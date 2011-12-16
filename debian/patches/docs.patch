@@ -1,0 +1,76 @@
+Author: Sergei Golovan <sgolovan@debian.org>
+Description: Fixes a bug with .RE macro in the Erlang manpages
+ and a few bugs with docs installation.
+Last-modified: Thu, 09 Dec 2010 10:45:56 +0300
+
+--- erlang-14.b.4-dfsg.orig/lib/erl_docgen/priv/xsl/db_man.xsl
++++ erlang-14.b.4-dfsg/lib/erl_docgen/priv/xsl/db_man.xsl
+@@ -505,7 +505,7 @@
+         <xsl:text>&#10;.RS 2</xsl:text>
+         <xsl:text>&#10;.LP&#10;</xsl:text>
+         <xsl:value-of select="$content"/>
+-        <xsl:text>&#10;.RE</xsl:text>
++        <xsl:text>&#10;.RE&#10;</xsl:text>
+       </xsl:otherwise>
+     </xsl:choose>
+   </xsl:template>
+@@ -760,7 +760,7 @@
+       <xsl:text>&#10;.TP 3</xsl:text>
+       <xsl:text>&#10;Types:&#10;</xsl:text>
+       <xsl:apply-templates/>
+-      <xsl:text>&#10;.RE</xsl:text>
++      <xsl:text>&#10;.RE&#10;</xsl:text>
+     </xsl:if>
+   </xsl:template>
+ 
+@@ -781,7 +781,7 @@
+   <xsl:template match="desc">
+     <xsl:text>&#10;.RS</xsl:text>
+     <xsl:apply-templates/>
+-    <xsl:text>&#10;.RE</xsl:text>
++    <xsl:text>&#10;.RE&#10;</xsl:text>
+   </xsl:template>
+ 
+ 
+--- erlang-14.b.4-dfsg.orig/lib/megaco/doc/src/Makefile
++++ erlang-14.b.4-dfsg/lib/megaco/doc/src/Makefile
+@@ -247,8 +247,6 @@
+ 	$(INSTALL_DATA) $(INFO_FILE) $(RELSYSDIR)
+ 	$(INSTALL_DIR) $(RELEASE_PATH)/man/man3
+ 	$(INSTALL_DATA) $(MAN3DIR)/* $(RELEASE_PATH)/man/man3
+-	$(INSTALL_DIR)  $(RELSYSDIR)/doc/standard
+-	$(INSTALL_DATA) $(STANDARDS) $(RELSYSDIR)/doc/standard
+ 
+ else
+ 
+@@ -270,8 +268,6 @@
+ 	$(INSTALL_DIR)  $(RELEASE_PATH)/man/man3
+ 	$(INSTALL_DATA) $(MAN3_FILES) $(RELEASE_PATH)/man/man3
+ 	$(INSTALL_DATA) $(TOP_HTML_FILES) $(RELSYSDIR)/doc
+-	$(INSTALL_DIR)  $(RELSYSDIR)/doc/standard
+-	$(INSTALL_DATA) $(STANDARDS) $(RELSYSDIR)/doc/standard
+ endif
+ endif
+ 
+--- erlang-14.b.4-dfsg.orig/lib/stdlib/doc/src/re.xml
++++ erlang-14.b.4-dfsg/lib/stdlib/doc/src/re.xml
+@@ -345,7 +345,7 @@
+       metacharacter should not match before it. Setting this without
+       <c>multiline</c> (at compile time) causes circumflex never to
+       match. This option only affects the behavior of the circumflex
+-      metacharacter. It does not affect \A.</item>
++      metacharacter. It does not affect \\A.</item>
+ 
+       <tag><c>noteol</c></tag>
+ 
+@@ -354,8 +354,8 @@
+       match it nor (except in multiline mode) a newline immediately
+       before it. Setting this without <c>multiline</c> (at compile time)
+       causes dollar never to match. This option affects only the
+-      behavior of the dollar metacharacter. It does not affect \Z or
+-      \z.</item>
++      behavior of the dollar metacharacter. It does not affect \\Z or
++      \\z.</item>
+ 
+       <tag><c>{offset, integer() >= 0}</c></tag>
+ 

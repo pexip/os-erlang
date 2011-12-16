@@ -1,0 +1,32 @@
+#! /bin/sh
+
+DIR=$1
+
+cp $DIR/man3/dialyzer.3 $DIR/man1/dialyzer.1
+mv $DIR/man1/start.1 $DIR/man1/start_embedded.1
+
+# Fix manpages
+for f in $DIR/*/*.1 ; do
+    sed -i -e's/, start_erl(1)//g' \
+	   -e's/start(1)/start_embedded(1)/g' \
+	$f
+done
+
+sed -i -e's/^\(\.TH .*\) 3 \(.*\) "Erlang Module Definition"/\1 1 \2 "User Commands"/' \
+    $DIR/man1/dialyzer.1
+
+sed -i -e's/^start \\-/start_embedded \\-/' \
+       -e's/^\.TH start 1/.TH start_embedded 1/' \
+    $DIR/man1/start_embedded.1
+
+for f in $DIR/*/*.[1-6] ; do
+    sed -i -e's/^\(\.TH .*\) 3 /\1 3erl /' \
+	   -e's/\([^[:space:]]\)(3)/\1(3erl)/g' \
+	   -e's/\([^[:space:]]\)(4)/\1(5)/g' \
+	   -e's/\([^[:space:]]\)(6)/\1(7)/g' \
+	$f
+done
+
+for f in $DIR/*/*.3 ; do \
+    mv $f ${f}erl ; \
+done
