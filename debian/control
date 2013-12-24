@@ -1,7 +1,8 @@
 Source: erlang
-Maintainer: Ubuntu Developers <ubuntu-devel-discuss@lists.ubuntu.com>
+Maintainer: Pexip AS <packaging@pexip.com>
+XSBC-Pexip-Original-Maintainer: Ubuntu Developers <ubuntu-devel-discuss@lists.ubuntu.com>
 XSBC-Original-Maintainer: Debian Erlang Packagers <pkg-erlang-devel@lists.alioth.debian.org>
-Uploaders: Sergei Golovan <sgolovan@debian.org>
+XSBC-Pexip-Original-Uploaders: Sergei Golovan <sgolovan@debian.org>
 Section: interpreters
 Priority: optional
 Standards-Version: 3.9.2
@@ -16,6 +17,7 @@ Build-Conflicts: autoconf2.13, libwxgtk2.4-dev, libwxgtk2.6-dev
 Homepage: http://www.erlang.org/
 Vcs-Svn: svn://svn.debian.org/svn/pkg-erlang/erlang/trunk/
 Vcs-Browser: http://svn.debian.org/wsvn/pkg-erlang/erlang/trunk/
+XS-Pexip-Upstream: http://archive.ubuntu.com/ubuntu/ precise
 
 Package: erlang-base
 Architecture: any
