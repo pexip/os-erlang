@@ -11,3 +11,4 @@ java.patch
 hppa.patch
 powerpc.patch
 fix-pointer-converstion.patch
+crypto.patch
