@@ -1,8 +1,17 @@
 diff --git a/lib/crypto/c_src/crypto.c b/lib/crypto/c_src/crypto.c
-index c781ccb..326846e 100644
+index c781ccb..8e91b78 100644
 --- a/lib/crypto/c_src/crypto.c
 +++ b/lib/crypto/c_src/crypto.c
-@@ -472,14 +472,18 @@ static ERL_NIF_TERM md5_final(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[
+@@ -253,7 +253,7 @@ ERL_NIF_INIT(crypto,nif_funcs,load,reload,upgrade,unload)
+ #define MD5_LEN_96      12
+ #define MD4_CTX_LEN     (sizeof(MD4_CTX))
+ #define MD4_LEN         16
+-#define SHA_CTX_LEN     (sizeof(SHA_CTX))
++#define SHA_CTX_LEN     (sizeof(EVP_MD_CTX))
+ #define SHA_LEN         20
+ #define SHA_LEN_96      12
+ #define HMAC_INT_LEN    64
+@@ -472,46 +472,53 @@ static ERL_NIF_TERM md5_final(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[
  
  static ERL_NIF_TERM sha(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[])
  {/* (Data) */    
@@ -23,3 +32,44 @@ index c781ccb..326846e 100644
      return ret;
  }
  static ERL_NIF_TERM sha_init(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[])
+ {/* () */   
+     ERL_NIF_TERM ret;
+-    SHA1_Init((SHA_CTX *) enif_make_new_binary(env, SHA_CTX_LEN, &ret));
++    EVP_MD_CTX *ctx = (EVP_MD_CTX *) enif_make_new_binary(env, SHA_CTX_LEN, &ret);
++    EVP_MD_CTX_init(ctx);
++    EVP_DigestInit_ex(ctx, EVP_sha1(), NULL);
+     return ret;
+ }
+ static ERL_NIF_TERM sha_update(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[])
+ {/* (Context, Data) */
+-    SHA_CTX* new_ctx;
++    EVP_MD_CTX* new_ctx;
+     ErlNifBinary ctx_bin, data_bin;
+     ERL_NIF_TERM ret;
+     if (!enif_inspect_binary(env, argv[0], &ctx_bin) || ctx_bin.size != SHA_CTX_LEN
+ 	|| !enif_inspect_iolist_as_binary(env, argv[1], &data_bin)) {
+ 	return enif_make_badarg(env);
+     }
+-    new_ctx = (SHA_CTX*) enif_make_new_binary(env,SHA_CTX_LEN, &ret);
++    new_ctx = (EVP_MD_CTX*) enif_make_new_binary(env,SHA_CTX_LEN, &ret);
+     memcpy(new_ctx, ctx_bin.data, SHA_CTX_LEN);
+-    SHA1_Update(new_ctx, data_bin.data, data_bin.size);
++    EVP_DigestUpdate(new_ctx, data_bin.data, data_bin.size);
+     return ret;
+ }
+ static ERL_NIF_TERM sha_final(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[])
+ {/* (Context) */
+     ErlNifBinary ctx_bin;
+-    SHA_CTX ctx_clone;
++    EVP_MD_CTX ctx_clone;
+     ERL_NIF_TERM ret;
+     if (!enif_inspect_binary(env, argv[0], &ctx_bin) || ctx_bin.size != SHA_CTX_LEN) {
+ 	return enif_make_badarg(env);
+     }
+     memcpy(&ctx_clone, ctx_bin.data, SHA_CTX_LEN); /* writable */
+-    SHA1_Final(enif_make_new_binary(env, SHA_LEN, &ret), &ctx_clone);    
++    EVP_DigestFinal_ex(&ctx_clone, enif_make_new_binary(env, SHA_LEN, &ret), NULL);
++    EVP_MD_CTX_cleanup(&ctx_clone);
+     return ret;
+ }
+ 
