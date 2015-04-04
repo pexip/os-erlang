@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2009-2011. All Rights Reserved.
+%% Copyright Ericsson AB 2009-2013. All Rights Reserved.
 %%
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -31,12 +31,15 @@
 -export([
 	 request/1, request/2, request/4, request/5,
 	 cancel_request/1, cancel_request/2,
-	 set_option/2, set_option/3,
+	 set_option/2,  set_option/3,
 	 set_options/1, set_options/2,
+	 get_option/1,  get_option/2,
+	 get_options/1, get_options/2,
 	 store_cookies/2, store_cookies/3, 
-	 cookie_header/1, cookie_header/2, 
+	 cookie_header/1, cookie_header/2, cookie_header/3, 
 	 which_cookies/0, which_cookies/1, 
 	 reset_cookies/0, reset_cookies/1, 
+	 which_sessions/0, which_sessions/1, 
 	 stream_next/1,
 	 default_profile/0, 
 	 profile_name/1, profile_name/2,
@@ -105,7 +108,6 @@ request(Url, Profile) ->
 %%                   {ssl, SSLOptions} | {proxy_auth, {User, Password}}
 %%	Ssloptions = ssl_options() | 
 %%                   {ssl,  ssl_options()} | 
-%%                   {ossl, ssl_options()} | 
 %%                   {essl, ssl_options()}
 %%      ssl_options() = [ssl_option()]
 %%	ssl_option() =  {verify, code()} | 
@@ -142,7 +144,9 @@ request(Url, Profile) ->
 request(Method, Request, HttpOptions, Options) ->
     request(Method, Request, HttpOptions, Options, default_profile()). 
 
-request(Method, {Url, Headers}, HTTPOptions, Options, Profile) 
+request(Method, 
+	{Url, Headers}, 
+	HTTPOptions, Options, Profile) 
   when (Method =:= options) orelse 
        (Method =:= get) orelse 
        (Method =:= head) orelse 
@@ -155,16 +159,23 @@ request(Method, {Url, Headers}, HTTPOptions, Options, Profile)
 		      {http_options, HTTPOptions}, 
 		      {options,      Options}, 
 		      {profile,      Profile}]),
-    case http_uri:parse(Url) of
+    case uri_parse(Url, Options) of
 	{error, Reason} ->
 	    {error, Reason};
-	ParsedUrl ->
-	    handle_request(Method, Url, ParsedUrl, Headers, [], [], 
-			   HTTPOptions, Options, Profile)
+	{ok, ParsedUrl} ->
+	    case header_parse(Headers) of
+		{error, Reason} ->
+		    {error, Reason};
+		_ ->
+		    handle_request(Method, Url, ParsedUrl, Headers, [], [], 
+				   HTTPOptions, Options, Profile)
+	    end
     end;
      
-request(Method, {Url,Headers,ContentType,Body}, HTTPOptions, Options, Profile) 
-  when ((Method =:= post) orelse (Method =:= put)) andalso 
+request(Method, 
+	{Url, Headers, ContentType, Body}, 
+	HTTPOptions, Options, Profile) 
+  when ((Method =:= post) orelse (Method =:= put) orelse (Method =:= delete)) andalso 
        (is_atom(Profile) orelse is_pid(Profile)) ->
     ?hcrt("request", [{method,       Method}, 
 		      {url,          Url},
@@ -174,10 +185,10 @@ request(Method, {Url,Headers,ContentType,Body}, HTTPOptions, Options, Profile)
 		      {http_options, HTTPOptions}, 
 		      {options,      Options}, 
 		      {profile,      Profile}]),
-    case http_uri:parse(Url) of
+    case uri_parse(Url, Options) of
 	{error, Reason} ->
 	    {error, Reason};
-	ParsedUrl ->
+	{ok, ParsedUrl} ->
 	    handle_request(Method, Url, 
 			   ParsedUrl, Headers, ContentType, Body, 
 			   HTTPOptions, Options, Profile)
@@ -197,16 +208,8 @@ cancel_request(RequestId) ->
 cancel_request(RequestId, Profile) 
   when is_atom(Profile) orelse is_pid(Profile) ->
     ?hcrt("cancel request", [{request_id, RequestId}, {profile, Profile}]),
-    ok = httpc_manager:cancel_request(RequestId, profile_name(Profile)), 
-    receive  
-	%% If the request was already fulfilled throw away the 
-	%% answer as the request has been canceled.
-	{http, {RequestId, _}} ->
-	    ok 
-    after 0 ->
-	    ok
-    end.
-
+    httpc_manager:cancel_request(RequestId, profile_name(Profile)).
+   
 
 %%--------------------------------------------------------------------------
 %% set_options(Options) -> ok | {error, Reason}
@@ -227,17 +230,10 @@ cancel_request(RequestId, Profile)
 set_options(Options) ->
     set_options(Options, default_profile()).
 set_options(Options, Profile) when is_atom(Profile) orelse is_pid(Profile) ->
-    ?hcrt("set cookies", [{options, Options}, {profile, Profile}]),
+    ?hcrt("set options", [{options, Options}, {profile, Profile}]),
     case validate_options(Options) of
 	{ok, Opts} ->
-	    try 
-		begin
-		    httpc_manager:set_options(Opts, profile_name(Profile))
-		end
-	    catch
-		exit:{noproc, _} ->
-		    {error, inets_not_started}
-	    end;
+	    httpc_manager:set_options(Opts, profile_name(Profile));
 	{error, Reason} ->
 	    {error, Reason}
     end.
@@ -247,6 +243,59 @@ set_option(Key, Value) ->
 
 set_option(Key, Value, Profile) ->
     set_options([{Key, Value}], Profile).
+
+
+%%--------------------------------------------------------------------------
+%% get_options(OptionItems) -> {ok, Values} | {error, Reason}
+%% get_options(OptionItems, Profile) -> {ok, Values} | {error, Reason}
+%%   OptionItems   - all | [option_item()]
+%%   option_item() - proxy | pipeline_timeout | max_pipeline_length | 
+%%                   keep_alive_timeout | max_keep_alive_length | 
+%%                   max_sessions | verbose | 
+%%                   cookies | ipfamily | ip | port | socket_opts
+%%   Profile       - atom()
+%%   Values - [{option_item(), term()}]
+%%   Reason - term()
+%% Description: Retrieves the current options. 
+%%-------------------------------------------------------------------------
+
+get_options() ->
+    record_info(fields, options).
+
+get_options(Options) ->
+    get_options(Options, default_profile()).
+
+get_options(all = _Options, Profile) ->
+    get_options(get_options(), Profile);
+get_options(Options, Profile) 
+  when (is_list(Options) andalso 
+	(is_atom(Profile) orelse is_pid(Profile))) ->
+    ?hcrt("get options", [{options, Options}, {profile, Profile}]),
+    case Options -- get_options() of
+	[] ->
+	    try 
+		begin
+		    {ok, httpc_manager:get_options(Options, 
+						   profile_name(Profile))}
+		end
+	    catch
+		exit:{noproc, _} ->
+		    {error, inets_not_started}
+	    end;
+	InvalidGetOptions ->
+	    {error, {invalid_options, InvalidGetOptions}}
+    end.
+
+get_option(Key) ->
+    get_option(Key, default_profile()).
+
+get_option(Key, Profile) ->
+    case get_options([Key], Profile) of
+	{ok, [{Key, Value}]} ->
+	    {ok, Value};
+	Error ->
+	    Error
+    end.
 
 
 %%--------------------------------------------------------------------------
@@ -268,7 +317,10 @@ store_cookies(SetCookieHeaders, Url, Profile)
 			    {profile,            Profile}]),
     try 
 	begin
-	    {_, _, Host, Port, Path, _} = http_uri:parse(Url),
+	    %% Since the Address part is not actually used
+	    %% by the manager when storing cookies, we dont
+	    %% care about ipv6-host-with-brackets.
+	    {ok, {_, _, Host, Port, Path, _}} = uri_parse(Url),
 	    Address     = {Host, Port}, 
 	    ProfileName = profile_name(Profile),
 	    Cookies     = httpc_cookie:cookies(SetCookieHeaders, Path, Host),
@@ -276,34 +328,41 @@ store_cookies(SetCookieHeaders, Url, Profile)
 	    ok
 	end
     catch 
-	exit:{noproc, _} ->
-	    {error, {not_started, Profile}};
 	error:{badmatch, Bad} ->
 	    {error, {parse_failed, Bad}}
     end.
 
 
 %%--------------------------------------------------------------------------
-%% cookie_header(Url [, Profile]) -> Header | {error, Reason}
-%%               
+%% cookie_header(Url) -> Header | {error, Reason}
+%% cookie_header(Url, Profile) -> Header | {error, Reason}
+%% cookie_header(Url, Opts,  Profile) -> Header | {error, Reason}
+%% 
 %% Description: Returns the cookie header that would be sent when making
 %% a request to <Url>.
 %%-------------------------------------------------------------------------
 cookie_header(Url) ->
     cookie_header(Url, default_profile()).
 
-cookie_header(Url, Profile) ->
+cookie_header(Url, Profile) when is_atom(Profile) orelse is_pid(Profile) ->
+    cookie_header(Url, [], Profile);
+cookie_header(Url, Opts) when is_list(Opts) ->
+    cookie_header(Url, Opts, default_profile()).
+
+cookie_header(Url, Opts, Profile) 
+  when (is_list(Opts) andalso (is_atom(Profile) orelse is_pid(Profile))) ->
     ?hcrt("cookie header", [{url,     Url},
+			    {opts,    Opts}, 
 			    {profile, Profile}]),
     try 
 	begin
-	    httpc_manager:which_cookies(Url, profile_name(Profile))
+	    httpc_manager:which_cookies(Url, Opts, profile_name(Profile))
 	end
     catch 
 	exit:{noproc, _} ->
 	    {error, {not_started, Profile}}
     end.
-
+    
 
 %%--------------------------------------------------------------------------
 %% which_cookies() -> [cookie()]
@@ -327,10 +386,32 @@ which_cookies(Profile) ->
 
 
 %%--------------------------------------------------------------------------
+%% which_sessions() -> {GoodSession, BadSessions, NonSessions}
+%% which_sessions(Profile) -> {GoodSession, BadSessions, NonSessions}
+%%               
+%% Description: Debug function, dumping the sessions database, sorted 
+%%              into three groups (Good-, Bad- and Non-sessions).
+%%-------------------------------------------------------------------------
+which_sessions() ->
+    which_sessions(default_profile()).
+
+which_sessions(Profile) ->
+    ?hcrt("which sessions", [{profile, Profile}]),
+    try 
+	begin
+	    httpc_manager:which_sessions(profile_name(Profile))
+	end
+    catch 
+	exit:{noproc, _} ->
+	    {[], [], []}
+    end.
+
+
+%%--------------------------------------------------------------------------
 %% info() -> list()
 %% info(Profile) -> list()
 %%               
-%% Description: Debug function, retreive info about the profile
+%% Description: Debug function, retrieve info about the profile
 %%-------------------------------------------------------------------------
 info() ->
     info(default_profile()).
@@ -465,6 +546,8 @@ handle_request(Method, Url,
 	    HeadersRecord = header_record(NewHeaders, Host2, HTTPOptions),
 	    Receiver      = proplists:get_value(receiver, Options),
 	    SocketOpts    = proplists:get_value(socket_opts, Options),
+	    BracketedHost = proplists:get_value(ipv6_host_with_brackets, 
+						Options),
 	    MaybeEscPath  = maybe_encode_uri(HTTPOptions, Path),
 	    MaybeEscQuery = maybe_encode_uri(HTTPOptions, Query),
 	    AbsUri        = maybe_encode_uri(HTTPOptions, Url),
@@ -483,7 +566,8 @@ handle_request(Method, Url,
 			       stream        = Stream, 
 			       headers_as_is = headers_as_is(Headers0, Options),
 			       socket_opts   = SocketOpts, 
-			       started       = Started},
+			       started       = Started,
+			       ipv6_host_with_brackets = BracketedHost},
 
 	    case httpc_manager:request(Request, profile_name(Profile)) of
 		{ok, RequestId} ->
@@ -644,8 +728,6 @@ http_options_default() ->
 		      {ok, {?HTTP_DEFAULT_SSL_KIND, Value}};
 		 ({ssl, SslOptions}) when is_list(SslOptions) ->
 		      {ok, {?HTTP_DEFAULT_SSL_KIND, SslOptions}};
-		 ({ossl, SslOptions}) when is_list(SslOptions) ->
-		      {ok, {ossl, SslOptions}};
 		 ({essl, SslOptions}) when is_list(SslOptions) ->
 		      {ok, {essl, SslOptions}};
 		 (_) ->
@@ -742,14 +824,17 @@ request_options_defaults() ->
 		error
 	end,
 
+    VerifyBrackets = VerifyBoolean, 
+
     [
-     {sync,          true,      VerifySync}, 
-     {stream,        none,      VerifyStream},
-     {body_format,   string,    VerifyBodyFormat},
-     {full_result,   true,      VerifyFullResult},
-     {headers_as_is, false,     VerifyHeaderAsIs},
-     {receiver,      self(),    VerifyReceiver},
-     {socket_opts,   undefined, VerifySocketOpts}
+     {sync,                    true,      VerifySync}, 
+     {stream,                  none,      VerifyStream},
+     {body_format,             string,    VerifyBodyFormat},
+     {full_result,             true,      VerifyFullResult},
+     {headers_as_is,           false,     VerifyHeaderAsIs},
+     {receiver,                self(),    VerifyReceiver},
+     {socket_opts,             undefined, VerifySocketOpts},
+     {ipv6_host_with_brackets, false,     VerifyBrackets}
     ]. 
 
 request_options(Options) ->
@@ -820,6 +905,10 @@ validate_options([{proxy, Proxy} = Opt| Tail], Acc) ->
     validate_proxy(Proxy),
     validate_options(Tail, [Opt | Acc]);
 
+validate_options([{https_proxy, Proxy} = Opt| Tail], Acc) ->
+    validate_https_proxy(Proxy),
+    validate_options(Tail, [Opt | Acc]);
+
 validate_options([{max_sessions, Value} = Opt| Tail], Acc) ->
     validate_max_sessions(Value),
     validate_options(Tail, [Opt | Acc]);
@@ -881,6 +970,14 @@ validate_proxy({{ProxyHost, ProxyPort}, NoProxy} = Proxy)
     Proxy;
 validate_proxy(BadProxy) ->
     bad_option(proxy, BadProxy).
+
+validate_https_proxy({{ProxyHost, ProxyPort}, NoProxy} = Proxy) 
+  when is_list(ProxyHost) andalso 
+       is_integer(ProxyPort) andalso 
+       is_list(NoProxy) ->
+    Proxy;
+validate_https_proxy(BadProxy) ->
+    bad_option(https_proxy, BadProxy).
 
 validate_max_sessions(Value) when is_integer(Value) andalso (Value >= 0) ->
     Value;
@@ -1123,6 +1220,27 @@ validate_headers(RequestHeaders, _, _) ->
     RequestHeaders.
 
 
+%%--------------------------------------------------------------------------
+%% These functions is just simple wrappers to parse specifically HTTP URIs
+%%--------------------------------------------------------------------------
+
+scheme_defaults() ->
+    [{http, 80}, {https, 443}].
+
+uri_parse(URI) ->
+    http_uri:parse(URI, [{scheme_defaults, scheme_defaults()}]).
+
+uri_parse(URI, Opts) ->
+    http_uri:parse(URI, [{scheme_defaults, scheme_defaults()} | Opts]).
+
+
+%%--------------------------------------------------------------------------
+header_parse([]) ->
+    ok;
+header_parse([{Field, Value}|T]) when is_list(Field), is_list(Value) ->    
+    header_parse(T);
+header_parse(_) -> 
+    {error, {headers_error, not_strings}}.
 child_name2info(undefined) ->
     {error, no_such_service};
 child_name2info(httpc_manager) ->

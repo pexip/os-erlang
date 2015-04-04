@@ -1,7 +1,7 @@
 #                                               -*- Autoconf -*-
 # %CopyrightBegin%
 #
-# Copyright Ericsson AB 2000-2010. All Rights Reserved.
+# Copyright Ericsson AB 2000-2012. All Rights Reserved.
 #
 # The contents of this file are subject to the Erlang Public License,
 # Version 1.1, (the "License"); you may not use this file except in
@@ -79,7 +79,7 @@ AC_ARG_ENABLE(threads,
     no) threads_disabled=yes ;;
     *)  threads_disabled=no ;;
   esac ],
-[ threads_disabled=no ])
+[ threads_disabled=maybe ])
 
 dnl ----------------------------------------------------------------------
 dnl Checks for programs
@@ -89,7 +89,7 @@ AC_PROG_CC
 AC_PROG_CPP
 dnl AC_PROG_LIBTOOL
 AC_PROG_RANLIB
-AC_CHECK_PROG(LD, ld.sh)
+AC_CHECK_PROGS(LD, ld.sh)
 AC_CHECK_TOOL(LD, ld, '$(CC)')
 AC_SUBST(LD)
 
@@ -224,50 +224,8 @@ elif test "x$with_gmp" != "xno" -a -n "$with_gmp" ;then
     # FIXME return ERROR if no lib
 fi
 
-MIXED_CYGWIN=no
-
-AC_MSG_CHECKING(for mixed cygwin and native VC++ environment)
-if test "X$CC" = "Xcc.sh" -a "X$host" = "Xwin32" -a "x$GCC" != x"yes"; then
-	if test -x /usr/bin/cygpath; then
-		CFLAGS="-O2"
-		MIXED_CYGWIN=yes
-		AC_MSG_RESULT([yes])
-		MIXED_CYGWIN_VC=yes
-	else
-		AC_MSG_RESULT([undeterminable])
-		AC_MSG_ERROR(Seems to be mixed windows but not with cygwin, cannot handle this!)
-	fi
-else
-	AC_MSG_RESULT([no])
-	MIXED_CYGWIN_VC=no
-fi
-AC_SUBST(MIXED_CYGWIN_VC)
-
-AC_MSG_CHECKING(for mixed cygwin and native MinGW environment)
-if test "X$CC" = "Xcc.sh" -a "X$host" = "Xwin32" -a "x$GCC" = x"yes"; then
-	if test -x /usr/bin/cygpath; then
-		CFLAGS="-O2"
-		MIXED_CYGWIN=yes
-		AC_MSG_RESULT([yes])
-		MIXED_CYGWIN_MINGW=yes
-	else
-		AC_MSG_RESULT([undeterminable])
-		AC_MSG_ERROR(Seems to be mixed windows but not with cygwin, cannot handle this!)
-	fi
-else
-	AC_MSG_RESULT([no])
-	MIXED_CYGWIN_MINGW=no
-fi
-AC_SUBST(MIXED_CYGWIN_MINGW)
-
-AC_MSG_CHECKING(if we mix cygwin with any native compiler)
-if test "X$MIXED_CYGWIN" = "Xyes" ; then
-	AC_MSG_RESULT([yes])	
-else
-	AC_MSG_RESULT([no])
-fi
-
-AC_SUBST(MIXED_CYGWIN)
+LM_WINDOWS_ENVIRONMENT
+	
 	
 dnl
 dnl Threads
@@ -279,12 +237,16 @@ AC_SUBST(THR_DEFS)
 AC_SUBST(EI_THREADS)
 
 case "$threads_disabled" in
-    no)
+    no|maybe)
 	LM_CHECK_THR_LIB
 
 	case "$THR_LIB_NAME" in
 	    "")
 	        EI_THREADS="false"
+		# Fail if --enable-threads given and no threads found
+		if test "x$threads_disabled" = "xno"; then
+		    AC_MSG_ERROR(No threads support found)
+		fi
 	        ;;
 	    win32_threads)
 		EI_THREADS="true"	
@@ -311,6 +273,8 @@ esac
 AC_SUBST(WFLAGS)
 
 if test "x$GCC" = xyes; then
+  # Treat certain GCC warnings as errors
+  LM_TRY_ENABLE_CFLAG([-Werror=return-type], [WERRORFLAGS])
   WFLAGS="-Wall -Wstrict-prototypes -Wmissing-prototypes -Wmissing-declarations -Wnested-externs -Winline"
   # check which GCC version
   GCC_VERSION=`$CC -v 2>&1 | sed -n 's/gcc version //p'`
@@ -325,8 +289,10 @@ if test "x$GCC" = xyes; then
     *)
         WFLAGS="$WFLAGS -fno-strict-aliasing";;
   esac
+  CFLAGS="$WERRORFLAGS $CFLAGS"
 else
   WFLAGS=""
+  WERRORFLAGS=""
 fi
 
 # ---------------------------------------------------------------------------
@@ -338,18 +304,32 @@ AC_SUBST(LIB_CFLAGS)
 if test "X$host" = "Xwin32"; then
   LIB_CFLAGS="$CFLAGS"
 else
-  case $host_os in
-    darwin*)
-	CFLAGS="$CFLAGS -no-cpp-precomp"
-	;;
-  esac
-
   if test "x$GCC" = xyes; then
 	LIB_CFLAGS="$CFLAGS -fPIC"
   else
 	LIB_CFLAGS="$CFLAGS"
   fi
 fi
+
+dnl ----------------------------------------------------------------------
+dnl Enable -fsanitize= flags.
+dnl ----------------------------------------------------------------------
+
+m4_define(DEFAULT_SANITIZERS, [address,undefined])
+AC_ARG_ENABLE(
+    sanitizers,
+    AS_HELP_STRING(
+        [--enable-sanitizers@<:@=comma-separated list of sanitizers@:>@],
+	    [Default=DEFAULT_SANITIZERS]),
+[
+case "$enableval" in
+    no) sanitizers= ;;
+    yes) sanitizers="-fsanitize=DEFAULT_SANITIZERS" ;;
+    *) sanitizers="-fsanitize=$enableval" ;;
+esac
+CFLAGS="$CFLAGS $sanitizers"
+LDFLAGS="$LDFLAGS $sanitizers"
+])
 
 # ---------------------------------------------------------------------------
 # XXX

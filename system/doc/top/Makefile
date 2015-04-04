@@ -1,7 +1,7 @@
 #
 # %CopyrightBegin%
 #
-# Copyright Ericsson AB 1999-2010. All Rights Reserved.
+# Copyright Ericsson AB 1999-2013. All Rights Reserved.
 #
 # The contents of this file are subject to the Erlang Public License,
 # Version 1.1, (the "License"); you may not use this file except in
@@ -30,20 +30,13 @@ APPLICATION=otp-system-documentation
 # ----------------------------------------------------
 # Release directory specification
 # ----------------------------------------------------
-RELSYSDIR = $(RELEASE_PATH)/doc
+RELSYSDIR = "$(RELEASE_PATH)/doc"
 
 GIF_FILES = 
 
 INFO_FILES = ../../README ../../COPYRIGHT PR.template
 
 TOPDOCDIR=.
-
-TOP_HTML_GEN_FILES = \
-	$(HTMLDIR)/incompatible.html \
-	$(HTMLDIR)/highlights.html
-
-TOP_HTML_FILES = \
-	$(TOP_HTML_GEN_FILES)
 
 include ../installation_guide/xmlfiles.mk
 include ../system_principles/xmlfiles.mk
@@ -121,7 +114,7 @@ $(INDEX_SCRIPT): $(INDEX_SRC)
 	$(ERLC) -o$(EBIN) +warn_unused_vars $<
 
 # We don't list toc_*.html as targets because we don't know
-$(HTMLDIR)/index.html + $(HTMLDIR)/applications.html: $(INDEX_SCRIPT)
+$(HTMLDIR)/index.html + $(HTMLDIR)/applications.html: $(INDEX_SCRIPT) $(TEMPLATES)
 	echo "Generating index $@"
 # Check if we are building the index from source or an installed release
 	if test "$$RELEASE_ROOT" = "" ; then \
@@ -162,18 +155,35 @@ $(MAN_INDEX): $(MAN_INDEX_SCRIPT)
 #--------------------------------------------------------------------------
 
 $(HTMLDIR)/highlights.html:  highlights.xml
-	date=`date +"%B %e %Y"`; \
-	$(XSLTPROC) --output $(@) --stringparam docgen "$(DOCGEN)" --stringparam topdocdir "$(TOPDOCDIR)" \
-		--stringparam pdfdir "$(PDFREFDIR)"  --stringparam gendate "$$date" --stringparam appname "$(APPLICATION)" \
-		--stringparam appver "$(VSN)" -path  $(DOCGEN)/priv/docbuilder_dtd -path  $(DOCGEN)/priv/dtd_html_entities \
+	date=`date +"%B %e, %Y"`; \
+	$(XSLTPROC) --output $(@) \
+		--stringparam docgen "$(DOCGEN)" \
+		--stringparam topdocdir "$(TOPDOCDIR)" \
+		--stringparam pdfdir "$(PDFREFDIR)"  \
+		--stringparam gendate "$$date" \
+		--stringparam appname "$(APPLICATION)" \
+		--stringparam appver "$(VSN)" \
+		--stringparam stylesheet "$(CSS_FILE)" \
+		--stringparam winprefix "$(WINPREFIX)" \
+		--stringparam logo "$(HTMLLOGO_FILE)" \
+		-path  $(DOCGEN)/priv/dtd \
+		-path  $(DOCGEN)/priv/dtd_html_entities \
 		$(DOCGEN)/priv/xsl/db_html.xsl $<
 
 
 $(HTMLDIR)/incompatible.html:  incompatible.xml
-	date=`date +"%B %e %Y"`; \
-	$(XSLTPROC) --output $(@) --stringparam docgen "$(DOCGEN)" --stringparam topdocdir "$(TOPDOCDIR)" \
-		--stringparam pdfdir "$(PDFREFDIR)"  --stringparam gendate "$$date" --stringparam appname "$(APPLICATION)" \
-		--stringparam appver "$(VSN)" -path  $(DOCGEN)/priv/docbuilder_dtd -path  $(DOCGEN)/priv/dtd_html_entities \
+	date=`date +"%B %e, %Y"`; \
+	$(XSLTPROC) --output $(@) --stringparam docgen "$(DOCGEN)" \
+		--stringparam topdocdir "$(TOPDOCDIR)" \
+		--stringparam pdfdir "$(PDFREFDIR)"  \
+		--stringparam gendate "$$date" \
+		--stringparam appname "$(APPLICATION)" \
+		--stringparam appver "$(VSN)" \
+		--stringparam stylesheet "$(CSS_FILE)" \
+		--stringparam winprefix "$(WINPREFIX)" \
+		--stringparam logo "$(HTMLLOGO_FILE)" \
+		-path  $(DOCGEN)/priv/dtd \
+		-path  $(DOCGEN)/priv/dtd_html_entities \
 		$(DOCGEN)/priv/xsl/db_html.xsl $<
 
 #--------------------------------------------------------------------------
@@ -188,7 +198,7 @@ $(GLOSSARY): $(GLOSSARY_SCRIPT)
 
 #--------------------------------------------------------------------------
 
-PR.template: PR.template.src $(ERL_TOP)/erts/vsn.mk
+PR.template: PR.template.src $(ERL_TOP)/make/$(TARGET)/otp.mk
 	sed -e 's;%VSN%;$(VSN);' \
 	    -e 's;%SYSTEM_VSN%;$(SYSTEM_VSN);' \
 	    $< > $@
@@ -212,7 +222,7 @@ $(TOP_PDF_FILE): $(XML_FILES)
 
 pdf: $(TOP_PDF_FILE)
 
-html:   $(INDEX_FILES) $(TOP_HTML_FILES) \
+html:   $(INDEX_FILES) \
 	$(MAN_INDEX) $(JAVASCRIPT)
 
 debug opt: 
@@ -220,7 +230,7 @@ debug opt:
 clean:
 	rm -rf 	../html/js
 	rm -f PR.template 
-	rm -f  $(INDEX_FILES) $(TOP_HTML_FILES) $(MAN_INDEX) 
+	rm -f  $(INDEX_FILES) $(MAN_INDEX)
 	rm -f  $(TOP_PDF_FILE) $(TOP_PDF_FILE:%.pdf=%.fo)
 	rm -f $(INDEX_SCRIPT) $(GLOSSARY_SCRIPT) \
 		$(JAVASCRIPT_BUILD_SCRIPT) 
@@ -233,17 +243,16 @@ include $(ERL_TOP)/make/otp_release_targets.mk
 
 
 release_docs_spec: docs
-	$(INSTALL_DIR)  $(RELEASE_PATH)
-	$(INSTALL_DATA) $(INFO_FILES) $(RELEASE_PATH)
+	$(INSTALL_DIR)  "$(RELEASE_PATH)"
+	$(INSTALL_DATA) $(INFO_FILES) "$(RELEASE_PATH)"
 	$(INSTALL_DIR)  $(RELSYSDIR)
 	$(INSTALL_DIR)  $(RELSYSDIR)/pdf
 	$(INSTALL_DATA)  \
 		$(TOP_PDF_FILE) $(RELSYSDIR)/pdf
-	$(INSTALL_DATA) $(TOP_HTML_FILES) $(RELSYSDIR) 
 	$(INSTALL_DIR)  $(RELSYSDIR)/js
 	$(INSTALL_DATA)  \
 		$(JAVASCRIPT) $(RELSYSDIR)/js
-	$(INSTALL_DATA) $(INDEX_FILES) $(MAN_INDEX) $(TOP_HTML_FILES) $(RELSYSDIR)
+	$(INSTALL_DATA) $(INDEX_FILES) $(MAN_INDEX) $(RELSYSDIR)
 	$(INSTALL_DIR)  $(RELSYSDIR)/docbuild
 	$(INSTALL_DATA) $(INDEX_SCRIPT) $(MAN_INDEX_SCRIPT) $(JAVASCRIPT_BUILD_SCRIPT) \
 		$(INDEX_SRC) $(MAN_INDEX_SRC) $(JAVASCRIPT_BUILD_SCRIPT_SRC) \

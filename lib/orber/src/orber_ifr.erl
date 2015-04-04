@@ -2,7 +2,7 @@
 %%
 %% %CopyrightBegin%
 %% 
-%% Copyright Ericsson AB 1997-2009. All Rights Reserved.
+%% Copyright Ericsson AB 1997-2012. All Rights Reserved.
 %% 
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -478,7 +478,7 @@ get_module(Id, Type) ->
 	What ->
 	    orber:dbg("[~p] ~p:get_module(~p, ~p).~n"
 		      "Id doesn't exist, mismatch Id vs Type or DB error: ~p", 
-		      [?LINE, ?MODULE, Id, What], ?DEBUG_LEVEL),
+		      [?LINE, ?MODULE, Id, Type, What], ?DEBUG_LEVEL),
 	    corba:raise(#'MARSHAL'{completion_status=?COMPLETED_MAYBE})
     end.
 
@@ -500,7 +500,7 @@ get_tc(Id, Type) ->
 	    case catch Module:tc() of
 		{'EXIT', Reason} ->
 		    case Reason of
-			{undef,[{Module, tc,[]}|_]} ->
+			{undef,[{Module, tc,[],_}|_]} ->
 			    orber:dbg("[~p] ~p:get_tc(~p);~nMissing ~p:tc()~n",
 				      [?LINE, ?MODULE, Id, Module], ?DEBUG_LEVEL),
 			    corba:raise(#'UNKNOWN'{minor=(?ORBER_VMCID bor 1),

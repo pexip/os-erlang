@@ -1,7 +1,7 @@
 #
 # %CopyrightBegin%
 # 
-# Copyright Ericsson AB 1997-2009. All Rights Reserved.
+# Copyright Ericsson AB 1997-2013. All Rights Reserved.
 # 
 # The contents of this file are subject to the Erlang Public License,
 # Version 1.1, (the "License"); you may not use this file except in
@@ -44,20 +44,7 @@ MODULES= \
 	dbg_ieval \
 	dbg_iload \
 	dbg_iserver \
-	dbg_ui_break \
-	dbg_ui_break_win \
-	dbg_ui_edit \
-	dbg_ui_edit_win \
-	dbg_ui_filedialog_win \
-	dbg_ui_interpret \
-	dbg_ui_mon \
-	dbg_ui_mon_win \
-	dbg_ui_settings \
-	dbg_ui_trace \
-	dbg_ui_trace_win \
-	dbg_ui_view \
-	dbg_ui_win \
-	dbg_ui_winman \
+	dbg_istk \
 	dbg_wx_break \
 	dbg_wx_break_win \
 	dbg_wx_code \
@@ -97,7 +84,7 @@ APPUP_TARGET = $(EBIN)/$(APPUP_FILE)
 # ----------------------------------------------------
 # FLAGS
 # ----------------------------------------------------
-ERL_COMPILE_FLAGS += +warn_obsolete_guard
+ERL_COMPILE_FLAGS += +warn_obsolete_guard -Werror
 
 
 # ----------------------------------------------------
@@ -111,10 +98,10 @@ clean:
 	rm -f errs core *~
 
 $(APP_TARGET): $(APP_SRC) ../vsn.mk
-	sed -e 's;%VSN%;$(VSN);' $< > $@
+	$(vsn_verbose)sed -e 's;%VSN%;$(VSN);' $< > $@
 
 $(APPUP_TARGET): $(APPUP_SRC) ../vsn.mk
-	sed -e 's;%VSN%;$(VSN);' $< > $@
+	$(vsn_verbose)sed -e 's;%VSN%;$(VSN);' $< > $@
 
 docs:
 
@@ -128,9 +115,9 @@ docs:
 include $(ERL_TOP)/make/otp_release_targets.mk
 
 release_spec: opt
-	$(INSTALL_DIR) $(RELSYSDIR)/src
-	$(INSTALL_DATA) $(ERL_FILES) $(INTERNAL_HRL_FILES) $(TOOLBOX_FILES) $(RELSYSDIR)/src
-	$(INSTALL_DIR) $(RELSYSDIR)/ebin
-	$(INSTALL_DATA) $(TARGET_FILES) $(TARGET_TOOLBOX_FILES) $(RELSYSDIR)/ebin
+	$(INSTALL_DIR) "$(RELSYSDIR)/src"
+	$(INSTALL_DATA) $(ERL_FILES) $(INTERNAL_HRL_FILES) $(TOOLBOX_FILES) "$(RELSYSDIR)/src"
+	$(INSTALL_DIR) "$(RELSYSDIR)/ebin"
+	$(INSTALL_DATA) $(TARGET_FILES) $(TARGET_TOOLBOX_FILES) "$(RELSYSDIR)/ebin"
 
 release_docs_spec:

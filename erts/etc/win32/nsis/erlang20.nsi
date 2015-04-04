@@ -4,6 +4,25 @@
 ; Original example written by Joost Verburg
 ; Modified for Erlang by Patrik
 
+;
+; %CopyrightBegin%
+;
+; Copyright Ericsson AB 2012. All Rights Reserved.
+;
+; The contents of this file are subject to the Erlang Public License,
+; Version 1.1, (the "License"); you may not use this file except in
+; compliance with the License. You should have received a copy of the
+; Erlang Public License along with this software. If not, it can be
+; retrieved online at http://www.erlang.org/.
+;
+; Software distributed under the License is distributed on an "AS IS"
+; basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See
+; the License for the specific language governing rights and limitations
+; under the License.
+;
+; %CopyrightEnd%
+;
+
 ; Verbosity does not come naturally with MUI, have to set it back now and then.
 	!verbose 1
 	!define MUI_MANUALVERBOSE 1
@@ -16,6 +35,7 @@
 
 	!include "MUI.nsh"
 	!include "WordFunc.nsh"
+	!include "WinVer.nsh"
 ;--------------------------------
 ;Configuration
 
@@ -31,17 +51,24 @@ Var STARTMENU_FOLDER
 !define MY_STARTMENUPAGE_REGISTRY_VALUENAME "Start Menu Folder"
 
 ;General
-	OutFile "${OUTFILEDIR}\otp_win32_${OTP_VERSION}.exe"
+	OutFile "${OUTFILEDIR}\otp_${WINTYPE}_${OTP_VERSION}.exe"
 
 ;Folder selection page
+!if ${WINTYPE} == "win64"
+  	InstallDir "$PROGRAMFILES64\erl${ERTS_VERSION}"
+!else
   	InstallDir "$PROGRAMFILES\erl${ERTS_VERSION}"
-  
+!endif  
 ;Remember install folder
   	InstallDirRegKey HKLM "SOFTWARE\Ericsson\Erlang\${ERTS_VERSION}" ""
   
 ; Set the default start menu folder
 
+!if ${WINTYPE} == "win64"
+	!define MUI_STARTMENUPAGE_DEFAULTFOLDER "${OTP_PRODUCT} ${OTP_VERSION} (x64)"
+!else
 	!define MUI_STARTMENUPAGE_DEFAULTFOLDER "${OTP_PRODUCT} ${OTP_VERSION}"
+!endif  
 
 ;--------------------------------
 ;Modern UI Configuration
@@ -98,12 +125,15 @@ Var STARTMENU_FOLDER
 Section "Microsoft redistributable libraries." SecMSRedist
 
   	SetOutPath "$INSTDIR"
-	File "${TESTROOT}\vcredist_x86.exe"
+	File "${TESTROOT}\${REDIST_EXECUTABLE}"
   
 ; Set back verbosity...
   	!verbose 1
-; Run the setup program  
-  	ExecWait '"$INSTDIR\vcredist_x86.exe"'
+; Run the setup program
+	IfSilent +3
+	    ExecWait '"$INSTDIR\${REDIST_EXECUTABLE}"'
+	Goto +2
+	    ExecWait '"$INSTDIR\${REDIST_EXECUTABLE}" /q'
 
   	!verbose 1
 SectionEnd ; MSRedist
@@ -310,24 +340,42 @@ Function DllVersionGoodEnough
 FunctionEnd
 
 Function .onInit
-   SectionGetFlags 0 $MYTEMP 
-   ;MessageBox MB_YESNO "Found $SYSDIR\${REDIST_DLL_NAME}" IDYES FoundLbl
-   IfFileExists $SYSDIR\${REDIST_DLL_NAME} MaybeFoundInSystemLbl
-   SearchSxsLbl:	
-        FindFirst $0 $1 $WINDIR\WinSxS\x86*
+   Var /GLOBAL archprefix
+   Var /GLOBAL sysnativedir
+   Var /GLOBAL winvermajor
+   Var /GLOBAL winverminor
+
+   SectionGetFlags 0 $MYTEMP
+   StrCmpS ${WINTYPE} "win64" +1 +4
+	StrCpy $archprefix "amd64"
+	StrCpy $sysnativedir "$WINDIR\sysnative"
+   Goto +3
+	StrCpy $archprefix "x86"
+	StrCpy $sysnativedir $SYSDIR
+   ${WinVerGetMajor} $0
+   ${WinVerGetMinor} $1
+   StrCpy $winvermajor $0
+   StrCpy $winverminor $1
+   IfFileExists $sysnativedir\${REDIST_DLL_NAME} MaybeFoundInSystemLbl
+   SearchSxSLbl:	
+        IntCmp $winvermajor 6 WVCheckMinorLbl WVCheckDoneLbl NotFoundLbl
+   WVCheckMinorLbl:
+	IntCmp $winverminor 1 WVCheckDoneLbl WVCheckDoneLbl NotFoundLbl
+   WVCheckDoneLbl:
+        FindFirst $0 $1 $WINDIR\WinSxS\$archprefix*
         LoopLbl:
 	    StrCmp $1 "" NotFoundLbl
-	    IfFileExists $WINDIR\WinSxS\$1\${REDIST_DLL_NAME} MaybeFoundInSxsLbl
+	    IfFileExists $WINDIR\WinSxS\$1\${REDIST_DLL_NAME} MaybeFoundInSxSLbl
 	    FindNext $0 $1
 	    Goto LoopLbl
-        MaybeFoundInSxsLbl:
+        MaybeFoundInSxSLbl:
 	    GetDllVersion $WINDIR\WinSxS\$1\${REDIST_DLL_NAME} $R0 $R1
 	    Call DllVersionGoodEnough
 	    FindNext $0 $1
 	    IntCmp 2 $R0 LoopLbl
 	    Goto FoundLbl  
    MaybeFoundInSystemLbl:
-	GetDllVersion $SYSDIR\${REDIST_DLL_NAME} $R0 $R1
+	GetDllVersion $sysnativedir\${REDIST_DLL_NAME} $R0 $R1
 	Call DllVersionGoodEnough
 	IntCmp 2 $R0 SearchSxSLbl  
    FoundLbl:

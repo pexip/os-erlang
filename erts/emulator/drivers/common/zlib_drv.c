@@ -1,7 +1,7 @@
 /*
  * %CopyrightBegin%
  *
- * Copyright Ericsson AB 2003-2010. All Rights Reserved.
+ * Copyright Ericsson AB 2003-2013. All Rights Reserved.
  *
  * The contents of this file are subject to the Erlang Public License,
  * Version 1.1, (the "License"); you may not use this file except in
@@ -21,6 +21,9 @@
  * ZLib interface for erlang
  *
  */
+#ifdef HAVE_CONFIG_H
+#  include "config.h"
+#endif
 #include <stdio.h>
 #include <zlib.h>
 #include <errno.h>
@@ -64,8 +67,9 @@
 static int zlib_init(void);
 static ErlDrvData zlib_start(ErlDrvPort port, char* buf);
 static void zlib_stop(ErlDrvData e);
-static int zlib_ctl(ErlDrvData drv_data, unsigned int command, char *buf, 
-		    int len, char **rbuf, int rlen);
+static void zlib_flush(ErlDrvData e);
+static ErlDrvSSizeT zlib_ctl(ErlDrvData drv_data, unsigned int command, char *buf,
+			     ErlDrvSizeT len, char **rbuf, ErlDrvSizeT rlen);
 static void zlib_outputv(ErlDrvData drv_data, ErlIOVec *ev);
 
 ErlDrvEntry zlib_driver_entry = {
@@ -82,7 +86,7 @@ ErlDrvEntry zlib_driver_entry = {
     NULL,                           /* timeout */
     zlib_outputv,
     NULL,                           /* read_async */
-    NULL,                           /* flush */
+    zlib_flush,
     NULL,                           /* call */
     NULL,                           /* event */
     ERL_DRV_EXTENDED_MARKER,
@@ -118,7 +122,7 @@ static int zlib_deflate(ZLibData* d, int flush);
 #if defined(__WIN32__)
 static int i32(char* buf)
 #else
-static inline int i32(char* buf)
+static __inline__ int i32(char* buf)
 #endif
 {
     return (int) (
@@ -162,12 +166,12 @@ static char* zlib_reason(int code, int* err)
 }
 
 
-static int zlib_return(int code, char** rbuf, int rlen)
+static ErlDrvSSizeT zlib_return(int code, char** rbuf, ErlDrvSizeT rlen)
 {
     int msg_code = 0; /* 0=ok, 1=error */
     char* dst = *rbuf;
     char* src;
-    int len = 0;
+    ErlDrvSizeT len = 0;
 
     src = zlib_reason(code, &msg_code);
     *dst++ = msg_code;
@@ -182,7 +186,8 @@ static int zlib_return(int code, char** rbuf, int rlen)
     return len;
 }
 
-static int zlib_value2(int msg_code, int value, char** rbuf, int rlen)
+static ErlDrvSSizeT zlib_value2(int msg_code, int value,
+				char** rbuf, ErlDrvSizeT rlen)
 {
     char* dst = *rbuf;
 
@@ -197,7 +202,7 @@ static int zlib_value2(int msg_code, int value, char** rbuf, int rlen)
     return 5;
 }
 
-static int zlib_value(int value, char** rbuf, int rlen)
+static ErlDrvSSizeT zlib_value(int value, char** rbuf, ErlDrvSizeT rlen)
 {
     return zlib_value2(2, value, rbuf, rlen);
 }
@@ -409,8 +414,15 @@ static void zlib_stop(ErlDrvData e)
     driver_free(d);
 }
 
-static int zlib_ctl(ErlDrvData drv_data, unsigned int command, char *buf, 
-		    int len, char **rbuf, int rlen)
+static void zlib_flush(ErlDrvData drv_data)
+{
+    ZLibData* d = (ZLibData*) drv_data;
+
+    driver_deq(d->port, driver_sizeq(d->port));
+}
+
+static ErlDrvSSizeT zlib_ctl(ErlDrvData drv_data, unsigned int command, char *buf,
+			     ErlDrvSizeT len, char **rbuf, ErlDrvSizeT rlen)
 {
     ZLibData* d = (ZLibData*)drv_data;
     int res;

@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2008-2010. All Rights Reserved.
+%% Copyright Ericsson AB 2008-2013. All Rights Reserved.
 %%
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -17,7 +17,7 @@
 %% %CopyrightEnd%
 %% This file is generated DO NOT EDIT
 
-%% @doc See external documentation: <a href="http://www.wxwidgets.org/manuals/stable/wx_wxsashevent.html">wxSashEvent</a>.
+%% @doc See external documentation: <a href="http://www.wxwidgets.org/manuals/2.8.12/wx_wxsashevent.html">wxSashEvent</a>.
 %% <dl><dt>Use {@link wxEvtHandler:connect/3.} with EventType:</dt>
 %% <dd><em>sash_dragged</em></dd></dl>
 %% See also the message variant {@link wxEvtHandler:wxSash(). #wxSash{}} event record type.
@@ -40,31 +40,34 @@
   parent_class/1,resumePropagation/2,setInt/2,setString/2,shouldPropagate/1,
   skip/1,skip/2,stopPropagation/1]).
 
+-export_type([wxSashEvent/0]).
 %% @hidden
 parent_class(wxCommandEvent) -> true;
 parent_class(wxEvent) -> true;
 parent_class(_Class) -> erlang:error({badtype, ?MODULE}).
 
-%% @spec (This::wxSashEvent()) -> WxSashEdgePosition
-%% WxSashEdgePosition = integer()
-%% @doc See <a href="http://www.wxwidgets.org/manuals/stable/wx_wxsashevent.html#wxsasheventgetedge">external documentation</a>.
-%%<br /> WxSashEdgePosition is one of ?wxSASH_TOP | ?wxSASH_RIGHT | ?wxSASH_BOTTOM | ?wxSASH_LEFT | ?wxSASH_NONE
+-type wxSashEvent() :: wx:wx_object().
+%% @doc See <a href="http://www.wxwidgets.org/manuals/2.8.12/wx_wxsashevent.html#wxsasheventgetedge">external documentation</a>.
+%%<br /> Res = ?wxSASH_TOP | ?wxSASH_RIGHT | ?wxSASH_BOTTOM | ?wxSASH_LEFT | ?wxSASH_NONE
+-spec getEdge(This) -> wx:wx_enum() when
+	This::wxSashEvent().
 getEdge(#wx_ref{type=ThisT,ref=ThisRef}) ->
   ?CLASS(ThisT,wxSashEvent),
   wxe_util:call(?wxSashEvent_GetEdge,
   <<ThisRef:32/?UI>>).
 
-%% @spec (This::wxSashEvent()) -> {X::integer(),Y::integer(),W::integer(),H::integer()}
-%% @doc See <a href="http://www.wxwidgets.org/manuals/stable/wx_wxsashevent.html#wxsasheventgetdragrect">external documentation</a>.
+%% @doc See <a href="http://www.wxwidgets.org/manuals/2.8.12/wx_wxsashevent.html#wxsasheventgetdragrect">external documentation</a>.
+-spec getDragRect(This) -> {X::integer(), Y::integer(), W::integer(), H::integer()} when
+	This::wxSashEvent().
 getDragRect(#wx_ref{type=ThisT,ref=ThisRef}) ->
   ?CLASS(ThisT,wxSashEvent),
   wxe_util:call(?wxSashEvent_GetDragRect,
   <<ThisRef:32/?UI>>).
 
-%% @spec (This::wxSashEvent()) -> WxSashDragStatus
-%% WxSashDragStatus = integer()
-%% @doc See <a href="http://www.wxwidgets.org/manuals/stable/wx_wxsashevent.html#wxsasheventgetdragstatus">external documentation</a>.
-%%<br /> WxSashDragStatus is one of ?wxSASH_STATUS_OK | ?wxSASH_STATUS_OUT_OF_RANGE
+%% @doc See <a href="http://www.wxwidgets.org/manuals/2.8.12/wx_wxsashevent.html#wxsasheventgetdragstatus">external documentation</a>.
+%%<br /> Res = ?wxSASH_STATUS_OK | ?wxSASH_STATUS_OUT_OF_RANGE
+-spec getDragStatus(This) -> wx:wx_enum() when
+	This::wxSashEvent().
 getDragStatus(#wx_ref{type=ThisT,ref=ThisRef}) ->
   ?CLASS(ThisT,wxSashEvent),
   wxe_util:call(?wxSashEvent_GetDragStatus,

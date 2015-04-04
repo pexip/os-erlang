@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 1996-2011. All Rights Reserved.
+%% Copyright Ericsson AB 1996-2013. All Rights Reserved.
 %%
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -17,6 +17,10 @@
 %% %CopyrightEnd%
 %%
 -module(heart). 
+
+-compile(no_native).
+% 'no_native' as part of a crude fix to make init:restart/0 work by clearing
+% all hipe inter-module information (hipe_mfa_info's in hipe_bif0.c).
 
 %%%--------------------------------------------------------------------
 %%% This is a rewrite of pre_heart from BS.3.
@@ -38,9 +42,11 @@
 -define(CLEAR_CMD, 5).
 -define(GET_CMD, 6).
 -define(HEART_CMD, 7).
+-define(PREPARING_CRASH, 8). % Used in beam vm
 
 -define(TIMEOUT, 5000).
 -define(CYCLE_TIMEOUT, 10000).
+-define(HEART_PORT_NAME, heart_port).
 
 %%---------------------------------------------------------------------
 
@@ -126,6 +132,8 @@ start_portprogram() ->
 	Port when is_port(Port) ->
 	    case wait_ack(Port) of
 		ok ->
+		    %% register port so the vm can find it if need be
+		    register(?HEART_PORT_NAME, Port),
 		    {ok, Port};
 		{error, Reason} ->
 		    report_problem({{port_problem, Reason},
@@ -174,20 +182,24 @@ wait_ack(Port) ->
     end.
 
 loop(Parent, Port, Cmd) ->
-    send_heart_beat(Port),
+    _ = send_heart_beat(Port),
     receive
-	{From, set_cmd, NewCmd} when length(NewCmd) < 2047 ->
-	    send_heart_cmd(Port, NewCmd),
-	    wait_ack(Port),
-	    From ! {heart, ok},
-	    loop(Parent, Port, NewCmd);
-	{From, set_cmd, NewCmd} ->
-	    From ! {heart, {error, {bad_cmd, NewCmd}}},
-	    loop(Parent, Port, Cmd);
+	{From, set_cmd, NewCmd0} ->
+	    Enc = file:native_name_encoding(),
+	    case catch unicode:characters_to_binary(NewCmd0,Enc,Enc) of
+		NewCmd when is_binary(NewCmd), byte_size(NewCmd) < 2047 ->
+		    _ = send_heart_cmd(Port, NewCmd),
+		    _ = wait_ack(Port),
+		    From ! {heart, ok},
+		    loop(Parent, Port, NewCmd);
+		_ ->
+		    From ! {heart, {error, {bad_cmd, NewCmd0}}},
+		    loop(Parent, Port, Cmd)
+	    end;
 	{From, clear_cmd} ->
 	    From ! {heart, ok},
-	    send_heart_cmd(Port, ""),
-	    wait_ack(Port),
+	    _ = send_heart_cmd(Port, ""),
+	    _ = wait_ack(Port),
 	    loop(Parent, Port, "");
 	{From, get_cmd} ->
 	    From ! {heart, get_heart_cmd(Port)},
@@ -214,19 +226,20 @@ loop(Parent, Port, Cmd) ->
 -spec no_reboot_shutdown(port()) -> no_return().
 
 no_reboot_shutdown(Port) ->
-    send_shutdown(Port),
+    _ = send_shutdown(Port),
     receive
 	{'EXIT', Port, Reason} when Reason =/= badsig ->
 	    exit(normal)
     end.
 
 do_cycle_port_program(Caller, Parent, Port, Cmd) ->
+    unregister(?HEART_PORT_NAME),
     case catch start_portprogram() of
 	{ok, NewPort} ->
-	    send_shutdown(Port),
+	    _ = send_shutdown(Port),
 	    receive
 		{'EXIT', Port, _Reason} ->
-		    send_heart_cmd(NewPort, Cmd),
+		    _ = send_heart_cmd(NewPort, Cmd),
 		    Caller ! {heart, ok},
 		    loop(Parent, NewPort, Cmd)
 	    after
@@ -234,7 +247,7 @@ do_cycle_port_program(Caller, Parent, Port, Cmd) ->
 		    %% Huh! Two heart port programs running...
 		    %% well, the old one has to be sick not to respond
 		    %% so we'll settle for the new one...
-		    send_heart_cmd(NewPort, Cmd),
+		    _ = send_heart_cmd(NewPort, Cmd),
 		    Caller ! {heart, {error, stop_error}},
 		    loop(Parent, NewPort, Cmd)
 	    end;

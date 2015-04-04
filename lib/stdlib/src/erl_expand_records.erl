@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2005-2011. All Rights Reserved.
+%% Copyright Ericsson AB 2005-2014. All Rights Reserved.
 %%
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -37,6 +37,8 @@
                  strict_ra=[],        % strict record accesses
                  checked_ra=[]        % successfully accessed records
                 }).
+
+-define(REC_OFFSET, 100000000). % A hundred millions. Also in v3_core.
 
 -spec(module(AbsForms, CompileOptions) -> AbsForms when
       AbsForms :: [erl_parse:abstract_form()],
@@ -132,17 +134,23 @@ pattern({cons,Line,H,T}, St0) ->
 pattern({tuple,Line,Ps}, St0) ->
     {TPs,St1} = pattern_list(Ps, St0),
     {{tuple,Line,TPs},St1};
+pattern({map,Line,Ps}, St0) ->
+    {TPs,St1} = pattern_list(Ps, St0),
+    {{map,Line,TPs},St1};
+pattern({map_field_exact,Line,K0,V0}, St0) ->
+    {K,St1} = expr(K0, St0),
+    {V,St2} = pattern(V0, St1),
+    {{map_field_exact,Line,K,V},St2};
 %%pattern({struct,Line,Tag,Ps}, St0) ->
 %%    {TPs,TPsvs,St1} = pattern_list(Ps, St0),
 %%    {{struct,Line,Tag,TPs},TPsvs,St1};
-pattern({record_field,_,_,_}=M, St) ->
-    {M,St};  % must be a package name
 pattern({record_index,Line,Name,Field}, St) ->
     {index_expr(Line, Field, Name, record_fields(Name, St)),St};
-pattern({record,Line,Name,Pfs}, St0) ->
+pattern({record,Line0,Name,Pfs}, St0) ->
     Fs = record_fields(Name, St0),
     {TMs,St1} = pattern_list(pattern_fields(Fs, Pfs), St0),
-    {{tuple,Line,[{atom,Line,Name} | TMs]},St1};
+    Line = record_offset(Line0, St1),
+    {{tuple,Line,[{atom,Line0,Name} | TMs]},St1};
 pattern({bin,Line,Es0}, St0) ->
     {Es1,St1} = pattern_bin(Es0, St0),
     {{bin,Line,Es1},St1};
@@ -303,16 +311,30 @@ expr({bc,Line,E0,Qs0}, St0) ->
 expr({tuple,Line,Es0}, St0) ->
     {Es1,St1} = expr_list(Es0, St0),
     {{tuple,Line,Es1},St1};
+expr({map,Line,Es0}, St0) ->
+    {Es1,St1} = expr_list(Es0, St0),
+    {{map,Line,Es1},St1};
+expr({map,Line,Arg0,Es0}, St0) ->
+    {Arg1,St1} = expr(Arg0, St0),
+    {Es1,St2} = expr_list(Es0, St1),
+    {{map,Line,Arg1,Es1},St2};
+expr({map_field_assoc,Line,K0,V0}, St0) ->
+    {K,St1} = expr(K0, St0),
+    {V,St2} = expr(V0, St1),
+    {{map_field_assoc,Line,K,V},St2};
+expr({map_field_exact,Line,K0,V0}, St0) ->
+    {K,St1} = expr(K0, St0),
+    {V,St2} = expr(V0, St1),
+    {{map_field_exact,Line,K,V},St2};
 %%expr({struct,Line,Tag,Es0}, Vs, St0) ->
 %%    {Es1,Esvs,Esus,St1} = expr_list(Es0, Vs, St0),
 %%    {{struct,Line,Tag,Es1},Esvs,Esus,St1};
-expr({record_field,_,_,_}=M, St) ->
-    {M,St};  % must be a package name
 expr({record_index,Line,Name,F}, St) ->
     I = index_expr(Line, F, Name, record_fields(Name, St)),
     expr(I, St);
-expr({record,Line,Name,Is}, St) ->
-    expr({tuple,Line,[{atom,Line,Name} | 
+expr({record,Line0,Name,Is}, St) ->
+    Line = record_offset(Line0, St),
+    expr({tuple,Line,[{atom,Line0,Name} |
                       record_inits(record_fields(Name, St), Is)]},
          St);
 expr({record_field,Line,R,Name,F}, St) ->
@@ -348,6 +370,9 @@ expr({'fun',_,{function,_M,_F,_A}}=Fun, St) ->
 expr({'fun',Line,{clauses,Cs0}}, St0) ->
     {Cs,St1} = clauses(Cs0, St0),
     {{'fun',Line,{clauses,Cs}},St1};
+expr({named_fun,Line,Name,Cs0}, St0) ->
+    {Cs,St1} = clauses(Cs0, St0),
+    {{named_fun,Line,Name,Cs},St1};
 expr({call,Line,{atom,_,is_record},[A,{atom,_,Name}]}, St) ->
     record_test(Line, A, Name, St);
 expr({call,Line,{remote,_,{atom,_,erlang},{atom,_,is_record}},
@@ -375,15 +400,9 @@ expr({call,Line,{atom,_La,N}=Atom,As0}, St0) ->
                     end
             end
     end;
-expr({call,Line,{record_field,_,_,_}=M,As0}, St0) ->
-    {As,St1} = expr_list(As0, St0),
-    {{call,Line,M,As},St1};
 expr({call,Line,{remote,Lr,M,F},As0}, St0) ->
     {[M1,F1 | As1],St1} = expr_list([M,F | As0], St0),
     {{call,Line,{remote,Lr,M1,F1},As1},St1};
-expr({call,Line,{tuple,Lt,[{atom,_,_}=M,{atom,_,_}=F]},As0}, St0) ->
-    {As,St1} = expr_list(As0, St0),
-    {{call,Line,{tuple,Lt,[M,F]},As},St1};
 expr({call,Line,F,As0}, St0) ->
     {[Fun1 | As1],St1} = expr_list([F | As0], St0),
     {{call,Line,Fun1,As1},St1};
@@ -452,8 +471,10 @@ conj([], _E) ->
 conj([{{Name,_Rp},L,R,Sz} | AL], E) ->
     NL = neg_line(L),
     T1 = {op,NL,'orelse',
-          {call,NL,{atom,NL,is_record},[R,{atom,NL,Name},{integer,NL,Sz}]},
-          {atom,NL,fail}},
+          {call,NL,
+	   {remote,NL,{atom,NL,erlang},{atom,NL,is_record}},
+	   [R,{atom,NL,Name},{integer,NL,Sz}]},
+	  {atom,NL,fail}},
     T2 = case conj(AL, none) of
         empty -> T1;
         C -> {op,NL,'and',C,T1}
@@ -565,8 +586,9 @@ strict_get_record_field(Line, R, {atom,_,F}=Index, Name, St0) ->
             I = index_expr(F, Fs, 2),
             P = record_pattern(2, I, Var, length(Fs)+1, Line, [{atom,Line,Name}]),
             NLine = neg_line(Line),
+            RLine = record_offset(NLine, St),
 	    E = {'case',NLine,R,
-		     [{clause,NLine,[{tuple,NLine,P}],[],[Var]},
+		     [{clause,NLine,[{tuple,RLine,P}],[],[Var]},
 		      {clause,NLine,[{var,NLine,'_'}],[],
 		       [{call,NLine,{remote,NLine,
 				    {atom,NLine,erlang},
@@ -581,7 +603,9 @@ strict_get_record_field(Line, R, {atom,_,F}=Index, Name, St0) ->
             ExpRp = erl_lint:modify_line(ExpR, fun(_L) -> 0 end),
             RA = {{Name,ExpRp},Line,ExpR,length(Fs)+1},
             St2 = St1#exprec{strict_ra = [RA | St1#exprec.strict_ra]},
-            {{call,Line,{atom,Line,element},[I,ExpR]},St2}
+            {{call,Line,
+	      {remote,Line,{atom,Line,erlang},{atom,Line,element}},
+	      [I,ExpR]},St2}
     end.
 
 record_pattern(I, I, Var, Sz, Line, Acc) ->
@@ -593,7 +617,9 @@ record_pattern(_, _, _, _, _, Acc) -> reverse(Acc).
 sloppy_get_record_field(Line, R, Index, Name, St) ->
     Fs = record_fields(Name, St),
     I = index_expr(Line, Index, Name, Fs),
-    expr({call,Line,{atom,Line,element},[I,R]}, St).
+    expr({call,Line,
+	  {remote,Line,{atom,Line,erlang},{atom,Line,element}},
+	  [I,R]}, St).
 
 strict_record_tests([strict_record_tests | _]) -> true;
 strict_record_tests([no_strict_record_tests | _]) -> false;
@@ -710,7 +736,8 @@ record_setel(R, Name, Fs, Us0) ->
     {'case',Lr,R,
      [{clause,Lr,[{tuple,Lr,[{atom,Lr,Name} | Wildcards]}],[],
        [foldr(fun ({I,Lf,Val}, Acc) ->
-                      {call,Lf,{atom,Lf,setelement},[I,Acc,Val]} end,
+                      {call,Lf,{remote,Lf,{atom,Lf,erlang},
+				{atom,Lf,setelement}},[I,Acc,Val]} end,
               R, Us)]},
       {clause,NLr,[{var,NLr,'_'}],[],
        [call_error(NLr, {tuple,NLr,[{atom,NLr,badrecord},{atom,NLr,Name}]})]}]}.
@@ -814,7 +841,7 @@ optimize_is_record(H0, G0, #exprec{compile=Opts}) ->
 	[] ->
 	    {H0,G0};
 	Rs0 ->
-	    case lists:member(no_is_record_optimization, Opts) of
+	    case lists:member(dialyzer, Opts) of % no_is_record_optimization
 		true ->
 		    {H0,G0};
 		false ->
@@ -939,3 +966,10 @@ opt_remove_2(A, _) -> A.
 
 neg_line(L) ->
     erl_parse:set_line(L, fun(Line) -> -abs(Line) end).
+
+record_offset(L, St) ->
+    case lists:member(dialyzer, St#exprec.compile) of
+        true when L >= 0 -> L+?REC_OFFSET;
+        true when L < 0  -> L-?REC_OFFSET;
+        false -> L
+    end.

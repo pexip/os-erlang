@@ -1,7 +1,7 @@
 #
 # %CopyrightBegin%
 # 
-# Copyright Ericsson AB 1997-2009. All Rights Reserved.
+# Copyright Ericsson AB 1997-2012. All Rights Reserved.
 # 
 # The contents of this file are subject to the Erlang Public License,
 # Version 1.1, (the "License"); you may not use this file except in
@@ -64,6 +64,8 @@ HRL_FILES=
 
 ERL_FILES= $(MODULES:%=%.erl)
 
+GEN_FILES = $(GEN_ERL_MODULES:%=%.erl) $(GEN_HRL_FILES)
+
 JAVA_CLASSES = \
 	StackClient
 
@@ -94,16 +96,20 @@ ERL_COMPILE_FLAGS += \
 debug opt: $(TARGET_FILES) 
 
 clean:
-	rm -f $(TARGET_FILES) $(GEN_ERL_MODULES:%=%.erl) $(GEN_HRL_FILES) $(CLASS_FILES)
+	rm -f $(TARGET_FILES) $(GEN_ERL_MODULES:%=%.erl) $(GEN_HRL_FILES) $(CLASS_FILES) IDL-GENERATED
 	rm -f errs core *~
 
 docs:
 
 test: $(TEST_TARGET_FILES)
 
+IDL-GENERATED: stack.idl
+	$(gen_verbose)erlc $(ERL_IDL_FLAGS) stack.idl
+	$(V_at)>IDL-GENERATED
 
-$(GEN_ERL_MODULES:%=%.erl) $(GEN_HRL_FILES): stack.idl
-	erlc $(ERL_IDL_FLAGS) stack.idl
+$(GEN_FILES): IDL-GENERATED
+
+$(TARGET_FILES): IDL-GENERATED
 
 # ----------------------------------------------------
 # Release Target
@@ -112,8 +118,8 @@ include $(ERL_TOP)/make/otp_release_targets.mk
 
 
 release_spec: opt
-	$(INSTALL_DIR) $(RELSYSDIR)/examples/Stack
-	$(INSTALL_DATA) $(ERL_FILES) $(JAVA_FILES) $(CPP_FILES) $(IDL_FILES) $(RELSYSDIR)/examples/Stack
+	$(INSTALL_DIR) "$(RELSYSDIR)/examples/Stack"
+	$(INSTALL_DATA) $(ERL_FILES) $(JAVA_FILES) $(CPP_FILES) $(IDL_FILES) "$(RELSYSDIR)/examples/Stack"
 
 
 release_docs_spec:

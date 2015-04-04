@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %% 
-%% Copyright Ericsson AB 2006-2011. All Rights Reserved.
+%% Copyright Ericsson AB 2006-2012. All Rights Reserved.
 %% 
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -21,7 +21,10 @@
 -export([all/0, suite/0,groups/0,init_per_suite/1, end_per_suite/1, 
 	 init_per_group/2,end_per_group/2,
 	 init_per_testcase/2,end_per_testcase/2,
-	 dehydrated_itracer/1,nested_tries/1]).
+	 dehydrated_itracer/1,nested_tries/1,
+	 seq_in_guard/1,make_effect_seq/1,eval_is_boolean/1,
+	 unsafe_case/1,nomatch_shadow/1,reversed_annos/1,
+	 map_core_test/1,eval_case/1,bad_boolean_guard/1]).
 
 -include_lib("test_server/include/test_server.hrl").
 
@@ -41,10 +44,15 @@ suite() -> [{ct_hooks,[ts_install_cth]}].
 
 all() -> 
     test_lib:recompile(?MODULE),
-    [dehydrated_itracer, nested_tries].
+    [{group,p}].
 
 groups() -> 
-    [].
+    [{p,test_lib:parallel(),
+      [dehydrated_itracer,nested_tries,seq_in_guard,make_effect_seq,
+       eval_is_boolean,unsafe_case,nomatch_shadow,reversed_annos,
+       map_core_test,eval_case,bad_boolean_guard
+   ]}].
+
 
 init_per_suite(Config) ->
     Config.
@@ -61,19 +69,22 @@ end_per_group(_GroupName, Config) ->
 
 ?comp(dehydrated_itracer).
 ?comp(nested_tries).
+?comp(seq_in_guard).
+?comp(make_effect_seq).
+?comp(eval_is_boolean).
+?comp(unsafe_case).
+?comp(nomatch_shadow).
+?comp(reversed_annos).
+?comp(map_core_test).
+?comp(eval_case).
+?comp(bad_boolean_guard).
 
 try_it(Mod, Conf) ->
-    ?line Src = filename:join(?config(data_dir, Conf), atom_to_list(Mod)),
-    ?line Out = ?config(priv_dir,Conf),
-    ?line io:format("Compiling: ~s\n", [Src]),
-    ?line CompRc0 = compile:file(Src, [from_core,{outdir,Out},report,time]),
-    ?line io:format("Result: ~p\n",[CompRc0]),
-    ?line {ok,Mod} = CompRc0,
+    Src = filename:join(?config(data_dir, Conf), atom_to_list(Mod)),
+    compile_and_load(Src, []),
+    compile_and_load(Src, [no_copt]).
 
-    ?line {module,Mod} = code:load_abs(filename:join(Out, Mod)),
-    ?line ok = Mod:Mod(),
-    ok.
-
-
-
-
+compile_and_load(Src, Opts) ->
+    {ok,Mod,Bin} = compile:file(Src, [from_core,report,time,binary|Opts]),
+    {module,Mod} = code:load_binary(Mod, Mod, Bin),
+    ok = Mod:Mod().

@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %% 
-%% Copyright Ericsson AB 2005-2011. All Rights Reserved.
+%% Copyright Ericsson AB 2005-2013. All Rights Reserved.
 %% 
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -66,7 +66,7 @@ version_of(_EC, Binary, 3, [AsnModV1, AsnModV2, AsnModV3])
 version_of([], _Binary, Err) ->
     {error, {decode_failed, lists:reverse(Err)}};
 version_of([AsnMod|AsnMods], Binary, Errs) when is_atom(AsnMod) ->
-    case (catch asn1rt:decode(AsnMod, 'MegacoMessage', Binary)) of
+    case (catch AsnMod:decode('MegacoMessage', Binary)) of
 	{ok, M} ->
 	    V = (M#'MegacoMessage'.mess)#'Message'.version,
 	    {ok, V};
@@ -82,14 +82,14 @@ version_of([AsnMod|AsnMods], Binary, Errs) when is_atom(AsnMod) ->
 
 encode_message([native], MegaMsg, AsnMod, _TransMod, binary) 
   when is_record(MegaMsg, 'MegacoMessage') ->
-    asn1rt:encode(AsnMod, 'MegacoMessage', MegaMsg);
+    AsnMod:encode('MegacoMessage', MegaMsg);
 encode_message(EC, MegaMsg, AsnMod, TransMod, binary) 
   when is_list(EC) andalso is_record(MegaMsg, 'MegacoMessage') ->
     case (catch TransMod:tr_message(MegaMsg, encode, EC)) of
 	{'EXIT', Reason} ->
 	    {error, Reason};
 	MegaMsg2 ->
-	    asn1rt:encode(AsnMod, 'MegacoMessage', MegaMsg2)
+	    AsnMod:encode('MegacoMessage', MegaMsg2)
     end;
 encode_message(EC, MegaMsg, AsnMod, TransMod, io_list) ->
     case encode_message(EC, MegaMsg, AsnMod, TransMod, binary) of
@@ -275,26 +275,13 @@ decode_message_dynamic(_EC, _BadBin, _Mods, _Type) ->
     {error, no_binary}.
 
 
-decode_message(EC, Bin, AsnMod, TransMod, binary) ->
-    case asn1rt:decode(AsnMod, 'MegacoMessage', Bin) of
+decode_message(EC, Bin, AsnMod, TransMod, _) ->
+    case AsnMod:decode('MegacoMessage', Bin) of
 	{ok, MegaMsg} ->
 	    case EC of
 		[native] ->
 		    {ok, MegaMsg};
 		_ ->		
-		    {ok, TransMod:tr_message(MegaMsg, decode, EC)}
-	    end;
-	{error, Reason} ->
-	    {error, Reason}
-    end;
-decode_message(EC, Bin, AsnMod, TransMod, io_list) ->
-    ShallowIoList = erlang:binary_to_list(Bin),
-    case asn1rt:decode(AsnMod, 'MegacoMessage', ShallowIoList) of
-	{ok, MegaMsg} ->
-	    case EC of
-		[native] ->
-		    {ok, MegaMsg};
-		_ ->
 		    {ok, TransMod:tr_message(MegaMsg, decode, EC)}
 	    end;
 	{error, Reason} ->

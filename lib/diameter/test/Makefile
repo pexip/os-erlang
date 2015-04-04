@@ -1,7 +1,7 @@
-# 
+#
 # %CopyrightBegin%
 #
-# Copyright Ericsson AB 2010-2011. All Rights Reserved.
+# Copyright Ericsson AB 2010-2013. All Rights Reserved.
 #
 # The contents of this file are subject to the Erlang Public License,
 # Version 1.1, (the "License"); you may not use this file except in
@@ -16,15 +16,8 @@
 #
 # %CopyrightEnd%
 
-ifeq ($(ERL_TOP),)
-TOP = $(DIAMETER_TOP)
-else
-TOP = $(ERL_TOP)
-DIAMETER_TOP = $(TOP)/lib/diameter
-endif
-
-include $(TOP)/make/target.mk
-include $(TOP)/make/$(TARGET)/otp.mk
+include $(ERL_TOP)/make/target.mk
+include $(ERL_TOP)/make/$(TARGET)/otp.mk
 
 # ----------------------------------------------------
 # Application version
@@ -46,127 +39,156 @@ RELSYSDIR = $(RELEASE_PATH)/diameter_test
 
 include modules.mk
 
-EBIN = .
-
-HRL_FILES = $(INTERNAL_HRL_FILES)
-ERL_FILES = $(MODULES:%=%.erl)
-
-SOURCE = $(HRL_FILES) $(ERL_FILES) 
+ERL_FILES    = $(MODULES:%=%.erl)
 TARGET_FILES = $(MODULES:%=%.$(EMULATOR))
 
 SUITE_MODULES = $(filter diameter_%_SUITE, $(MODULES))
-SUITES = $(SUITE_MODULES:diameter_%_SUITE=%)
+SUITES        = $(SUITE_MODULES:diameter_%_SUITE=%)
 
-RELTEST_FILES = $(TEST_SPEC_FILE) $(COVER_SPEC_FILE) $(SOURCE)
+DATA_DIRS = $(sort $(dir $(DATA)))
 
 # ----------------------------------------------------
 # FLAGS
 # ----------------------------------------------------
 
-include ../src/app/diameter.mk 
-
 # This is only used to compile suite locally when running with a
 # target like 'all' below. Target release_tests only installs source.
-ERL_COMPILE_FLAGS += $(DIAMETER_ERL_COMPILE_FLAGS) \
-                     -DDIAMETER_CT=true \
-                     -I $(DIAMETER_TOP)/src/app
+ERL_COMPILE_FLAGS += +warn_export_vars \
+                     +warn_unused_vars \
+                     -I ../include \
+                     -I ../src/gen \
+                     $(STRICT_FLAGS)
 
 # ----------------------------------------------------
 # Targets
 # ----------------------------------------------------
 
-all: $(SUITES)
+all debug opt: $(TARGET_FILES)
 
-tests debug opt: $(TARGET_FILES)
+strict:
+	$(MAKE) opt STRICT_FLAGS=-Werror
+
+# Require success ...
+run: $(SUITES)
+
+# ... or not.
+any: opt
+	$(MAKE) -i $(SUITES)
 
 clean:
-	rm -f $(TARGET_FILES) 
-	rm -f depend.mk
+	rm -f $(TARGET_FILES)
+	rm -f depend.mk coverspec
 
 realclean: clean
 	rm -rf log
-	rm -f errs core *~
-
-.PHONY: all tests debug opt clean realclean
 
 docs:
 
+list = echo $(1):; echo $($(1)) | tr ' ' '\n' | sort | sed 's@^@  @'
+
 info:
-	@echo "TARGET_FILES = $(TARGET_FILES)"
+	@echo ========================================
+	@$(call list,MODULES)
 	@echo
-	@echo "ERL_COMPILE_FLAGS = $(ERL_COMPILE_FLAGS)"
-	@echo "ERL  = $(ERL)"
-	@echo "ERLC = $(ERLC)"
+	@$(call list,HRL_FILES)
 	@echo
-	@echo "HRL_FILES    = $(HRL_FILES)"
-	@echo "ERL_FILES    = $(ERL_FILES)"
-	@echo "TARGET_FILES = $(TARGET_FILES)"
+	@$(call list,SUITES)
 	@echo
-	@echo "SUITE_MODULES = $(SUITE_MODULES)"
-	@echo "SUITES        = $(SUITES)"
-	@echo
+	@echo erl = $(shell which erl)
+	@erl -noinput \
+	     -eval 'io:format("diameter = ~s~n", [code:lib_dir(diameter)])' \
+	     -s init stop
+	@echo ========================================
 
 help:
+	@echo ========================================
+	@echo "Useful targets:"
 	@echo
-	@echo "Targets:"
+	@echo "    all:"
+	@echo "        Compile all test suites."
 	@echo
-	@echo "    all"
-	@echo "        Run all test suites."
+	@echo "    run:"
+	@echo "        Compile and run all test suites, stop on failure."
 	@echo
-	@echo "    $(SUITES)"
-	@echo "        Run a specific test suite."
+	@echo "    any:"
+	@echo "        Compile and run all test suites, ignore any failures."
 	@echo
-	@echo "    tests"
-	@echo "        Compile all test-code."
+	@echo "    $(SUITES):"
+	@echo "        Compile and run a specific test suite."
 	@echo
-	@echo "    clean | realclean"
+	@echo "    clean | realclean:"
 	@echo "        Remove generated files."
 	@echo
-	@echo "    info"
-	@echo "        Prints various environment variables."
-	@echo "        May be useful when debugging this Makefile."
-	@echo
-	@echo "    help"
-	@echo "        Print this info."
-	@echo
+	@echo "    info:"
+	@echo "        Echo some relevant variables."
+	@echo ========================================
 
-.PHONY: docs info help
+.PHONY: all any run clean debug docs help info opt realclean strict
 
 # ----------------------------------------------------
 # Special Targets
 # ----------------------------------------------------
 
 # Exit with a non-zero status if the output looks to indicate failure.
-# diameter_ct:run/1 itself can't tell (it seems).
-$(SUITES): log tests
-	$(ERL) -noshell \
-	        -pa $(DIAMETER_TOP)/ebin \
-	        -sname diameter_test_$@ \
-	        -s diameter_ct run diameter_$@_SUITE \
-	        -s init stop \
-	| awk '1{rc=0} {print} / FAILED /{rc=1} END{exit rc}'
+# diameter_ct:run/1 itself can't tell (it seems). The absolute -pa is
+# because ct will change directories.
+$(SUITES): log opt
+	$(ERL) -noinput \
+	       -pa $(realpath ../ebin) \
+	       -sname diameter_test_$@ \
+	       -s diameter_ct run diameter_$@_SUITE \
+	       -s init stop \
+	| awk '{print} / FAILED /{rc=1} END{exit rc}' rc=0
 # Shorter in sed but requires a GNU extension (ie. Q).
+
+cover: log opt coverspec
+	$(ERL) -noinput \
+	       -pa $(realpath ../ebin) \
+	       -sname diameter_cover \
+	       -s diameter_ct cover \
+	       -s init stop \
+	| awk '{print} / FAILED /{rc=1} END{exit rc}' rc=0
+
+coverspec: diameter.cover
+	sed -f $@.sed $< > $@
 
 log:
 	mkdir $@
 
-.PHONY: $(SUITES)
+.PHONY: $(SUITES) cover
 
 # ----------------------------------------------------
 # Release Targets
-# ---------------------------------------------------- 
+# ----------------------------------------------------
 
-include $(TOP)/make/otp_release_targets.mk
+/%: % force
+	sed -f release.sed $< > "$(RELSYSDIR)$@"
 
-release_spec: 
+include $(ERL_TOP)/make/otp_release_targets.mk
 
-release_docs_spec:
+release_spec release_docs_spec:
 
 release_tests_spec:
-	$(INSTALL_DIR)  $(RELSYSDIR)
-	$(INSTALL_DATA) $(RELTEST_FILES) $(RELSYSDIR)
+	$(INSTALL_DIR)  "$(RELSYSDIR)"
+	$(INSTALL_DATA) $(TEST_SPEC_FILE) \
+	                $(COVER_SPEC_FILE) \
+	                $(HRL_FILES) \
+	                "$(RELSYSDIR)"
+	$(MAKE) $(DATA_DIRS:%/=release_data_%)
+	$(MAKE) $(ERL_FILES:%=/%)
+
+$(DATA_DIRS:%/=release_data_%): release_data_%:
+	$(INSTALL_DIR) "$(RELSYSDIR)/$*"
+	$(INSTALL_DATA) $(filter $*/%, $(DATA)) "$(RELSYSDIR)/$*"
+
+force:
 
 .PHONY: release_spec release_docs_spec release_test_specs
+.PHONY: force
+.PHONY: $(DATA_DIRS:%/=release_data_%)
+
+# Can't just make $(ERL_FILES:%=/%) phony since then implicit rule
+# searching is skipped.
 
 # ----------------------------------------------------
 
@@ -175,7 +197,7 @@ depend: depend.mk
 # Generate dependencies makefile.
 depend.mk: depend.sed $(MODULES:%=%.erl) Makefile
 	(for f in $(MODULES); do \
-	     sed -f $< $$f.erl | sed "s@/@/$$f@"; \
+	     (echo $$f; cat $$f.erl) | sed -f $<; \
 	 done) \
 	> $@
 

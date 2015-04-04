@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 1996-2010. All Rights Reserved.
+%% Copyright Ericsson AB 1996-2014. All Rights Reserved.
 %%
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -37,8 +37,9 @@ end_per_testcase(Func, Conf) ->
 all() -> 
     [system_info, table_info, error_description,
      db_node_lifecycle, evil_delete_db_node, start_and_stop,
-     checkpoint, table_lifecycle, add_copy_conflict,
-     add_copy_when_going_down, replica_management,
+     checkpoint, table_lifecycle, storage_options, 
+     add_copy_conflict,
+     add_copy_when_going_down, replica_management, clear_table_during_load,
      schema_availability, local_content,
      {group, table_access_modifications}, replica_location,
      {group, table_sync}, user_properties, unsupp_user_props,
@@ -244,7 +245,7 @@ db_node_lifecycle(Config) when is_list(Config) ->
     ?match([], mnesia_test_lib:start_mnesia(AllNodes)),
 
     ?match([SNs, SNs, SNs], 
-	   lists:map({lists, sort}, 
+	   lists:map(fun lists:sort/1,
 		     element(1, rpc:multicall(AllNodes, mnesia, table_info, 
 					      [schema, disc_copies])))),
 
@@ -259,7 +260,7 @@ db_node_lifecycle(Config) when is_list(Config) ->
            mnesia:change_table_copy_type(schema, Node2, disc_copies)),
 
     ?match([SNs, SNs, SNs], 
-	   lists:map({lists, sort}, 
+	   lists:map(fun lists:sort/1,
 		     element(1, rpc:multicall(AllNodes, mnesia, table_info, 
 					      [schema, disc_copies])))),
 
@@ -462,7 +463,7 @@ table_lifecycle(Config) when is_list(Config) ->
     ?match({atomic, ok}, mnesia:create_table([{name, already_exists},
 					      {ram_copies, [Node1]}])),
     ?match({aborted, Reason23 } when element(1, Reason23) ==already_exists,
-	   mnesia:create_table([{name, already_exists}, 
+	   mnesia:create_table([{name, already_exists},
 				{ram_copies, [Node1]}])),
     ?match({aborted, Reason21 } when element(1, Reason21) == bad_type,
            mnesia:create_table([{name, bad_node}, {ram_copies, ["foo"]}])),
@@ -520,11 +521,99 @@ table_lifecycle(Config) when is_list(Config) ->
     ?match({atomic, ok},
            mnesia:create_table([{name, create_with_index}, {index, [3]},
                                 {ram_copies, [Node1]}])),
-    ets:new(ets_table, [named_table]),
 
+    ets:new(ets_table, [named_table]),
     ?match({aborted, _}, mnesia:create_table(ets_table, [{ram_copies, Nodes}])),
+    ?match({aborted, _}, mnesia:create_table(ets_table, [{ram_copies, [Node1]}])),
+    ets:delete(ets_table),
+    ?match({atomic, ok}, mnesia:create_table(ets_table, [{ram_copies, [Node1]}])),
+    ?match(Node1, rpc:call(Node1, mnesia_lib, val, [{ets_table,where_to_read}])),
+    ?match(Node1, rpc:call(Node2, mnesia_lib, val, [{ets_table,where_to_read}])),
+    ?match({atomic, ok}, mnesia:change_table_copy_type(ets_table, Node1, disc_only_copies)),    
+    ?match(Node1, rpc:call(Node2, mnesia_lib, val, [{ets_table,where_to_read}])),
+    
+    ?verify_mnesia(Nodes, []).
+
+
+storage_options(suite) -> [];
+storage_options(Config) when is_list(Config) ->
+    [N1,N2,N3] = Nodes = ?acquire_nodes(3, Config),
+
+    ?match({aborted,_}, mnesia:create_table(a, [{storage_properties, [{ets,foobar}]}])),
+    ?match({aborted,_}, mnesia:create_table(a, [{storage_properties, [{ets,[foobar]}]}])),
+    ?match({aborted,_}, mnesia:create_table(a, [{storage_properties, [{ets,[duplicate_bag]}]}])),
+    ?match({aborted,_}, mnesia:create_table(a, [{storage_properties, [{dets,[{type,bag}]}]}])),
+
+    ?match({atomic, ok}, mnesia:create_table(a, [{ram_copies, [N1]},
+						 {disc_only_copies, [N2]},
+						 {storage_properties,
+						  [{ets,[compressed]},
+						   {dets, [{auto_save, 5000}]} ]}])),
+    ?match(true, ets:info(a, compressed)),
+    ?match(5000, rpc:call(N2, dets, info, [a, auto_save])),
+    ?match(ok, mnesia:dirty_write({a,1,1})),
+    ?match([{a,1,1}], mnesia:dirty_read({a,1})),
+    mnesia:dump_log(),
+    W2C1 = [{N2, disc_only_copies}, {N1, ram_copies}],
+    ?match(W2C1, lists:sort(rpc:call(N2, mnesia_lib, val, [{a, where_to_commit}]))),
+    ?match(W2C1, lists:sort(rpc:call(N3, mnesia_lib, val, [{a, where_to_commit}]))),
+    ?match({atomic,ok}, mnesia:change_table_copy_type(a, N1, disc_only_copies)),
+    W2C2 = [{N2, disc_only_copies}, {N1, disc_only_copies}],
+    ?match(W2C2, lists:sort(rpc:call(N2, mnesia_lib, val, [{a, where_to_commit}]))),
+    ?match(W2C2, lists:sort(rpc:call(N3, mnesia_lib, val, [{a, where_to_commit}]))),
+    ?match(undefined, ets:info(a, compressed)),
+    ?match(5000, dets:info(a, auto_save)),
+    ?match({atomic,ok}, mnesia:change_table_copy_type(a, N1, disc_copies)),
+    ?match(true, ets:info(a, compressed)),
 
     ?verify_mnesia(Nodes, []).
+
+
+clear_table_during_load(suite) -> [];
+clear_table_during_load(doc) ->
+    ["Clear table caused during load caused a schema entry in the actual tab"];
+clear_table_during_load(Config) when is_list(Config) ->
+    Nodes = [_, Node2] = ?acquire_nodes(2, Config ++ [{tc_timeout, timer:minutes(2)}]),
+    ?match({atomic,ok}, mnesia:create_table(cleartab, [{ram_copies, Nodes}])),
+    Tester = self(),
+    Bin = <<"Testingasdasd", 0:32000>>,
+    Fill =  fun() -> [mnesia:write({cleartab, N, Bin}) || N <- lists:seq(1, 3000)], ok end,
+    ?match({atomic, ok}, mnesia:sync_transaction(Fill)),
+
+    StopAndStart = fun() ->
+			   stopped = mnesia:stop(),
+			   Tester ! {self(), stopped},
+			   receive start_node -> ok end,
+			   ok = mnesia:start(),
+			   ok = mnesia:wait_for_tables([cleartab], 2000),
+			   lists:foreach(fun({cleartab,_,_}) -> ok;
+					    (What) -> Tester ! {failed, What},
+						      unlink(Tester),
+						      exit(foo)
+					 end,
+					 ets:tab2list(cleartab)),
+			   Tester ! {self(), ok},
+			   normal
+		   end,
+
+    Test = fun(N) ->
+		   Pid = spawn_link(Node2, StopAndStart),
+		   receive {Pid, stopped} -> ok end,
+		   Pid ! start_node,
+		   timer:sleep(N*10),
+		   {atomic, ok} = mnesia:clear_table(cleartab),
+		   receive
+		       {Pid, ok} -> ok;
+		       {failed, What} ->
+			   io:format("Failed in ~p tries, with ~p~n",[N, What]),
+			   exit({error, What});
+		       {'EXIT', Pid, Reason} ->
+			   exit({died, Reason})
+		   end
+	   end,
+    [Test(N) || N <- lists:seq(1, 10)],
+    ?verify_mnesia(Nodes, []).
+
 
 add_copy_conflict(suite) -> [];
 add_copy_conflict(doc) -> 
@@ -553,7 +642,7 @@ add_copy_conflict(Config) when is_list(Config) ->
     mnesia_controller:unblock_controller(),
     
     ?match_receive({test, {atomic,ok}}),
-    
+    ?match(ok, mnesia:wait_for_tables([a,b], 3000)),
     ?verify_mnesia(Nodes, []),
     ?cleanup(1, Config).
 
@@ -582,14 +671,17 @@ add_copy_when_going_down(Config) ->
 	?acquire_nodes(2, Config ++ [{tc_timeout, timer:minutes(2)}]),
     ?match({atomic, ok}, mnesia:create_table(a, [{ram_copies, [Node1]}])),
     %% Grab a write lock 
+    Tester = self(),
     WriteAndWait = fun() -> 
 			   mnesia:write({a,1,1}),
-			   receive continue -> ok 
+			   Tester ! {self(), got_lock},
+			   receive continue -> ok
 			   end
 		   end,
-    _Lock = spawn(fun() -> mnesia:transaction(WriteAndWait) end),
-    Tester = self(),
-    spawn_link(fun() -> Res = rpc:call(Node2,mnesia, add_table_copy,
+    Locker = spawn(fun() -> mnesia:transaction(WriteAndWait) end),
+    receive {Locker, got_lock} -> ok end,
+
+    spawn_link(fun() -> Res = rpc:call(Node2, mnesia, add_table_copy,
 				       [a, Node2, ram_copies]),
 			Tester ! {test, Res}
 	       end),
@@ -1780,14 +1872,19 @@ subscribe_extended(Config) when is_list(Config) ->
 	    {attributes, record_info(fields, tab)}],
     ?match({atomic, ok}, mnesia:create_table(Tab2, Def2)),
 
+    Tab3 = ctab,
+    Def3 = [{Storage, [N1, N2]}],
+    ?match({atomic, ok}, mnesia:create_table(Tab3, Def3)),
+
     ?match({ok, N1}, mnesia:subscribe({table, Tab1, detailed})),
     ?match({ok, N1}, mnesia:subscribe({table, Tab2, detailed})),
+    ?match({ok, N1}, mnesia:subscribe({table, Tab3, detailed})),
 
     ?match({error, {already_exists, _}}, mnesia:subscribe({table, Tab1, simple})),
     ?match({error, {badarg, {table, Tab1, bad}}}, mnesia:subscribe({table, Tab1, bad})),
 
     ?match({ok, N1}, mnesia:subscribe(activity)),
-    test_ext_sub(Tab1, Tab2),
+    test_ext_sub(Tab1, Tab2, Tab3),
     
     ?match({ok, N1}, mnesia:unsubscribe(activity)),
     ?match({ok, N1}, mnesia:subscribe({table, Tab1, detailed})),
@@ -1795,7 +1892,7 @@ subscribe_extended(Config) when is_list(Config) ->
     ?match({mnesia_table_event, {delete, schema, {schema, Tab1}, [{schema, Tab1, _}],_}}, recv_event()),
     ?match({mnesia_table_event, {write, schema, {schema, Tab1, _}, [], _}}, recv_event()),
 
-    ?match({atomic, ok}, mnesia_schema:clear_table(Tab2)),
+    ?match({atomic, ok}, mnesia:clear_table(Tab2)),
     ?match({mnesia_table_event, {delete, schema, {schema, Tab2}, [{schema, Tab2, _}],_}}, 
 	   recv_event()),
     ?match({mnesia_table_event, {write, schema, {schema, Tab2, _}, [], _}}, recv_event()),
@@ -1806,11 +1903,11 @@ subscribe_extended(Config) when is_list(Config) ->
 					     {max, [Tab1, Tab2]}]),
     ?match({ok, N1}, mnesia:subscribe({table, Tab2, detailed})),
     ?match({ok, N1}, mnesia:subscribe(activity)),
-    test_ext_sub(Tab1, Tab2),
+    test_ext_sub(Tab1, Tab2, Tab3),
 
     ?verify_mnesia(Nodes, []).
 
-test_ext_sub(Tab1, Tab2) ->    
+test_ext_sub(Tab1, Tab2, Tab3) ->
     %% The basics 
     Rec1 = {Tab1, 1, 0, 0},
     Rec2 = {Tab1, 1, 1, 0},
@@ -1851,7 +1948,6 @@ test_ext_sub(Tab1, Tab2) ->
     ?match({atomic, ok}, Delete(Tab1, 1)),
     ?match({mnesia_table_event, {delete, Tab1, {Tab1, 1}, [], {tid,_,S}}}, recv_event()),
     ?match({mnesia_activity_event, {complete, {tid,_,S}}}, recv_event()),
-    
     ?match({ok, _N1}, mnesia:unsubscribe({table, Tab1, detailed})),
 
     %% BAG 
@@ -1880,6 +1976,17 @@ test_ext_sub(Tab1, Tab2) ->
     ?match({atomic, ok}, Delete(Tab2, 2)),
     ?match({mnesia_table_event, {delete, Tab2, {Tab2, 2}, [Rec4, Rec3], {tid,_,S}}}, recv_event()),
     ?match({mnesia_activity_event, {complete, {tid,_,S}}}, recv_event()),
+
+    %% COUNTERS
+
+    Rec5 = {Tab3, counter, 0},
+    ?match(ok, mnesia:dirty_write(Rec5)),
+    ?match({mnesia_table_event, {write, Tab3, Rec5, [], D}}, recv_event()),
+    ?match(1, mnesia:dirty_update_counter({Tab3, counter}, 1)),
+    ?match({mnesia_table_event, {write, Tab3, {Tab3,counter,1}, [Rec5], D}}, recv_event()),
+    ?match(ok, mnesia:dirty_delete({Tab3, counter})),
+    ?match({mnesia_table_event, {delete, Tab3, {Tab3,counter},
+				 [{Tab3,counter,1}], D}}, recv_event()),
     ok.
 
 
@@ -1896,6 +2003,10 @@ subscribe_standard(Config) when is_list(Config)->
     ?match({atomic, ok}, mnesia:create_table(Tab, Def)),
 
     %% Check system events
+    ?match({error, {badarg, foo}}, mnesia:unsubscribe(foo)),
+    ?match({error, badarg}, mnesia:unsubscribe({table, foo})),
+    mnesia:unsubscribe(activity),
+
     ?match({ok, N1}, mnesia:subscribe(system)),
     ?match({ok, N1}, mnesia:subscribe(activity)),
 

@@ -1,7 +1,7 @@
 /*
  * %CopyrightBegin%
  * 
- * Copyright Ericsson AB 1999-2009. All Rights Reserved.
+ * Copyright Ericsson AB 1999-2012. All Rights Reserved.
  * 
  * The contents of this file are subject to the Erlang Public License,
  * Version 1.1, (the "License"); you may not use this file except in
@@ -34,21 +34,12 @@
 #include <stdlib.h>
 #include <string.h>
 #ifndef __WIN32__
-#    ifdef VXWORKS
-#        include <sockLib.h>
-#        include <sys/times.h>
-#        include <iosLib.h>
-#        include <taskLib.h>
-#        include <selectLib.h>
-#        include <ioLib.h>
-#        include "reclaim.h"
-#    endif 
-#        include <unistd.h>
-#        include <errno.h>
-#        include <sys/types.h>
-#        include <sys/socket.h>
-#        include <netinet/in.h>
-#        include <fcntl.h>
+# include <unistd.h>
+# include <errno.h>
+# include <sys/types.h>
+# include <sys/socket.h>
+# include <netinet/in.h>
+# include <fcntl.h>
 #endif
 
 #ifdef DEBUG
@@ -185,7 +176,8 @@ static TraceIpData *first_data;
 */
 static ErlDrvData trace_ip_start(ErlDrvPort port, char *buff);
 static void trace_ip_stop(ErlDrvData handle);
-static void trace_ip_output(ErlDrvData handle, char *buff, int bufflen);
+static void trace_ip_output(ErlDrvData handle, char *buff,
+			    ErlDrvSizeT bufflen);
 #ifdef __WIN32__
 static void trace_ip_event(ErlDrvData handle, ErlDrvEvent event);
 #endif
@@ -193,9 +185,10 @@ static void trace_ip_ready_input(ErlDrvData handle, ErlDrvEvent fd);
 static void trace_ip_ready_output(ErlDrvData handle, ErlDrvEvent fd);
 static void trace_ip_finish(void); /* No arguments, despite what might be stated
 				     in any documentation */
-static int trace_ip_control(ErlDrvData handle, unsigned int command, 
-			    char* buff, int count, 
-			    char** res, int res_size);
+static ErlDrvSSizeT trace_ip_control(ErlDrvData handle,
+				     unsigned int command, 
+				     char* buff, ErlDrvSizeT count, 
+				     char** res, ErlDrvSizeT res_size);
 
 /*
 ** Internal routines
@@ -210,11 +203,11 @@ static TraceIpData *lookup_data_by_port(int portno);
 static int set_nonblocking(SOCKET sock);
 static TraceIpMessage *make_buffer(int datasiz, unsigned char op, 
 				   unsigned number);
-static void enque_message(TraceIpData *data, unsigned char *buff, int bufflen,
+static void enque_message(TraceIpData *data, char *buff, int bufflen,
 			  int byteswritten);
 static void clean_que(TraceIpData *data);
 static void close_client(TraceIpData *data);
-static int trywrite(TraceIpData *data, unsigned char *buff, int bufflen);
+static int trywrite(TraceIpData *data, char *buff, int bufflen);
 static SOCKET my_accept(SOCKET sock);
 static void close_unlink_port(TraceIpData *data);
 enum MySelectOp { SELECT_ON, SELECT_OFF, SELECT_CLOSE };
@@ -382,7 +375,7 @@ static void trace_ip_stop(ErlDrvData handle)
 /*
 ** Data sent from erlang to port.
 */
-static void trace_ip_output(ErlDrvData handle, char *buff, int bufflen)
+static void trace_ip_output(ErlDrvData handle, char *buff, ErlDrvSizeT bufflen)
 {
     TraceIpData *data = (TraceIpData *) handle;
     if (data->flags & FLAG_LISTEN_PORT) {
@@ -516,7 +509,7 @@ static void trace_ip_ready_output(ErlDrvData handle, ErlDrvEvent fd)
     tim = data->que[data->questart];
     towrite = tim->siz - tim->written;
     while((res = write_until_done(data->fd, 
-				  tim->bin + tim->written, towrite)) 
+				  (char *)tim->bin + tim->written, towrite))
 	  == towrite) {
 	driver_free(tim);
 	data->que[data->questart] = NULL;
@@ -548,9 +541,10 @@ static void trace_ip_ready_output(ErlDrvData handle, ErlDrvEvent fd)
 /*
 ** Control message from erlang, we handle $p, which is get_listen_port.
 */
-static int trace_ip_control(ErlDrvData handle, unsigned int command, 
-			      char* buff, int count, 
-			      char** res, int res_size)
+static ErlDrvSSizeT trace_ip_control(ErlDrvData handle,
+				     unsigned int command, 
+				     char* buff, ErlDrvSizeT count, 
+				     char** res, ErlDrvSizeT res_size)
 {
     register void *void_ptr; /* Soft type cast */
 
@@ -558,7 +552,7 @@ static int trace_ip_control(ErlDrvData handle, unsigned int command,
 	TraceIpData *data = (TraceIpData *) handle;
 	ErlDrvBinary *b = my_alloc_binary(3);
 	b->orig_bytes[0] = '\0'; /* OK */
-	put_be16(data->listen_portno, &(b->orig_bytes[1]));
+	put_be16(data->listen_portno, (unsigned char *)&(b->orig_bytes[1]));
 	*res = void_ptr = b;
 	return 0;
     } 
@@ -587,8 +581,8 @@ static void *my_alloc(size_t size)
     void *ret;
     if ((ret = driver_alloc(size)) == NULL) {
 	/* May or may not work... */
-	fprintf(stderr, "Could not allocate %d bytes of memory in %s.",
-		(int) size, __FILE__);
+	fprintf(stderr, "Could not allocate %lu bytes of memory in %s.",
+		(unsigned long) size, __FILE__);
 	exit(1);
     }
     return ret;
@@ -602,8 +596,8 @@ static ErlDrvBinary *my_alloc_binary(int size)
     ErlDrvBinary *ret;
     if ((ret = driver_alloc_binary(size)) == NULL) {
 	/* May or may not work... */
-	fprintf(stderr, "Could not allocate a binary of %d bytes in %s.",
-		(int) size, __FILE__);
+	fprintf(stderr, "Could not allocate a binary of %lu bytes in %s.",
+		(unsigned long) size, __FILE__);
 	exit(1);
     }
     return ret;
@@ -693,7 +687,7 @@ static TraceIpMessage *make_buffer(int datasiz, unsigned char op,
 ** Add message to que, discarding in a politically correct way...
 ** The FLAG_DROP_OLDEST is currently ingored...
 */
-static void enque_message(TraceIpData *data, unsigned char *buff, int bufflen,
+static void enque_message(TraceIpData *data, char *buff, int bufflen,
 			  int byteswritten)
 {
     int diff = data->questop - data->questart;
@@ -760,13 +754,13 @@ static void close_client(TraceIpData *data)
 ** Try to write a message from erlang directly (only called when que is empty 
 ** and client is connected)
 */
-static int trywrite(TraceIpData *data, unsigned char *buff, int bufflen)
+static int trywrite(TraceIpData *data, char *buff, int bufflen)
 {
-    unsigned char op[5];
+    char op[5];
     int res;
 
     op[0] = OP_BINARY;
-    put_be32(bufflen, op + 1);
+    put_be32(bufflen, (unsigned char *)op + 1);
 
     if ((res = write_until_done(data->fd, op, 5)) < 0) {
 	close_client(data);
@@ -790,7 +784,11 @@ static int trywrite(TraceIpData *data, unsigned char *buff, int bufflen)
 static SOCKET my_accept(SOCKET sock)
 {
     struct sockaddr_in sin;
-    int sin_size = sizeof(sin);
+#ifdef HAVE_SOCKLEN_T
+    socklen_t sin_size = sizeof(sin);
+#else
+    int sin_size = (int) sizeof(sin);
+#endif
 
     return accept(sock, (struct sockaddr *) &sin, &sin_size);
 }
@@ -903,7 +901,7 @@ static void stop_select(ErlDrvEvent event, void* _)
     WSACloseEvent((HANDLE)event);
 }
 
-#else /* UNIX/VXWORKS */
+#else /* UNIX */
 
 static int my_driver_select(TraceIpData *desc, SOCKET fd, int flags, enum MySelectOp op)
 {

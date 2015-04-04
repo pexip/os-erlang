@@ -1,7 +1,7 @@
 /*
  * %CopyrightBegin%
  *
- * Copyright Ericsson AB 1999-2011. All Rights Reserved.
+ * Copyright Ericsson AB 1999-2014. All Rights Reserved.
  *
  * The contents of this file are subject to the Erlang Public License,
  * Version 1.1, (the "License"); you may not use this file except in
@@ -26,6 +26,14 @@
 
 #ifdef HAVE_CONFIG_H
 #  include "config.h"
+#endif
+
+#define ERL_DRV_DEPRECATED_FUNC
+#ifdef __GNUC__
+#  if __GNUC__ >= 3
+#    undef ERL_DRV_DEPRECATED_FUNC
+#    define ERL_DRV_DEPRECATED_FUNC __attribute__((deprecated))
+#  endif
 #endif
 
 #ifdef SIZEOF_CHAR
@@ -77,11 +85,9 @@
 #include "erl_drv_nif.h"
 
 #include <stdlib.h>
+#include <sys/types.h>	/* ssize_t */
 
-#if defined(VXWORKS)
-#  include <ioLib.h>
-typedef struct iovec SysIOVec;
-#elif defined(__WIN32__) || defined(_WIN32) || defined(_WIN32_)
+#if defined(__WIN32__) || defined(_WIN32) || defined(_WIN32_)
 #ifndef STATIC_ERLANG_DRIVER
    /* Windows dynamic drivers, everything is different... */
 #define ERL_DRIVER_TYPES_ONLY
@@ -126,8 +132,24 @@ typedef struct {
 #define DO_WRITE ERL_DRV_WRITE
 
 #define ERL_DRV_EXTENDED_MARKER		(0xfeeeeeed)
-#define ERL_DRV_EXTENDED_MAJOR_VERSION	1
-#define ERL_DRV_EXTENDED_MINOR_VERSION	5
+#define ERL_DRV_EXTENDED_MAJOR_VERSION	3
+#define ERL_DRV_EXTENDED_MINOR_VERSION	1
+
+/*
+ * The emulator will refuse to load a driver with a major version
+ * lower than ERL_DRV_MIN_REQUIRED_MAJOR_VERSION_ON_LOAD. The load
+ * may however fail if user have not removed use of deprecated
+ * symbols.
+ *
+ * The ERL_DRV_MIN_REQUIRED_MAJOR_VERSION_ON_LOAD have to allow
+ * loading of drivers built at least two major OTP releases
+ * ago.
+ *
+ * Bump of major version to 3 happened in OTP 17. That is, in
+ * OTP 19 we can increase ERL_DRV_MIN_REQUIRED_MAJOR_VERSION_ON_LOAD
+ * to 3.
+ */
+#define ERL_DRV_MIN_REQUIRED_MAJOR_VERSION_ON_LOAD 2
 
 /*
  * The emulator will refuse to load a driver with different major
@@ -148,14 +170,20 @@ typedef struct {
 
 #define ERL_DRV_FLAG_USE_PORT_LOCKING	(1 << 0)
 #define ERL_DRV_FLAG_SOFT_BUSY		(1 << 1)
+#define ERL_DRV_FLAG_NO_BUSY_MSGQ	(1 << 2)
 
 /*
  * Integer types
  */
-
+#if  defined(__WIN32__) && (SIZEOF_VOID_P == 8)
+typedef unsigned __int64 ErlDrvTermData;
+typedef unsigned __int64 ErlDrvUInt;
+typedef signed __int64 ErlDrvSInt;
+#else
 typedef unsigned long ErlDrvTermData;
 typedef unsigned long ErlDrvUInt;
 typedef signed long ErlDrvSInt;
+#endif
 
 #if defined(__WIN32__)
 typedef unsigned __int64 ErlDrvUInt64;
@@ -170,13 +198,21 @@ typedef long long ErlDrvSInt64;
 #error No 64-bit integer type
 #endif
 
+#if defined(__WIN32__) || defined(_WIN32)
+typedef ErlDrvUInt ErlDrvSizeT;
+typedef ErlDrvSInt ErlDrvSSizeT;
+#else
+typedef size_t ErlDrvSizeT;
+typedef ssize_t ErlDrvSSizeT;
+#endif
+
 /*
  * A binary as seen in a driver. Note that a binary should never be
  * altered by the driver when it has been sent to Erlang.
  */
 
 typedef struct erl_drv_binary {
-    long orig_size;        /* total length of binary */
+    ErlDrvSInt orig_size;        /* total length of binary */
     char orig_bytes[1];   /* the data (char instead of byte!) */
 } ErlDrvBinary;
 
@@ -188,8 +224,8 @@ typedef struct erl_drv_binary {
 typedef struct _erl_drv_data* ErlDrvData; /* Data to be used by the driver itself. */
 #ifndef ERL_SYS_DRV
 typedef struct _erl_drv_event* ErlDrvEvent; /* An event to be selected on. */
-typedef struct _erl_drv_port* ErlDrvPort; /* A port descriptor. */
 #endif
+typedef struct _erl_drv_port* ErlDrvPort; /* A port descriptor. */
 typedef struct _erl_drv_port* ErlDrvThreadData; /* Thread data. */
 
 #if !defined(__WIN32__) && !defined(_WIN32) && !defined(_WIN32_) && !defined(USE_SELECT)
@@ -236,7 +272,7 @@ typedef struct {
 
 typedef struct erl_io_vec {
     int vsize;			/* length of vectors */
-    int size;			/* total size in bytes */
+    ErlDrvSizeT size;		/* total size in bytes */
     SysIOVec* iov;
     ErlDrvBinary** binv;
 } ErlIOVec;
@@ -250,7 +286,6 @@ typedef struct ErlDrvMutex_ ErlDrvMutex;
 typedef struct ErlDrvCond_ ErlDrvCond;
 typedef struct ErlDrvRWLock_ ErlDrvRWLock;
 typedef int ErlDrvTSDKey;
-
 
 /*
  * 
@@ -277,8 +312,8 @@ typedef struct erl_drv_entry {
     void (*stop)(ErlDrvData drv_data);
                                 /* called when port is closed, and when the
 				   emulator is halted. */
-    void (*output)(ErlDrvData drv_data, char *buf, int len);
-				/* called when we have output from erlang to 
+    void (*output)(ErlDrvData drv_data, char *buf, ErlDrvSizeT len);
+				/* called when we have output from erlang to
 				   the port */
     void (*ready_input)(ErlDrvData drv_data, ErlDrvEvent event); 
 				/* called when we have input from one of 
@@ -291,10 +326,10 @@ typedef struct erl_drv_entry {
     void (*finish)(void);        /* called before unloading the driver -
 				   DYNAMIC DRIVERS ONLY */
     void *handle;		/* Reserved -- Used by emulator internally */
-    int (*control)(ErlDrvData drv_data, unsigned int command, char *buf, 
-		   int len, char **rbuf, int rlen); 
-				/* "ioctl" for drivers - invoked by 
-				   port_control/3 */
+    ErlDrvSSizeT (*control)(ErlDrvData drv_data, unsigned int command,
+			    char *buf, ErlDrvSizeT len, char **rbuf,
+			    ErlDrvSizeT rlen); /* "ioctl" for drivers - invoked by
+						  port_control/3 */
     void (*timeout)(ErlDrvData drv_data);	/* Handling of timeout in driver */
     void (*outputv)(ErlDrvData drv_data, ErlIOVec *ev);
 				/* called when we have output from erlang
@@ -305,10 +340,12 @@ typedef struct erl_drv_entry {
 				   closed, and there is data in the 
 				   driver queue that needs to be flushed
 				   before 'stop' can be called */
-    int (*call)(ErlDrvData drv_data, unsigned int command, char *buf, 
-		   int len, char **rbuf, int rlen, unsigned int *flags); 
-                                /* Works mostly like 'control', a synchronous
-				   call into the driver. */
+    ErlDrvSSizeT (*call)(ErlDrvData drv_data,
+			 unsigned int command, char *buf, ErlDrvSizeT len,
+			 char **rbuf, ErlDrvSizeT rlen,
+			 unsigned int *flags); /* Works mostly like 'control',
+						  a synchronous
+						  call into the driver. */
     void (*event)(ErlDrvData drv_data, ErlDrvEvent event,
 		  ErlDrvEventData event_data);
                                 /* Called when an event selected by 
@@ -343,34 +380,58 @@ typedef struct erl_drv_entry {
  * It must initialize a ErlDrvEntry structure and return a pointer to it.
  */
 
+#ifdef STATIC_ERLANG_DRIVER
+#  define ERLANG_DRIVER_NAME(NAME) NAME ## _driver_init
+#else
+#  define ERLANG_DRIVER_NAME(NAME) driver_init
+#endif
+
 /* For windows dynamic drivers */
 #ifndef ERL_DRIVER_TYPES_ONLY
 
-#if defined(VXWORKS)
-#  define DRIVER_INIT(DRIVER_NAME) ErlDrvEntry* DRIVER_NAME  ## _init(void)
-#elif defined(__WIN32__)
-#  define DRIVER_INIT(DRIVER_NAME) __declspec(dllexport) ErlDrvEntry* driver_init(void)
+#if defined(__WIN32__)
+#  define DRIVER_INIT(DRIVER_NAME) \
+  __declspec(dllexport) ErlDrvEntry* ERLANG_DRIVER_NAME(DRIVER_NAME)(void);	\
+    __declspec(dllexport) ErlDrvEntry* ERLANG_DRIVER_NAME(DRIVER_NAME)(void)
 #else 
-#  define DRIVER_INIT(DRIVER_NAME) ErlDrvEntry* driver_init(void)
+#  define DRIVER_INIT(DRIVER_NAME) \
+    ErlDrvEntry* ERLANG_DRIVER_NAME(DRIVER_NAME)(void); \
+    ErlDrvEntry* ERLANG_DRIVER_NAME(DRIVER_NAME)(void)
 #endif
+
+#define ERL_DRV_BUSY_MSGQ_DISABLED	(~((ErlDrvSizeT) 0))
+#define ERL_DRV_BUSY_MSGQ_READ_ONLY	((ErlDrvSizeT) 0)
+#define ERL_DRV_BUSY_MSGQ_LIM_MAX	(ERL_DRV_BUSY_MSGQ_DISABLED - 1)
+#define ERL_DRV_BUSY_MSGQ_LIM_MIN	((ErlDrvSizeT) 1)
 
 /*
  * These are the functions available for driver writers.
  */
+EXTERN void erl_drv_busy_msgq_limits(ErlDrvPort port,
+				     ErlDrvSizeT *low,
+				     ErlDrvSizeT *high);
+
 EXTERN int driver_select(ErlDrvPort port, ErlDrvEvent event, int mode, int on);
 EXTERN int driver_event(ErlDrvPort port, ErlDrvEvent event, 
 			ErlDrvEventData event_data);
-EXTERN int driver_output(ErlDrvPort port, char *buf, int len);
-EXTERN int driver_output2(ErlDrvPort port, char *hbuf, int hlen, 
-			  char *buf, int len);
-EXTERN int driver_output_binary(ErlDrvPort port, char *hbuf, int hlen,
-				ErlDrvBinary* bin, int offset, int len);
-EXTERN int driver_outputv(ErlDrvPort port, char* hbuf, int hlen, ErlIOVec *ev,
-			  int skip);
-EXTERN int driver_vec_to_buf(ErlIOVec *ev, char *buf, int len);
+
+EXTERN int driver_output(ErlDrvPort port, char *buf, ErlDrvSizeT len);
+EXTERN int driver_output2(ErlDrvPort port, char *hbuf, ErlDrvSizeT hlen,
+			  char *buf, ErlDrvSizeT len);
+EXTERN int driver_output_binary(ErlDrvPort port, char *hbuf, ErlDrvSizeT hlen,
+				ErlDrvBinary* bin,
+				ErlDrvSizeT offset, ErlDrvSizeT len);
+EXTERN int driver_outputv(ErlDrvPort port, char* hbuf, ErlDrvSizeT hlen,
+			  ErlIOVec *ev, ErlDrvSizeT skip);
+EXTERN ErlDrvSizeT driver_vec_to_buf(ErlIOVec *ev, char *buf, ErlDrvSizeT len);
 EXTERN int driver_set_timer(ErlDrvPort port, unsigned long time);
 EXTERN int driver_cancel_timer(ErlDrvPort port);
 EXTERN int driver_read_timer(ErlDrvPort port, unsigned long *time_left);
+
+/*
+ * Inform runtime system about lengthy work.
+ */
+EXTERN int erl_drv_consume_timeslice(ErlDrvPort port, int percent);
 
 /*
  * Get plain-text error message from within a driver
@@ -428,8 +489,8 @@ EXTERN int  get_port_flags(ErlDrvPort port);
  * since the binary is a shared object it MUST be written once.
  */
 
-EXTERN ErlDrvBinary* driver_alloc_binary(int size);
-EXTERN ErlDrvBinary* driver_realloc_binary(ErlDrvBinary *bin, int size);
+EXTERN ErlDrvBinary* driver_alloc_binary(ErlDrvSizeT size);
+EXTERN ErlDrvBinary* driver_realloc_binary(ErlDrvBinary *bin, ErlDrvSizeT size);
 EXTERN void driver_free_binary(ErlDrvBinary *bin);
 
 /* Referenc count on driver binaries */
@@ -438,24 +499,24 @@ EXTERN ErlDrvSInt driver_binary_inc_refc(ErlDrvBinary *dbp);
 EXTERN ErlDrvSInt driver_binary_dec_refc(ErlDrvBinary *dbp);
 
 /* Allocation interface */
-EXTERN void *driver_alloc(size_t size);
-EXTERN void *driver_realloc(void *ptr, size_t size);
+EXTERN void *driver_alloc(ErlDrvSizeT size);
+EXTERN void *driver_realloc(void *ptr, ErlDrvSizeT size);
 EXTERN void driver_free(void *ptr);
 
 /* Queue interface */
-EXTERN int driver_enq(ErlDrvPort port, char* buf, int len);
-EXTERN int driver_pushq(ErlDrvPort port, char* buf, int len);
-EXTERN int driver_deq(ErlDrvPort port, int size);
-EXTERN int driver_sizeq(ErlDrvPort port);
-EXTERN int driver_enq_bin(ErlDrvPort port, ErlDrvBinary *bin, int offset, 
-			  int len);
-EXTERN int driver_pushq_bin(ErlDrvPort port, ErlDrvBinary *bin, int offset,
-			    int len);
+EXTERN int driver_enq(ErlDrvPort port, char* buf, ErlDrvSizeT len);
+EXTERN int driver_pushq(ErlDrvPort port, char* buf, ErlDrvSizeT len);
+EXTERN ErlDrvSizeT driver_deq(ErlDrvPort port, ErlDrvSizeT size);
+EXTERN ErlDrvSizeT driver_sizeq(ErlDrvPort port);
+EXTERN int driver_enq_bin(ErlDrvPort port, ErlDrvBinary *bin, ErlDrvSizeT offset,
+			  ErlDrvSizeT len);
+EXTERN int driver_pushq_bin(ErlDrvPort port, ErlDrvBinary *bin, ErlDrvSizeT offset,
+			    ErlDrvSizeT len);
 
-EXTERN int driver_peekqv(ErlDrvPort port, ErlIOVec *ev);
+EXTERN ErlDrvSizeT driver_peekqv(ErlDrvPort port, ErlIOVec *ev);
 EXTERN SysIOVec* driver_peekq(ErlDrvPort port, int *vlen);
-EXTERN int driver_enqv(ErlDrvPort port, ErlIOVec *ev, int skip);
-EXTERN int driver_pushqv(ErlDrvPort port, ErlIOVec *ev, int skip);
+EXTERN int driver_enqv(ErlDrvPort port, ErlIOVec *ev, ErlDrvSizeT skip);
+EXTERN int driver_pushqv(ErlDrvPort port, ErlIOVec *ev, ErlDrvSizeT skip);
 
 /*
  * Add and remove driver entries.
@@ -506,6 +567,11 @@ EXTERN int erl_drv_equal_tids(ErlDrvTid tid1, ErlDrvTid tid2);
 EXTERN void erl_drv_thread_exit(void *resp);
 EXTERN int erl_drv_thread_join(ErlDrvTid, void **respp);
 
+EXTERN char* erl_drv_mutex_name(ErlDrvMutex *mtx);
+EXTERN char* erl_drv_cond_name(ErlDrvCond *cnd);
+EXTERN char* erl_drv_rwlock_name(ErlDrvRWLock *rwlck);
+EXTERN char* erl_drv_thread_name(ErlDrvTid tid);
+
 /*
  * Misc.
  */
@@ -554,6 +620,8 @@ EXTERN int null_func(void);
 #define ERL_DRV_INT64       ((ErlDrvTermData) 15) /* ErlDrvSInt64 * */
 #define ERL_DRV_UINT64      ((ErlDrvTermData) 16) /* ErlDrvUInt64 * */
 
+#define ERL_DRV_MAP         ((ErlDrvTermData) 17) /* ErlDrvUInt */
+
 #ifndef ERL_DRIVER_TYPES_ONLY
 
 /* make terms for driver_output_term and driver_send_term */
@@ -569,21 +637,42 @@ EXTERN ErlDrvPort driver_create_port(ErlDrvPort creator_port,
 				     ErlDrvData drv_data);
 					 
 
+/*
+ * driver_output_term() is deprecated, and scheduled for removal in
+ * OTP-R17. Use erl_drv_output_term() instead. For more information
+ * see the erl_driver(3) documentation.
+ */
+EXTERN int driver_output_term(ErlDrvPort ix,
+			      ErlDrvTermData* data,
+			      int len) ERL_DRV_DEPRECATED_FUNC;
+/*
+ * driver_send_term() is deprecated, and scheduled for removal in
+ * OTP-R17. Use erl_drv_send_term() instead. For more information
+ * see the erl_driver(3) documentation.
+ */
+EXTERN int driver_send_term(ErlDrvPort ix,
+			    ErlDrvTermData to,
+			    ErlDrvTermData* data,
+			    int len) ERL_DRV_DEPRECATED_FUNC;
+
 /* output term data to the port owner */
-EXTERN int driver_output_term(ErlDrvPort ix, ErlDrvTermData* data, int len);
+EXTERN int erl_drv_output_term(ErlDrvTermData port,
+			       ErlDrvTermData* data,
+			       int len);
 /* output term data to a specific process */
-EXTERN int driver_send_term(ErlDrvPort ix, ErlDrvTermData to,
-			    ErlDrvTermData* data, int len);
+EXTERN int erl_drv_send_term(ErlDrvTermData port,
+			     ErlDrvTermData to,
+			     ErlDrvTermData* data,
+			     int len);
 
 /* Async IO functions */
+EXTERN unsigned int driver_async_port_key(ErlDrvPort port);
+
 EXTERN long driver_async(ErlDrvPort ix,
 			 unsigned int* key,
 			 void (*async_invoke)(void*), 
 			 void* async_data,
 			 void (*async_free)(void*));
-
-
-EXTERN int driver_async_cancel(unsigned int key);
 
 /* Locks the driver in the machine "forever", there is
    no unlock function. Note that this is almost never useful, as an open
@@ -606,6 +695,16 @@ EXTERN char *driver_dl_error(void);
 EXTERN int erl_drv_putenv(char *key, char *value);
 EXTERN int erl_drv_getenv(char *key, char *value, size_t *value_size);
 
+#ifdef __OSE__
+typedef ErlDrvUInt ErlDrvOseEventId;
+EXTERN union SIGNAL *erl_drv_ose_get_signal(ErlDrvEvent ev);
+EXTERN ErlDrvEvent erl_drv_ose_event_alloc(SIGSELECT sig, ErlDrvOseEventId handle,
+					   ErlDrvOseEventId (*resolve_signal)(union SIGNAL *sig), void *extra);
+EXTERN void erl_drv_ose_event_free(ErlDrvEvent ev);
+EXTERN void erl_drv_ose_event_fetch(ErlDrvEvent ev, SIGSELECT *sig,
+                  ErlDrvOseEventId *handle, void **extra);
+#endif
+
 #endif /* !ERL_DRIVER_TYPES_ONLY */
 
 #ifdef WIN32_DYNAMIC_ERL_DRIVER
@@ -614,6 +713,5 @@ EXTERN int erl_drv_getenv(char *key, char *value, size_t *value_size);
 
 #endif
 
-
-
-
+/* also in global.h, but driver's can't include global.h */
+void dtrace_drvport_str(ErlDrvPort port, char *port_buf);

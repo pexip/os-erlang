@@ -1,4 +1,5 @@
 ./usr/lib/erlang/Install
+./usr/lib/erlang/OTP_VERSION
 ./usr/lib/erlang/misc/
 ./usr/lib/erlang/releases/[^.]*(\.[^s]|\.s[^r]|\.sr[^c]|\.src.)?[^.]*$
 ./usr/lib/erlang/bin/[^cd][^y].*([^t]|[^s]t)$
@@ -10,5 +11,9 @@
 ./usr/lib/erlang/lib/erts-.*/ebin/
 ./usr/lib/erlang/lib/hipe-.*/ebin/
 ./usr/lib/erlang/lib/kernel-.*/ebin/
+./usr/lib/erlang/lib/kernel-.*/include/
+./usr/lib/erlang/lib/ose-.*/ebin/
 ./usr/lib/erlang/lib/sasl-.*/ebin/
 ./usr/lib/erlang/lib/stdlib-.*/ebin/
+./usr/lib/erlang/lib/stdlib-.*/include/
+./lib/systemd/

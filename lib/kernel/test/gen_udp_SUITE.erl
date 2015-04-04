@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %% 
-%% Copyright Ericsson AB 1998-2011. All Rights Reserved.
+%% Copyright Ericsson AB 1998-2013. All Rights Reserved.
 %% 
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -33,7 +33,7 @@
 	 init_per_group/2,end_per_group/2]).
 -export([init_per_testcase/2, end_per_testcase/2]).
 
--export([send_to_closed/1, 
+-export([send_to_closed/1, active_n/1,
 	 buffer_size/1, binary_passive_recv/1, bad_address/1,
 	 read_packets/1, open_fd/1, connect/1, implicit_inet6/1]).
 
@@ -42,7 +42,7 @@ suite() -> [{ct_hooks,[ts_install_cth]}].
 all() -> 
     [send_to_closed, buffer_size, binary_passive_recv,
      bad_address, read_packets, open_fd, connect,
-     implicit_inet6].
+     implicit_inet6, active_n].
 
 groups() -> 
     [].
@@ -99,9 +99,9 @@ buffer_size(Config) when is_list(Config) ->
     ?line Bin = list_to_binary(lists:seq(0, Len-1)),
     ?line M = 8192 div Len,
     ?line Spec0 =
-	[{opt,M},{safe,M-1},{long,M+1},
-	 {opt,2*M},{safe,2*M-1},{long,2*M+1},
-	 {opt,4*M},{safe,4*M-1},{long,4*M+1}],
+	[{opt,M},{safe,M-3},{long,M+1},
+	 {opt,2*M},{safe,2*M-3},{long,2*M+1},
+	 {opt,4*M},{safe,4*M-3},{long,4*M+1}],
     ?line Spec =
 	[case Tag of
 	     opt ->
@@ -145,16 +145,27 @@ buffer_size_client(_, _, _, _, _, []) ->
     ?line ok;
 buffer_size_client(Server, IP, Port, 
 		   Socket, Cnt, [Opts|T]) when is_list(Opts) ->
+    ?line io:format("buffer_size_client Cnt=~w setopts ~p.~n", [Cnt,Opts]),
     ?line ok = inet:setopts(Socket, Opts),
     ?line Server ! {self(),setopts,Cnt},
     ?line receive {Server,setopts,Cnt} -> ok end,
     ?line buffer_size_client(Server, IP, Port, Socket, Cnt+1, T);
 buffer_size_client(Server, IP, Port, 
-		   Socket, Cnt, [{B,Replies}|T]) when is_binary(B) ->
-    ?line ok = gen_udp:send(Socket, IP, Port, B),
+		   Socket, Cnt, [{B,Replies}|T]=Opts) when is_binary(B) ->
+    ?line io:format(
+	    "buffer_size_client Cnt=~w send size ~w expecting ~p.~n",
+	    [Cnt,size(B),Replies]),
+    ?line ok = gen_udp:send(Socket, IP, Port, <<Cnt,B/binary>>),
     ?line receive
 	      {Server,Cnt,Reply} ->
-		  ?line case lists:member(Reply, Replies) of
+		  ?line Tag =
+		      if
+			  is_tuple(Reply) ->
+			      element(1, Reply);
+			  is_atom(Reply) ->
+			      Reply
+		      end,
+		  ?line case lists:member(Tag, Replies) of
 			    true -> ok;
 			    false ->
 				?line 
@@ -162,33 +173,61 @@ buffer_size_client(Server, IP, Port,
 					     byte_size(B),
 					     inet:getopts(Socket,
 							  [sndbuf,recbuf])})
-			end
-	  end,
-    ?line buffer_size_client(Server, IP, Port, Socket, Cnt+1, T).
+			end,
+		  ?line buffer_size_client(Server, IP, Port, Socket, Cnt+1, T)
+	  after 1313 ->
+		  ?line buffer_size_client(Server, IP, Port, Socket, Cnt, Opts)
+	  end.
 
 buffer_size_server(_, _, _, _, _, []) -> 
     ok;
 buffer_size_server(Client, IP, Port, 
 		   Socket, Cnt, [Opts|T]) when is_list(Opts) ->
     receive {Client,setopts,Cnt} -> ok end,
+    ?line io:format("buffer_size_server Cnt=~w setopts ~p.~n", [Cnt,Opts]),
     ok = inet:setopts(Socket, Opts),
     Client ! {self(),setopts,Cnt},
     buffer_size_server(Client, IP, Port, Socket, Cnt+1, T);
 buffer_size_server(Client, IP, Port, 
 		   Socket, Cnt, [{B,_}|T]) when is_binary(B) ->
+    ?line io:format(
+	    "buffer_size_server Cnt=~w expecting size ~w.~n",
+	    [Cnt,size(B)]),
     Client ! 
 	{self(),Cnt,
-	 receive
-	     {udp,Socket,IP,Port,D} when is_binary(D) ->
+	 case buffer_size_server_recv(Socket, IP, Port, Cnt) of
+	     D when is_binary(D) ->
 		 SizeD = byte_size(D),
+		 ?line io:format(
+			 "buffer_size_server Cnt=~w received size ~w.~n",
+			 [Cnt,SizeD]),
 		 case B of
-		     D ->                             correct;
-		     <<D:SizeD/binary,_/binary>> ->   truncated
+		     D ->
+			 correct;
+		     <<D:SizeD/binary,_/binary>> ->
+			 truncated;
+		     _ ->
+			 {unexpected,D}
 		 end;
-	     {udp_error,Socket,Error} ->              Error
-	 after 5000 ->                                timeout
+	     Error ->
+		 ?line io:format(
+			 "buffer_size_server Cnt=~w received error ~w.~n",
+			 [Cnt,Error]),
+		 Error
 	 end},
     buffer_size_server(Client, IP, Port, Socket, Cnt+1, T).
+
+buffer_size_server_recv(Socket, IP, Port, Cnt) ->
+    receive
+	{udp,Socket,IP,Port,<<Cnt,B/binary>>} ->
+	    B;
+	{udp,Socket,IP,Port,<<_/binary>>} ->
+	    buffer_size_server_recv(Socket, IP, Port, Cnt);
+	{udp_error,Socket,Error} ->
+	    Error
+    after 5000 ->
+	    {timeout,flush()}
+    end.
 
 
 
@@ -403,13 +442,13 @@ open_fd(suite) ->
 open_fd(doc) ->
     ["Test that the 'fd' option works"];
 open_fd(Config) when is_list(Config) ->
-    Msg = "Det gör ont när knoppar brista. Varför skulle annars våren tveka?",
+    Msg = "Det gÃ¶r ont nÃ¤r knoppar brista. VarfÃ¶r skulle annars vÃ¥ren tveka?",
     Addr = {127,0,0,1},
     {ok,S1}   = gen_udp:open(0),
     {ok,P2} = inet:port(S1),
     {ok,FD}   = prim_inet:getfd(S1),
-    {error,einval} = gen_udp:open(P2, [inet6, {fd,FD}]),
-    {ok,S2}   = gen_udp:open(P2, [{fd,FD}]),
+    {error,einval} = gen_udp:open(0, [inet6, {fd,FD}]),
+    {ok,S2}   = gen_udp:open(0, [{fd,FD}]),
     {ok,S3}   = gen_udp:open(0),
     {ok,P3} = inet:port(S3),
     ok = gen_udp:send(S3, Addr, P2, Msg),
@@ -426,6 +465,108 @@ open_fd(Config) when is_list(Config) ->
 	    ?t:fail(io_lib:format("~w", [flush()]))
     end.
 
+active_n(Config) when is_list(Config) ->
+    N = 3,
+    S1 = ok(gen_udp:open(0, [{active,N}])),
+    [{active,N}] = ok(inet:getopts(S1, [active])),
+    ok = inet:setopts(S1, [{active,-N}]),
+    receive
+        {udp_passive, S1} -> ok
+    after
+        5000 ->
+            exit({error,udp_passive_failure})
+    end,
+    [{active,false}] = ok(inet:getopts(S1, [active])),
+    ok = inet:setopts(S1, [{active,0}]),
+    receive
+        {udp_passive, S1} -> ok
+    after
+        5000 ->
+            exit({error,udp_passive_failure})
+    end,
+    ok = inet:setopts(S1, [{active,32767}]),
+    {error,einval} = inet:setopts(S1, [{active,1}]),
+    {error,einval} = inet:setopts(S1, [{active,-32769}]),
+    ok = inet:setopts(S1, [{active,-32768}]),
+    receive
+        {udp_passive, S1} -> ok
+    after
+        5000 ->
+            exit({error,udp_passive_failure})
+    end,
+    [{active,false}] = ok(inet:getopts(S1, [active])),
+    ok = inet:setopts(S1, [{active,N}]),
+    ok = inet:setopts(S1, [{active,true}]),
+    [{active,true}] = ok(inet:getopts(S1, [active])),
+    receive
+        _ -> exit({error,active_n})
+    after
+        0 ->
+            ok
+    end,
+    ok = inet:setopts(S1, [{active,N}]),
+    ok = inet:setopts(S1, [{active,once}]),
+    [{active,once}] = ok(inet:getopts(S1, [active])),
+    receive
+        _ -> exit({error,active_n})
+    after
+        0 ->
+            ok
+    end,
+    {error,einval} = inet:setopts(S1, [{active,32768}]),
+    ok = inet:setopts(S1, [{active,false}]),
+    [{active,false}] = ok(inet:getopts(S1, [active])),
+    S1Port = ok(inet:port(S1)),
+    S2 = ok(gen_udp:open(0, [{active,N}])),
+    S2Port = ok(inet:port(S2)),
+    [{active,N}] = ok(inet:getopts(S2, [active])),
+    ok = inet:setopts(S1, [{active,N}]),
+    [{active,N}] = ok(inet:getopts(S1, [active])),
+    lists:foreach(
+      fun(I) ->
+              Msg = "message "++integer_to_list(I),
+              ok = gen_udp:send(S2, "localhost", S1Port, Msg),
+              receive
+                  {udp,S1,_,S2Port,Msg} ->
+                      ok = gen_udp:send(S1, "localhost", S2Port, Msg)
+              after
+                  5000 ->
+                      exit({error,timeout})
+              end,
+              receive
+                  {udp,S2,_,S1Port,Msg} ->
+                      ok
+              after
+                  5000 ->
+                      exit({error,timeout})
+              end
+      end, lists:seq(1,N)),
+    receive
+        {udp_passive,S1} ->
+            [{active,false}] = ok(inet:getopts(S1, [active]))
+    after
+        5000 ->
+            exit({error,udp_passive})
+    end,
+    receive
+        {udp_passive,S2} ->
+            [{active,false}] = ok(inet:getopts(S2, [active]))
+    after
+        5000 ->
+            exit({error,udp_passive})
+    end,
+    S3 = ok(gen_udp:open(0, [{active,0}])),
+    receive
+        {udp_passive,S3} ->
+            [{active,false}] = ok(inet:getopts(S3, [active]))
+    after
+        5000 ->
+            exit({error,udp_passive})
+    end,
+    ok = gen_udp:close(S3),
+    ok = gen_udp:close(S2),
+    ok = gen_udp:close(S1),
+    ok.
 
 %
 % Utils

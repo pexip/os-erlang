@@ -1,7 +1,7 @@
 #
 # %CopyrightBegin%
 # 
-# Copyright Ericsson AB 2003-2009. All Rights Reserved.
+# Copyright Ericsson AB 2003-2012. All Rights Reserved.
 # 
 # The contents of this file are subject to the Erlang Public License,
 # Version 1.1, (the "License"); you may not use this file except in
@@ -16,7 +16,7 @@
 # 
 # %CopyrightEnd%
 #
-include @erl_interface_mk_include@@DS@eidefs.mk
+include @erl_interface_mk_include@
 
 CC0 = @CC@
 CC = .@DS@gccifier@exe@ -CC"$(CC0)"
@@ -30,7 +30,9 @@ CHMOD=chmod
 
 all: $(ALL_OBJS)
 
-@IFEQ@ (@erl_interface_cross_compile@, true)
+$(EI_COMMON_OBJS): gccifier@exe@
+
+@IFEQ@ (@cross@, yes)
 gccifier@exe@:
 	$(CP) gccifier.sh gccifier@exe@
 	$(CHMOD) a+x gccifier@exe@

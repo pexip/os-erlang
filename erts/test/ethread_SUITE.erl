@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2004-2011. All Rights Reserved.
+%% Copyright Ericsson AB 2004-2012. All Rights Reserved.
 %%
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -33,7 +33,7 @@
 
 -export([all/0, suite/0,groups/0,init_per_suite/1, end_per_suite/1, 
 	 init_per_group/2,end_per_group/2, 
-	 init_per_testcase/2, fin_per_testcase/2]).
+	 init_per_testcase/2, end_per_testcase/2]).
 
 -export([create_join_thread/1,
 	 equal_tids/1,
@@ -47,14 +47,26 @@
 	 spinlock/1,
 	 rwspinlock/1,
 	 rwmutex/1,
-	 atomic/1]).
+	 atomic/1,
+	 dw_atomic_massage/1]).
 
 -include_lib("test_server/include/test_server.hrl").
 
-tests() -> 
-    [create_join_thread, equal_tids, mutex, try_lock_mutex,
-     cond_wait, broadcast, detached_thread,
-     max_threads, tsd, spinlock, rwspinlock, rwmutex, atomic].
+tests() ->
+    [create_join_thread,
+     equal_tids,
+     mutex,
+     try_lock_mutex,
+     cond_wait,
+     broadcast,
+     detached_thread,
+     max_threads,
+     tsd,
+     spinlock,
+     rwspinlock,
+     rwmutex,
+     atomic,
+     dw_atomic_massage].
 
 suite() -> [{ct_hooks,[ts_install_cth]}].
 
@@ -110,35 +122,37 @@ try_lock_mutex(suite) ->
 try_lock_mutex(Config) ->
     run_case(Config, "try_lock_mutex", "").
 
-wd_dispatch(P) ->
-    receive
-	bye ->
-	    ?line true = port_command(P, "-1 "),
-	    ?line bye;
-	L when is_list(L) ->
-	    ?line true = port_command(P, L),
-	    ?line wd_dispatch(P)
-    end.
+%% Remove dead code?
 
-watchdog(Port) ->
-    ?line process_flag(priority, max),
-    ?line receive after 500 -> ok end,
-
-    ?line random:seed(),
-    ?line true = port_command(Port, "0 "),
-    ?line lists:foreach(fun (T) ->
-				erlang:send_after(T,
-						  self(),
-						  integer_to_list(T)
-						  ++ " ")
-			end,
-			lists:usort(lists:map(fun (_) ->
-						      random:uniform(4500)+500
-					      end,
-					      lists:duplicate(50,0)))),
-    ?line erlang:send_after(5100, self(), bye),
-
-    wd_dispatch(Port).
+% wd_dispatch(P) ->
+%     receive
+% 	bye ->
+% 	    ?line true = port_command(P, "-1 "),
+% 	    ?line bye;
+% 	L when is_list(L) ->
+% 	    ?line true = port_command(P, L),
+% 	    ?line wd_dispatch(P)
+%     end.
+% 
+% watchdog(Port) ->
+%     ?line process_flag(priority, max),
+%     ?line receive after 500 -> ok end,
+% 
+%     ?line random:seed(),
+%     ?line true = port_command(Port, "0 "),
+%     ?line lists:foreach(fun (T) ->
+% 				erlang:send_after(T,
+% 						  self(),
+% 						  integer_to_list(T)
+% 						  ++ " ")
+% 			end,
+% 			lists:usort(lists:map(fun (_) ->
+% 						      random:uniform(4500)+500
+% 					      end,
+% 					      lists:duplicate(50,0)))),
+%     ?line erlang:send_after(5100, self(), bye),
+% 
+%     wd_dispatch(Port).
 
 cond_wait(doc) ->
     ["Tests ethr_cond_wait with ethr_cond_signal and ethr_cond_broadcast."];
@@ -159,7 +173,15 @@ detached_thread(doc) ->
 detached_thread(suite) ->
     [];
 detached_thread(Config) ->
-    run_case(Config, "detached_thread", "").
+    case {os:type(), os:version()} of
+	{{unix,darwin}, {9, _, _}} ->
+	    %% For some reason pthread_create() crashes when more
+	    %% threads cannot be created, instead of returning an
+	    %% error code on our MacOS X Leopard machine...
+	    {skipped, "MacOS X Leopard cannot cope with this test..."};
+	_ ->
+	    run_case(Config, "detached_thread", "")
+    end.
 
 max_threads(doc) ->
     ["Tests maximum number of threads."];
@@ -211,17 +233,31 @@ atomic(suite) ->
 atomic(Config) ->
     run_case(Config, "atomic", "").
 
+dw_atomic_massage(doc) ->
+    ["Massage double word atomics"];
+dw_atomic_massage(suite) ->
+    [];
+dw_atomic_massage(Config) ->
+    run_case(Config, "dw_atomic_massage", "").
+
 %%
 %%
 %% Auxiliary functions
 %%
 %%
 
-init_per_testcase(_Case, Config) ->
-    Dog = ?t:timetrap(?DEFAULT_TIMEOUT),
-    [{watchdog, Dog}|Config].
+init_per_testcase(Case, Config) ->
+    case inet:gethostname() of
+	{ok,"fenris"} when Case == max_threads ->
+	    %% Cannot use os:type+os:version as not all
+	    %% solaris10 machines are buggy.
+	    {skip, "This machine is buggy"};
+	_Else ->
+	    Dog = ?t:timetrap(?DEFAULT_TIMEOUT),
+	    [{watchdog, Dog}|Config]
+    end.
 
-fin_per_testcase(_Case, Config) ->
+end_per_testcase(_Case, Config) ->
     Dog = ?config(watchdog, Config),
     ?t:timetrap_cancel(Dog),
     ok.
@@ -277,7 +313,7 @@ read_case_data(Port, TestCase) ->
 	      {Port, {data, {eol, [?PID_MARKER | PidStr]}}} ->
 		  ?line ?t:format("Port program pid: ~s~n", [PidStr]),
 		  ?line CaseProc = self(),
-		  ?line list_to_integer(PidStr), % Sanity check
+		  ?line _ = list_to_integer(PidStr), % Sanity check
 		  spawn_opt(fun () ->
 				    port_prog_killer(CaseProc, PidStr)
 			    end,

@@ -1,7 +1,7 @@
 /*
  * %CopyrightBegin%
  *
- * Copyright Ericsson AB 2003-2011. All Rights Reserved.
+ * Copyright Ericsson AB 2003-2013. All Rights Reserved.
  *
  * The contents of this file are subject to the Erlang Public License,
  * Version 1.1, (the "License"); you may not use this file except in
@@ -163,10 +163,10 @@ BKT_MIN_SZ(GFAllctr_t *gfallctr, int ix)
 
 /* Prototypes of callback functions */
 static Block_t *	get_free_block		(Allctr_t *, Uint,
-						 Block_t *, Uint, Uint32);
-static void		link_free_block		(Allctr_t *, Block_t *, Uint32);
-static void		unlink_free_block	(Allctr_t *, Block_t *, Uint32);
-static void		update_last_aux_mbc	(Allctr_t *, Carrier_t *, Uint32);
+						 Block_t *, Uint);
+static void		link_free_block		(Allctr_t *, Block_t *);
+static void		unlink_free_block	(Allctr_t *, Block_t *);
+static void		update_last_aux_mbc	(Allctr_t *, Carrier_t *);
 static Eterm		info_options		(Allctr_t *, char *, int *,
 						 void *, Uint **, Uint *);
 static void		init_atoms		(void);
@@ -190,16 +190,18 @@ erts_gfalc_start(GFAllctr_t *gfallctr,
 		 GFAllctrInit_t *gfinit,
 		 AllctrInit_t *init)
 {
-    GFAllctr_t nulled_state = {{0}};
-    /* {{0}} is used instead of {0}, in order to avoid (an incorrect) gcc
-       warning. gcc warns if {0} is used as initializer of a struct when
-       the first member is a struct (not if, for example, the third member
-       is a struct). */
+    struct {
+	int dummy;
+	GFAllctr_t allctr;
+    } zero = {0};
+    /* The struct with a dummy element first is used in order to avoid (an
+       incorrect) gcc warning. gcc warns if {0} is used as initializer of
+       a struct when the first member is a struct (not if, for example,
+       the third member is a struct). */
+
     Allctr_t *allctr = (Allctr_t *) gfallctr;
 
-    init->sbmbct = 0; /* Small mbc not yet supported by goodfit */
-
-    sys_memcpy((void *) gfallctr, (void *) &nulled_state, sizeof(GFAllctr_t));
+    sys_memcpy((void *) gfallctr, (void *) &zero.allctr, sizeof(GFAllctr_t));
 
     allctr->mbc_header_size		= sizeof(Carrier_t);
     allctr->min_mbc_size		= MIN_MBC_SZ;
@@ -219,7 +221,9 @@ erts_gfalc_start(GFAllctr_t *gfallctr,
     allctr->get_next_mbc_size		= NULL;
     allctr->creating_mbc		= update_last_aux_mbc;
     allctr->destroying_mbc		= update_last_aux_mbc;
-
+    allctr->add_mbc		        = NULL;
+    allctr->remove_mbc		        = NULL;
+    allctr->largest_fblk_in_mbc         = NULL;
     allctr->init_atoms			= init_atoms;
 
 #ifdef ERTS_ALLOC_UTIL_HARD_DEBUG
@@ -359,7 +363,7 @@ search_bucket(Allctr_t *allctr, int ix, Uint size)
 	 blk && i < max_blk_search;
 	 blk = blk->next, i++) {
 
-	blk_sz = BLK_SZ(blk);
+	blk_sz = MBC_FBLK_SZ(&blk->block_head);
 	blk_on_lambc = (((char *) blk) < gfallctr->last_aux_mbc_end
 			&& gfallctr->last_aux_mbc_start <= ((char *) blk));
 
@@ -381,7 +385,7 @@ search_bucket(Allctr_t *allctr, int ix, Uint size)
 
 static Block_t *
 get_free_block(Allctr_t *allctr, Uint size,
-	       Block_t *cand_blk, Uint cand_size, Uint32 flags)
+	       Block_t *cand_blk, Uint cand_size)
 {
     GFAllctr_t *gfallctr = (GFAllctr_t *) allctr;
     int unsafe_bi, min_bi;
@@ -398,9 +402,9 @@ get_free_block(Allctr_t *allctr, Uint size,
     if (min_bi == unsafe_bi) {
 	blk = search_bucket(allctr, min_bi, size);
 	if (blk) {
-	    if (cand_blk && cand_size <= BLK_SZ(blk))
+	    if (cand_blk && cand_size <= MBC_FBLK_SZ(blk))
 		return NULL; /* cand_blk was better */
-	    unlink_free_block(allctr, blk, flags);
+	    unlink_free_block(allctr, blk);
 	    return blk;
 	}
 	if (min_bi < NO_OF_BKTS - 1) {
@@ -418,20 +422,20 @@ get_free_block(Allctr_t *allctr, Uint size,
     /* We are guaranteed to find a block that fits in this bucket */
     blk = search_bucket(allctr, min_bi, size);
     ASSERT(blk);
-    if (cand_blk && cand_size <= BLK_SZ(blk))
+    if (cand_blk && cand_size <= MBC_FBLK_SZ(blk))
 	return NULL; /* cand_blk was better */
-    unlink_free_block(allctr, blk, flags);
+    unlink_free_block(allctr, blk);
     return blk;
 }
 
 
 
 static void
-link_free_block(Allctr_t *allctr, Block_t *block, Uint32 flags)
+link_free_block(Allctr_t *allctr, Block_t *block)
 {
     GFAllctr_t *gfallctr = (GFAllctr_t *) allctr;
     GFFreeBlock_t *blk = (GFFreeBlock_t *) block;
-    Uint sz = BLK_SZ(blk);
+    Uint sz = MBC_FBLK_SZ(&blk->block_head);
     int i = BKT_IX(gfallctr, sz);
 
     ASSERT(sz >= MIN_BLK_SZ);
@@ -448,11 +452,11 @@ link_free_block(Allctr_t *allctr, Block_t *block, Uint32 flags)
 }
 
 static void
-unlink_free_block(Allctr_t *allctr, Block_t *block, Uint32 flags)
+unlink_free_block(Allctr_t *allctr, Block_t *block)
 {
     GFAllctr_t *gfallctr = (GFAllctr_t *) allctr;
     GFFreeBlock_t *blk = (GFFreeBlock_t *) block;
-    Uint sz = BLK_SZ(blk);
+    Uint sz = MBC_FBLK_SZ(&blk->block_head);
     int i = BKT_IX(gfallctr, sz);
 
     if (!blk->prev) {
@@ -469,7 +473,7 @@ unlink_free_block(Allctr_t *allctr, Block_t *block, Uint32 flags)
 }
 
 static void
-update_last_aux_mbc(Allctr_t *allctr, Carrier_t *mbc, Uint32 flags)
+update_last_aux_mbc(Allctr_t *allctr, Carrier_t *mbc)
 {
     GFAllctr_t *gfallctr = (GFAllctr_t *) allctr;
 
@@ -586,16 +590,16 @@ info_options(Allctr_t *allctr,
  * to erts_gfalc_test()                                                      *
 \*                                                                           */
 
-unsigned long
-erts_gfalc_test(unsigned long op, unsigned long a1, unsigned long a2)
+UWord
+erts_gfalc_test(UWord op, UWord a1, UWord a2)
 {
     switch (op) {
-    case 0x100:	return (unsigned long) BKT_IX((GFAllctr_t *) a1, (Uint) a2);
-    case 0x101:	return (unsigned long) BKT_MIN_SZ((GFAllctr_t *) a1, (int) a2);
-    case 0x102:	return (unsigned long) NO_OF_BKTS;
-    case 0x103:	return (unsigned long)
+    case 0x100:	return (UWord) BKT_IX((GFAllctr_t *) a1, (Uint) a2);
+    case 0x101:	return (UWord) BKT_MIN_SZ((GFAllctr_t *) a1, (int) a2);
+    case 0x102:	return (UWord) NO_OF_BKTS;
+    case 0x103:	return (UWord)
 		    find_bucket(&((GFAllctr_t *) a1)->bucket_mask, (int) a2);
-    default:	ASSERT(0); return ~((unsigned long) 0);
+    default:	ASSERT(0); return ~((UWord) 0);
     }
 }
 
@@ -614,7 +618,7 @@ check_block(Allctr_t *allctr, Block_t * blk, int free_block)
     GFFreeBlock_t *fblk;
 
     if(free_block) {
-	Uint blk_sz = BLK_SZ(blk);
+	Uint blk_sz = is_sbc_blk(blk) ? SBC_BLK_SZ(blk) : MBC_BLK_SZ(blk);
 	bi = BKT_IX(gfallctr, blk_sz);
 
 	ASSERT(gfallctr->bucket_mask.main & (((UWord) 1) << IX2SMIX(bi)));

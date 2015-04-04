@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %% 
-%% Copyright Ericsson AB 2006-2010. All Rights Reserved.
+%% Copyright Ericsson AB 2006-2012. All Rights Reserved.
 %% 
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -30,7 +30,6 @@
 -compile({no_auto_import,[error/1]}).
 -export([start_flex_scanner/0, stop_flex_scanner/1,
 	 expanded_messages/2, expanded_messages/3, 
-	 set_default_sched_bind/0,
 	 display_os_info/0, 
 	 display_system_info/0, 
 	 display_alloc_info/0, 
@@ -70,16 +69,6 @@ detect_version(Codec, Conf, Bin) ->
 
 %%----------------------------------------------------------------------
 %% 
-%% S c h e d u l e r   b i n d   t y p e
-%% 
-%%----------------------------------------------------------------------
-
-set_default_sched_bind() ->
-    (catch erlang:system_flag(scheduler_bind_type, default_bind)).
-
-
-%%----------------------------------------------------------------------
-%% 
 %% D i s p l a y   O s   I n f o 
 %% 
 %%----------------------------------------------------------------------
@@ -111,7 +100,6 @@ display_system_info() ->
     OtpRel        = otp_release(),
     SysVer        = system_version(),
     SysHT         = heap_type(),
-    SysGHSz       = global_heaps_size(),
     SysSMP        = smp_support(),
     SysNumSched   = schedulers(),
     SysProcLimit  = process_limit(),
@@ -124,7 +112,6 @@ display_system_info() ->
     io:format("OTP release:         ~s~n", [OtpRel]),
     io:format("System version:      ~s~n", [SysVer]),
     io:format("Heap type:           ~s~n", [SysHT]),
-    io:format("Global heap size:    ~s~n", [SysGHSz]),
     io:format("Thread support:      ~s~n", [SysThreads]),
     io:format("Thread pool size:    ~s~n", [SysTPSz]),
     io:format("Process limit:       ~s~n", [SysProcLimit]),
@@ -147,9 +134,6 @@ system_version() ->
 
 heap_type() ->
     system_info(heap_type, any).
-
-global_heaps_size() ->
-    system_info(global_heaps_size, any).
 
 smp_support() ->
     system_info(smp_support, any).
@@ -284,7 +268,7 @@ display_megaco_info() ->
     io:format("Megaco version:      ~s~n", [Ver]).
 
 display_asn1_info() ->
-    AI = megaco_ber_bin_drv_media_gateway_control_v1:info(),
+    AI = megaco_ber__media_gateway_control_v1:info(),
     Vsn = 
 	case lists:keysearch(vsn, 1, AI) of
 	    {value, {vsn, V}} when is_atom(V) ->
@@ -377,15 +361,11 @@ expand_codec(Codec, only_drv) ->
 	    [{Codec, megaco_compact_text_encoder, [flex_scanner]},
 	     {Codec, megaco_compact_text_encoder, [flex_scanner]}];
 	ber ->
-	    [{Codec, megaco_ber_bin_encoder, [driver,native]},
-	     {Codec, megaco_ber_bin_encoder, [driver]},
-	     {Codec, megaco_ber_bin_encoder, [driver,native]},
-	     {Codec, megaco_ber_bin_encoder, [driver]}];
+	    [{Codec, megaco_ber_encoder, [native]},
+	     {Codec, megaco_ber_encoder, []}];
 	per ->
-	    [{Codec, megaco_per_bin_encoder, [driver,native]},
-	     {Codec, megaco_per_bin_encoder, [native]},
-	     {Codec, megaco_per_bin_encoder, [driver,native]},
-	     {Codec, megaco_per_bin_encoder, [native]}];
+	    [{Codec, megaco_per_encoder, [native]},
+	     {Codec, megaco_per_encoder, []}];
 	erlang ->
 	    Encoder = megaco_erl_dist_encoder,
 	    [
@@ -406,15 +386,11 @@ expand_codec(Codec, no_drv) ->
 	    [{Codec, megaco_compact_text_encoder, []},
 	     {Codec, megaco_compact_text_encoder, []}];
 	ber ->
-	    [{Codec, megaco_ber_bin_encoder, [native]},
-	     {Codec, megaco_ber_bin_encoder, []},
-	     {Codec, megaco_ber_bin_encoder, [native]},
-	     {Codec, megaco_ber_bin_encoder, []}];
+	    [{Codec, megaco_ber_encoder, [native]},
+	     {Codec, megaco_ber_encoder, []}];
 	per ->
-	    [{Codec, megaco_per_bin_encoder, [native]},
-	     {Codec, megaco_per_bin_encoder, []},
-	     {Codec, megaco_per_bin_encoder, [native]},
-	     {Codec, megaco_per_bin_encoder, []}];
+	    [{Codec, megaco_per_encoder, [native]},
+	     {Codec, megaco_per_encoder, []}];
 	erlang ->
 	    Encoder = megaco_erl_dist_encoder,
 	    [
@@ -435,15 +411,11 @@ expand_codec(Codec, _) ->
 	    [{Codec, megaco_compact_text_encoder, [flex_scanner]},
 	     {Codec, megaco_compact_text_encoder, []}];
 	ber ->
-	    [{Codec, megaco_ber_bin_encoder, [driver,native]},
-	     {Codec, megaco_ber_bin_encoder, [native]},
-	     {Codec, megaco_ber_bin_encoder, [driver]},
-	     {Codec, megaco_ber_bin_encoder, []}];
+	    [{Codec, megaco_ber_encoder, [native]},
+	     {Codec, megaco_ber_encoder, []}];
 	per ->
-	    [{Codec, megaco_per_bin_encoder, [driver,native]},
-	     {Codec, megaco_per_bin_encoder, [native]},
-	     {Codec, megaco_per_bin_encoder, [driver]},
-	     {Codec, megaco_per_bin_encoder, []}];
+	    [{Codec, megaco_per_encoder, [native]},
+	     {Codec, megaco_per_encoder, []}];
 	erlang ->
 	    Encoder = megaco_erl_dist_encoder,
 	    [

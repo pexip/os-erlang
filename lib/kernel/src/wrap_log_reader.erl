@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 1998-2011. All Rights Reserved.
+%% Copyright Ericsson AB 1998-2013. All Rights Reserved.
 %%
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -29,6 +29,8 @@
 -endif.
 
 -export([open/1, open/2, chunk/1, chunk/2, close/1]).
+
+-export_type([continuation/0]).
 
 -include("disk_log.hrl").
 
@@ -147,7 +149,7 @@ open_int(File, FileNo, FirstFileNo) ->
 		{ok, Head} ->
 		    case disk_log_1:is_head(Head) of
 			no ->
-			    file:close(Fd),
+			    _ = file:close(Fd),
 			    {error, {not_a_log_file, FName}};
 			_ -> % yes or yes_not_closed
 			    case last_mod_time(FName) of
@@ -159,12 +161,12 @@ open_int(File, FileNo, FirstFileNo) ->
 						      first_no = FirstFileNo},
 				    {ok, WR};
 				{error, E} ->
-				    file:close(Fd),
+				    _ = file:close(Fd),
 				    {error, {file_error, FName, E}}
 			    end
 		    end;
 		_Other ->
-		    file:close(Fd),
+		    _ = file:close(Fd),
 		    {error, {not_a_log_file, FName}}
 	    end;
 	_Other ->
@@ -278,7 +280,7 @@ read_next_file(WR, N, NewFileNo, Bad) ->
 		true -> 
 		    case open_int(File, NewFileNo, FirstFileNo) of
 			{ok, NWR} ->
-			    close(WR), %% Now we can safely close the old file.
+			    _ = close(WR), %% Now we can safely close the old file.
 			    chunk(NWR, N, Bad);
 			Error ->
 			    Error

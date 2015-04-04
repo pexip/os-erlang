@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2008-2010. All Rights Reserved.
+%% Copyright Ericsson AB 2008-2013. All Rights Reserved.
 %%
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -17,7 +17,7 @@
 %% %CopyrightEnd%
 %% This file is generated DO NOT EDIT
 
-%% @doc See external documentation: <a href="http://www.wxwidgets.org/manuals/stable/wx_wxgraphicsbrush.html">wxGraphicsBrush</a>.
+%% @doc See external documentation: <a href="http://www.wxwidgets.org/manuals/2.8.12/wx_wxgraphicsbrush.html">wxGraphicsBrush</a>.
 %% <p>This class is derived (and can use functions) from:
 %% <br />{@link wxGraphicsObject}
 %% </p>
@@ -32,10 +32,12 @@
 %% inherited exports
 -export([getRenderer/1,isNull/1,parent_class/1]).
 
+-export_type([wxGraphicsBrush/0]).
 %% @hidden
 parent_class(wxGraphicsObject) -> true;
 parent_class(_Class) -> erlang:error({badtype, ?MODULE}).
 
+-type wxGraphicsBrush() :: wx:wx_object().
  %% From wxGraphicsObject
 %% @hidden
 isNull(This) -> wxGraphicsObject:isNull(This).

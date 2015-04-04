@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2000-2010. All Rights Reserved.
+%% Copyright Ericsson AB 2000-2013. All Rights Reserved.
 %%
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -78,7 +78,8 @@ init([]) ->
     process_flag(trap_exit, true),
     case ?PRIM_FILE:start() of
 	{ok, Handle} ->
-	    ets:new(?FILE_IO_SERVER_TABLE, [named_table]),
+	    ?FILE_IO_SERVER_TABLE =
+                ets:new(?FILE_IO_SERVER_TABLE, [named_table]),
 	    {ok, Handle};
 	{error, Reason} ->
 	    {stop, Reason}
@@ -136,6 +137,8 @@ handle_call({del_dir, Name}, _From, Handle) ->
 
 handle_call({list_dir, Name}, _From, Handle) ->
     {reply, ?PRIM_FILE:list_dir(Handle, Name), Handle};
+handle_call({list_dir_all, Name}, _From, Handle) ->
+    {reply, ?PRIM_FILE:list_dir_all(Handle, Name), Handle};
 
 handle_call(get_cwd, _From, Handle) ->
     {reply, ?PRIM_FILE:get_cwd(Handle), Handle};
@@ -147,17 +150,28 @@ handle_call({get_cwd, Name}, _From, Handle) ->
 handle_call({read_file_info, Name}, _From, Handle) ->
     {reply, ?PRIM_FILE:read_file_info(Handle, Name), Handle};
 
+handle_call({read_file_info, Name, Opts}, _From, Handle) ->
+    {reply, ?PRIM_FILE:read_file_info(Handle, Name, Opts), Handle};
+
 handle_call({altname, Name}, _From, Handle) ->
     {reply, ?PRIM_FILE:altname(Handle, Name), Handle};
 
 handle_call({write_file_info, Name, Info}, _From, Handle) ->
     {reply, ?PRIM_FILE:write_file_info(Handle, Name, Info), Handle};
 
+handle_call({write_file_info, Name, Info, Opts}, _From, Handle) ->
+    {reply, ?PRIM_FILE:write_file_info(Handle, Name, Info, Opts), Handle};
+
 handle_call({read_link_info, Name}, _From, Handle) ->
     {reply, ?PRIM_FILE:read_link_info(Handle, Name), Handle};
 
+handle_call({read_link_info, Name, Opts}, _From, Handle) ->
+    {reply, ?PRIM_FILE:read_link_info(Handle, Name, Opts), Handle};
+
 handle_call({read_link, Name}, _From, Handle) ->
     {reply, ?PRIM_FILE:read_link(Handle, Name), Handle};
+handle_call({read_link_all, Name}, _From, Handle) ->
+    {reply, ?PRIM_FILE:read_link_all(Handle, Name), Handle};
 
 handle_call({make_link, Old, New}, _From, Handle) ->
     {reply, ?PRIM_FILE:make_link(Handle, Old, New), Handle};
@@ -304,8 +318,7 @@ do_start_slave(start, Filer, Name) ->
     SlaveMonitor = erlang:monitor(process, Slave),
     receive
 	{started, Token} ->
-	    erlang:demonitor(SlaveMonitor),
-	    receive {'DOWN', SlaveMonitor, _, _, _} -> ok after 0 -> ok end,
+	    erlang:demonitor(SlaveMonitor, [flush]),
 	    {ok, Slave};
 	{'DOWN', SlaveMonitor, _, _, Reason} ->
 	    exit(Reason)

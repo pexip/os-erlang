@@ -1,7 +1,7 @@
 /*
  * %CopyrightBegin%
  * 
- * Copyright Ericsson AB 2003-2011. All Rights Reserved.
+ * Copyright Ericsson AB 2003-2013. All Rights Reserved.
  * 
  * The contents of this file are subject to the Erlang Public License,
  * Version 1.1, (the "License"); you may not use this file except in
@@ -37,15 +37,20 @@
 #define GET_ERL_AF_ALLOC_IMPL
 #include "erl_afit_alloc.h"
 
+struct AFFreeBlock_t_ {
+    Block_t block_head;
+    AFFreeBlock_t *prev;
+    AFFreeBlock_t *next;
+};
+#define AF_BLK_SZ(B) MBC_FBLK_SZ(&(B)->block_head)
 
 #define MIN_MBC_SZ		(16*1024)
 #define MIN_MBC_FIRST_FREE_SZ	(4*1024)
 
 /* Prototypes of callback functions */
-static Block_t *	get_free_block		(Allctr_t *, Uint,
-						 Block_t *, Uint, Uint32);
-static void		link_free_block		(Allctr_t *, Block_t *, Uint32);
-static void		unlink_free_block	(Allctr_t *, Block_t *, Uint32);
+static Block_t *	get_free_block		(Allctr_t *, Uint, Block_t *, Uint);
+static void		link_free_block		(Allctr_t *, Block_t *);
+static void		unlink_free_block	(Allctr_t *, Block_t *);
 
 
 static Eterm		info_options		(Allctr_t *, char *, int *,
@@ -65,16 +70,18 @@ erts_afalc_start(AFAllctr_t *afallctr,
 		 AFAllctrInit_t *afinit,
 		 AllctrInit_t *init)
 {
-    AFAllctr_t nulled_state = {{0}};
-    /* {{0}} is used instead of {0}, in order to avoid (an incorrect) gcc
-       warning. gcc warns if {0} is used as initializer of a struct when
-       the first member is a struct (not if, for example, the third member
-       is a struct). */
+    struct {
+	int dummy;
+	AFAllctr_t allctr;
+    } zero = {0};
+    /* The struct with a dummy element first is used in order to avoid (an
+       incorrect) gcc warning. gcc warns if {0} is used as initializer of
+       a struct when the first member is a struct (not if, for example,
+       the third member is a struct). */
+
     Allctr_t *allctr = (Allctr_t *) afallctr;
 
-    init->sbmbct = 0; /* Small mbc not supported by afit */
-
-    sys_memcpy((void *) afallctr, (void *) &nulled_state, sizeof(AFAllctr_t));
+    sys_memcpy((void *) afallctr, (void *) &zero.allctr, sizeof(AFAllctr_t));
 
     allctr->mbc_header_size		= sizeof(Carrier_t);
     allctr->min_mbc_size		= MIN_MBC_SZ;
@@ -91,6 +98,9 @@ erts_afalc_start(AFAllctr_t *afallctr,
     allctr->get_next_mbc_size		= NULL;
     allctr->creating_mbc		= NULL;
     allctr->destroying_mbc		= NULL;
+    allctr->add_mbc                     = NULL;
+    allctr->remove_mbc                  = NULL;
+    allctr->largest_fblk_in_mbc         = NULL;
     allctr->init_atoms			= init_atoms;
 
 #ifdef ERTS_ALLOC_UTIL_HARD_DEBUG
@@ -107,14 +117,13 @@ erts_afalc_start(AFAllctr_t *afallctr,
 }
 
 static Block_t *
-get_free_block(Allctr_t *allctr, Uint size, Block_t *cand_blk, Uint cand_size,
-	       Uint32 flags)
+get_free_block(Allctr_t *allctr, Uint size, Block_t *cand_blk, Uint cand_size)
 {
     AFAllctr_t *afallctr = (AFAllctr_t *) allctr;
 
     ASSERT(!cand_blk || cand_size >= size);
 
-    if (afallctr->free_list && BLK_SZ(afallctr->free_list) >= size) {
+    if (afallctr->free_list && AF_BLK_SZ(afallctr->free_list) >= size) {
 	AFFreeBlock_t *res = afallctr->free_list;	
 	afallctr->free_list = res->next;
 	if (res->next)
@@ -126,12 +135,12 @@ get_free_block(Allctr_t *allctr, Uint size, Block_t *cand_blk, Uint cand_size,
 }
 
 static void
-link_free_block(Allctr_t *allctr, Block_t *block, Uint32 flags)
+link_free_block(Allctr_t *allctr, Block_t *block)
 {
     AFFreeBlock_t *blk = (AFFreeBlock_t *) block;
     AFAllctr_t *afallctr = (AFAllctr_t *) allctr;
 
-    if (afallctr->free_list && BLK_SZ(afallctr->free_list) > BLK_SZ(blk)) {
+    if (afallctr->free_list && AF_BLK_SZ(afallctr->free_list) > AF_BLK_SZ(blk)) {
 	blk->next = afallctr->free_list->next;
 	blk->prev = afallctr->free_list;
 	afallctr->free_list->next = blk;
@@ -147,7 +156,7 @@ link_free_block(Allctr_t *allctr, Block_t *block, Uint32 flags)
 }
 
 static void
-unlink_free_block(Allctr_t *allctr, Block_t *block, Uint32 flags)
+unlink_free_block(Allctr_t *allctr, Block_t *block)
 {
     AFFreeBlock_t *blk = (AFFreeBlock_t *) block;
     AFAllctr_t *afallctr = (AFAllctr_t *) allctr;
@@ -250,10 +259,10 @@ info_options(Allctr_t *allctr,
  * to erts_afalc_test()                                                      *
 \*                                                                           */
 
-unsigned long
-erts_afalc_test(unsigned long op, unsigned long a1, unsigned long a2)
+UWord
+erts_afalc_test(UWord op, UWord a1, UWord a2)
 {
     switch (op) {
-    default:	ASSERT(0); return ~((unsigned long) 0);
+    default:	ASSERT(0); return ~((UWord) 0);
     }
 }

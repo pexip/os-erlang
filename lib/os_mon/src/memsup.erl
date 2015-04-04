@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %% 
-%% Copyright Ericsson AB 1996-2011. All Rights Reserved.
+%% Copyright Ericsson AB 1996-2012. All Rights Reserved.
 %% 
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -112,7 +112,7 @@ get_helper_timeout() ->
 set_helper_timeout(Seconds) ->
     case param_type(memsup_helper_timeout, Seconds) of
 	true ->
-	    os_mon:call(memsup, {set_helper_timeout, Seconds});
+	    os_mon:call(memsup, {set_helper_timeout, Seconds}, infinity);
 	false ->
 	    erlang:error(badarg)
     end.
@@ -185,7 +185,6 @@ init([]) ->
 		   {unix, irix} -> true;
 		   {unix, sunos} -> true;
 		   {win32, _OSname} -> false;
-		   vxworks -> true;
 		   _ ->
 		       exit({unsupported_os, OS})
 	       end,
@@ -617,8 +616,7 @@ code_change(Vsn, PrevState, "1.8") ->
 			   {unix, openbsd} -> true;
 			   {unix, netbsd} -> true;
 			   {unix, sunos} -> true;
-			   {win32, _OSname} -> false;
-			   vxworks -> true
+			   {win32, _OSname} -> false
 		       end,
 	    Pid = if
 		      PortMode -> spawn_link(fun() -> port_init() end);
@@ -723,20 +721,19 @@ reply(Pending, MemUsage, SysMemUsage) ->
 %% get_memory_usage(OS) -> {Alloc, Total}
 
 %% Darwin:
-%% Uses vm_stat command. This appears to lie about the page size in
-%% Mac OS X 10.2.2 - the pages given are based on 4000 bytes, but
-%% the vm_stat command tells us that it is 4096...
+%% Uses vm_stat command.
 get_memory_usage({unix,darwin}) ->
     Str1 = os:cmd("/usr/bin/vm_stat"),
-    
-    {[Free],     Str2} = fread_value("Pages free:~d.", Str1),
-    {[Active],   Str3} = fread_value("Pages active:~d.", Str2),
-    {[Inactive], Str4} = fread_value("Pages inactive:~d.", Str3),
-    {[_],        Str5} = fread_value("Pages speculative:~d.", Str4),
+    PageSize = 4096,
+
+    {[Free],        Str2} = fread_value("Pages free:~d.", Str1),
+    {[Active],      Str3} = fread_value("Pages active:~d.", Str2),
+    {[Inactive],    Str4} = fread_value("Pages inactive:~d.", Str3),
+    {[Speculative], Str5} = fread_value("Pages speculative:~d.", Str4),
     {[Wired],       _} = fread_value("Pages wired down:~d.", Str5),
 
-    NMemUsed  = (Wired + Active + Inactive) * 4000,
-    NMemTotal = NMemUsed + Free * 4000,
+    NMemUsed  = (Wired + Active + Inactive) * PageSize,
+    NMemTotal = NMemUsed + (Free + Speculative) * PageSize,
     {NMemUsed,NMemTotal};
 
 %% FreeBSD: Look in /usr/include/sys/vmmeter.h for the format of struct
@@ -802,8 +799,7 @@ port_init() ->
     port_idle(Port).
 
 start_portprogram() ->
-    Command = filename:join([code:priv_dir(os_mon), "bin", "memsup"]),
-    open_port({spawn, Command}, [{packet, 1}]).
+    os_mon:open_port("memsup",[{packet,1}]).
 
 %% The connected process loops are a bit awkward (several different
 %% functions doing almost the same thing) as

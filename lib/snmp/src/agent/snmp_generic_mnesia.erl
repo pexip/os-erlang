@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %% 
-%% Copyright Ericsson AB 1996-2009. All Rights Reserved.
+%% Copyright Ericsson AB 1996-2012. All Rights Reserved.
 %% 
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -121,7 +121,7 @@ table_func(set, RowIndex, Cols, Name) ->
 	   fun() ->
 		   snmp_generic:table_set_row(
 		     {Name, mnesia}, nofunc,
-		     {snmp_generic_mnesia, table_try_make_consistent},
+		     fun table_try_make_consistent/2,
 		     RowIndex, Cols)
 	   end) of
 	{atomic, Value} ->
@@ -368,7 +368,8 @@ table_set_elements(Name, RowIndex, Cols) ->
 	_ -> false
     end.
 table_set_elements(Name, RowIndex, Cols, ConsFunc) ->
-    #table_info{index_types = Indexes, first_own_index = FirstOwnIndex} =
+    #table_info{index_types     = Indexes, 
+		first_own_index = FirstOwnIndex} = 
 	snmp_generic:table_info(Name),
     AddCol = if
 		 FirstOwnIndex == 0 -> 2;

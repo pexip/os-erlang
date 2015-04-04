@@ -1,7 +1,7 @@
 /*
  * %CopyrightBegin%
  *
- * Copyright Ericsson AB 2008-2011. All Rights Reserved.
+ * Copyright Ericsson AB 2008-2014. All Rights Reserved.
  *
  * The contents of this file are subject to the Erlang Public License,
  * Version 1.1, (the "License"); you may not use this file except in
@@ -40,9 +40,14 @@ static ErlDrvData wxe_driver_start(ErlDrvPort port, char *buff);
 static int  wxe_driver_load(void);
 static void wxe_driver_stop(ErlDrvData handle);
 static void wxe_driver_unload(void);
-static int  wxe_driver_control(ErlDrvData handle, unsigned int command,  
- 			       char* buf, int count, char** res, int res_size); 
-static int wxe_driver_call(ErlDrvData drv_data, unsigned int command, char *buf, int len, char **rbuf, int rlen, unsigned int *flags);
+static ErlDrvSSizeT wxe_driver_control(ErlDrvData handle,
+				       unsigned int command,  
+				       char* buf, ErlDrvSizeT count,
+				       char** res, ErlDrvSizeT res_size); 
+static ErlDrvSSizeT wxe_driver_call(ErlDrvData drv_data, unsigned int command,
+				    char *buf, ErlDrvSizeT len,
+				    char **rbuf, ErlDrvSizeT rlen,
+				    unsigned int *flags);
 
 static void standard_outputv(ErlDrvData drv_data, ErlIOVec *ev);
 static void wxe_process_died(ErlDrvData drv_data, ErlDrvMonitor *monitor);
@@ -95,7 +100,8 @@ int wxe_driver_load()
       return -1;
 }
 
-ErlDrvPort WXE_DRV_PORT = 0;
+ErlDrvPort WXE_DRV_PORT_HANDLE = 0;
+ErlDrvTermData WXE_DRV_PORT = 0;
 
 static ErlDrvData 
 wxe_driver_start(ErlDrvPort port, char *buff)
@@ -109,17 +115,20 @@ wxe_driver_start(ErlDrvPort port, char *buff)
       fprintf(stderr, " Couldn't alloc mem\r\n");
       return(ERL_DRV_ERROR_GENERAL);  /* ENOMEM */      
    } else {
+      ErlDrvTermData term_port = driver_mk_port(port);
       set_port_control_flags(port, PORT_CONTROL_FLAG_BINARY);
       data->driver_data = NULL;
       data->bin = NULL; 
-      data->port = port;
+      data->port_handle = port;
+      data->port = term_port;
       data->pdl = driver_pdl_create(port);
-      if(WXE_DRV_PORT == 0) {
+      if(WXE_DRV_PORT_HANDLE == 0) {
 	 for(; *buff != 32; buff++); 
 	 buff++; 
 	 erl_wx_privdir = strdup(buff);
 	 
-	 WXE_DRV_PORT = port;
+	 WXE_DRV_PORT_HANDLE = port;
+	 WXE_DRV_PORT = term_port;
 	 wxe_master = data;
 	 if(!(start_native_gui(data) == 1))
 	    return(ERL_DRV_ERROR_GENERAL);  /* ENOMEM */
@@ -134,7 +143,7 @@ static void
 wxe_driver_stop(ErlDrvData handle) 
 {  
    wxe_data *sd = ((wxe_data *)handle);
-   if(sd->port != WXE_DRV_PORT) {
+   if(sd->port_handle != WXE_DRV_PORT_HANDLE) {
       // fprintf(stderr, "%s:%d: STOP \r\n", __FILE__,__LINE__);
       meta_command(DELETE_PORT,sd);
       free(handle);
@@ -151,17 +160,20 @@ wxe_driver_unload(void)
    wxe_master = NULL;
 }
 
-static int
+static ErlDrvSSizeT
 wxe_driver_control(ErlDrvData handle, unsigned op,
-		   char* buf, int count, char** res, int res_size)
+		   char* buf, ErlDrvSizeT count,
+		   char** res, ErlDrvSizeT res_size)
 {
    wxe_data *sd = ((wxe_data *)handle);
    push_command(op,buf,count,sd);
    return 0;
 }
 
-static int wxe_driver_call(ErlDrvData handle, unsigned int command, 
-			   char *buf, int len, char **res, int rlen, unsigned int *flags)
+static ErlDrvSSizeT
+wxe_driver_call(ErlDrvData handle, unsigned int command, 
+		char *buf, ErlDrvSizeT len,
+		char **res, ErlDrvSizeT rlen, unsigned int *flags)
 {
    wxe_data *sd = ((wxe_data *)handle);
    if(command == WXE_DEBUG_DRIVER) {
@@ -183,10 +195,10 @@ void wxe_process_died(ErlDrvData handle, ErlDrvMonitor *monitor)
 {
    /* Callback is active for the dead process */
    wxe_data *sd = ((wxe_data *)handle);
-   push_command(WXE_CB_RETURN,NULL,0,sd);
+   push_command(WXE_CB_DIED,NULL,0,sd);
 
 /*    ErlDrvTermData pid; */
-/*    pid = driver_get_monitored_process(sd->port, monitor);    */
+/*    pid = driver_get_monitored_process(sd->port_handle, monitor);    */
 /*    fprintf(stderr, "Process died %d \r\n", (int) pid);  */
 }
 
@@ -202,7 +214,7 @@ standard_outputv(ErlDrvData drv_data, ErlIOVec* ev)
       binref = driver_alloc(sizeof(WXEBinRef));
       binref->base = ev->iov[1].iov_base;
       binref->size = ev->iov[1].iov_len;
-      binref->from = driver_caller(sd->port);
+      binref->from = driver_caller(sd->port_handle);
       bin = ev->binv[1];
       driver_binary_inc_refc(bin); /* Otherwise it could get deallocated */
       binref->bin = bin;
@@ -212,7 +224,7 @@ standard_outputv(ErlDrvData drv_data, ErlIOVec* ev)
       binref = driver_alloc(sizeof(WXEBinRef));
       binref->base = NULL;
       binref->size = 0;
-      binref->from = driver_caller(sd->port);
+      binref->from = driver_caller(sd->port_handle);
       binref->bin = NULL;
       binref->next = sd->bin;
       sd->bin = binref;

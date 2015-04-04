@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %% 
-%% Copyright Ericsson AB 1996-2011. All Rights Reserved.
+%% Copyright Ericsson AB 1996-2013. All Rights Reserved.
 %% 
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -89,18 +89,13 @@ names() ->
 
 
 -spec names(Host) -> {ok, [{Name, Port}]} | {error, Reason} when
-      Host :: atom() | string(),
+      Host :: atom() | string() | inet:ip_address(),
       Name :: string(),
       Port :: non_neg_integer(),
       Reason :: address | file:posix().
 
 names(Hostname) ->
-    case inet:gethostbyname(Hostname) of
-	{ok, {hostent, _Name, _ , _Af, _Size, [Addr | _]}} ->
-	    erl_epmd:names(Addr);
-	Else ->
-	    Else
-    end.
+    erl_epmd:names(Hostname).
 
 -spec dns_hostname(Host) -> {ok, Name} | {error, Host} when
       Host :: atom() | string(),
@@ -133,7 +128,7 @@ dns_hostname(Hostname) ->
 -spec ping_list([atom()]) -> [atom()].
 
 ping_list(Nodelist) ->
-    net_kernel:monitor_nodes(true),
+    ok = net_kernel:monitor_nodes(true),
     Sofar = ping_first(Nodelist, nodes()),
     collect_new(Sofar, Nodelist).
 
@@ -159,7 +154,7 @@ collect_new(Sofar, Nodelist) ->
 		    collect_new([Node | Sofar], Nodelist)
 	    end
     after 3000 ->
-	    net_kernel:monitor_nodes(false),
+	    ok = net_kernel:monitor_nodes(false),
 	    Sofar
     end.
 

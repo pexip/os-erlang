@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2007-2010. All Rights Reserved.
+%% Copyright Ericsson AB 2007-2013. All Rights Reserved.
 %%
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -23,7 +23,7 @@
 %%% start flags (or equivalent ct:run_test/1 options) are supported:
 %%% -until <StopTime>, StopTime = YYMoMoDDHHMMSS | HHMMSS
 %%% -duration <DurTime>, DurTime = HHMMSS
-%%% -force_stop
+%%% -force_stop [skip_rest]
 %%% -repeat <N>, N = integer()</p>
 
 -module(ct_repeat).
@@ -41,72 +41,89 @@ loop_test(If,Args) when is_list(Args) ->
     case get_loop_info(Args) of
 	no_loop ->
 	    false;
-	{error,E} ->
+	E = {error,_} ->
 	    io:format("Common Test error: ~p\n\n",[E]),
 	    file:set_cwd(Cwd),
 	    E;
 	{repeat,N} ->
 	    io:format("\nCommon Test: Will repeat tests ~w times.\n\n",[N]),
 	    Args1 = [{loop_info,[{repeat,1,N}]} | Args],
-	    loop(If,repeat,0,N,undefined,Args1,undefined),
-	    file:set_cwd(Cwd);
+	    Result = loop(If,repeat,0,N,undefined,Args1,undefined,[]),
+	    file:set_cwd(Cwd),
+	    Result;
 	{stop_time,StopTime} ->
-	    case remaining_time(StopTime) of
-		0 ->
-		    io:format("\nCommon Test: No time left to run tests.\n\n",[]),
-		    ok;
-		Secs ->
-		    io:format("\nCommon Test: Will repeat tests for ~s.\n\n",
-			      [ts(Secs)]),
-		    TPid =
-			case lists:keymember(force_stop,1,Args) of 
-			    true ->
-				CtrlPid = self(),
-				spawn(fun() -> stop_after(CtrlPid,Secs) end);
-			    false ->
-				undefined
-			end,
-		    Args1 = [{loop_info,[{stop_time,Secs,StopTime,1}]} | Args],
-		    loop(If,stop_time,0,Secs,StopTime,Args1,TPid)
-	    end,
-	    file:set_cwd(Cwd)
+	    Result =
+		case remaining_time(StopTime) of
+		    0 ->
+			io:format("\nCommon Test: "
+				  "No time left to run tests.\n\n",[]),
+			{error,not_enough_time};
+		    Secs ->
+			io:format("\nCommon Test: "
+				  "Will repeat tests for ~s.\n\n",[ts(Secs)]),
+			TPid =
+			    case proplists:get_value(force_stop,Args) of
+				False when False==false; False==undefined ->
+				    undefined;
+				ForceStop ->
+				    CtrlPid = self(),
+				    spawn(
+				      fun() ->
+					      stop_after(CtrlPid,Secs,ForceStop)
+				      end)
+			    end,
+			Args1 = [{loop_info,[{stop_time,Secs,StopTime,1}]} | Args],
+			loop(If,stop_time,0,Secs,StopTime,Args1,TPid,[])
+		end,
+	    file:set_cwd(Cwd),
+	    Result
     end.
     
-loop(_,repeat,N,N,_,_Args,_) ->
-    ok;
+loop(_,repeat,N,N,_,_Args,_,AccResult) ->
+    lists:reverse(AccResult);
 
-loop(If,Type,N,Data0,Data1,Args,TPid) ->
+loop(If,Type,N,Data0,Data1,Args,TPid,AccResult) ->
     Pid = spawn_tester(If,self(),Args),
     receive 
 	{'EXIT',Pid,Reason} ->
-	    io:format("Test run crashed! This could be an internal error "
-		      "- please report!\n\n"
-		      "~p\n\n",[Reason]),
-	    cancel(TPid),
-	    {error,Reason};
+	    case Reason of
+		{user_error,What} ->
+		    io:format("\nTest run failed!\nReason: ~p\n\n\n", [What]),
+		    cancel(TPid),
+		    {error,What};			
+		_ ->
+		    io:format("Test run crashed! This could be an internal error "
+			      "- please report!\n\n"
+			      "~p\n\n\n",[Reason]),
+		    cancel(TPid),
+		    {error,Reason}
+	    end;
 	{Pid,{error,Reason}} ->
-	    io:format("\nTest run failed!\nReason: ~p\n\n",[Reason]),
+	    io:format("\nTest run failed!\nReason: ~p\n\n\n",[Reason]),
 	    cancel(TPid),
 	    {error,Reason};
 	{Pid,Result} ->
 	    if Type == repeat ->
-		    io:format("\nTest run ~w(~w) complete.\n\n",[N+1,Data0]),		    
+		    io:format("\nTest run ~w(~w) complete.\n\n\n",[N+1,Data0]),
 		    lists:keydelete(loop_info,1,Args),
 		    Args1 = [{loop_info,[{repeat,N+2,Data0}]} | Args],
-		    loop(If,repeat,N+1,Data0,Data1,Args1,TPid);
+		    loop(If,repeat,N+1,Data0,Data1,Args1,TPid,[Result|AccResult]);
 	       Type == stop_time ->
 		    case remaining_time(Data1) of
 			0 ->
-			    io:format("\nTest time (~s) has run out.\n\n",[ts(Data0)]),
+			    io:format("\nTest time (~s) has run out.\n\n\n",
+				      [ts(Data0)]),
 			    cancel(TPid),
-			    Result;
+			    lists:reverse([Result|AccResult]);
 			Secs ->
 			    io:format("\n~s of test time remaining, " 
-				      "starting run #~w...\n\n",[ts(Secs),N+2]),
+				      "starting run #~w...\n\n\n",
+				      [ts(Secs),N+2]),
 			    lists:keydelete(loop_info,1,Args),			    
 			    ST = {stop_time,Data0,Data1,N+2},
 			    Args1 = [{loop_info,[ST]} | Args],
-			    loop(If,stop_time,N+1,Data0,Data1,Args1,TPid)
+			    loop(If,stop_time,N+1,Data0,Data1,Args1,TPid,
+				 [Result|AccResult])
 		    end
 	    end
     end.
@@ -116,7 +133,7 @@ spawn_tester(script,Ctrl,Args) ->
 
 spawn_tester(func,Ctrl,Opts) ->
     Tester = fun() ->
-		     case catch ct_run:run_test1(Opts) of
+		     case catch ct_run:run_test2(Opts) of
 			 {'EXIT',Reason} ->
 			     exit(Reason);
 			 Result ->
@@ -198,7 +215,7 @@ get_stop_time(until,[Y1,Y2,Mo1,Mo2,D1,D2,H1,H2,Mi1,Mi2,S1,S2]) ->
 	    list_to_integer([S1,S2])},
     calendar:datetime_to_gregorian_seconds({Date,Time});
 
-get_stop_time(until,Time) ->
+get_stop_time(until,Time=[_,_,_,_,_,_]) ->
     get_stop_time(until,"000000"++Time);
 
 get_stop_time(duration,[H1,H2,Mi1,Mi2,S1,S2]) ->
@@ -213,9 +230,16 @@ cancel(Pid) ->
 
 %% After Secs, abort will make the test_server finish the current
 %% job, then empty the job queue and stop.
-stop_after(_CtrlPid,Secs) ->
+stop_after(_CtrlPid,Secs,ForceStop) ->
     timer:sleep(Secs*1000),
+    case ForceStop of
+	SkipRest when SkipRest==skip_rest; SkipRest==["skip_rest"] ->
+	    ct_util:set_testdata({skip_rest,true});
+	_ ->
+	    ok
+    end,
     test_server_ctrl:abort().
+
 
 %% Callback from ct_run to print loop info to system log.
 log_loop_info(Args) ->
@@ -245,11 +269,11 @@ log_loop_info(Args) ->
 		io_lib:format("Test time remaining: ~w secs (~w%)\n",
 			      [Secs,trunc((Secs/Secs0)*100)]),
 	    LogStr4 =
-		case lists:keymember(force_stop,1,Args) of
-		    true ->
-			io_lib:format("force_stop is enabled",[]);
-		    _ ->
-			""
+		case proplists:get_value(force_stop,Args) of
+		    False when False==false; False==undefined ->
+			"";
+		    ForceStop ->
+			io_lib:format("force_stop is set to: ~w",[ForceStop])
 		end,			
 	    ct_logs:log("Test loop info",LogStr1++LogStr2++LogStr3++LogStr4,[])
     end.

@@ -1,7 +1,7 @@
 /*
  * %CopyrightBegin%
  * 
- * Copyright Ericsson AB 1997-2011. All Rights Reserved.
+ * Copyright Ericsson AB 1997-2012. All Rights Reserved.
  * 
  * The contents of this file are subject to the Erlang Public License,
  * Version 1.1, (the "License"); you may not use this file except in
@@ -19,8 +19,12 @@
 /*
  * Purpose: Interrupt handling in windows.
  */
+#ifdef HAVE_CONFIG_H
+#  include "config.h"
+#endif
 #include "sys.h"
 #include "erl_alloc.h"
+#include "erl_thr_progress.h"
 #include "erl_driver.h"
 #include "../../drivers/win32/win_con.h"
 
@@ -33,9 +37,9 @@
 #ifdef ERTS_SMP
 erts_smp_atomic32_t erts_break_requested;
 #define ERTS_SET_BREAK_REQUESTED \
-  erts_smp_atomic32_set(&erts_break_requested, (erts_aint32_t) 1)
+  erts_smp_atomic32_set_nob(&erts_break_requested, (erts_aint32_t) 1)
 #define ERTS_UNSET_BREAK_REQUESTED \
-  erts_smp_atomic32_set(&erts_break_requested, (erts_aint32_t) 0)
+  erts_smp_atomic32_set_nob(&erts_break_requested, (erts_aint32_t) 0)
 #else
 volatile int erts_break_requested = 0;
 #define ERTS_SET_BREAK_REQUESTED (erts_break_requested = 1)
@@ -52,14 +56,14 @@ void erts_do_break_handling(void)
      * therefore, make sure that all threads but this one are blocked before
      * proceeding!
      */
-    erts_smp_block_system(0);
+    erts_smp_thr_progress_block();
     /* call the break handling function, reset the flag */
     do_break();
 
     ResetEvent(erts_sys_break_event);
     ERTS_UNSET_BREAK_REQUESTED;
 
-    erts_smp_release_system();
+    erts_smp_thr_progress_unblock();
 }
 
 
@@ -71,11 +75,11 @@ BOOL WINAPI ctrl_handler_ignore_break(DWORD dwCtrlType)
 	return TRUE;
 	break;
     case CTRL_LOGOFF_EVENT:
+    case CTRL_SHUTDOWN_EVENT:
 	if (nohup)
 	    return TRUE;
 	/* else pour through... */
     case CTRL_CLOSE_EVENT:
-    case CTRL_SHUTDOWN_EVENT:
 	erl_exit(0, "");
 	break;
     }
@@ -123,11 +127,11 @@ BOOL WINAPI ctrl_handler(DWORD dwCtrlType)
 	SetEvent(erts_sys_break_event);
 	break;
     case CTRL_LOGOFF_EVENT:
+    case CTRL_SHUTDOWN_EVENT:
 	if (nohup)
 	    return TRUE;
 	/* else pour through... */
     case CTRL_CLOSE_EVENT:
-    case CTRL_SHUTDOWN_EVENT:
 	erl_exit(0, "");
 	break;
     }

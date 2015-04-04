@@ -2,7 +2,7 @@
 %%
 %% %CopyrightBegin%
 %% 
-%% Copyright Ericsson AB 2004-2011. All Rights Reserved.
+%% Copyright Ericsson AB 2004-2013. All Rights Reserved.
 %% 
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -190,7 +190,7 @@ set_to(Dst, Val, Env) ->
 %% Returns   : { FlowWorkList, SSAWorkList, NewEnvironment}
 %%-----------------------------------------------------------------------------
 
-visit_branch(Inst, Env) -> %% Titta ocksÂ pÂ exekverbarflagga
+visit_branch(Inst, Env) -> %% Titta ocks√• p√• exekverbarflagga
   Val1 = lookup_lattice_value(hipe_rtl:branch_src1(Inst), Env),
   Val2 = lookup_lattice_value(hipe_rtl:branch_src2(Inst), Env),
   CFGWL = case evaluate_relop(Val1, hipe_rtl:branch_cond(Inst), Val2) of

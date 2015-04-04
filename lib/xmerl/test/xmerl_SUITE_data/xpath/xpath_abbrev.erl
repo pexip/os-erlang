@@ -8,6 +8,7 @@
 -module(xpath_abbrev).
 
 -export([test/0, check_node_set/2, ticket_6873/0, ticket_7496/0, functions/0]).
+-export([namespaces/0]).
 
 -include("test_server.hrl").
 -include_lib("xmerl/include/xmerl.hrl").
@@ -210,7 +211,7 @@ ticket_7496() ->
     ?line {Doc3,_} = xmerl_scan:file("documentRoot.xml"),
     ?line ok = Test(Doc3,"//child",[child,child,child]),
     ?line ok = Test(Doc3,"//child[@name='beta']",[child]),
-    ?line [{xmlAttribute,id,[],[],[],[],1,[],"2",false}] =
+    ?line [{xmlAttribute,id,[],[],[],_,1,[],"2",false}] =
 	xmerl_xpath:string("/documentRoot/parent/child[@name='beta']/@id",Doc3),
     ?line ok = Test(Doc3,"/documentRoot/parent/child|/documentRoot/parent/pet",
 		    [child,child,child,pet,pet]),
@@ -264,3 +265,33 @@ functions() ->
 		    [city,city,comment]),
     ?line ok = Test(Doc2,"//*[starts-with(name(),'{http://www.example.com/PO1')]",
 		    ['apo:purchaseOrder','apo:comment']).
+
+
+namespaces() ->
+    {Doc,_} = xmerl_scan:file("purchaseOrder.xml", [{namespace_conformant, true}]),
+
+    %% Element name using regular namespace and context namespace declaration.
+    ?line [#xmlElement{nsinfo = {_, "purchaseOrder"}}] =
+        xmerl_xpath:string("/apo:purchaseOrder", Doc),
+    ?line [#xmlElement{nsinfo = {_, "purchaseOrder"}}] =
+        xmerl_xpath:string("/t:purchaseOrder", Doc, [{namespace, [{"t", "http://www.example.com/PO1"}]}]),
+
+    %% Wildcard element name using regular namespace and context namespace declaration.
+    ?line [#xmlElement{nsinfo = {_, "comment"}}] =
+        xmerl_xpath:string("./apo:*", Doc),
+    ?line [#xmlElement{nsinfo = {_, "comment"}}] =
+        xmerl_xpath:string("./t:*", Doc, [{namespace, [{"t", "http://www.example.com/PO1"}]}]),
+
+    %% Attribute name using regular namespace and context namespace declaration.
+    ?line [#xmlAttribute{nsinfo = {_, "type"}}, #xmlAttribute{nsinfo = {_, "type"}}] =
+        xmerl_xpath:string("//@xsi:type", Doc),
+    ?line [#xmlAttribute{nsinfo = {_, "type"}}, #xmlAttribute{nsinfo = {_, "type"}}] =
+        xmerl_xpath:string("//@t:type", Doc, [{namespace, [{"t", "http://www.w3.org/2001/XMLSchema-instance"}]}]),
+
+    %% Wildcard attribute name using regular namespace and context namespace declaration.
+    ?line [#xmlAttribute{nsinfo = {_, "type"}}, #xmlAttribute{nsinfo = {_, "type"}}] =
+        xmerl_xpath:string("//@xsi:*", Doc),
+    ?line [#xmlAttribute{nsinfo = {_, "type"}}, #xmlAttribute{nsinfo = {_, "type"}}] =
+        xmerl_xpath:string("//@t:*", Doc, [{namespace, [{"t", "http://www.w3.org/2001/XMLSchema-instance"}]}]),
+
+    ok.

@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %% 
-%% Copyright Ericsson AB 1999-2011. All Rights Reserved.
+%% Copyright Ericsson AB 1999-2014. All Rights Reserved.
 %% 
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -22,13 +22,14 @@
 -export([all/0, suite/0,groups/0,init_per_suite/1, end_per_suite/1, 
 	 init_per_group/2,end_per_group/2, not_run/1]).
 -export([test_1/1, test_2/1, test_3/1, bad_match_spec_bin/1,
-	 trace_control_word/1, silent/1, silent_no_ms/1, 
+	 trace_control_word/1, silent/1, silent_no_ms/1, silent_test/1,
 	 ms_trace2/1, ms_trace3/1, boxed_and_small/1,
 	 destructive_in_test_bif/1, guard_exceptions/1,
+	 empty_list/1,
 	 unary_plus/1, unary_minus/1, moving_labels/1]).
 -export([fpe/1]).
 -export([otp_9422/1]).
-
+-export([faulty_seq_trace/1, do_faulty_seq_trace/0]).
 -export([runner/2, loop_runner/3]).
 -export([f1/1, f2/2, f3/2, fn/1, fn/2, fn/3]).
 -export([do_boxed_and_small/0]).
@@ -41,7 +42,7 @@
 -export([init_per_testcase/2, end_per_testcase/2]).
 
 init_per_testcase(Func, Config) when is_atom(Func), is_list(Config) ->
-    Dog=?t:timetrap(?t:seconds(10)),
+    Dog=?t:timetrap(?t:seconds(30)),
     [{watchdog, Dog}|Config].
 
 end_per_testcase(_Func, Config) ->
@@ -55,10 +56,12 @@ all() ->
     case test_server:is_native(match_spec_SUITE) of
 	false ->
 	    [test_1, test_2, test_3, bad_match_spec_bin,
-	     trace_control_word, silent, silent_no_ms, ms_trace2,
+	     trace_control_word, silent, silent_no_ms, silent_test, ms_trace2,
 	     ms_trace3, boxed_and_small, destructive_in_test_bif,
 	     guard_exceptions, unary_plus, unary_minus, fpe,
 	     moving_labels,
+	     faulty_seq_trace,
+	     empty_list,
 	     otp_9422];
 	true -> [not_run]
     end.
@@ -212,7 +215,7 @@ test_3(Config) when is_list(Config) ->
 
 otp_9422(doc) -> [];
 otp_9422(Config) when is_list(Config) ->
-    Laps = 1000,
+    Laps = 10000,
     ?line Fun1 = fun() -> otp_9422_tracee() end,
     ?line P1 = spawn_link(?MODULE, loop_runner, [self(), Fun1, Laps]),
     io:format("spawned ~p as tracee\n", [P1]),
@@ -229,7 +232,7 @@ otp_9422(Config) when is_list(Config) ->
     %%receive after 10*1000 -> ok end,
 
     stop_collect(P1),
-    stop_collect(P2),
+    stop_collect(P2, abort),
     ok.
     
 otp_9422_tracee() ->
@@ -500,6 +503,14 @@ silent_no_ms(Config) when is_list(Config) ->
 			 {trace,Tracee,return_to,{?MODULE,f3,2}}]
 	    end).
 
+silent_test(doc) ->
+    ["Test that match_spec_test does not activate silent"];
+silent_test(_Config) ->
+    {flags,[]} = erlang:trace_info(self(),flags),
+    erlang:match_spec_test([],[{'_',[],[{silent,true}]}],trace),
+    {flags,[]} = erlang:trace_info(self(),flags).
+
+
 ms_trace2(doc) ->
     ["Test the match spec functions {trace/2}"];
 ms_trace2(suite) -> [];
@@ -726,6 +737,19 @@ do_boxed_and_small() ->
     {ok, false, _, _} = erlang:match_spec_test({0,3},[{{make_ref(),'_'},[],['$_']}],table),
     ok.
 
+faulty_seq_trace(doc) ->
+    ["Test that faulty seq_trace_call does not crash emulator"];
+faulty_seq_trace(suite) -> [];
+faulty_seq_trace(Config) when is_list(Config) ->
+    ?line {ok, Node} = start_node(match_spec_suite_other),
+    ?line ok = rpc:call(Node,?MODULE,do_faulty_seq_trace,[]),
+    ?line stop_node(Node),
+    ok.
+
+do_faulty_seq_trace() ->
+    {ok,'EXIT',_,_} = erlang:match_spec_test([],[{'_',[],[{message,{set_seq_token,yxa,true}}]}],trace),
+    ok.
+
 errchk(Pat) ->
     case catch erlang:trace_pattern({?MODULE, f2, 2}, Pat) of
 	{'EXIT', {badarg, _}} ->
@@ -875,6 +899,11 @@ fpe(Config) when is_list(Config) ->
 	_ -> ok 
     end.
 
+empty_list(Config) when is_list(Config) ->
+    Val=[{'$1',[], [{message,'$1'},{message,{caller}},{return_trace}]}],
+     %% Did crash debug VM in faulty assert:
+    erlang:match_spec_test([],Val,trace).
+
 moving_labels(Config) when is_list(Config) ->
     %% Force an andalso/orelse construction to be moved by placing it
     %% in a tuple followed by a constant term. Labels should still
@@ -953,7 +982,9 @@ start_collect(P) ->
     P ! {go, self()}.
 
 stop_collect(P) ->
-    P ! {done, self()},
+    stop_collect(P, done).
+stop_collect(P, Order) ->
+    P ! {Order, self()},
     receive
 	{gone, P} ->
 	    ok
@@ -978,15 +1009,23 @@ loop_runner(Collector, Fun, Laps) ->
     end,
     loop_runner_cont(Collector, Fun, 0, Laps).
 
-loop_runner_cont(_Collector, _Fun, Laps, Laps) ->
+loop_runner_cont(Collector, _Fun, Laps, Laps) ->
     receive
-	{done, Collector} ->
-	    io:format("loop_runner ~p exit after ~p laps\n", [self(), Laps]),
-	    Collector ! {gone, self()}
-    end;
+	{done, Collector} -> ok;
+	{abort, Collector} -> ok
+    end,
+    io:format("loop_runner ~p exit after ~p laps\n", [self(), Laps]),
+    Collector ! {gone, self()};
+
 loop_runner_cont(Collector, Fun, N, Laps) ->
     Fun(),
-    loop_runner_cont(Collector, Fun, N+1, Laps).
+    receive
+	{abort, Collector} ->
+	    io:format("loop_runner ~p aborted after ~p of ~p laps\n", [self(), N+1, Laps]),
+	    Collector ! {gone, self()}
+    after 0 ->
+	    loop_runner_cont(Collector, Fun, N+1, Laps)
+    end.
 
 
 f1(X) ->

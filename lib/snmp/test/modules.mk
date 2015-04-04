@@ -2,7 +2,7 @@
 
 # %CopyrightBegin%
 #
-# Copyright Ericsson AB 2004-2011. All Rights Reserved.
+# Copyright Ericsson AB 2004-2014. All Rights Reserved.
 #
 # The contents of this file are subject to the Erlang Public License,
 # Version 1.1, (the "License"); you may not use this file except in
@@ -19,6 +19,7 @@
 
 SUITE_MODULES = \
 	snmp_SUITE \
+        snmp_to_snmpnet_SUITE \
 	snmp_app_test \
 	snmp_appup_test \
 	snmp_compiler_test \
@@ -42,6 +43,7 @@ TEST_UTIL_MODULES = \
 	snmp_test_manager \
 	snmp_test_mgr \
 	snmp_test_mgr_misc \
+	snmp_test_mgr_counter_server \
 	sa \
 	klas3 \
 	test1 \
@@ -76,7 +78,8 @@ MIB_FILES = \
 	TestTrap.mib \
 	TestTrapv2.mib \
 	Test1.mib \
-	Test2.mib
+	Test2.mib \
+	Test3.mib
 
-SPECS = snmp.spec snmp.spec.vxworks 
+SPECS = snmp.spec
 

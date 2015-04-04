@@ -77,6 +77,11 @@ PRIMOP_LIST(am_nonclosure_address, &nbif_nonclosure_address)
 PRIMOP_LIST(am_conv_big_to_float, &nbif_conv_big_to_float)
 PRIMOP_LIST(am_fclearerror_error, &nbif_fclearerror_error)
 
+#ifdef NO_FPE_SIGNALS
+PRIMOP_LIST(am_emulate_fpe, &nbif_emulate_fpe)
+#endif
+PRIMOP_LIST(am_debug_native_called, &nbif_hipe_bifs_debug_native_called)
+
 #if defined(__sparc__)
 #include "hipe_sparc_primops.h"
 #endif

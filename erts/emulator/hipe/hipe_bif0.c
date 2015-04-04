@@ -1,7 +1,7 @@
 /*
  * %CopyrightBegin%
  *
- * Copyright Ericsson AB 2001-2011. All Rights Reserved.
+ * Copyright Ericsson AB 2001-2013. All Rights Reserved.
  *
  * The contents of this file are subject to the Erlang Public License,
  * Version 1.1, (the "License"); you may not use this file except in
@@ -174,8 +174,13 @@ static inline unsigned char *bytearray_lvalue(Eterm bin, Eterm idx)
 {
     Sint i;
     unsigned char *bytes;
+#ifndef DEBUG
+    ERTS_DECLARE_DUMMY(Uint bitoffs);
+    ERTS_DECLARE_DUMMY(Uint bitsize);
+#else
     Uint bitoffs;
     Uint bitsize;
+#endif
 
     if (is_not_binary(bin) ||
 	is_not_small(idx) ||
@@ -235,9 +240,15 @@ BIF_RETTYPE hipe_bifs_bitarray_2(BIF_ALIST_2)
 BIF_RETTYPE hipe_bifs_bitarray_update_3(BIF_ALIST_3)
 {
     unsigned char *bytes, bytemask;
-    Uint bitoffs, bitsize;
     Uint bitnr, bytenr;
     int set;
+#ifndef DEBUG
+    ERTS_DECLARE_DUMMY(Uint bitoffs);
+    ERTS_DECLARE_DUMMY(Uint bitsize);
+#else
+    Uint bitoffs;
+    Uint bitsize;
+#endif
 
     if (is_not_binary(BIF_ARG_1))
 	BIF_ERROR(BIF_P, BADARG);
@@ -267,8 +278,15 @@ BIF_RETTYPE hipe_bifs_bitarray_update_3(BIF_ALIST_3)
 BIF_RETTYPE hipe_bifs_bitarray_sub_2(BIF_ALIST_2)
 {
     unsigned char *bytes, bytemask;
-    Uint bitoffs, bitsize;
     Uint bitnr, bytenr;
+#ifndef DEBUG
+    ERTS_DECLARE_DUMMY(Uint bitoffs);
+    ERTS_DECLARE_DUMMY(Uint bitsize);
+#else
+    Uint bitoffs;
+    Uint bitsize;
+#endif
+
 
     if (is_not_binary(BIF_ARG_1))
 	BIF_ERROR(BIF_P, BADARG);
@@ -397,10 +415,15 @@ BIF_RETTYPE hipe_bifs_enter_code_2(BIF_ALIST_2)
     Uint nrbytes;
     void *bytes;
     void *address;
-    Uint bitoffs;
-    Uint bitsize;
     Eterm trampolines;
     Eterm *hp;
+#ifndef DEBUG
+    ERTS_DECLARE_DUMMY(Uint bitoffs);
+    ERTS_DECLARE_DUMMY(Uint bitsize);
+#else
+    Uint bitoffs;
+    Uint bitsize;
+#endif
 
     if (is_not_binary(BIF_ARG_1))
 	BIF_ERROR(BIF_P, BADARG);
@@ -586,8 +609,8 @@ static Uint *hipe_find_emu_address(Eterm mod, Eterm name, unsigned int arity)
     Uint *code_base;
     int i, n;
 
-    modp = erts_get_module(mod);
-    if (modp == NULL || (code_base = modp->code) == NULL)
+    modp = erts_get_module(mod, erts_active_code_ix());
+    if (modp == NULL || (code_base = modp->curr.code) == NULL)
 	return NULL;
     n = code_base[MI_NUM_FUNCTIONS];
     for (i = 0; i < n; ++i) {
@@ -625,7 +648,7 @@ static void *hipe_get_emu_address(Eterm m, Eterm f, unsigned int arity, int is_r
 	/* if not found, stub it via the export entry */
 	/* no lock needed around erts_export_get_or_make_stub() */
 	Export *export_entry = erts_export_get_or_make_stub(m, f, arity);
-	address = export_entry->address;
+	address = export_entry->addressv[erts_active_code_ix()];
     }
     return address;
 }
@@ -985,6 +1008,26 @@ BIF_RETTYPE hipe_conv_big_to_float(BIF_ALIST_1)
     BIF_RET(res);
 }
 
+#ifdef NO_FPE_SIGNALS
+
+/* 
+   This is the current solution to make hipe run without FPE.
+   The native code is the same except that a call to this primop
+   is made after _every_ float operation to check the result.
+   The native fcheckerror still done later will detect if an
+   "emulated" FPE has occured.
+   We use p->hipe.float_result to avoid passing a 'double' argument,
+   which has its own calling convention (on amd64 at least).
+   Simple and slow...
+*/
+void hipe_emulate_fpe(Process* p)
+{
+    if (!finite(p->hipe.float_result)) {
+	p->fp_exception = 1;
+    }
+}
+#endif
+
 #if 0 /* XXX: unused */
 /*
  * At least parts of this should be inlined in native code.
@@ -1050,19 +1093,17 @@ BIF_RETTYPE hipe_bifs_make_fun_3(BIF_ALIST_3)
     if (is_not_nil(free_vars))
 	BIF_ERROR(BIF_P, BADARG);
 
-#ifndef HYBRID /* FIND ME! */
     funp->next = MSO(BIF_P).funs;
     MSO(BIF_P).funs = funp;
-#endif
 
     BIF_RET(make_fun(funp));
 }
 #endif
 
 /*
- * args: Nativecodeaddress, Module, {Uniq, Index, BeamAddress}
+ * args: Module, {Uniq, Index, BeamAddress}
  */
-BIF_RETTYPE hipe_bifs_make_fe_3(BIF_ALIST_3)
+BIF_RETTYPE hipe_bifs_get_fe_2(BIF_ALIST_2)
 {
     Eterm mod;
     Uint index;
@@ -1070,20 +1111,15 @@ BIF_RETTYPE hipe_bifs_make_fe_3(BIF_ALIST_3)
     void *beam_address;
     ErlFunEntry *fe;
     Eterm *tp;
-    void *native_address;
 
-    native_address = term_to_address(BIF_ARG_1);
-    if (!native_address)
+    if (is_not_atom(BIF_ARG_1))
 	BIF_ERROR(BIF_P, BADARG);
+    mod = BIF_ARG_1;
 
-    if (is_not_atom(BIF_ARG_2))
+    if (is_not_tuple(BIF_ARG_2) ||
+	(arityval(*tuple_val(BIF_ARG_2)) != 3))
 	BIF_ERROR(BIF_P, BADARG);
-    mod = BIF_ARG_2;
-
-    if (is_not_tuple(BIF_ARG_3) ||
-	(arityval(*tuple_val(BIF_ARG_3)) != 3))
-	BIF_ERROR(BIF_P, BADARG);
-    tp = tuple_val(BIF_ARG_3);
+    tp = tuple_val(BIF_ARG_2);
     if (term_to_Uint(tp[1], &uniq) == 0)
 	BIF_ERROR(BIF_P, BADARG);
     if (term_to_Uint(tp[2], &index) == 0)
@@ -1103,10 +1139,28 @@ BIF_RETTYPE hipe_bifs_make_fe_3(BIF_ALIST_3)
 	printf("no fun entry for %s %ld:%ld\n", atom_buf, uniq, index);
 	BIF_ERROR(BIF_P, BADARG);
     }
+    BIF_RET(address_to_term((void *)fe, BIF_P));
+}
+
+/*
+ * args: FE, Nativecodeaddress
+ */
+BIF_RETTYPE hipe_bifs_set_native_address_in_fe_2(BIF_ALIST_2)
+{
+    ErlFunEntry *fe;
+    void *native_address;
+
+    fe = (ErlFunEntry *)term_to_address(BIF_ARG_1);
+    if (!fe)
+	BIF_ERROR(BIF_P, BADARG);
+    native_address = term_to_address(BIF_ARG_2);
+    if (!native_address)
+	BIF_ERROR(BIF_P, BADARG);
+
     fe->native_address = native_address;
     if (erts_refc_dectest(&fe->refc, 0) == 0)
 	erts_erase_fun_entry(fe);
-    BIF_RET(address_to_term((void *)fe, BIF_P));
+    BIF_RET(am_true);
 }
 
 #if 0 /* XXX: unused */
@@ -1542,14 +1596,6 @@ BIF_RETTYPE hipe_nonclosure_address(BIF_ALIST_2)
 	    goto badfun;
 	m = ep->code[0];
 	f = ep->code[1];
-    } else if (hdr == make_arityval(2)) {
-	Eterm *tp = tuple_val(BIF_ARG_1);
-	m = tp[1];
-	f = tp[2];
-	if (is_not_atom(m) || is_not_atom(f))
-	    goto badfun;
-	if (!erts_find_export_entry(m, f, BIF_ARG_2))
-	    goto badfun;
     } else
 	goto badfun;
     address = hipe_get_na_nofail(m, f, BIF_ARG_2, 1);
@@ -1714,12 +1760,52 @@ BIF_RETTYPE hipe_bifs_mark_referred_from_1(BIF_ALIST_1) /* get_refs_from */
     BIF_RET(NIL);
 }
 
+/* Called by init:restart after unloading all hipe compiled modules
+ * to work around bug causing execution of deallocated beam code.
+ * Can be removed when delete/purge of native modules works better.
+ * Test: Do init:restart in debug compiled vm with hipe compiled kernel. 
+ */
+static void hipe_purge_all_refs(void)
+{
+    struct hipe_mfa_info **bucket;
+    unsigned int i, nrbuckets;
+
+    hipe_mfa_info_table_lock();
+
+    bucket = hipe_mfa_info_table.bucket;
+    nrbuckets = 1 << hipe_mfa_info_table.log2size;
+    for (i = 0; i < nrbuckets; ++i) {	
+	while (bucket[i] != NULL) {
+	    struct hipe_mfa_info* mfa = bucket[i];
+	    bucket[i] = mfa->bucket.next;
+
+	    while (mfa->refers_to) {
+		struct hipe_mfa_info_list *to = mfa->refers_to;
+		mfa->refers_to = to->next;
+		erts_free(ERTS_ALC_T_HIPE, to);
+	    }
+	    while (mfa->referred_from) {
+		struct ref* from = mfa->referred_from;
+		mfa->referred_from = from->next;
+		erts_free(ERTS_ALC_T_HIPE, from);
+	    }
+	    erts_free(ERTS_ALC_T_HIPE, mfa);
+	}
+    }
+    hipe_mfa_info_table_unlock();
+}
+
 BIF_RETTYPE hipe_bifs_remove_refs_from_1(BIF_ALIST_1)
 {
     struct mfa mfa;
     struct hipe_mfa_info *caller_mfa, *callee_mfa;
     struct hipe_mfa_info_list *refers_to, *tmp_refers_to;
     struct ref **prev, *ref;
+
+    if (BIF_ARG_1 == am_all) {
+	hipe_purge_all_refs();
+	BIF_RET(am_ok);
+    }
 
     if (!term_to_mfa(BIF_ARG_1, &mfa))
 	BIF_ERROR(BIF_P, BADARG);
@@ -1755,8 +1841,9 @@ BIF_RETTYPE hipe_bifs_remove_refs_from_1(BIF_ALIST_1)
 	caller_mfa->refers_to = NULL;
     }
     hipe_mfa_info_table_unlock();
-    BIF_RET(NIL);
+    BIF_RET(am_ok);
 }
+
 
 /* redirect_referred_from(CalleeMFA)
  * Redirect all pending-redirect refs in CalleeMFA's referred_from.

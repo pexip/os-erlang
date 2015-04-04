@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %% 
-%% Copyright Ericsson AB 1997-2011. All Rights Reserved.
+%% Copyright Ericsson AB 1997-2013. All Rights Reserved.
 %% 
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -18,6 +18,7 @@
 %%
 %%
 -module(asn1ct_value).
+-compile([{nowarn_deprecated_function,{asn1rt,utf8_list_to_binary,1}}]).
 
 %%  Generate Erlang values for ASN.1 types.
 %%  The value is randomized within it's constraints
@@ -25,57 +26,55 @@
 -include("asn1_records.hrl").
 %-compile(export_all).
 
--export([get_type/3]).
--export([i_random/1]).
-
+-export([from_type/2]).
 
 %% Generate examples of values ******************************
 %%****************************************x
 
 
-get_type(M,Typename,Tellname) ->
-    case asn1_db:dbget(M,Typename) of
-	undefined -> 
-	    {asn1_error,{not_found,{M,Typename}}};
-	Tdef when is_record(Tdef,typedef) ->
-	    Type = Tdef#typedef.typespec,
-	    get_type(M,[Typename],Type,Tellname);
+from_type(M,Typename) ->
+    case asn1_db:dbload(M) of
+	error ->
+	    {error,{not_found,{M,Typename}}};
+	ok ->
+	    #typedef{typespec=Type} = asn1_db:dbget(M, Typename),
+	    from_type(M,[Typename],Type);
+    Vdef when is_record(Vdef,valuedef) ->
+        from_value(Vdef);
 	Err ->
-	    {asn1_error,{other,Err}}
+	    {error,{other,Err}}
     end.
 
-get_type(M,Typename,Type,Tellname) when is_record(Type,type) ->
+from_type(M,Typename,Type) when is_record(Type,type) ->
     InnerType = get_inner(Type#type.def),
     case asn1ct_gen:type(InnerType) of
 	#'Externaltypereference'{module=Emod,type=Etype} ->
-	    get_type(Emod,Etype,Tellname);
+	    from_type(Emod,Etype);
 	{_,user} ->
-	    case Tellname of
-		yes -> {Typename,get_type(M,InnerType,no)};
-		no -> get_type(M,InnerType,no)
-	    end;
-	{notype,_} ->
-	    true;
+		from_type(M,InnerType);
 	{primitive,bif} ->
-	    get_type_prim(Type,get_encoding_rule(M));
+	    from_type_prim(M, Type);
 	'ASN1_OPEN_TYPE' ->
 	    case  Type#type.constraint of
 		[#'Externaltypereference'{type=TrefConstraint}] ->
-		    get_type(M,TrefConstraint,no);
+		    from_type(M,TrefConstraint);
 		_ ->
 		    ERule = get_encoding_rule(M),
 		    open_type_value(ERule)
 	    end;
 	{constructed,bif} when Typename == ['EXTERNAL'] ->
-	    Val=get_type_constructed(M,Typename,InnerType,Type),
-	    asn1rt_check:transform_to_EXTERNAL1994(Val);
+	    Val=from_type_constructed(M,Typename,InnerType,Type),
+	    asn1ct_eval_ext:transform_to_EXTERNAL1994(Val);
 	{constructed,bif} ->
-	    get_type_constructed(M,Typename,InnerType,Type)
+	    from_type_constructed(M,Typename,InnerType,Type)
     end;
-get_type(M,Typename,#'ComponentType'{name = Name,typespec = Type},_)  ->
-    get_type(M,[Name|Typename],Type,no);
-get_type(_,_,_,_) -> % 'EXTENSIONMARK'
+from_type(M,Typename,#'ComponentType'{name = Name,typespec = Type})  ->
+    from_type(M,[Name|Typename],Type);
+from_type(_,_,_) -> % 'EXTENSIONMARK'
     undefined.
+
+from_value(#valuedef{type = #type{def = 'INTEGER'}, value = Val}) ->
+    Val.
 
 get_inner(A) when is_atom(A) -> A;    
 get_inner(Ext) when is_record(Ext,'Externaltypereference') -> Ext;    
@@ -93,7 +92,7 @@ get_inner(T) when is_tuple(T) ->
 
 
 
-get_type_constructed(M,Typename,InnerType,D) when is_record(D,type) ->
+from_type_constructed(M,Typename,InnerType,D) when is_record(D,type) ->
     case InnerType of
 	'SET' ->
 	    get_sequence(M,Typename,D);
@@ -132,7 +131,7 @@ get_components(M,Typename,{Root,Ext}) ->
 %% Should enhance this *** HERE *** with proper handling of extensions
 
 get_components(M,Typename,[H|T]) ->
-    [get_type(M,Typename,H,no)|
+    [from_type(M,Typename,H)|
     get_components(M,Typename,T)];
 get_components(_,_,[]) ->
     [].
@@ -145,10 +144,10 @@ get_choice(M,Typename,Type) ->
 	{CompList,ExtList} -> % Should be enhanced to handle extensions too
 	    CList = CompList ++ ExtList,
 	    C = lists:nth(random(length(CList)),CList),
-	    {C#'ComponentType'.name,get_type(M,Typename,C,no)};
+	    {C#'ComponentType'.name,from_type(M,Typename,C)};
 	CompList when is_list(CompList) ->
 	    C = lists:nth(random(length(CompList)),CompList),
-	    {C#'ComponentType'.name,get_type(M,Typename,C,no)}
+	    {C#'ComponentType'.name,from_type(M,Typename,C)}
     end.
     
 get_sequence_of(M,Typename,Type,TypeSuffix) ->
@@ -157,29 +156,28 @@ get_sequence_of(M,Typename,Type,TypeSuffix) ->
     C = Type#type.constraint,
     S = size_random(C),
     NewTypeName = [TypeSuffix|Typename],
-    gen_list(M,NewTypeName,Oftype,no,S).
+    gen_list(M,NewTypeName,Oftype,S).
 
-gen_list(_,_,_,_,0) ->
+gen_list(_,_,_,0) ->
     [];
-gen_list(M,Typename,Oftype,Tellname,N) ->
-    [get_type(M,Typename,Oftype,no)|gen_list(M,Typename,Oftype,Tellname,N-1)].
+gen_list(M,Typename,Oftype,N) ->
+    [from_type(M,Typename,Oftype)|gen_list(M,Typename,Oftype,N-1)].
     
-get_type_prim(D,Erule) ->
+from_type_prim(M, D) ->
     C = D#type.constraint,
     case D#type.def of
 	'INTEGER' ->
 	    i_random(C);
-	{'INTEGER',NamedNumberList} ->
-	    NN = [X||{X,_} <- NamedNumberList],
-	    case NN of 
+	{'INTEGER',[_|_]=NNL} ->
+	    case C of
 		[] ->
-		    i_random(C);
+		    {N,_} = lists:nth(random(length(NNL)), NNL),
+		    N;
 		_ ->
-		    case C of
-			[] ->
-			    lists:nth(random(length(NN)),NN);
-			_ ->
-			    lists:nth((fun(0)->1;(X)->X end(i_random(C))),NN)
+		    V = i_random(C),
+		    case lists:keyfind(V, 2, NNL) of
+			false -> V;
+			{N,V} -> N
 		    end
 	    end;
 	Enum when is_tuple(Enum),element(1,Enum)=='ENUMERATED' ->
@@ -198,6 +196,7 @@ get_type_prim(D,Erule) ->
 	    NN = [X||{X,_} <- NNew],
 	    case NN of
 		[] ->
+            io:format(user, "Enum = ~p~n", [Enum]),
 		    asn1_EMPTY;
 		_ ->
 		    case C of
@@ -211,23 +210,10 @@ get_type_prim(D,Erule) ->
 	    NN = [X||{X,_} <- NamedNumberList],
 	    case NN of
 		[] ->
-		    Bl1 =lists:reverse(adjust_list(size_random(C),[1,0,1,1])),
-		    Bl2 = lists:reverse(lists:dropwhile(fun(0)->true;(1)->false end,Bl1)),
-		    case {length(Bl2),get_constraint(C,'SizeConstraint')} of
-			{Len,Len} ->
-			    Bl2;
-			{_Len,Int} when is_integer(Int) ->
-			    Bl1;
-			{Len,{Min,_}} when Min > Len ->
-			    Bl1;
-			_ ->
-			    Bl2
-		    end;
+		    random_unnamed_bit_string(M, C);
 		_ ->
 		    [lists:nth(random(length(NN)),NN)]
 	    end;
-	'ANY' ->
-	    exit({asn1_error,nyi,'ANY'});
 	'NULL' ->
 	    'NULL';
 	'OBJECT IDENTIFIER' ->
@@ -275,7 +261,11 @@ get_type_prim(D,Erule) ->
 	'BOOLEAN' ->
 	    true;
 	'OCTET STRING' ->
-	    adjust_list(size_random(C),c_string(C,"OCTET STRING"));
+	    S0 = adjust_list(size_random(C), c_string(C, "OCTET STRING")),
+	    case M:legacy_erlang_types() of
+		false -> list_to_binary(S0);
+		true -> S0
+	    end;
 	'NumericString' ->
 	    adjust_list(size_random(C),c_string(C,"0123456789"));
 	'TeletexString' ->
@@ -302,12 +292,7 @@ get_type_prim(D,Erule) ->
 	    adjust_list(size_random(C),c_string(C,"BMPString"));
 	'UTF8String' ->
 	    {ok,Res}=asn1rt:utf8_list_to_binary(adjust_list(random(50),[$U,$T,$F,$8,$S,$t,$r,$i,$n,$g,16#ffff,16#fffffff,16#ffffff,16#fffff,16#fff])),
-	    case Erule of
-		per ->
-		    binary_to_list(Res);
-		_ ->
-		    Res
-	    end;
+	    Res;
 	'UniversalString' ->
 	    adjust_list(size_random(C),c_string(C,"UniversalString"));
 	XX ->
@@ -322,6 +307,32 @@ c_string(C,Default) ->
 	    [V];
 	no ->
 	    Default
+    end.
+
+random_unnamed_bit_string(M, C) ->
+    Bl1 = lists:reverse(adjust_list(size_random(C), [1,0,1,1])),
+    Bl2 = lists:reverse(lists:dropwhile(fun(0)-> true;
+					   (1) -> false
+					end,Bl1)),
+    Val = case {length(Bl2),get_constraint(C, 'SizeConstraint')} of
+	      {Len,Len} ->
+		  Bl2;
+	      {_Len,Int} when is_integer(Int) ->
+		  Bl1;
+	      {Len,{Min,_}} when Min > Len ->
+		  Bl1;
+	      _ ->
+		  Bl2
+	  end,
+    case M:bit_string_format() of
+	legacy ->
+	    Val;
+	bitstring ->
+	    << <<B:1>> || B <- Val >>;
+	compact ->
+	    BitString = << <<B:1>> || B <- Val >>,
+	    PadLen = (8 - (bit_size(BitString) band 7)) band 7,
+	    {PadLen,<<BitString/bitstring,0:PadLen>>}
     end.
 
 %% FIXME:
@@ -342,7 +353,7 @@ c_string(C,Default) ->
 
 random(Upper) ->
     {A1,A2,A3} = erlang:now(),
-    random:seed(A1,A2,A3),
+    _ = random:seed(A1, A2, A3),
     random:uniform(Upper).
 
 size_random(C) ->
@@ -412,13 +423,19 @@ adjust_list1(Len,Orig,[Oh|Ot],Acc) ->
     adjust_list1(Len-1,Orig,Ot,[Oh|Acc]).
 
 
-get_constraint(C,Key) ->
-    case lists:keysearch(Key,1,C) of
-	false ->
-	     no;
-	{value,{_,V}} -> 
-	    V
+get_constraint(C, Key) ->
+    case lists:keyfind(Key, 1, C) of
+        false                    -> no;
+        {'ValueRange', {Lb, Ub}} -> {check_external(Lb), check_external(Ub)};
+        {'SizeConstraint', N}    -> N;
+        {Key, Value}             -> Value
     end.
+
+check_external(ExtRef) when is_record(ExtRef, 'Externalvaluereference') ->
+    #'Externalvaluereference'{module = Emod, value = Evalue} = ExtRef,
+    from_type(Emod, Evalue);
+check_external(Value) ->
+    Value.
 
 get_encoding_rule(M) ->
     Mod =
@@ -433,20 +450,9 @@ get_encoding_rule(M) ->
     end.
 
 open_type_value(ber) ->
-    [4,9,111,112,101,110,95,116,121,112,101];
-open_type_value(ber_bin) ->
-%    [4,9,111,112,101,110,95,116,121,112,101];
     <<4,9,111,112,101,110,95,116,121,112,101>>;
-open_type_value(ber_bin_v2) ->
-%    [4,9,111,112,101,110,95,116,121,112,101];
-    <<4,9,111,112,101,110,95,116,121,112,101>>;
-open_type_value(per) ->
-    "\n\topen_type"; %octet string value "open_type"
-open_type_value(per_bin) ->
-    <<"\n\topen_type">>;
-%    <<10,9,111,112,101,110,95,116,121,112,101>>;
 open_type_value(_) ->
-    [4,9,111,112,101,110,95,116,121,112,101].
+    <<"\n\topen_type">>.	       %octet string value "open_type"
 
 to_textual_order({Root,Ext}) ->
     {to_textual_order(Root),Ext};

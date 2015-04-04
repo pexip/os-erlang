@@ -1,7 +1,7 @@
 %%-*-erlang-*-
 %% %CopyrightBegin%
 %% 
-%% Copyright Ericsson AB 2008-2010. All Rights Reserved.
+%% Copyright Ericsson AB 2008-2012. All Rights Reserved.
 %% 
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -39,6 +39,9 @@
 %% Internal exports
 %%----------------------------------------------------------------------
 -export([
+	 cf/3,
+	 cf/4,
+	 cf/5
         ]).
 
 %%----------------------------------------------------------------------
@@ -110,6 +113,10 @@ parse_dtd(Xml, State) ->
 	    State3 =  event_callback(endDocument, State2),
 	    ets:delete(RefTable),
 	    {ok, State3#xmerl_sax_parser_state.event_state, Rest}; 
+	{endDocument, Rest, State2} when is_record(State2, xmerl_sax_parser_state) ->
+	    State3 =  event_callback(endDocument, State2),
+	    ets:delete(RefTable),
+	    {ok, State3#xmerl_sax_parser_state.event_state, Rest}; 
 	Other ->
 	    _State2 = event_callback(endDocument, State1),
 	    ets:delete(RefTable),
@@ -152,16 +159,16 @@ parse_xml_decl(?BYTE_ORDER_MARK_2, State) ->
     cf(?BYTE_ORDER_MARK_2, State, fun parse_xml_decl/2);
 parse_xml_decl(?BYTE_ORDER_MARK_REST(Rest), State) ->
     cf(Rest, State, fun parse_xml_decl/2);
-parse_xml_decl(?STRING("<"), State) ->
-    cf(?STRING("<"), State, fun parse_xml_decl/2);
-parse_xml_decl(?STRING("<?"), State) ->
-    cf(?STRING("<?"), State, fun parse_xml_decl/2);
-parse_xml_decl(?STRING("<?x"), State) ->
-    cf(?STRING("<?x"), State, fun parse_xml_decl/2);
-parse_xml_decl(?STRING("<?xm"), State) ->
-    cf(?STRING("<?xm"), State, fun parse_xml_decl/2);
-parse_xml_decl(?STRING("<?xml"), State) ->
-    cf(?STRING("<?xml"), State, fun parse_xml_decl/2);
+parse_xml_decl(?STRING("<") = Bytes, State) ->
+    cf(Bytes, State, fun parse_xml_decl/2);
+parse_xml_decl(?STRING("<?") = Bytes, State) ->
+    cf(Bytes, State, fun parse_xml_decl/2);
+parse_xml_decl(?STRING("<?x") = Bytes, State) ->
+    cf(Bytes, State, fun parse_xml_decl/2);
+parse_xml_decl(?STRING("<?xm") = Bytes, State) ->
+    cf(Bytes, State, fun parse_xml_decl/2);
+parse_xml_decl(?STRING("<?xml") = Bytes, State) ->
+    cf(Bytes, State, fun parse_xml_decl/2);
 parse_xml_decl(?STRING_REST("<?xml", Rest1), State) ->
     parse_xml_decl_1(Rest1, State);
 parse_xml_decl(Bytes, #xmerl_sax_parser_state{encoding=Enc} = State) when is_binary(Bytes) ->
@@ -201,11 +208,17 @@ parse_xml_decl_1(Bytes, State) ->
 %%----------------------------------------------------------------------
 parse_prolog(?STRING_EMPTY, State) ->
     cf(?STRING_EMPTY, State, fun parse_prolog/2);
-parse_prolog(?STRING("<"), State) ->
-    cf(?STRING("<"), State, fun parse_prolog/2);
+parse_prolog(?STRING("<") = Bytes, State) ->
+    cf(Bytes, State, fun parse_prolog/2);
 parse_prolog(?STRING_REST("<?", Rest), State) ->
-    {Rest1, State1} = parse_pi(Rest, State),
-    parse_prolog(Rest1, State1);
+    case parse_pi(Rest, State) of
+	{Rest1, State1} ->
+	    parse_prolog(Rest1, State1);
+	{endDocument, Rest1, State1} ->
+	    parse_prolog(Rest1, State1)  
+	    % IValue = ?TO_INPUT_FORMAT("<?"),
+	    % {?APPEND_STRING(IValue, Rest1), State1}
+    end;
 parse_prolog(?STRING_REST("<!", Rest), State) ->
     parse_prolog_1(Rest, State);
 parse_prolog(?STRING_REST("<", Rest), State) ->
@@ -220,18 +233,18 @@ parse_prolog(Bytes, State) ->
 
 parse_prolog_1(?STRING_EMPTY, State) ->
     cf(?STRING_EMPTY, State, fun parse_prolog_1/2);
-parse_prolog_1(?STRING("D"), State) ->
-    cf(?STRING("D"), State, fun parse_prolog_1/2);
-parse_prolog_1(?STRING("DO"), State) ->
-    cf(?STRING("DO"), State, fun parse_prolog_1/2);
-parse_prolog_1(?STRING("DOC"), State) ->
-    cf(?STRING("DOC"), State, fun parse_prolog_1/2);
-parse_prolog_1(?STRING("DOCT"), State) ->
-    cf(?STRING("DOCT"), State, fun parse_prolog_1/2);
-parse_prolog_1(?STRING("DOCTY"), State) ->
-    cf(?STRING("DOCTY"), State, fun parse_prolog_1/2);
-parse_prolog_1(?STRING("DOCTYP"), State) ->
-    cf(?STRING("DOCTYP"), State, fun parse_prolog_1/2);
+parse_prolog_1(?STRING("D") = Bytes, State) ->
+    cf(Bytes, State, fun parse_prolog_1/2);
+parse_prolog_1(?STRING("DO") = Bytes, State) ->
+    cf(Bytes, State, fun parse_prolog_1/2);
+parse_prolog_1(?STRING("DOC") = Bytes, State) ->
+    cf(Bytes, State, fun parse_prolog_1/2);
+parse_prolog_1(?STRING("DOCT") = Bytes, State) ->
+    cf(Bytes, State, fun parse_prolog_1/2);
+parse_prolog_1(?STRING("DOCTY") = Bytes, State) ->
+    cf(Bytes, State, fun parse_prolog_1/2);
+parse_prolog_1(?STRING("DOCTYP") = Bytes, State) ->
+    cf(Bytes, State, fun parse_prolog_1/2);
 parse_prolog_1(?STRING_REST("DOCTYPE", Rest), State) ->
     {Rest1, State1} = parse_doctype(Rest, State),
     State2 = event_callback(endDTD, State1),
@@ -406,10 +419,11 @@ parse_pi(?STRING_UNBOUND_REST(C, Rest) = Bytes, State) ->
 		parse_name(Rest, State, [C]),
 	    case string:to_lower(PiTarget) of  
 		"xml" ->
-		    case State#xmerl_sax_parser_state.end_tags of
-			[] ->
-			    {Bytes, State};
-			_ ->
+		    case check_if_new_doc_allowed(State#xmerl_sax_parser_state.input_type,
+						  State#xmerl_sax_parser_state.end_tags) of
+			true ->
+			    {endDocument, Bytes, State};
+			false ->
 			    ?fatal_error(State1, "<?xml  ...?> not first in document")
 		    end;
 		_ ->
@@ -422,6 +436,11 @@ parse_pi(?STRING_UNBOUND_REST(C, Rest) = Bytes, State) ->
     end;
 parse_pi(Bytes, State) ->
     unicode_incomplete_check([Bytes, State, fun parse_pi/2], undefined).
+
+check_if_new_doc_allowed(stream, []) ->
+    true;
+check_if_new_doc_allowed(_, _) ->
+    false.
 
 %%----------------------------------------------------------------------
 %% Function: parse_pi_1(Rest, State) -> Result
@@ -509,10 +528,10 @@ parse_ns_name(Bytes, State, Prefix, Name) ->
 %%----------------------------------------------------------------------
 parse_pi_data(?STRING_EMPTY, State, Acc) ->
     cf(?STRING_EMPTY, State, Acc, fun parse_pi_data/3);
-parse_pi_data(?STRING("?"), State, Acc) ->
-    cf(?STRING("?"), State, Acc, fun parse_pi_data/3);
-parse_pi_data(?STRING("\r"), State, Acc) ->
-    cf(?STRING("\r"), State, Acc, fun parse_pi_data/3);
+parse_pi_data(?STRING("?") = Bytes, State, Acc) ->
+    cf(Bytes, State, Acc, fun parse_pi_data/3);
+parse_pi_data(?STRING("\r") = Bytes, State, Acc) ->
+    cf(Bytes, State, Acc, fun parse_pi_data/3);
 parse_pi_data(?STRING_REST("?>", Rest), State, Acc) ->
     {lists:reverse(Acc), Rest, State};
 parse_pi_data(?STRING_REST("\n", Rest), #xmerl_sax_parser_state{line_no=N} = State, Acc) ->
@@ -541,23 +560,23 @@ parse_pi_data(Bytes, State, Acc) ->
 %%----------------------------------------------------------------------
 parse_cdata(?STRING_EMPTY, State) -> 
     cf(?STRING_EMPTY, State, fun parse_cdata/2);
-parse_cdata(?STRING("["), State) -> 
-    cf(?STRING("["), State, fun parse_cdata/2);
-parse_cdata(?STRING("[C"), State) -> 
-    cf(?STRING("[C"), State, fun parse_cdata/2);
-parse_cdata(?STRING("[CD"), State) -> 
-    cf(?STRING("[CD"), State, fun parse_cdata/2);
-parse_cdata(?STRING("[CDA"), State) -> 
-    cf(?STRING("[CDA"), State, fun parse_cdata/2);
-parse_cdata(?STRING("[CDAT"), State) -> 
-    cf(?STRING("[CDAT"), State, fun parse_cdata/2);
-parse_cdata(?STRING("[CDATA"), State) -> 
-    cf(?STRING("[CDATA"), State, fun parse_cdata/2);
-parse_cdata(?STRING_REST("[CDATA[", Rest), State) -> 
-    State1 = event_callback(startCDATA, State),	    
+parse_cdata(?STRING("[") = Bytes, State) ->
+    cf(Bytes, State, fun parse_cdata/2);
+parse_cdata(?STRING("[C") = Bytes, State) ->
+    cf(Bytes, State, fun parse_cdata/2);
+parse_cdata(?STRING("[CD") = Bytes, State) ->
+    cf(Bytes, State, fun parse_cdata/2);
+parse_cdata(?STRING("[CDA") = Bytes, State) ->
+    cf(Bytes, State, fun parse_cdata/2);
+parse_cdata(?STRING("[CDAT") = Bytes, State) ->
+    cf(Bytes, State, fun parse_cdata/2);
+parse_cdata(?STRING("[CDATA") = Bytes, State) ->
+    cf(Bytes, State, fun parse_cdata/2);
+parse_cdata(?STRING_REST("[CDATA[", Rest), State) ->
+    State1 = event_callback(startCDATA, State),	   
     parse_cdata(Rest, State1, []);
-parse_cdata(Bytes, State) -> 
-    unicode_incomplete_check([Bytes, State, fun parse_cdata/2], 
+parse_cdata(Bytes, State) ->
+    unicode_incomplete_check([Bytes, State, fun parse_cdata/2],
 			     "expecting comment or CDATA").
 
 
@@ -571,12 +590,12 @@ parse_cdata(Bytes, State) ->
 %%----------------------------------------------------------------------
 parse_cdata(?STRING_EMPTY, State, Acc) -> 
     cf(?STRING_EMPTY, State, Acc, fun parse_cdata/3);
-parse_cdata(?STRING("\r"), State, Acc) -> 
-    cf(?STRING("\r"), State, Acc, fun parse_cdata/3);
-parse_cdata(?STRING("]"), State, Acc) -> 
-    cf(?STRING("]"), State, Acc, fun parse_cdata/3);
-parse_cdata(?STRING("]]"), State, Acc) -> 
-    cf(?STRING("]]"), State, Acc, fun parse_cdata/3);
+parse_cdata(?STRING("\r") = Bytes, State, Acc) -> 
+    cf(Bytes, State, Acc, fun parse_cdata/3);
+parse_cdata(?STRING("]") = Bytes, State, Acc) -> 
+    cf(Bytes, State, Acc, fun parse_cdata/3);
+parse_cdata(?STRING("]]") = Bytes, State, Acc) -> 
+    cf(Bytes, State, Acc, fun parse_cdata/3);
 parse_cdata(?STRING_REST("]]>", Rest), State, Acc) -> 
     State1 = event_callback({characters, lists:reverse(Acc)}, State),   
     State2 = event_callback(endCDATA, State1),	    
@@ -607,12 +626,12 @@ parse_cdata(Bytes, State, Acc) ->
 %%----------------------------------------------------------------------
 parse_comment(?STRING_EMPTY, State, Acc) -> 
     cf(?STRING_EMPTY, State, Acc, fun parse_comment/3);
-parse_comment(?STRING("\r"), State, Acc) -> 
-    cf(?STRING("\r"), State, Acc, fun parse_comment/3);
-parse_comment(?STRING("-"), State, Acc) -> 
-    cf(?STRING("-"), State, Acc, fun parse_comment/3);
-parse_comment(?STRING("--"), State, Acc) -> 
-    cf(?STRING("--"), State, Acc, fun parse_comment/3);
+parse_comment(?STRING("\r") = Bytes, State, Acc) -> 
+    cf(Bytes, State, Acc, fun parse_comment/3);
+parse_comment(?STRING("-") = Bytes, State, Acc) -> 
+    cf(Bytes, State, Acc, fun parse_comment/3);
+parse_comment(?STRING("--") = Bytes, State, Acc) -> 
+    cf(Bytes, State, Acc, fun parse_comment/3);
 parse_comment(?STRING_REST("-->", Rest), State, Acc) -> 
     State1 = event_callback({comment, lists:reverse(Acc)}, State),   
     {Rest, State1};
@@ -654,8 +673,13 @@ parse_misc(?STRING_EMPTY, State, Eod) ->
 parse_misc(?STRING("<") = Rest, State, Eod) ->
     cf(Rest, State, Eod, fun parse_misc/3);
 parse_misc(?STRING_REST("<?", Rest), State, Eod) ->
-    {Rest1, State1} = parse_pi(Rest, State),
-    parse_misc(Rest1, State1, Eod);
+    case parse_pi(Rest, State) of
+	{Rest1, State1} ->
+	    parse_misc(Rest1, State1, Eod);
+	{endDocument, _Rest1, State1} ->
+	    IValue = ?TO_INPUT_FORMAT("<?"),
+	    {?APPEND_STRING(IValue, Rest), State1}
+    end;
 parse_misc(?STRING("<!") = Rest, State, Eod) ->
     cf(Rest, State, Eod, fun parse_misc/3);
 parse_misc(?STRING("<!-") = Rest, State, Eod) ->
@@ -710,8 +734,8 @@ parse_stag(Bytes, State) ->
 %%----------------------------------------------------------------------
 parse_attributes(?STRING_EMPTY, State, CurrentTag) ->
     cf(?STRING_EMPTY, State, CurrentTag, fun parse_attributes/3);
-parse_attributes(?STRING("/"), State, CurrentTag) -> 
-    cf(?STRING("/"), State, CurrentTag, fun parse_attributes/3);
+parse_attributes(?STRING("/") = Bytes, State, CurrentTag) -> 
+    cf(Bytes, State, CurrentTag, fun parse_attributes/3);
 parse_attributes(?STRING_REST("/>", Rest), State, {Tag, AttList, NewNsList}) ->
     CompleteNsList =  NewNsList ++ State#xmerl_sax_parser_state.ns,
     {Uri, LocalName, QName, Attributes} = fix_ns(Tag, AttList, CompleteNsList),
@@ -759,7 +783,7 @@ parse_attributes(?STRING_UNBOUND_REST(C, Rest), State, {Tag, AttList, NsList}) -
 		    end
 	    end;
 	false ->
-	    ?fatal_error(State,  "Invalid start character in attribute name: " ++ C)
+	    ?fatal_error(State,  "Invalid start character in attribute name: " ++ [C])
     end;
 parse_attributes(Bytes, State, CurrentTag) ->
     unicode_incomplete_check([Bytes, State, CurrentTag, fun parse_attributes/3],
@@ -908,20 +932,20 @@ parse_att_value(?STRING_EMPTY, State, undefined, Acc) ->
     {Acc, [], State}; %% stop clause when parsing references
 parse_att_value(?STRING_EMPTY, State, Stop, Acc) ->
     cf(?STRING_EMPTY, State, Stop, Acc, fun parse_att_value/4);
-parse_att_value(?STRING("\r"), State, Stop, Acc) ->
-    cf(?STRING("\r"), State, Stop, Acc, fun parse_att_value/4);
+parse_att_value(?STRING("\r") = Bytes, State, Stop, Acc) ->
+    cf(Bytes, State, Stop, Acc, fun parse_att_value/4);
 parse_att_value(?STRING_REST("\n", Rest), #xmerl_sax_parser_state{line_no=N} = State, Stop, Acc) -> 
     parse_att_value(Rest, 
-		   State#xmerl_sax_parser_state{line_no=N+1}, Stop, [?space |Acc]);
+		    State#xmerl_sax_parser_state{line_no=N+1}, Stop, [?space |Acc]);
 parse_att_value(?STRING_REST("\r\n", Rest), #xmerl_sax_parser_state{line_no=N} = State, Stop, Acc) -> 
     parse_att_value(Rest, 
-		   State#xmerl_sax_parser_state{line_no=N+1}, Stop, [?space |Acc]);
+		    State#xmerl_sax_parser_state{line_no=N+1}, Stop, [?space |Acc]);
 parse_att_value(?STRING_REST("\r", Rest), #xmerl_sax_parser_state{line_no=N} = State, Stop, Acc)  -> 
     parse_att_value(Rest, 
-		   State#xmerl_sax_parser_state{line_no=N+1}, Stop, [?space |Acc]);
+		    State#xmerl_sax_parser_state{line_no=N+1}, Stop, [?space |Acc]);
 parse_att_value(?STRING_REST("\t", Rest), #xmerl_sax_parser_state{line_no=N} = State, Stop, Acc)  -> 
     parse_att_value(Rest, 
-		   State#xmerl_sax_parser_state{line_no=N+1}, Stop, [?space |Acc]);
+		    State#xmerl_sax_parser_state{line_no=N+1}, Stop, [?space |Acc]);
 parse_att_value(?STRING_REST("&", Rest), State, Stop, Acc)  -> 
     {Ref, Rest1, State1} = parse_reference(Rest, State, true),
     case Ref of 
@@ -944,14 +968,19 @@ parse_att_value(?STRING_REST("&", Rest), State, Stop, Acc)  ->
 	{unparsed, Name, _}  ->
 	    ?fatal_error(State1, "Unparsed entity reference in  attribute value: " ++ Name)
     end;
-parse_att_value(?STRING_UNBOUND_REST(Stop, Rest), State, Stop, Acc) -> 
+parse_att_value(?STRING_UNBOUND_REST(Stop, Rest), State, Stop, Acc) ->
     {lists:reverse(Acc), Rest, State};
-parse_att_value(?STRING_UNBOUND_REST($<, _Rest), State, _Stop, _Acc)   -> 
+parse_att_value(?STRING_UNBOUND_REST($<, _Rest), State, _Stop, _Acc)   ->
     ?fatal_error(State,  "< not allowed in attribute value");
-parse_att_value(?STRING_UNBOUND_REST(C, Rest), State, Stop, Acc)   -> 
-    parse_att_value(Rest, State, Stop, [C|Acc]);
-parse_att_value(Bytes, State, Stop, Acc)   -> 
-    unicode_incomplete_check([Bytes, State, Stop, Acc, fun parse_att_value/4], 
+parse_att_value(?STRING_UNBOUND_REST(C, Rest), State, Stop, Acc)   ->
+    if
+	?is_char(C) ->
+	    parse_att_value(Rest, State, Stop, [C|Acc]);
+	true ->
+	     ?fatal_error(State, lists:flatten(io_lib:format("Bad character in attribute value: ~p", [C])))
+    end;
+parse_att_value(Bytes, State, Stop, Acc)   ->
+    unicode_incomplete_check([Bytes, State, Stop, Acc, fun parse_att_value/4],
 			     undefined).
 
 
@@ -1038,25 +1067,30 @@ parse_content(?STRING_EMPTY, State, Acc, IgnorableWS) ->
 	Other ->
 	    throw(Other)
     end;
-parse_content(?STRING("\r"), State, Acc, IgnorableWS) ->
-    cf(?STRING("\r"), State, Acc, IgnorableWS, fun parse_content/4);
-parse_content(?STRING("<"), State, Acc, IgnorableWS) ->	
-    cf(?STRING("<"), State, Acc, IgnorableWS, fun parse_content/4);
+parse_content(?STRING("\r") = Bytes, State, Acc, IgnorableWS) ->
+    cf(Bytes, State, Acc, IgnorableWS, fun parse_content/4);
+parse_content(?STRING("<") = Bytes, State, Acc, IgnorableWS) ->	
+    cf(Bytes, State, Acc, IgnorableWS, fun parse_content/4);
 parse_content(?STRING_REST("</", Rest), State, Acc, IgnorableWS) ->
     State1 = send_character_event(length(Acc), IgnorableWS, lists:reverse(Acc), State),
     parse_etag(Rest, State1);
-parse_content(?STRING("<!"), State, _Acc, IgnorableWS) ->
-    cf(?STRING("<!"), State, [], IgnorableWS, fun parse_content/4);
-parse_content(?STRING("<!-"), State, _Acc, IgnorableWS) ->
-    cf(?STRING("<!-"), State, [], IgnorableWS, fun parse_content/4);
+parse_content(?STRING("<!") = Bytes, State, _Acc, IgnorableWS) ->
+    cf(Bytes, State, [], IgnorableWS, fun parse_content/4);
+parse_content(?STRING("<!-") = Bytes, State, _Acc, IgnorableWS) ->
+    cf(Bytes, State, [], IgnorableWS, fun parse_content/4);
 parse_content(?STRING_REST("<!--", Rest), State, Acc, IgnorableWS) ->
     State1 = send_character_event(length(Acc), IgnorableWS, lists:reverse(Acc), State),
     {Rest1, State2} = parse_comment(Rest, State1, []),
     parse_content(Rest1, State2, [], true);
 parse_content(?STRING_REST("<?", Rest), State, Acc, IgnorableWS) ->
     State1 = send_character_event(length(Acc), IgnorableWS, lists:reverse(Acc), State),
-    {Rest1, State2} = parse_pi(Rest, State1),
-    parse_content(Rest1, State2, [], true);
+    case parse_pi(Rest, State1) of
+	{Rest1, State2} ->
+	    parse_content(Rest1, State2, [], true);
+	{endDocument, _Rest1, State2} ->
+	    IValue = ?TO_INPUT_FORMAT("<?"),
+	    {?APPEND_STRING(IValue, Rest), State2}
+    end;
 parse_content(?STRING_REST("<!", Rest1) = Rest, #xmerl_sax_parser_state{end_tags = ET} = State, Acc, IgnorableWS) ->
     case ET of 
 	[] ->
@@ -1120,10 +1154,10 @@ parse_content(?STRING_UNBOUND_REST(C, Rest), State, Acc, _IgnorableWS) ->
 	?is_char(C) ->
 	    parse_content(Rest, State, [C|Acc], false);
 	true ->
-	     ?fatal_error(State, "Bad character in content: " ++ C)
-    end;   
-parse_content(Bytes, State, Acc, IgnorableWS)   -> 
-    unicode_incomplete_check([Bytes, State, Acc, IgnorableWS, fun parse_content/4], 
+	     ?fatal_error(State, lists:flatten(io_lib:format("Bad character in content: ~p", [C])))
+    end;
+parse_content(Bytes, State, Acc, IgnorableWS)   ->
+    unicode_incomplete_check([Bytes, State, Acc, IgnorableWS, fun parse_content/4],
 			     undefined).
 
 
@@ -1219,8 +1253,8 @@ whitespace(Bytes, #xmerl_sax_parser_state{encoding=Enc} = State, Acc) when is_bi
 %%----------------------------------------------------------------------
 parse_reference(?STRING_EMPTY, State, HaveToExist) ->
     cf(?STRING_EMPTY, State, HaveToExist, fun parse_reference/3);
-parse_reference(?STRING("#"), State, HaveToExist) -> 
-    cf(?STRING("#"), State, HaveToExist, fun parse_reference/3);
+parse_reference(?STRING("#") = Bytes, State, HaveToExist) -> 
+    cf(Bytes, State, HaveToExist, fun parse_reference/3);
 parse_reference(?STRING_REST("#x", Rest), State, _HaveToExist) ->
     {CharValue, RefString, Rest1, State1} = parse_hex(Rest, State, []),
     if 
@@ -1641,8 +1675,9 @@ handle_external_entity({file, FileToOpen}, State) ->
 	    {?STRING_EMPTY, EntityState} = 
 		parse_external_entity_1(<<>>, 
 					State#xmerl_sax_parser_state{continuation_state=FD,
-							      current_location=filename:dirname(FileToOpen),
-							      entity=filename:basename(FileToOpen)}),
+								     current_location=filename:dirname(FileToOpen),
+								     entity=filename:basename(FileToOpen),
+								     input_type=file}),
 	    file:close(FD),
 	    EntityState#xmerl_sax_parser_state.event_state
     end;
@@ -1659,8 +1694,9 @@ handle_external_entity({http, Url}, State) ->
 		{?STRING_EMPTY, EntityState} = 
 		    parse_external_entity_1(<<>>, 
 					    State#xmerl_sax_parser_state{continuation_state=FD,
-								  current_location=filename:dirname(Url),
-								  entity=filename:basename(Url)}),
+									 current_location=filename:dirname(Url),
+									 entity=filename:basename(Url),
+									 input_type=file}),
 		file:close(FD),
 		file:delete(TmpFile),
 		EntityState#xmerl_sax_parser_state.event_state
@@ -1694,16 +1730,16 @@ parse_external_entity_1(?BYTE_ORDER_MARK_2, State) ->
     cf(?BYTE_ORDER_MARK_2, State, fun parse_external_entity_1/2);
 parse_external_entity_1(?BYTE_ORDER_MARK_REST(Rest), State) ->
     parse_external_entity_1(Rest, State);
-parse_external_entity_1(?STRING("<"), State) ->
-    cf(?STRING("<"), State, fun parse_external_entity_1/2);
-parse_external_entity_1(?STRING("<?"), State) ->
-    cf(?STRING("<?"), State, fun parse_external_entity_1/2);
-parse_external_entity_1(?STRING("<?x"), State) ->
-    cf(?STRING("<?x"), State, fun parse_external_entity_1/2);
-parse_external_entity_1(?STRING("<?xm"), State) ->
-    cf(?STRING("<?xm"), State, fun parse_external_entity_1/2);
-parse_external_entity_1(?STRING("<?xml"), State) ->
-    cf(?STRING("<?xml"), State, fun parse_external_entity_1/2);
+parse_external_entity_1(?STRING("<") = Bytes, State) ->
+    cf(Bytes, State, fun parse_external_entity_1/2);
+parse_external_entity_1(?STRING("<?") = Bytes, State) ->
+    cf(Bytes, State, fun parse_external_entity_1/2);
+parse_external_entity_1(?STRING("<?x") = Bytes, State) ->
+    cf(Bytes, State, fun parse_external_entity_1/2);
+parse_external_entity_1(?STRING("<?xm") = Bytes, State) ->
+    cf(Bytes, State, fun parse_external_entity_1/2);
+parse_external_entity_1(?STRING("<?xml") = Bytes, State) ->
+    cf(Bytes, State, fun parse_external_entity_1/2);
 parse_external_entity_1(?STRING_REST("<?xml", Rest) = Bytes, 
 			#xmerl_sax_parser_state{file_type=Type} = State) ->   
     {Rest1, State1} = 
@@ -1773,29 +1809,29 @@ is_next_char_whitespace(Bytes, State) ->
 %%----------------------------------------------------------------------
 parse_external_id(?STRING_EMPTY, State, OptionalSystemId) ->
     cf(?STRING_EMPTY, State, OptionalSystemId, fun parse_external_id/3);
-parse_external_id(?STRING("S"), State,OptionalSystemId) ->
-    cf(?STRING("S"), State, OptionalSystemId, fun parse_external_id/3);
-parse_external_id(?STRING("SY"), State, OptionalSystemId) ->
-    cf(?STRING("SY"), State, OptionalSystemId, fun parse_external_id/3);
-parse_external_id(?STRING("SYS"), State, OptionalSystemId) ->
-    cf(?STRING("SYS"), State, OptionalSystemId, fun parse_external_id/3);
-parse_external_id(?STRING("SYST"), State, OptionalSystemId) ->
-    cf(?STRING("SYST"), State, OptionalSystemId, fun parse_external_id/3);
-parse_external_id(?STRING("SYSTE"), State, OptionalSystemId) ->
-    cf(?STRING("SYSTE"), State, OptionalSystemId, fun parse_external_id/3);
+parse_external_id(?STRING("S") = Bytes, State,OptionalSystemId) ->
+    cf(Bytes, State, OptionalSystemId, fun parse_external_id/3);
+parse_external_id(?STRING("SY") = Bytes, State, OptionalSystemId) ->
+    cf(Bytes, State, OptionalSystemId, fun parse_external_id/3);
+parse_external_id(?STRING("SYS") = Bytes, State, OptionalSystemId) ->
+    cf(Bytes, State, OptionalSystemId, fun parse_external_id/3);
+parse_external_id(?STRING("SYST") = Bytes, State, OptionalSystemId) ->
+    cf(Bytes, State, OptionalSystemId, fun parse_external_id/3);
+parse_external_id(?STRING("SYSTE") = Bytes, State, OptionalSystemId) ->
+    cf(Bytes, State, OptionalSystemId, fun parse_external_id/3);
 parse_external_id(?STRING_REST("SYSTEM", Rest), State, _) ->
     {SysId, Rest1, State1} = parse_system_id(Rest, State, false),
     {"", SysId, Rest1, State1};
-parse_external_id(?STRING("P"), State, OptionalSystemId) ->
-    cf(?STRING("P"), State, OptionalSystemId, fun parse_external_id/3);
-parse_external_id(?STRING("PU"), State, OptionalSystemId) ->
-    cf(?STRING("PU"), State, OptionalSystemId, fun parse_external_id/3);
-parse_external_id(?STRING("PUB"), State, OptionalSystemId) ->
-    cf(?STRING("PUB"), State, OptionalSystemId, fun parse_external_id/3);
-parse_external_id(?STRING("PUBL"), State, OptionalSystemId) ->
-    cf(?STRING("PUBL"), State, OptionalSystemId, fun parse_external_id/3);
-parse_external_id(?STRING("PUBLI"), State, OptionalSystemId) ->
-    cf(?STRING("PUBLI"), State, OptionalSystemId, fun parse_external_id/3);
+parse_external_id(?STRING("P") = Bytes, State, OptionalSystemId) ->
+    cf(Bytes, State, OptionalSystemId, fun parse_external_id/3);
+parse_external_id(?STRING("PU") = Bytes, State, OptionalSystemId) ->
+    cf(Bytes, State, OptionalSystemId, fun parse_external_id/3);
+parse_external_id(?STRING("PUB") = Bytes, State, OptionalSystemId) ->
+    cf(Bytes, State, OptionalSystemId, fun parse_external_id/3);
+parse_external_id(?STRING("PUBL") = Bytes, State, OptionalSystemId) ->
+    cf(Bytes, State, OptionalSystemId, fun parse_external_id/3);
+parse_external_id(?STRING("PUBLI") = Bytes, State, OptionalSystemId) ->
+    cf(Bytes, State, OptionalSystemId, fun parse_external_id/3);
 parse_external_id(?STRING_REST("PUBLIC", Rest), State, OptionalSystemId) ->
     parse_public_id(Rest, State, OptionalSystemId);
 parse_external_id(Bytes, State, OptionalSystemId) ->
@@ -1873,8 +1909,13 @@ parse_doctype_decl(?STRING_EMPTY, State) ->
 parse_doctype_decl(?STRING("<"), State) ->
     cf(?STRING("<"), State, fun parse_doctype_decl/2);
 parse_doctype_decl(?STRING_REST("<?", Rest), State) ->
-    {Rest1, State1} = parse_pi(Rest, State),
-    parse_doctype_decl(Rest1, State1);
+    case parse_pi(Rest, State) of
+	{Rest1, State1} ->
+	     parse_doctype_decl(Rest1, State1);
+	{endDocument, _Rest1, State1} ->
+	    IValue = ?TO_INPUT_FORMAT("<?"),
+	    {?APPEND_STRING(IValue, Rest), State1}
+    end;
 parse_doctype_decl(?STRING_REST("%", Rest), State) ->
     {Ref, Rest1, State1} = parse_pe_reference(Rest, State),
     case Ref of
@@ -1915,70 +1956,70 @@ parse_doctype_decl(Bytes, State) ->
 parse_doctype_decl_1(?STRING_EMPTY, State) ->
     cf(?STRING_EMPTY, State, fun parse_doctype_decl_1/2);
 
-parse_doctype_decl_1(?STRING("E"), State) ->
-    cf(?STRING("E"), State, fun parse_doctype_decl_1/2);
-parse_doctype_decl_1(?STRING("EL"), State) ->
-    cf(?STRING("EL"), State, fun parse_doctype_decl_1/2);
-parse_doctype_decl_1(?STRING("ELE"), State) ->
-    cf(?STRING("ELE"), State, fun parse_doctype_decl_1/2);
-parse_doctype_decl_1(?STRING("ELEM"), State) ->
-    cf(?STRING("ELEM"), State, fun parse_doctype_decl_1/2);
-parse_doctype_decl_1(?STRING("ELEME"), State) ->
-    cf(?STRING("ELEME"), State, fun parse_doctype_decl_1/2);
-parse_doctype_decl_1(?STRING("ELEMEN"), State) ->
-    cf(?STRING("ELEMEN"), State, fun parse_doctype_decl_1/2);
+parse_doctype_decl_1(?STRING("E") = Bytes, State) ->
+    cf(Bytes, State, fun parse_doctype_decl_1/2);
+parse_doctype_decl_1(?STRING("EL") = Bytes, State) ->
+    cf(Bytes, State, fun parse_doctype_decl_1/2);
+parse_doctype_decl_1(?STRING("ELE") = Bytes, State) ->
+    cf(Bytes, State, fun parse_doctype_decl_1/2);
+parse_doctype_decl_1(?STRING("ELEM") = Bytes, State) ->
+    cf(Bytes, State, fun parse_doctype_decl_1/2);
+parse_doctype_decl_1(?STRING("ELEME") = Bytes, State) ->
+    cf(Bytes, State, fun parse_doctype_decl_1/2);
+parse_doctype_decl_1(?STRING("ELEMEN") = Bytes, State) ->
+    cf(Bytes, State, fun parse_doctype_decl_1/2);
 parse_doctype_decl_1(?STRING_REST("ELEMENT", Rest), State) ->
     {Rest1, State1} = parse_element_decl(Rest, State),
     parse_doctype_decl(Rest1, State1);
 
-parse_doctype_decl_1(?STRING("A"), State) ->
-    cf(?STRING("A"), State, fun parse_doctype_decl_1/2);
-parse_doctype_decl_1(?STRING("AT"), State) ->
-    cf(?STRING("AT"), State, fun parse_doctype_decl_1/2);
-parse_doctype_decl_1(?STRING("ATT"), State) ->
-    cf(?STRING("ATT"), State, fun parse_doctype_decl_1/2);
-parse_doctype_decl_1(?STRING("ATTL"), State) ->
-    cf(?STRING("ATTL"), State, fun parse_doctype_decl_1/2);
-parse_doctype_decl_1(?STRING("ATTLI"), State) ->
-    cf(?STRING("ATTLI"), State, fun parse_doctype_decl_1/2);
-parse_doctype_decl_1(?STRING("ATTLIS"), State) ->
-    cf(?STRING("ATTLIS"), State, fun parse_doctype_decl_1/2);
+parse_doctype_decl_1(?STRING("A") = Bytes, State) ->
+    cf(Bytes, State, fun parse_doctype_decl_1/2);
+parse_doctype_decl_1(?STRING("AT") = Bytes, State) ->
+    cf(Bytes, State, fun parse_doctype_decl_1/2);
+parse_doctype_decl_1(?STRING("ATT") = Bytes, State) ->
+    cf(Bytes, State, fun parse_doctype_decl_1/2);
+parse_doctype_decl_1(?STRING("ATTL") = Bytes, State) ->
+    cf(Bytes, State, fun parse_doctype_decl_1/2);
+parse_doctype_decl_1(?STRING("ATTLI") = Bytes, State) ->
+    cf(Bytes, State, fun parse_doctype_decl_1/2);
+parse_doctype_decl_1(?STRING("ATTLIS") = Bytes, State) ->
+    cf(Bytes, State, fun parse_doctype_decl_1/2);
 parse_doctype_decl_1(?STRING_REST("ATTLIST", Rest), State) ->
     {Rest1, State1} = parse_att_list_decl(Rest, State),
     parse_doctype_decl(Rest1, State1);
 
 %% E clause not needed here because already taken care of above.
-parse_doctype_decl_1(?STRING("EN"), State) ->
-    cf(?STRING("EN"), State, fun parse_doctype_decl_1/2);
-parse_doctype_decl_1(?STRING("ENT"), State) ->
-    cf(?STRING("ENT"), State, fun parse_doctype_decl_1/2);
-parse_doctype_decl_1(?STRING("ENTI"), State) ->
-    cf(?STRING("ENTI"), State, fun parse_doctype_decl_1/2);
-parse_doctype_decl_1(?STRING("ENTIT"), State) ->
-    cf(?STRING("ENTIT"), State, fun parse_doctype_decl_1/2);
+parse_doctype_decl_1(?STRING("EN") = Bytes, State) ->
+    cf(Bytes, State, fun parse_doctype_decl_1/2);
+parse_doctype_decl_1(?STRING("ENT") = Bytes, State) ->
+    cf(Bytes, State, fun parse_doctype_decl_1/2);
+parse_doctype_decl_1(?STRING("ENTI") = Bytes, State) ->
+    cf(Bytes, State, fun parse_doctype_decl_1/2);
+parse_doctype_decl_1(?STRING("ENTIT") = Bytes, State) ->
+    cf(Bytes, State, fun parse_doctype_decl_1/2);
 parse_doctype_decl_1(?STRING_REST("ENTITY", Rest), State) ->
     {Rest1, State1} = parse_entity_decl(Rest, State),
     parse_doctype_decl(Rest1, State1);
 
-parse_doctype_decl_1(?STRING("N"), State) ->
-    cf(?STRING("N"), State, fun parse_doctype_decl_1/2);
-parse_doctype_decl_1(?STRING("NO"), State) ->
-    cf(?STRING("NO"), State, fun parse_doctype_decl_1/2);
-parse_doctype_decl_1(?STRING("NOT"), State) ->
-    cf(?STRING("NOT"), State, fun parse_doctype_decl_1/2);
-parse_doctype_decl_1(?STRING("NOTA"), State) ->
-    cf(?STRING("NOTA"), State, fun parse_doctype_decl_1/2);
-parse_doctype_decl_1(?STRING("NOTAT"), State) ->
-    cf(?STRING("NOTAT"), State, fun parse_doctype_decl_1/2);
-parse_doctype_decl_1(?STRING("NOTATI"), State) ->
-    cf(?STRING("NOTATI"), State, fun parse_doctype_decl_1/2);
-parse_doctype_decl_1(?STRING("NOTATIO"), State) ->
-    cf(?STRING("NOTATIO"), State, fun parse_doctype_decl_1/2);
+parse_doctype_decl_1(?STRING("N") = Bytes, State) ->
+    cf(Bytes, State, fun parse_doctype_decl_1/2);
+parse_doctype_decl_1(?STRING("NO") = Bytes, State) ->
+    cf(Bytes, State, fun parse_doctype_decl_1/2);
+parse_doctype_decl_1(?STRING("NOT") = Bytes, State) ->
+    cf(Bytes, State, fun parse_doctype_decl_1/2);
+parse_doctype_decl_1(?STRING("NOTA") = Bytes, State) ->
+    cf(Bytes, State, fun parse_doctype_decl_1/2);
+parse_doctype_decl_1(?STRING("NOTAT") = Bytes, State) ->
+    cf(Bytes, State, fun parse_doctype_decl_1/2);
+parse_doctype_decl_1(?STRING("NOTATI") = Bytes, State) ->
+    cf(Bytes, State, fun parse_doctype_decl_1/2);
+parse_doctype_decl_1(?STRING("NOTATIO") = Bytes, State) ->
+    cf(Bytes, State, fun parse_doctype_decl_1/2);
 parse_doctype_decl_1(?STRING_REST("NOTATION", Rest), State) ->
     {Rest1, State1} = parse_notation_decl(Rest, State),
     parse_doctype_decl(Rest1, State1);
-parse_doctype_decl_1(?STRING("-"), State) ->
-    cf(?STRING("-"), State, fun parse_doctype_decl_1/2);
+parse_doctype_decl_1(?STRING("-") = Bytes, State) ->
+    cf(Bytes, State, fun parse_doctype_decl_1/2);
 parse_doctype_decl_1(?STRING_REST("--", Rest), State) ->
     {Rest1, State1} = parse_comment(Rest, State, []),
     parse_doctype_decl(Rest1, State1);
@@ -2049,14 +2090,18 @@ parse_element_content(Bytes, State) ->
 parse_element_content_1(?STRING_EMPTY, State, Acc) ->
         cf(?STRING_EMPTY, State, Acc, fun parse_element_content_1/3);
 parse_element_content_1(?STRING_REST(">", Rest), State, Acc) ->
-    {lists:reverse(Acc), Rest, State};
+    {lists:reverse(delete_leading_whitespace(Acc)), Rest, State};
 parse_element_content_1(?STRING_UNBOUND_REST(C, Rest), State, Acc) ->
     parse_element_content_1(Rest, State, [C|Acc]);
 parse_element_content_1(Bytes, State, Acc) ->
     unicode_incomplete_check([Bytes, State, Acc, fun parse_element_content_1/3], 
 			     undefined).
 
-
+delete_leading_whitespace([C |Acc]) when ?is_whitespace(C)->
+    delete_leading_whitespace(Acc);
+delete_leading_whitespace(Acc) ->
+    Acc.
+								   
 %%----------------------------------------------------------------------
 %% Function  : parse_att_list_decl(Rest, State) -> Result
 %% Parameters: Rest = string() | binary()
@@ -2252,52 +2297,52 @@ parse_default_decl(Bytes, State) ->
 %%----------------------------------------------------------------------
 parse_default_decl_1(?STRING_EMPTY, State) ->
     cf(?STRING_EMPTY, State, fun parse_default_decl_1/2);
-parse_default_decl_1(?STRING_REST("#", Rest), State) ->
-    case Rest of
-	?STRING("R") ->
-	    cf(Rest, State, fun parse_default_decl_1/2);
-	?STRING("RE") ->
-	    cf(Rest, State, fun parse_default_decl_1/2);
-	?STRING("REQ") ->
-	    cf(Rest, State, fun parse_default_decl_1/2);
-	?STRING("REQU") ->
-	    cf(Rest, State, fun parse_default_decl_1/2);
-	?STRING("REQUI") ->
-	    cf(Rest, State, fun parse_default_decl_1/2);
-	?STRING("REQUIR") ->
-	    cf(Rest, State, fun parse_default_decl_1/2);
-	?STRING("REQUIRE") ->
-	    cf(Rest, State, fun parse_default_decl_1/2);
-	?STRING_REST("REQUIRED", Rest1) ->
+parse_default_decl_1(?STRING_REST("#", _Rest) = Bytes, State) ->
+    case Bytes of
+	?STRING("#R") ->
+	    cf(Bytes, State, fun parse_default_decl_1/2);
+	?STRING("#RE") ->
+	    cf(Bytes, State, fun parse_default_decl_1/2);
+	?STRING("#REQ") ->
+	    cf(Bytes, State, fun parse_default_decl_1/2);
+	?STRING("#REQU") ->
+	    cf(Bytes, State, fun parse_default_decl_1/2);
+	?STRING("#REQUI") ->
+	    cf(Bytes, State, fun parse_default_decl_1/2);
+	?STRING("#REQUIR") ->
+	    cf(Bytes, State, fun parse_default_decl_1/2);
+	?STRING("#REQUIRE") ->
+	    cf(Bytes, State, fun parse_default_decl_1/2);
+	?STRING_REST("#REQUIRED", Rest1) ->
 	    {"#REQUIRED", undefined, Rest1, State};
 
-	?STRING("I") ->
-	    cf(Rest, State, fun parse_default_decl_1/2);
-	?STRING("IM") ->
-	    cf(Rest, State, fun parse_default_decl_1/2);
-	?STRING("IMP") ->
-	    cf(Rest, State, fun parse_default_decl_1/2);
-	?STRING("IMPL") ->
-	    cf(Rest, State, fun parse_default_decl_1/2);
-	?STRING("IMPLI") ->
-	    cf(Rest, State, fun parse_default_decl_1/2);
-	?STRING("IMPLIE") ->
-	    cf(Rest, State, fun parse_default_decl_1/2);
-	?STRING_REST("IMPLIED", Rest1)  ->
+	?STRING("#I") ->
+	    cf(Bytes, State, fun parse_default_decl_1/2);
+	?STRING("#IM") ->
+	    cf(Bytes, State, fun parse_default_decl_1/2);
+	?STRING("#IMP") ->
+	    cf(Bytes, State, fun parse_default_decl_1/2);
+	?STRING("#IMPL") ->
+	    cf(Bytes, State, fun parse_default_decl_1/2);
+	?STRING("#IMPLI") ->
+	    cf(Bytes, State, fun parse_default_decl_1/2);
+	?STRING("#IMPLIE") ->
+	    cf(Bytes, State, fun parse_default_decl_1/2);
+	?STRING_REST("#IMPLIED", Rest1)  ->
 	    {"#IMPLIED", undefined, Rest1, State};
 
-	?STRING("F") ->
-	    cf(Rest, State, fun parse_default_decl_1/2);
-	?STRING("FI") ->
-	    cf(Rest, State, fun parse_default_decl_1/2);
-	?STRING("FIX") ->
-	    cf(Rest, State, fun parse_default_decl_1/2);
-	?STRING("FIXE") ->
-	    cf(Rest, State, fun parse_default_decl_1/2);
-	?STRING_REST("FIXED", Rest1)  ->
+	?STRING("#F") ->
+	    cf(Bytes, State, fun parse_default_decl_1/2);
+	?STRING("#FI") ->
+	    cf(Bytes, State, fun parse_default_decl_1/2);
+	?STRING("#FIX") ->
+	    cf(Bytes, State, fun parse_default_decl_1/2);
+	?STRING("#FIXE") ->
+	    cf(Bytes, State, fun parse_default_decl_1/2);
+	?STRING_REST("#FIXED", Rest1)  ->
 	    parse_fixed(Rest1, State);
 	_  ->
-	    ?fatal_error(State, "REQUIRED, IMPLIED or FIXED expected")
+	    ?fatal_error(State, "REQUIRED, IMPLIED or FIXED expected after #")
     end;
 parse_default_decl_1(?STRING_UNBOUND_REST(C, Rest), State) when C == $'; C == $" ->
     {DefaultValue, Rest1, State1} = parse_att_value(Rest, State, C, []),
@@ -2522,11 +2567,16 @@ parse_entity_value(?STRING_REST("%", Rest), #xmerl_sax_parser_state{file_type=Ty
 			
 	    end
     end;
-parse_entity_value(?STRING_UNBOUND_REST(Stop, Rest), State, Stop, Acc) -> 
+parse_entity_value(?STRING_UNBOUND_REST(Stop, Rest), State, Stop, Acc) ->
     {lists:reverse(Acc), Rest, State};
-parse_entity_value(?STRING_UNBOUND_REST(C, Rest), State, Stop, Acc)   -> 
-    parse_entity_value(Rest, State, Stop, [C|Acc]);
-parse_entity_value(Bytes, State, Stop, Acc)   -> 
+parse_entity_value(?STRING_UNBOUND_REST(C, Rest), State, Stop, Acc)   ->
+    if
+	?is_char(C) ->
+	    parse_entity_value(Rest, State, Stop, [C|Acc]);
+	true ->
+	     ?fatal_error(State, lists:flatten(io_lib:format("Bad character in entity value: ~p", [C])))
+    end;
+parse_entity_value(Bytes, State, Stop, Acc)   ->
     unicode_incomplete_check([Bytes, State, Stop, Acc, fun parse_entity_value/4],
 			     undefined).
 
@@ -2543,14 +2593,14 @@ parse_ndata_decl(?STRING_EMPTY, State) ->
     cf(?STRING_EMPTY, State, fun parse_ndata_decl/2);
 parse_ndata_decl(?STRING_REST(">", Rest), State) ->
     {undefined, Rest, State};
-parse_ndata_decl(?STRING("N") = Rest, State) ->
-    cf(Rest, State, fun parse_ndata_decl/2);
-parse_ndata_decl(?STRING("ND") = Rest, State) ->
-    cf(Rest, State, fun parse_ndata_decl/2);
-parse_ndata_decl(?STRING("NDA") = Rest, State) ->
-    cf(Rest, State, fun parse_ndata_decl/2);
-parse_ndata_decl(?STRING("NDAT") = Rest, State) ->
-    cf(Rest, State, fun parse_ndata_decl/2);
+parse_ndata_decl(?STRING("N") = Bytes, State) ->
+    cf(Bytes, State, fun parse_ndata_decl/2);
+parse_ndata_decl(?STRING("ND") = Bytes, State) ->
+    cf(Bytes, State, fun parse_ndata_decl/2);
+parse_ndata_decl(?STRING("NDA") = Bytes, State) ->
+    cf(Bytes, State, fun parse_ndata_decl/2);
+parse_ndata_decl(?STRING("NDAT") = Bytes, State) ->
+    cf(Bytes, State, fun parse_ndata_decl/2);
 parse_ndata_decl(?STRING_REST("NDATA", Rest), State) ->
     parse_ndata_decl_1(Rest, State);
 parse_ndata_decl(Bytes, State) -> 

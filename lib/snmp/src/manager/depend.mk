@@ -2,7 +2,7 @@
 
 # %CopyrightBegin%
 # 
-# Copyright Ericsson AB 2004-2009. All Rights Reserved.
+# Copyright Ericsson AB 2004-2014. All Rights Reserved.
 # 
 # The contents of this file are subject to the Erlang Public License,
 # Version 1.1, (the "License"); you may not use this file except in
@@ -43,6 +43,14 @@ $(EBIN)/snmpm_misc_sup.$(EMULATOR): \
 	../misc/snmp_debug.hrl
 
 $(EBIN)/snmpm_net_if.$(EMULATOR): \
+	../../include/snmp_types.hrl \
+	../misc/snmp_debug.hrl \
+	../misc/snmp_verbosity.hrl \
+	snmpm_net_if.erl \
+	snmpm_network_interface.erl
+
+$(EBIN)/snmpm_net_if_mt.$(EMULATOR): \
+	snmpm_net_if_mt.erl \
 	../../include/snmp_types.hrl \
 	../misc/snmp_debug.hrl \
 	../misc/snmp_verbosity.hrl \

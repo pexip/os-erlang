@@ -50,6 +50,11 @@
 
 -define(OSCMD(Cmd), inets_test_lib:oscmd(Cmd)).
 
+-define(PRINT_SYSTEM_INFO(P), inets_test_lib:print_system_info(P)).
+
+-define(RUN_ON_OS(OS, FUN),  inets_test_lib:run_on_os(OS, FUN)).
+-define(RUN_ON_WINDOWS(FUN), inets_test_lib:run_on_windows(FUN)).
+
 
 %% - Test case macros -
 
@@ -64,10 +69,11 @@
 
 %% - Misc macros -
 
--define(UPDATE(K,V,C),  inets_test_lib:update_config(K,V,C)).
--define(CONFIG(K,C),    inets_test_lib:get_config(K,C)).
--define(HOSTNAME(),     inets_test_lib:hostname()).
--define(SZ(X),          inets_test_lib:sz(X)).
+-define(ENSURE_STARTED(A), inets_test_lib:ensure_started(A)).
+-define(UPDATE(K,V,C),     inets_test_lib:update_config(K,V,C)).
+-define(CONFIG(K,C),       inets_test_lib:get_config(K,C)).
+-define(HOSTNAME(),        inets_test_lib:hostname()).
+-define(SZ(X),             inets_test_lib:sz(X)).
 
 
 %% - Test case macros - 

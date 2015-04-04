@@ -1,7 +1,7 @@
 %% 
 %% %CopyrightBegin%
 %% 
-%% Copyright Ericsson AB 1996-2009. All Rights Reserved.
+%% Copyright Ericsson AB 1996-2011. All Rights Reserved.
 %% 
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -258,10 +258,17 @@ code_change({down, _Vsn}, State, _Extra) ->
     {ok, NState};
 
 % upgrade
-code_change(_Vsn, State, _Extra) ->
+code_change(_Vsn, State0, _Extra) ->
     process_flag(trap_exit, true),
-    NState = restart_timer(State),
-    {ok, NState}.
+    State1 = 
+	case State0 of
+	    #state{timeout = false} ->
+		State0#state{timeout = ?timeout};
+	    _ ->
+		State0
+	end,
+    State2 = restart_timer(State1),
+    {ok, State2}.
 
 
 %%----------------------------------------------------------
@@ -282,7 +289,7 @@ deactivate_timer(#state{timer = Pid, active = true} = State) ->
     receive
 	deactivated -> ok
     end,
-    State#state{timeout = false};
+    State#state{active = false};
 deactivate_timer(State) ->
     State.
 

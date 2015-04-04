@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %% 
-%% Copyright Ericsson AB 1996-2009. All Rights Reserved.
+%% Copyright Ericsson AB 1996-2012. All Rights Reserved.
 %% 
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -23,6 +23,7 @@
 %% ------------------------------------------------------------
 
 -module(gstk_image).
+-compile([{nowarn_deprecated_function,{gs,pair,2}}]).
 
 %%-----------------------------------------------------------------------------
 %% 			    BITMAP OPTIONS
@@ -227,10 +228,10 @@ event(DB, Gstkid, Etype, Edata, Args) ->
 option(Option, Gstkid, _Canvas, _DB, _AItem) ->
     case Option of
 	{bitmap,     Bitmap} ->
-	    {ok, BF,_} = regexp:gsub(Bitmap, [92,92], "/"),
+	    BF = re:replace(Bitmap, [92,92], "/", [global,{return,list}]),
 	    {s, [" -bi @", BF]};
 	{load_gif,       File} -> 
-	    {ok, F2,_} = regexp:gsub(File, [92,92], "/"),
+	    F2 = re:replace(File, [92,92], "/", [global,{return,list}]),
 	    {Photo_item, _item} = Gstkid#gstkid.widget_data,
 	    {c,[Photo_item, " configure -file ", gstk:to_ascii(F2)]};
 	{pix_val,  {Coords,Color}} ->

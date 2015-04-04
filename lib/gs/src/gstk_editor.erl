@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %% 
-%% Copyright Ericsson AB 1996-2009. All Rights Reserved.
+%% Copyright Ericsson AB 1996-2012. All Rights Reserved.
 %% 
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -23,6 +23,9 @@
 %% ------------------------------------------------------------
 
 -module(gstk_editor).
+-compile([{nowarn_deprecated_function,{gs,assq,2}},
+          {nowarn_deprecated_function,{gs,error,2}},
+          {nowarn_deprecated_function,{gs,val,2}}]).
 
 %%------------------------------------------------------------------------------
 %% 			    CANVAS OPTIONS
@@ -87,9 +90,9 @@
 %%	type
 %%
 
-%.t tag names 2.7 -> red blue (blue är färgen)
-%.t tag add blue 2.1 2.10    tagga text
-%.t tag configure blue -foregr blue skapa tag
+%.t tag names 2.7 -> red blue (blue is the colour)
+%.t tag add blue 2.1 2.10    tag the text
+%.t tag configure blue -foregr blue create tag
 % .t index end -> MaxRows.cols
 % .t yview moveto (Row-1)/MaxRows
 
@@ -243,14 +246,14 @@ option(Option, Gstkid, _MainW, DB, Editor) ->
 		 Editor, " ins ",AI," ", gstk:to_ascii(Text)]};
 	clear       -> {c, [Editor, " delete 1.0 end"]};
 	{load,        File} ->
-	    {ok, F2,_} = regexp:gsub(File, [92,92], "/"),
+	    F2 = re:replace(File, [92,92], "/", [global,{return,list}]),
 	    case gstk:call(["ed_load ", Editor, " ", gstk:to_ascii(F2)]) of
 		{result,    _} -> none;
 		{bad_result,Re} -> 
 		    {error,{no_such_file,editor,load,F2,Re}}
 	    end;
 	{save, File} ->
-	    {ok, F2,_} = regexp:gsub(File, [92,92], "/"),
+	    F2 = re:replace(File, [92,92], "/", [global,{return,list}]),
 	    case gstk:call(["ed_save ",Editor," ",gstk:to_ascii(F2)]) of
 		{result,    _} -> none;
 		{bad_result,Re} -> 

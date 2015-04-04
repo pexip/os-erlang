@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2008-2011. All Rights Reserved.
+%% Copyright Ericsson AB 2008-2013. All Rights Reserved.
 %%
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -41,7 +41,7 @@
 %%----------------------------------------------------------------------
 all() -> 
     [{group, cpd_tests}, xpath_text1, xpath_main,
-     xpath_abbreviated_syntax, xpath_functions,
+     xpath_abbreviated_syntax, xpath_functions, xpath_namespaces,
      {group, misc}, {group, eventp_tests},
      {group, ticket_tests}, {group, app_test},
      {group, appup_test}].
@@ -58,7 +58,7 @@ groups() ->
      {ticket_tests, [],
       [ticket_5998, ticket_7211, ticket_7214, ticket_7430,
        ticket_6873, ticket_7496, ticket_8156, ticket_8697,
-       ticket_9411, ticket_9457]},
+       ticket_9411, ticket_9457, ticket_9664_schema, ticket_9664_dtd]},
      {app_test, [], [{xmerl_app_test, all}]},
      {appup_test, [], [{xmerl_appup_test, all}]}].
 
@@ -204,6 +204,11 @@ xpath_functions(Config) ->
     ?line file:set_cwd(filename:join(?config(data_dir,Config),xpath)),
     ?line ok = xpath_abbrev:functions().
 
+xpath_namespaces(suite) -> [];
+xpath_namespaces(Config) ->
+    ?line file:set_cwd(filename:join(?config(data_dir,Config),xpath)),
+    ?line ok = xpath_abbrev:namespaces().
+
 %%----------------------------------------------------------------------
 
 latin1_alias(suite) -> [];
@@ -284,7 +289,7 @@ export(Config) ->
     ?line {E,_} = xmerl_scan:file(TestFile),
     ?line Exported = xmerl:export([E],xmerl_xml,[{prolog,Prolog}]),
     B = list_to_binary(Exported++"\n"),
-    ?line {ok,B} = file:read_file(TestFile),
+    ?line {ok, B} = file:read_file(TestFile),
     ok.
 
 %%----------------------------------------------------------------------
@@ -531,8 +536,8 @@ ticket_7430(Config) ->
 		   {xmlElement,a,a,[],
 		    {xmlNamespace,[],[]},
 		    [],1,[],
-		    [{xmlText,[{a,1}],1,[],"é",text},
-		     {xmlText,[{a,1}],2,[],"\né",text}],
+		    [{xmlText,[{a,1}],1,[],"Ã©",text},
+		     {xmlText,[{a,1}],2,[],"\nÃ©",text}],
 		    [],_,undeclared} ->
 		       ok;
 		   _ ->
@@ -608,6 +613,38 @@ ticket_9457_cont(Continue, Exception, GlobalState) ->
 	_ ->
 	    Exception(GlobalState)
     end.
+
+
+ticket_9664_schema(suite) -> [];
+ticket_9664_schema(doc) -> 
+    ["Test that comments are handled correct whith"];
+ticket_9664_schema(Config) ->
+
+    ?line {E, _} = xmerl_scan:file(filename:join([?config(data_dir, Config), misc,
+						  "ticket_9664_schema.xml"]),[]),
+    ?line {ok, S} = xmerl_xsd:process_schema(filename:join([?config(data_dir, Config), misc,
+							    "motorcycles.xsd"])),
+    ?line {E1, _} = xmerl_xsd:validate(E, S),
+
+    ?line {E1,_} = xmerl_xsd:process_validate(filename:join([?config(data_dir,Config), misc,
+							    "motorcycles.xsd"]),E,[]),
+
+    ?line {E1,_} = xmerl_scan:file(filename:join([?config(data_dir,Config),  misc,
+						 "ticket_9664_schema.xml"]), 
+				  [{schemaLocation, [{"mc", "motorcycles.xsd"}]},
+				   {validation, schema}]),
+    ok.
+
+ticket_9664_dtd(suite) -> [];
+ticket_9664_dtd(doc) -> 
+    ["Test that comments are handled correct whith"];
+ticket_9664_dtd(Config) ->
+    ?line {E, _} = xmerl_scan:file(filename:join([?config(data_dir, Config),  misc,
+						  "ticket_9664_dtd.xml"]),[]),
+    ?line {E, _} = xmerl_scan:file(filename:join([?config(data_dir, Config),  misc,
+						  "ticket_9664_dtd.xml"]),[{validation, true}]),
+    ok.
+
 
 %%======================================================================
 %% Support Functions

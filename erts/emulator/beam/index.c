@@ -1,7 +1,7 @@
 /*
  * %CopyrightBegin%
  * 
- * Copyright Ericsson AB 1996-2009. All Rights Reserved.
+ * Copyright Ericsson AB 1996-2012. All Rights Reserved.
  * 
  * The contents of this file are subject to the Erlang Public License,
  * Version 1.1, (the "License"); you may not use this file except in
@@ -68,21 +68,22 @@ erts_index_init(ErtsAlcType_t type, IndexTable* t, char* name,
     return t;
 }
 
-int
-index_put(IndexTable* t, void* tmpl)
+IndexSlot*
+index_put_entry(IndexTable* t, void* tmpl)
 {
     int ix;
     IndexSlot* p = (IndexSlot*) hash_put(&t->htable, tmpl);
 
     if (p->index >= 0) {
-	return p->index;
+	return p;
     }
 
     ix = t->entries;
     if (ix >= t->size) {
 	Uint sz;
 	if (ix >= t->limit) {
-	    erl_exit(1, "no more index entries in %s (max=%d)\n",
+	    /* A core dump is unnecessary */
+	    erl_exit(ERTS_DUMP_EXIT, "no more index entries in %s (max=%d)\n",
 		     t->htable.name, t->limit);
 	}
 	sz = INDEX_PAGE_SIZE*sizeof(IndexSlot*);
@@ -92,7 +93,7 @@ index_put(IndexTable* t, void* tmpl)
     t->entries++;
     p->index = ix;
     t->seg_table[ix>>INDEX_PAGE_SHIFT][ix&INDEX_PAGE_MASK] = p;
-    return ix;
+    return p;
 }
 
 int index_get(IndexTable* t, void* tmpl)
@@ -133,5 +134,20 @@ void erts_index_merge(Hash* src, IndexTable* dst)
 	    dst->seg_table[ix>>INDEX_PAGE_SHIFT][ix&INDEX_PAGE_MASK] = p;
 	    b = b->next;
 	}
+    }
+}
+
+void index_erase_latest_from(IndexTable* t, Uint from_ix)
+{
+    if(from_ix < (Uint)t->entries) {
+	int ix;
+	for (ix = from_ix; ix < t->entries; ix++)  {
+	    IndexSlot* obj = t->seg_table[ix>>INDEX_PAGE_SHIFT][ix&INDEX_PAGE_MASK];
+	    hash_erase(&t->htable, obj);
+	}
+	t->entries = from_ix;
+    }
+    else {
+	ASSERT(from_ix == t->entries);
     }
 }

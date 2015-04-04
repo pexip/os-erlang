@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %% 
-%% Copyright Ericsson AB 2000-2009. All Rights Reserved.
+%% Copyright Ericsson AB 2000-2013. All Rights Reserved.
 %% 
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -23,9 +23,9 @@
 -export([module/2]).
 -export([bs_clean_saves/1]).
 -export([clean_labels/1]).
--import(lists, [map/2,foldl/3,reverse/1]).
+-import(lists, [map/2,foldl/3,reverse/1,filter/2]).
 
-module({Mod,Exp,Attr,Fs0,_}, _Opt) ->
+module({Mod,Exp,Attr,Fs0,_}, Opts) ->
     Order = [Lbl || {function,_,_,Lbl,_} <- Fs0],
     All = foldl(fun({function,_,_,Lbl,_}=Func,D) -> dict:store(Lbl, Func, D) end,
 		dict:new(), Fs0),
@@ -33,7 +33,8 @@ module({Mod,Exp,Attr,Fs0,_}, _Opt) ->
     Used = find_all_used(WorkList, All, sets:from_list(WorkList)),
     Fs1 = remove_unused(Order, Used, All),
     {Fs2,Lc} = clean_labels(Fs1),
-    Fs = bs_fix(Fs2),
+    Fs3 = bs_fix(Fs2),
+    Fs = maybe_remove_lines(Fs3, Opts),
     {ok,{Mod,Exp,Attr,Fs,Lc}}.
 
 %% Remove all bs_save2/2 instructions not referenced by a bs_restore2/2.
@@ -73,10 +74,6 @@ find_all_used([], _All, Used) -> Used.
 
 update_work_list([{call,_,{f,L}}|Is], Sets) ->
     update_work_list(Is, add_to_work_list(L, Sets));
-update_work_list([{call_last,_,{f,L},_}|Is], Sets) ->
-    update_work_list(Is, add_to_work_list(L, Sets));
-update_work_list([{call_only,_,{f,L}}|Is], Sets) ->
-    update_work_list(Is, add_to_work_list(L, Sets));
 update_work_list([{make_fun2,{f,L},_,_,_}|Is], Sets) ->
     update_work_list(Is, add_to_work_list(L, Sets));
 update_work_list([_|Is], Sets) ->
@@ -89,7 +86,7 @@ add_to_work_list(F, {Fs,Used}=Sets) ->
 	false -> {[F|Fs],sets:add_element(F, Used)}
     end.
 
-
+
 %%%
 %%% Coalesce adjacent labels. Renumber all labels to eliminate gaps.
 %%% This cleanup will slightly reduce file size and slightly speed up loading.
@@ -199,7 +196,7 @@ replace([{test,Test,{f,Lbl},Ops}|Is], Acc, D) ->
     replace(Is, [{test,Test,{f,label(Lbl, D)},Ops}|Acc], D);
 replace([{test,Test,{f,Lbl},Live,Ops,Dst}|Is], Acc, D) ->
     replace(Is, [{test,Test,{f,label(Lbl, D)},Live,Ops,Dst}|Acc], D);
-replace([{select_val,R,{f,Fail0},{list,Vls0}}|Is], Acc, D) ->
+replace([{select,I,R,{f,Fail0},Vls0}|Is], Acc, D) ->
     Vls1 = map(fun ({f,L}) -> {f,label(L, D)};
 		   (Other) -> Other end, Vls0),
     Fail = label(Fail0, D),
@@ -209,12 +206,8 @@ replace([{select_val,R,{f,Fail0},{list,Vls0}}|Is], Acc, D) ->
 	    %% Convert to a plain jump.
 	    replace(Is, [{jump,{f,Fail}}|Acc], D);
 	Vls ->
-	    replace(Is, [{select_val,R,{f,Fail},{list,Vls}}|Acc], D)
+	    replace(Is, [{select,I,R,{f,Fail},Vls}|Acc], D)
     end;
-replace([{select_tuple_arity,R,{f,Fail},{list,Vls0}}|Is], Acc, D) ->
-    Vls = map(fun ({f,L}) -> {f,label(L, D)};
-		  (Other) -> Other end, Vls0),
-    replace(Is, [{select_tuple_arity,R,{f,label(Fail, D)},{list,Vls}}|Acc], D);
 replace([{'try',R,{f,Lbl}}|Is], Acc, D) ->
     replace(Is, [{'try',R,{f,label(Lbl, D)}}|Acc], D);
 replace([{'catch',R,{f,Lbl}}|Is], Acc, D) ->
@@ -235,12 +228,12 @@ replace([{gc_bif,Name,{f,Lbl},Live,As,R}|Is], Acc, D) when Lbl =/= 0 ->
     replace(Is, [{gc_bif,Name,{f,label(Lbl, D)},Live,As,R}|Acc], D);
 replace([{call,Ar,{f,Lbl}}|Is], Acc, D) ->
     replace(Is, [{call,Ar,{f,label(Lbl,D)}}|Acc], D);
-replace([{call_last,Ar,{f,Lbl},N}|Is], Acc, D) ->
-    replace(Is, [{call_last,Ar,{f,label(Lbl,D)},N}|Acc], D);
-replace([{call_only,Ar,{f,Lbl}}|Is], Acc, D) ->
-    replace(Is, [{call_only,Ar,{f,label(Lbl, D)}}|Acc], D);
 replace([{make_fun2,{f,Lbl},U1,U2,U3}|Is], Acc, D) ->
     replace(Is, [{make_fun2,{f,label(Lbl, D)},U1,U2,U3}|Acc], D);
+replace([{bs_init,{f,Lbl},Info,Live,Ss,Dst}|Is], Acc, D) when Lbl =/= 0 ->
+    replace(Is, [{bs_init,{f,label(Lbl, D)},Info,Live,Ss,Dst}|Acc], D);
+replace([{bs_put,{f,Lbl},Info,Ss}|Is], Acc, D) when Lbl =/= 0 ->
+    replace(Is, [{bs_put,{f,label(Lbl, D)},Info,Ss}|Acc], D);
 replace([{bs_init2,{f,Lbl},Sz,Words,R,F,Dst}|Is], Acc, D) when Lbl =/= 0 ->
     replace(Is, [{bs_init2,{f,label(Lbl, D)},Sz,Words,R,F,Dst}|Acc], D);
 replace([{bs_init_bits,{f,Lbl},Sz,Words,R,F,Dst}|Is], Acc, D) when Lbl =/= 0 ->
@@ -266,6 +259,11 @@ replace([{bs_utf8_size=I,{f,Lbl},Src,Dst}|Is], Acc, D) when Lbl =/= 0 ->
     replace(Is, [{I,{f,label(Lbl, D)},Src,Dst}|Acc], D);
 replace([{bs_utf16_size=I,{f,Lbl},Src,Dst}|Is], Acc, D) when Lbl =/= 0 ->
     replace(Is, [{I,{f,label(Lbl, D)},Src,Dst}|Acc], D);
+replace([{put_map=I,{f,Lbl},Op,Src,Dst,Live,List}|Is], Acc, D)
+  when Lbl =/= 0 ->
+    replace(Is, [{I,{f,label(Lbl, D)},Op,Src,Dst,Live,List}|Acc], D);
+replace([{get_map_elements=I,{f,Lbl},Src,List}|Is], Acc, D) when Lbl =/= 0 ->
+    replace(Is, [{I,{f,label(Lbl, D)},Src,List}|Acc], D);
 replace([I|Is], Acc, D) ->
     replace(Is, [I|Acc], D);
 replace([], Acc, _) -> Acc.
@@ -375,3 +373,20 @@ bs_clean_saves_1([{bs_save2,_,{_,_}=SavePoint}=I|Is], Needed, Acc) ->
 bs_clean_saves_1([I|Is], Needed, Acc) ->
     bs_clean_saves_1(Is, Needed, [I|Acc]);
 bs_clean_saves_1([], _, Acc) -> reverse(Acc).
+
+%%%
+%%% Remove line instructions if requested.
+%%%
+
+maybe_remove_lines(Fs, Opts) ->
+    case proplists:get_bool(no_line_info, Opts) of
+	false -> Fs;
+	true -> remove_lines(Fs)
+    end.
+
+remove_lines([{function,N,A,Lbl,Is0}|T]) ->
+    Is = filter(fun({line,_}) -> false;
+		   (_)  -> true
+		end, Is0),
+    [{function,N,A,Lbl,Is}|remove_lines(T)];
+remove_lines([]) -> [].

@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %% 
-%% Copyright Ericsson AB 1997-2009. All Rights Reserved.
+%% Copyright Ericsson AB 1997-2014. All Rights Reserved.
 %% 
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -63,7 +63,7 @@ handle_event(Event, State) ->
 %%-----------------------------------------------------------------
 
 handle_info(Msg, State) ->
-    handle_any_event(Msg, State),
+    {ok, _} = handle_any_event(Msg, State),
     {ok, State}.
 
 %%-----------------------------------------------------------------
@@ -121,7 +121,7 @@ handle_system_event({mnesia_up, Node}, State) ->
     {ok, State#state{nodes = Nodes}}; 
 
 handle_system_event({mnesia_down, Node}, State) ->
-    case mnesia:system_info(fallback_activated) of
+    case mnesia:system_info(fallback_activated) andalso Node =/= node() of
 	true ->
 	    case mnesia_monitor:get_env(fallback_error_function) of
 		{mnesia, lkill} ->
@@ -129,8 +129,8 @@ handle_system_event({mnesia_down, Node}, State) ->
 			"must be restarted. Forcing shutdown "
 			"after mnesia_down from ~p...~n",
 		    report_fatal(Msg, [Node], nocore, State#state.dumped_core),
-		    mnesia:lkill(),
-		    exit(fatal);
+		    catch exit(whereis(mnesia_monitor), fatal),
+		    {ok, State};
 		{UserMod, UserFunc} ->
 		    Msg = "Warning: A fallback is installed and Mnesia got mnesia_down "
 			"from ~p. ~n",
@@ -153,7 +153,7 @@ handle_system_event({mnesia_down, Node}, State) ->
     end;
 
 handle_system_event({mnesia_overload, Details}, State) ->
-    report_warning("Mnesia is overloaded: ~p~n", [Details]),
+    report_warning("Mnesia is overloaded: ~w~n", [Details]),
     {ok, State}; 
 
 handle_system_event({mnesia_info, Format, Args}, State) ->

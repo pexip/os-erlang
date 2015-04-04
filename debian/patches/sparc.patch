@@ -5,9 +5,9 @@ sparc.patch by Jurij Smakov <jurij@wooyd.org>
 
 (2) Fixes FTBFS(see http://bugs.debian.org/cgi-bin/bugreport.cgi?bug=328031).
 
---- erlang-14.b.4-dfsg.orig/erts/configure.in
-+++ erlang-14.b.4-dfsg/erts/configure.in
-@@ -614,7 +614,7 @@
+--- a/erts/configure.in
++++ b/erts/configure.in
+@@ -662,7 +662,7 @@
  fi
  
  case $chk_arch_ in
@@ -16,9 +16,9 @@ sparc.patch by Jurij Smakov <jurij@wooyd.org>
      sparc64)	ARCH=sparc64;;
      sun4v)	ARCH=ultrasparc;;
      i86pc)	ARCH=x86;;
---- erlang-14.b.4-dfsg.orig/erts/emulator/beam/beam_emu.c
-+++ erlang-14.b.4-dfsg/erts/emulator/beam/beam_emu.c
-@@ -1060,16 +1060,6 @@
+--- a/erts/emulator/beam/beam_emu.c
++++ b/erts/emulator/beam/beam_emu.c
+@@ -989,16 +989,6 @@
   * in registers.
   */
  
@@ -35,11 +35,11 @@ sparc.patch by Jurij Smakov <jurij@wooyd.org>
  #  define REG_x0
  #  define REG_xregs
  #  define REG_htop
-@@ -1078,7 +1068,6 @@
+@@ -1007,7 +997,6 @@
  #  define REG_fcalls
  #  define REG_tmp_arg1
  #  define REG_tmp_arg2
 -#endif
  
- /*
-  * process_main() is called twice:
+ #ifdef USE_VM_PROBES
+ #  define USE_VM_CALL_PROBES

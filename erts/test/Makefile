@@ -1,7 +1,7 @@
 #
 # %CopyrightBegin%
 #
-# Copyright Ericsson AB 1997-2010. All Rights Reserved.
+# Copyright Ericsson AB 1997-2014. All Rights Reserved.
 #
 # The contents of this file are subject to the Erlang Public License,
 # Version 1.1, (the "License"); you may not use this file except in
@@ -28,7 +28,6 @@ EBIN = .
 # ----------------------------------------------------
 
 MODULES= \
-	autoimport_SUITE \
 	erlc_SUITE \
 	install_SUITE \
 	nt_SUITE \
@@ -37,16 +36,14 @@ MODULES= \
 	erl_print_SUITE \
 	run_erl_SUITE \
 	erlexec_SUITE \
-	z_SUITE
-
-ERL_XML = $(ERL_TOP)/erts/doc/src/erlang.xml
-ERL_XML_TARGET = autoimport_SUITE_data/erlang.xml
+	z_SUITE \
+	upgrade_SUITE
 
 ERL_FILES= $(MODULES:%=%.erl)
 
 TARGET_FILES = $(MODULES:%=$(EBIN)/%.$(EMULATOR))
 
-EXTRA_FILES = install_SUITE_data/install_bin $(ERL_XML_TARGET)
+EXTRA_FILES = install_SUITE_data/install_bin
 
 # ----------------------------------------------------
 # Release directory specification
@@ -68,10 +65,6 @@ install_SUITE_data/install_bin: ../../make/install_bin
 	rm -f $@
 	cp -p $< $@
 
-$(ERL_XML_TARGET): $(ERL_XML)
-	rm -f $@
-	cp -p $< $@
-
 clean:
 	rm -f $(TARGET_FILES) $(EXTRA_FILES)
 	rm -f core *~
@@ -86,10 +79,10 @@ include $(ERL_TOP)/make/otp_release_targets.mk
 release_spec:
 
 release_tests_spec: opt
-	$(INSTALL_DIR) $(RELSYSDIR)
-	$(INSTALL_DATA) system.spec system.dynspec system.spec.vxworks \
-		$(ERL_FILES) $(TARGET_FILES) $(RELSYSDIR)
-	chmod -R u+w $(RELSYSDIR)
-	tar cf - *_SUITE_data utils | (cd $(RELSYSDIR); tar xf -)
+	$(INSTALL_DIR) "$(RELSYSDIR)"
+	$(INSTALL_DATA) system.spec system.dynspec system_smoke.spec \
+		$(ERL_FILES) $(TARGET_FILES) "$(RELSYSDIR)"
+	chmod -R u+w "$(RELSYSDIR)"
+	tar cf - *_SUITE_data utils | (cd "$(RELSYSDIR)"; tar xf -)
 
 release_docs_spec:

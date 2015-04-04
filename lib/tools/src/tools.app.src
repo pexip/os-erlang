@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %% 
-%% Copyright Ericsson AB 1996-2009. All Rights Reserved.
+%% Copyright Ericsson AB 1996-2012. All Rights Reserved.
 %% 
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -24,6 +24,7 @@
 	     eprof,
 	     fprof,
 	     instrument,
+	     lcnt,
 	     make,
 	     xref,
 	     xref_base,
@@ -38,23 +39,9 @@
   {applications, [kernel, stdlib]},
   {env, [{file_util_search_methods,[{"", ""}, {"ebin", "esrc"}, {"ebin", "src"}]}
 	]
-  }
+  },
+  {runtime_dependencies, ["webtool-0.8.10","stdlib-2.0","runtime_tools-1.8.14",
+			  "kernel-3.0","inets-5.10","erts-6.0",
+			  "compiler-5.0"]}
  ]
 }. 
- 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-

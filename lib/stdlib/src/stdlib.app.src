@@ -2,7 +2,7 @@
 %% 
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 1996-2010. All Rights Reserved.
+%% Copyright Ericsson AB 1996-2011. All Rights Reserved.
 %%
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -71,6 +71,7 @@
 	     lib,
 	     lists,
 	     log_mf_h,
+	     maps,
 	     math,
 	     ms_transform,
 	     orddict,
@@ -85,7 +86,6 @@
 	     queue,
 	     random,
 	     re,
-	     regexp,
 	     sets,
 	     shell,
 	     shell_default,
@@ -102,5 +102,8 @@
   {registered,[timer_server,rsh_starter,take_over_monitor,pool_master,
                dets]},
   {applications, [kernel]},
-  {env, []}]}.
+  {env, []},
+  {runtime_dependencies, ["sasl-2.4","kernel-3.0.2","erts-6.2","crypto-3.3",
+			  "compiler-5.0"]}
+]}.
 

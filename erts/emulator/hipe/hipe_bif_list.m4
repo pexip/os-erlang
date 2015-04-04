@@ -1,7 +1,7 @@
 /*
  * %CopyrightBegin%
  *
- * Copyright Ericsson AB 2004-2011. All Rights Reserved.
+ * Copyright Ericsson AB 2004-2014. All Rights Reserved.
  *
  * The contents of this file are subject to the Erlang Public License,
  * Version 1.1, (the "License"); you may not use this file except in
@@ -70,21 +70,15 @@
  ****************************************************************/
 
 /*
+ * standard_bif_interface_0(nbif_name, cbif_name)
  * standard_bif_interface_1(nbif_name, cbif_name)
  * standard_bif_interface_2(nbif_name, cbif_name)
  * standard_bif_interface_3(nbif_name, cbif_name)
  *
- * A BIF with implicit P parameter, 1-3 ordinary parameters,
+ * A BIF with implicit P parameter, 0-3 ordinary parameters,
  * which may fail.
  * HP and FCALLS may be read and updated.
  * HP_LIMIT, NSP, NSP_LIMIT, and NRA may not be accessed.
- */
-
-/*
- * fail_bif_interface_0(nbif_name, cbif_name)
- *
- * A zero-arity BIF which may fail, otherwise
- * identical to standard_bif_interface_N.
  */
 
 /*
@@ -150,17 +144,16 @@
 /*
  * Zero-arity BIFs that can fail.
  */
-fail_bif_interface_0(nbif_memory_0, memory_0)
-fail_bif_interface_0(nbif_processes_0, processes_0)
+standard_bif_interface_0(nbif_processes_0, processes_0)
+standard_bif_interface_0(nbif_ports_0, ports_0)
 
 /*
  * BIFs and primops that may do a GC (change heap limit and walk the native stack).
  * XXX: erase/1 and put/2 cannot fail
  */
-gc_bif_interface_2(nbif_check_process_code_2, hipe_check_process_code_2)
+gc_bif_interface_2(nbif_erts_internal_check_process_code_2, hipe_erts_internal_check_process_code_2)
 gc_bif_interface_1(nbif_erase_1, erase_1)
 gc_bif_interface_0(nbif_garbage_collect_0, garbage_collect_0)
-gc_bif_interface_1(nbif_garbage_collect_1, hipe_garbage_collect_1)
 gc_nofail_primop_interface_1(nbif_gc_1, hipe_gc)
 gc_bif_interface_2(nbif_put_2, put_2)
 
@@ -172,14 +165,15 @@ gc_bif_interface_2(nbif_put_2, put_2)
 gc_bif_interface_1(nbif_hipe_bifs_show_nstack_1, hipe_show_nstack_1)
 gc_bif_interface_1(nbif_hipe_bifs_show_pcb_1, hipe_bifs_show_pcb_1)
 gc_bif_interface_0(nbif_hipe_bifs_nstack_used_size_0, hipe_bifs_nstack_used_size_0)
+gc_bif_interface_2(nbif_hipe_bifs_debug_native_called, hipe_bifs_debug_native_called_2)
 
 /*
  * Arithmetic operators called indirectly by the HiPE compiler.
  */
-standard_bif_interface_2(nbif_add_2, erts_mixed_plus)
-standard_bif_interface_2(nbif_sub_2, erts_mixed_minus)
-standard_bif_interface_2(nbif_mul_2, erts_mixed_times)
-standard_bif_interface_2(nbif_div_2, erts_mixed_div)
+standard_bif_interface_2(nbif_add_2, splus_2)
+standard_bif_interface_2(nbif_sub_2, sminus_2)
+standard_bif_interface_2(nbif_mul_2, stimes_2)
+standard_bif_interface_2(nbif_div_2, div_2)
 standard_bif_interface_2(nbif_intdiv_2, intdiv_2)
 standard_bif_interface_2(nbif_rem_2, rem_2)
 standard_bif_interface_2(nbif_bsl_2, bsl_2)
@@ -252,6 +246,10 @@ noproc_primop_interface_5(nbif_bs_put_big_integer, hipe_bs_put_big_integer)
 
 gc_bif_interface_0(nbif_check_get_msg, hipe_check_get_msg)
 
+#`ifdef' NO_FPE_SIGNALS
+nocons_nofail_primop_interface_0(nbif_emulate_fpe, hipe_emulate_fpe)
+#endif
+
 /*
  * SMP-specific stuff
  */
@@ -261,15 +259,27 @@ noproc_primop_interface_1(nbif_atomic_inc, hipe_atomic_inc)
 ',)dnl
 
 /*
- * Implement standard_bif_interface_0 as nofail_primop_interface_0.
- */
-define(standard_bif_interface_0,`nofail_primop_interface_0($1, $2)')
-
-/*
  * Standard BIFs.
  * BIF_LIST(ModuleAtom,FunctionAtom,Arity,CFun,Index)
  */
-define(BIF_LIST,`standard_bif_interface_$3(nbif_$4, $4)')
+
+/* BIFs that disable GC while trapping are called via a wrapper
+ * to reserve stack space for the "trap frame".
+ */
+define(CFUN,`ifelse($1,term_to_binary_1,hipe_wrapper_term_to_binary_1,
+ifelse($1,term_to_binary_2,hipe_wrapper_term_to_binary_2,
+ifelse($1,binary_to_term_1,hipe_wrapper_binary_to_term_1,
+ifelse($1,binary_to_term_2,hipe_wrapper_binary_to_term_2,
+ifelse($1,binary_to_list_1,hipe_wrapper_binary_to_list_1,
+ifelse($1,binary_to_list_3,hipe_wrapper_binary_to_list_3,
+ifelse($1,bitstring_to_list_1,hipe_wrapper_bitstring_to_list_1,
+ifelse($1,list_to_binary_1,hipe_wrapper_list_to_binary_1,
+ifelse($1,iolist_to_binary_1,hipe_wrapper_iolist_to_binary_1,
+ifelse($1,binary_list_to_bin_1,hipe_wrapper_binary_list_to_bin_1,
+ifelse($1,list_to_bitstring_1,hipe_wrapper_list_to_bitstring_1,
+$1)))))))))))')
+
+define(BIF_LIST,`standard_bif_interface_$3(nbif_$4, CFUN($4))')
 include(TARGET/`erl_bif_list.h')
 
 /*

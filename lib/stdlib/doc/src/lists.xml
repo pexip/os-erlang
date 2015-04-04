@@ -1,10 +1,10 @@
-<?xml version="1.0" encoding="latin1" ?>
+<?xml version="1.0" encoding="utf-8" ?>
 <!DOCTYPE erlref SYSTEM "erlref.dtd">
 
 <erlref>
   <header>
     <copyright>
-      <year>1996</year><year>2011</year>
+      <year>1996</year><year>2013</year>
       <holder>Ericsson AB. All Rights Reserved.</holder>
     </copyright>
     <legalnotice>
@@ -123,6 +123,14 @@
       </desc>
     </func>
     <func>
+      <name name="droplast" arity="1"/>
+      <fsummary>Drop the last element of a list</fsummary>
+      <desc>
+        <p>Drops the last element of a <c><anno>List</anno></c>. The list should
+           be non-empty, otherwise the function will crash with a <c>function_clause</c></p>
+      </desc>
+    </func>
+    <func>
       <name name="dropwhile" arity="2"/>
       <fsummary>Drop elements from a list while a predicate is true</fsummary>
       <desc>
@@ -149,6 +157,31 @@
         <p><c><anno>List2</anno></c> is a list of all elements <c><anno>Elem</anno></c> in
           <c><anno>List1</anno></c> for which <c><anno>Pred</anno>(<anno>Elem</anno>)</c> returns
           <c>true</c>.</p>
+      </desc>
+    </func>
+    <func>
+      <name name="filtermap" arity="2"/>
+      <fsummary>Filter and map elements which satisfy a function</fsummary>
+      <desc>
+        <p>Calls <c><anno>Fun</anno>(<anno>Elem</anno>)</c> on successive elements <c>Elem</c>
+          of <c><anno>List1</anno></c>. <c><anno>Fun</anno>/2</c> must return either a boolean
+          or a tuple <c>{true, <anno>Value</anno>}</c>. The function returns the list of elements
+          for which <c><anno>Fun</anno></c> returns a new value, where a value of <c>true</c>
+          is synonymous with <c>{true, <anno>Elem</anno>}</c>.</p>
+        <p>That is, <c>filtermap</c> behaves as if it had been defined as follows:</p>
+        <code type="none">
+filtermap(Fun, List1) ->
+    lists:foldr(fun(Elem, Acc) ->
+                       case Fun(Elem) of
+                           false -> Acc;
+                           true -> [Elem|Acc];
+                           {true,Value} -> [Value|Acc]
+                       end,
+                end, [], List1).</code>
+        <p>Example:</p>
+        <pre>
+> <input>lists:filtermap(fun(X) -> case X rem 2 of 0 -> {true, X div 2}; _ -> false end end, [1,2,3,4,5]).</input>
+[1,2]</pre>
       </desc>
     </func>
     <func>
@@ -240,7 +273,7 @@ flatmap(Fun, List1) ->
     <func>
       <name name="keydelete" arity="3"/>
       <fsummary>Delete an element from a list of tuples</fsummary>
-      <type_desc variable="N">1..tuple_size(Tuple)</type_desc>
+      <type_desc variable="N">1..tuple_size(<anno>Tuple</anno>)</type_desc>
       <desc>
         <p>Returns a copy of <c><anno>TupleList1</anno></c> where the first
           occurrence of a tuple whose <c><anno>N</anno></c>th element compares equal to
@@ -248,25 +281,20 @@ flatmap(Fun, List1) ->
       </desc>
     </func>
     <func>
-      <name>keyfind(Key, N, TupleList) -> Tuple | false</name>
+      <name name="keyfind" arity="3"/>
+      <type_desc variable="N">1..tuple_size(<anno>Tuple</anno>)</type_desc>
       <fsummary>Search for an element in a list of tuples</fsummary>
-      <type>
-        <v>Key = term()</v>
-        <v>N = 1..tuple_size(Tuple)</v>
-        <v>TupleList = [Tuple]</v>
-        <v>Tuple = tuple()</v>
-      </type>
       <desc>
-        <p>Searches the list of tuples <c>TupleList</c> for a
-          tuple whose <c>N</c>th element compares equal to <c>Key</c>.
-          Returns <c>Tuple</c> if such a tuple is found,
+        <p>Searches the list of tuples <c><anno>TupleList</anno></c> for a
+          tuple whose <c><anno>N</anno></c>th element compares equal to <c><anno>Key</anno></c>.
+          Returns <c><anno>Tuple</anno></c> if such a tuple is found,
           otherwise <c>false</c>.</p>
       </desc>
     </func>
     <func>
       <name name="keymap" arity="3"/>
       <fsummary>Map a function over a list of tuples</fsummary>
-      <type_desc variable="N">1..tuple_size(Tuple)</type_desc>
+      <type_desc variable="N">1..tuple_size(<anno>Tuple</anno>)</type_desc>
       <desc>
         <p>Returns a list of tuples where, for each tuple in
           <c><anno>TupleList1</anno></c>, the <c><anno>N</anno></c>th element <c><anno>Term1</anno></c> of the tuple
@@ -281,24 +309,19 @@ flatmap(Fun, List1) ->
       </desc>
     </func>
     <func>
-      <name>keymember(Key, N, TupleList) -> boolean()</name>
+      <name name="keymember" arity="3"/>
+      <type_desc variable="N">1..tuple_size(<anno>Tuple</anno>)</type_desc>
       <fsummary>Test for membership of a list of tuples</fsummary>
-      <type>
-        <v>Key = term()</v>
-        <v>N = 1..tuple_size(Tuple)</v>
-        <v>TupleList = [Tuple]</v>
-        <v>&nbsp;Tuple = tuple()</v>
-      </type>
       <desc>
-        <p>Returns <c>true</c> if there is a tuple in <c>TupleList</c>
-          whose <c>N</c>th element compares equal to <c>Key</c>, otherwise
+        <p>Returns <c>true</c> if there is a tuple in <c><anno>TupleList</anno></c>
+          whose <c><anno>N</anno></c>th element compares equal to <c><anno>Key</anno></c>, otherwise
           <c>false</c>.</p>
       </desc>
     </func>
     <func>
       <name name="keymerge" arity="3"/>
       <fsummary>Merge two key-sorted lists of tuples</fsummary>
-      <type_desc variable="N">1..tuple_size(Tuple)</type_desc>
+      <type_desc variable="N">1..tuple_size(<anno>Tuple</anno>)</type_desc>
       <desc>
         <p>Returns the sorted list formed by merging <c><anno>TupleList1</anno></c>
           and <c><anno>TupleList2</anno></c>. The merge is performed on
@@ -312,7 +335,7 @@ flatmap(Fun, List1) ->
     <func>
       <name name="keyreplace" arity="4"/>
       <fsummary>Replace an element in a list of tuples</fsummary>
-      <type_desc variable="N">1..tuple_size(Tuple)</type_desc>
+      <type_desc variable="N">1..tuple_size(<anno>Tuple</anno>)</type_desc>
       <desc>
         <p>Returns a copy of <c><anno>TupleList1</anno></c> where the first
           occurrence of a <c>T</c> tuple whose <c><anno>N</anno></c>th element
@@ -321,18 +344,13 @@ flatmap(Fun, List1) ->
       </desc>
     </func>
     <func>
-      <name>keysearch(Key, N, TupleList) -> {value, Tuple} | false</name>
+      <name name="keysearch" arity="3"/>
+      <type_desc variable="N">1..tuple_size(<anno>Tuple</anno>)</type_desc>
       <fsummary>Search for an element in a list of tuples</fsummary>
-      <type>
-        <v>Key = term()</v>
-        <v>N = 1..tuple_size(Tuple)</v>
-        <v>TupleList = [Tuple]</v>
-        <v>Tuple = tuple()</v>
-      </type>
       <desc>
-        <p>Searches the list of tuples <c>TupleList</c> for a
-          tuple whose <c>N</c>th element compares equal to <c>Key</c>.
-          Returns <c>{value, Tuple}</c> if such a tuple is found,
+        <p>Searches the list of tuples <c><anno>TupleList</anno></c> for a
+          tuple whose <c><anno>N</anno></c>th element compares equal to <c><anno>Key</anno></c>.
+          Returns <c>{value, <anno>Tuple</anno>}</c> if such a tuple is found,
           otherwise <c>false</c>.</p>
       <note><p>This function is retained for backward compatibility.
       The function <c>lists:keyfind/3</c> (introduced in R13A)
@@ -342,7 +360,7 @@ flatmap(Fun, List1) ->
     <func>
       <name name="keysort" arity="2"/>
       <fsummary>Sort a list of tuples</fsummary>
-      <type_desc variable="N">1..tuple_size(Tuple)</type_desc>
+      <type_desc variable="N">1..tuple_size(<anno>Tuple</anno>)</type_desc>
       <desc>
         <p>Returns a list containing the sorted elements of the list
           <c><anno>TupleList1</anno></c>. Sorting is performed on the <c><anno>N</anno></c>th
@@ -352,7 +370,7 @@ flatmap(Fun, List1) ->
     <func>
       <name name="keystore" arity="4"/>
       <fsummary>Store an element in a list of tuples</fsummary>
-      <type_desc variable="N">1..tuple_size(Tuple)</type_desc>
+      <type_desc variable="N">1..tuple_size(<anno>Tuple</anno>)</type_desc>
       <desc>
         <p>Returns a copy of <c><anno>TupleList1</anno></c> where the first
           occurrence of a tuple <c>T</c> whose <c><anno>N</anno></c>th element
@@ -366,7 +384,7 @@ flatmap(Fun, List1) ->
     <func>
       <name name="keytake" arity="3"/>
       <fsummary>Extract an element from a list of tuples</fsummary>
-      <type_desc variable="N">1..tuple_size(Tuple)</type_desc>
+      <type_desc variable="N">1..tuple_size(<anno>Tuple</anno>)</type_desc>
       <desc>
         <p>Searches the list of tuples <c><anno>TupleList1</anno></c> for a tuple
           whose <c><anno>N</anno></c>th element compares equal to <c><anno>Key</anno></c>.
@@ -425,15 +443,11 @@ flatmap(Fun, List1) ->
       </desc>
     </func>
     <func>
-      <name>member(Elem, List) -> boolean()</name>
+      <name name="member" arity="2"/>
       <fsummary>Test for membership of a list</fsummary>
-      <type>
-        <v>Elem = term()</v>
-        <v>List = [term()]</v>
-      </type>
       <desc>
-        <p>Returns <c>true</c> if <c>Elem</c> matches some element of
-          <c>List</c>, otherwise <c>false</c>.</p>
+        <p>Returns <c>true</c> if <c><anno>Elem</anno></c> matches some element of
+          <c><anno>List</anno></c>, otherwise <c>false</c>.</p>
       </desc>
     </func>
     <func>
@@ -500,7 +514,7 @@ flatmap(Fun, List1) ->
     <func>
       <name name="nth" arity="2"/>
       <fsummary>Return the Nth element of a list</fsummary>
-      <type_desc variable="N">1..length(List)</type_desc>
+      <type_desc variable="N">1..length(<anno>List</anno>)</type_desc>
       <desc>
         <p>Returns the <c><anno>N</anno></c>th element of <c><anno>List</anno></c>. For example:</p>
         <pre>
@@ -511,7 +525,7 @@ c</pre>
     <func>
       <name name="nthtail" arity="2"/>
       <fsummary>Return the Nth tail of a list</fsummary>
-      <type_desc variable="N">0..length(List)</type_desc>
+      <type_desc variable="N">0..length(<anno>List</anno>)</type_desc>
       <desc>
         <p>Returns the <c><anno>N</anno></c>th tail of <c><anno>List</anno></c>, that is, the sublist of
           <c><anno>List</anno></c> starting at <c><anno>N</anno>+1</c> and continuing up to
@@ -562,14 +576,11 @@ c</pre>
       </desc>
     </func>
     <func>
-      <name>reverse(List1, Tail) -> List2</name>
+      <name name="reverse" arity="2"/>
       <fsummary>Reverse a list appending a tail</fsummary>
-      <type>
-        <v>List1 = Tail = List2 = [term()]</v>
-      </type>
       <desc>
-        <p>Returns a list with the elements in <c>List1</c>
-          in reverse order, with the tail <c>Tail</c> appended. For
+        <p>Returns a list with the elements in <c><anno>List1</anno></c>
+          in reverse order, with the tail <c><anno>Tail</anno></c> appended. For
           example:</p>
         <pre>
 > <input>lists:reverse([1, 2, 3, 4], [a, b, c]).</input>
@@ -630,7 +641,7 @@ length(lists:seq(From, To, Incr)) == (To-From+Incr) div Incr</code>
     <func>
       <name name="split" arity="2"/>
       <fsummary>Split a list into two lists</fsummary>
-      <type_desc variable="N">0..length(List1)</type_desc>
+      <type_desc variable="N">0..length(<anno>List1</anno>)</type_desc>
       <desc>
         <p>Splits <c><anno>List1</anno></c> into <c><anno>List2</anno></c> and <c><anno>List3</anno></c>.
           <c><anno>List2</anno></c> contains the first <c><anno>N</anno></c> elements and
@@ -663,14 +674,14 @@ splitwith(Pred, List) ->
       <desc>
         <p>Returns the sub-list of <c><anno>List1</anno></c> starting at position 1
           and with (max) <c><anno>Len</anno></c> elements. It is not an error for
-          <c><anno>Len</anno></c> to exceed the length of the list -- in that case
+          <c><anno>Len</anno></c> to exceed the length of the list, in that case
           the whole list is returned.</p>
       </desc>
     </func>
     <func>
       <name name="sublist" arity="3"/>
       <fsummary>Return a sub-list starting at a given position and with a given number of elements</fsummary>
-      <type_desc variable="Start">1..(length(List1)+1)</type_desc>
+      <type_desc variable="Start">1..(length(<anno>List1</anno>)+1)</type_desc>
       <desc>
         <p>Returns the sub-list of <c><anno>List1</anno></c> starting at <c><anno>Start</anno></c>
           and with (max) <c><anno>Len</anno></c> elements. It is not an error for
@@ -732,7 +743,7 @@ splitwith(Pred, List) ->
     <func>
       <name name="ukeymerge" arity="3"/>
       <fsummary>Merge two key-sorted lists of tuples, removing duplicates</fsummary>
-      <type_desc variable="N">1..tuple_size(Tuple)</type_desc>
+      <type_desc variable="N">1..tuple_size(<anno>Tuple</anno>)</type_desc>
       <desc>
         <p>Returns the sorted list formed by merging <c><anno>TupleList1</anno></c>
           and <c><anno>TupleList2</anno></c>. The merge is performed on the
@@ -746,7 +757,7 @@ splitwith(Pred, List) ->
     <func>
       <name name="ukeysort" arity="2"/>
       <fsummary>Sort a list of tuples, removing duplicates</fsummary>
-      <type_desc variable="N">1..tuple_size(Tuple)</type_desc>
+      <type_desc variable="N">1..tuple_size(<anno>Tuple</anno>)</type_desc>
       <desc>
         <p>Returns a list containing the sorted elements of the list
           <c><anno>TupleList1</anno></c> where all but the first tuple of the

@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2008-2010. All Rights Reserved.
+%% Copyright Ericsson AB 2008-2013. All Rights Reserved.
 %%
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -17,7 +17,7 @@
 %% %CopyrightEnd%
 %% This file is generated DO NOT EDIT
 
-%% @doc See external documentation: <a href="http://www.wxwidgets.org/manuals/stable/wx_wxsizeevent.html">wxSizeEvent</a>.
+%% @doc See external documentation: <a href="http://www.wxwidgets.org/manuals/2.8.12/wx_wxsizeevent.html">wxSizeEvent</a>.
 %% <dl><dt>Use {@link wxEvtHandler:connect/3.} with EventType:</dt>
 %% <dd><em>size</em></dd></dl>
 %% See also the message variant {@link wxEvtHandler:wxSize(). #wxSize{}} event record type.
@@ -37,12 +37,15 @@
 -export([getId/1,getSkipped/1,getTimestamp/1,isCommandEvent/1,parent_class/1,
   resumePropagation/2,shouldPropagate/1,skip/1,skip/2,stopPropagation/1]).
 
+-export_type([wxSizeEvent/0]).
 %% @hidden
 parent_class(wxEvent) -> true;
 parent_class(_Class) -> erlang:error({badtype, ?MODULE}).
 
-%% @spec (This::wxSizeEvent()) -> {W::integer(),H::integer()}
-%% @doc See <a href="http://www.wxwidgets.org/manuals/stable/wx_wxsizeevent.html#wxsizeeventgetsize">external documentation</a>.
+-type wxSizeEvent() :: wx:wx_object().
+%% @doc See <a href="http://www.wxwidgets.org/manuals/2.8.12/wx_wxsizeevent.html#wxsizeeventgetsize">external documentation</a>.
+-spec getSize(This) -> {W::integer(), H::integer()} when
+	This::wxSizeEvent().
 getSize(#wx_ref{type=ThisT,ref=ThisRef}) ->
   ?CLASS(ThisT,wxSizeEvent),
   wxe_util:call(?wxSizeEvent_GetSize,

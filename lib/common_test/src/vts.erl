@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2003-2011. All Rights Reserved.
+%% Copyright Ericsson AB 2003-2012. All Rights Reserved.
 %%
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -765,10 +765,6 @@ report1(tc_done,{_Suite,end_per_suite,_},State) ->
 report1(tc_done,{_Suite,init_per_group,_},State) ->
     State;
 report1(tc_done,{_Suite,end_per_group,_},State) ->
-    State;
-report1(tc_done,{_Suite,ct_init_per_group,_},State) ->
-    State;
-report1(tc_done,{_Suite,ct_end_per_group,_},State) ->
     State;
 report1(tc_done,{_Suite,_Case,ok},State) ->
     State#state{ok=State#state.ok+1};

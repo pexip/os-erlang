@@ -624,16 +624,8 @@ lines_to_key_value([Line | Lines]) ->
     end.
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-% Extensions to the 'regexp' module.
+% Regular expression helpers.
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-
-%% is_match(Ex, Re) ->
-%%     case regexp:first_match(Ex, Re) of
-%% 	{match, _, _} ->
-%% 	    true;
-%% 	nomatch ->
-%% 	    false
-%%     end.
 
 %% -type gsub(String, RegExp, Fun, Acc) -> subres().
 %%  Substitute every match of the regular expression RegExp with the
@@ -663,7 +655,7 @@ sub_repl([[{St, L}] |Ss], Fun, Acc0, S, Pos) ->
         {string:substr(S, Pos+1, St-Pos) ++ Rep ++ Rs, NewAcc};
 sub_repl([], _Fun, Acc, S, Pos) -> {string:substr(S, Pos+1), Acc}.
 
-
+
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 % Error and warnings

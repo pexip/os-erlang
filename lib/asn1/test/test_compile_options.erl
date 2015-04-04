@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2005-2011. All Rights Reserved.
+%% Copyright Ericsson AB 2005-2012. All Rights Reserved.
 %%
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -40,10 +40,7 @@ wrong_path(Config) ->
 comp(Parent,Config) ->
     DataDir = ?config(data_dir,Config),
     OutDir = ?config(priv_dir,Config),
-    %%?line true = code:add_patha(?config(priv_dir,Config)),
-    io:format("DataDir: ~p~n",[DataDir]),
     ?line Err=asn1ct:compile(DataDir++"NoImport",[{i,OutDir},{i,filename:join([DataDir,"subdir"])},{outdir,OutDir}]),
-    io:format("compiling process terminated with value: ~p~n",[Err]),
     Parent!Err.
 
 %% OTP-5701
@@ -54,26 +51,19 @@ path(Config) ->
     {ok,CWD} = file:get_cwd(),
     ?line file:set_cwd(filename:join([DataDir,subdir])),
 
-    %%?line ok=asn1ct:compile(filename:join([DataDir,"../MyMerge.set.asn"]),[{inline,mymerge},{outdir,OutDir}]),
-    ?line ok=asn1ct:compile("../MyMerge.set.asn",[{inline,mymerge},{outdir,OutDir}]),
+    ok = asn1ct:compile("../MyMerge.set.asn",[{outdir,OutDir}]),
 
     ?line ok=outfiles_check(OutDir),
     ?line outfiles_remove(OutDir),
 
     file:set_cwd(filename:join([DataDir,subdir,subsubdir])),
-    ?line ok = asn1ct:compile('../../MyMerge.set.asn',[{inline,mymerge},{i,'..'},{outdir,OutDir}]),
+    ok = asn1ct:compile('../../MyMerge.set.asn',[{i,'..'},{outdir,OutDir}]),
 
     ?line ok=outfiles_check(OutDir,outfiles2()),
     file:set_cwd(CWD),
     ok.
 
-ticket_6143(Config) ->
-    DataDir = ?config(data_dir,Config),
-    OutDir = ?config(priv_dir,Config),
-    io:format("DataDir: ~p~n",[DataDir]),
-
-    ?line ok=asn1ct:compile(filename:join([DataDir,"AA1"]),[{i,DataDir},{outdir,OutDir}]),
-    ok.
+ticket_6143(Config) -> asn1_test_lib:compile("AA1", Config, []).
 
 noobj(Config) ->
     DataDir = ?config(data_dir,Config),
@@ -101,7 +91,8 @@ noobj(Config) ->
     file:delete(filename:join([OutDir,'P-Record.beam'])),
     file:delete(filename:join([OutDir,'p_record.erl'])),
     file:delete(filename:join([OutDir,'p_record.beam'])),
-    ?line ok=asn1ct:compile(filename:join([DataDir,"p_record.set.asn"]),[asn1config,ber_bin,optimize,noobj,{outdir,OutDir}]),
+    ok = asn1ct:compile(filename:join([DataDir,"p_record.set.asn"]),
+			[asn1config,ber,noobj,{outdir,OutDir}]),
 %%     ?line false = code:is_loaded('P-Record'),
 %%     ?line false = code:is_loaded('p_record'),
     ?line {error,enoent} =
@@ -132,7 +123,7 @@ verbose(Config) when is_list(Config) ->
     ?line ok = asn1ct:compile(Asn1File, [{i,DataDir},{outdir,OutDir},noobj,verbose]),
     ?line test_server:capture_stop(),
     ?line [Line0|_] = test_server:capture_get(),
-    ?line true = lists:prefix("Erlang ASN.1 version", Line0),
+    ?line true = lists:prefix("Erlang ASN.1 compiler", Line0),
 
     %% Test non-verbose compile
     ?line test_server:capture_start(),
@@ -190,11 +181,10 @@ outfiles_check(OutDir,[H|T]) ->
     outfiles_check(OutDir,T).
 
 outfiles1() ->
-    ["mymerge.erl","mymerge.beam","MyMerge.asn1db","MyMerge.beam",
+    ["MyMerge.asn1db","MyMerge.beam",
      "MyMerge.erl","MyMerge.hrl"].
 outfiles2() ->
-    ["MyMerge.beam","mymerge.erl","MyMerge.asn1db","MyMerge.erl",
-     "mymerge.beam"].
+    ["MyMerge.beam","MyMerge.asn1db","MyMerge.erl"].
 
 outfiles_remove(OutDir) ->
     lists:foreach(fun(F)-> file:delete(filename:join([OutDir,F])) end,

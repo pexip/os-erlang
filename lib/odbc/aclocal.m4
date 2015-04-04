@@ -1,7 +1,7 @@
 dnl
 dnl %CopyrightBegin%
 dnl
-dnl Copyright Ericsson AB 1998-2011. All Rights Reserved.
+dnl Copyright Ericsson AB 1998-2013. All Rights Reserved.
 dnl
 dnl The contents of this file are subject to the Erlang Public License,
 dnl Version 1.1, (the "License"); you may not use this file except in
@@ -59,6 +59,7 @@ AC_ARG_VAR(erl_xcomp_isysroot, [Absolute cross system root include path (only us
 
 dnl Cross compilation variables
 AC_ARG_VAR(erl_xcomp_bigendian, [big endian system: yes|no (only used when cross compiling)])
+AC_ARG_VAR(erl_xcomp_double_middle_endian, [double-middle-endian system: yes|no (only used when cross compiling)])
 AC_ARG_VAR(erl_xcomp_linux_clock_gettime_correction, [clock_gettime() can be used for time correction: yes|no (only used when cross compiling)])
 AC_ARG_VAR(erl_xcomp_linux_nptl, [have Native POSIX Thread Library: yes|no (only used when cross compiling)])
 AC_ARG_VAR(erl_xcomp_linux_usable_sigusrx, [SIGUSR1 and SIGUSR2 can be used: yes|no (only used when cross compiling)])
@@ -72,6 +73,21 @@ AC_ARG_VAR(erl_xcomp_gethrvtime_procfs_ioctl, [have working gethrvtime() which c
 AC_ARG_VAR(erl_xcomp_clock_gettime_cpu_time, [clock_gettime() can be used for retrieving process CPU time: yes|no (only used when cross compiling)])
 AC_ARG_VAR(erl_xcomp_after_morecore_hook, [__after_morecore_hook can track malloc()s core memory usage: yes|no (only used when cross compiling)])
 AC_ARG_VAR(erl_xcomp_dlsym_brk_wrappers, [dlsym(RTLD_NEXT, _) brk wrappers can track malloc()s core memory usage: yes|no (only used when cross compiling)])
+
+dnl Cross compilation variables for OSE
+AC_ARG_VAR(erl_xcomp_ose_ldflags_pass1, [Linker flags for the OSE module (pass 1) (only used when cross compiling for OSE)])
+AC_ARG_VAR(erl_xcomp_ose_ldflags_pass2, [Linker flags for the OSE module (pass 2) (only used when cross compiling for OSE)])
+AC_ARG_VAR(erl_xcomp_ose_OSEROOT, [OSE installation root directory (only used when cross compiling for OSE)])
+AC_ARG_VAR(erl_xcomp_ose_STRIP, [Strip utility shipped with the OSE distribution(only used when cross compiling for OSE)])
+AC_ARG_VAR(erl_xcomp_ose_LM_POST_LINK, [OSE postlink tool (only used when cross compiling for OSE)])
+AC_ARG_VAR(erl_xcomp_ose_LM_SET_CONF, [Sets the configuration for an OSE load module (only used when cross compiling for OSE)])
+AC_ARG_VAR(erl_xcomp_ose_LM_ELF_SIZE, [Prints the section size information for an OSE load module (only used when cross compiling for OSE)])
+AC_ARG_VAR(erl_xcomp_ose_LM_LCF, [OSE load module linker configuration file (only used when cross compiling for OSE)])
+AC_ARG_VAR(erl_xcomp_ose_BEAM_LM_CONF, [BEAM OSE load module default configuration file (only used when cross compiling for OSE)])
+AC_ARG_VAR(erl_xcomp_ose_EPMD_LM_CONF, [EPMD OSE load module default configuration file (only used when cross compiling for OSE)])
+AC_ARG_VAR(erl_xcomp_ose_RUN_ERL_LM_CONF, [run_erl_lm OSE load module default configuration file (only used when cross compiling for OSE)])
+AC_ARG_VAR(erl_xcomp_ose_CONFD, [OSE confd source file])
+AC_ARG_VAR(erl_xcomp_ose_CRT0_LM, [OSE crt0 lm source file])
 
 ])
 
@@ -112,6 +128,94 @@ fi
 
 dnl ----------------------------------------------------------------------
 dnl
+dnl LM_WINDOWS_ENVIRONMENT
+dnl
+dnl
+dnl Tries to determine thw windows build environment, i.e. 
+dnl MIXED_CYGWIN_VC or MIXED_MSYS_VC 
+dnl
+
+AC_DEFUN(LM_WINDOWS_ENVIRONMENT,
+[
+MIXED_CYGWIN=no
+MIXED_MSYS=no
+
+AC_MSG_CHECKING(for mixed cygwin or msys and native VC++ environment)
+if test "X$host" = "Xwin32" -a "x$GCC" != "xyes"; then
+	if test -x /usr/bin/cygpath; then
+		CFLAGS="-O2"
+		MIXED_CYGWIN=yes
+		AC_MSG_RESULT([Cygwin and VC])
+		MIXED_CYGWIN_VC=yes
+		CPPFLAGS="$CPPFLAGS -DERTS_MIXED_CYGWIN_VC"
+	elif test -x /usr/bin/msysinfo; then
+	        CFLAGS="-O2"
+		MIXED_MSYS=yes
+		AC_MSG_RESULT([MSYS and VC])
+		MIXED_MSYS_VC=yes
+		CPPFLAGS="$CPPFLAGS -DERTS_MIXED_MSYS_VC"
+	else		    
+		AC_MSG_RESULT([undeterminable])
+		AC_MSG_ERROR(Seems to be mixed windows but not with cygwin, cannot handle this!)
+	fi
+else
+	AC_MSG_RESULT([no])
+	MIXED_CYGWIN_VC=no
+	MIXED_MSYS_VC=no
+fi
+AC_SUBST(MIXED_CYGWIN_VC)
+AC_SUBST(MIXED_MSYS_VC)
+
+MIXED_VC=no
+if test "x$MIXED_MSYS_VC" = "xyes" -o  "x$MIXED_CYGWIN_VC" = "xyes" ; then
+   MIXED_VC=yes
+fi
+
+AC_SUBST(MIXED_VC)
+
+if test "x$MIXED_MSYS" != "xyes"; then
+   AC_MSG_CHECKING(for mixed cygwin and native MinGW environment)
+   if test "X$host" = "Xwin32" -a "x$GCC" = x"yes"; then
+	if test -x /usr/bin/cygpath; then
+		CFLAGS="-O2"
+		MIXED_CYGWIN=yes
+		AC_MSG_RESULT([yes])
+		MIXED_CYGWIN_MINGW=yes
+		CPPFLAGS="$CPPFLAGS -DERTS_MIXED_CYGWIN_MINGW"
+	else
+		AC_MSG_RESULT([undeterminable])
+		AC_MSG_ERROR(Seems to be mixed windows but not with cygwin, cannot handle this!)
+	fi
+    else
+	AC_MSG_RESULT([no])
+	MIXED_CYGWIN_MINGW=no
+    fi
+else
+	MIXED_CYGWIN_MINGW=no
+fi	
+AC_SUBST(MIXED_CYGWIN_MINGW)
+
+AC_MSG_CHECKING(if we mix cygwin with any native compiler)
+if test "X$MIXED_CYGWIN" = "Xyes"; then
+	AC_MSG_RESULT([yes])	
+else
+	AC_MSG_RESULT([no])
+fi
+
+AC_SUBST(MIXED_CYGWIN)
+	
+AC_MSG_CHECKING(if we mix msys with another native compiler)
+if test "X$MIXED_MSYS" = "Xyes" ; then
+	AC_MSG_RESULT([yes])	
+else
+	AC_MSG_RESULT([no])
+fi
+
+AC_SUBST(MIXED_MSYS)
+])		
+	
+dnl ----------------------------------------------------------------------
+dnl
 dnl LM_FIND_EMU_CC
 dnl
 dnl
@@ -125,8 +229,10 @@ AC_DEFUN(LM_FIND_EMU_CC,
 			ac_cv_prog_emu_cc,
 			[
 AC_TRY_COMPILE([],[
-#ifdef __llvm__
-#error "llvm is currently unable to compile beam_emu.c"
+#if defined(__clang_major__) && __clang_major__ >= 3
+    /* clang 3.x or later is fine */
+#elif defined(__llvm__)
+#error "this version of llvm is unable to correctly compile beam_emu.c"
 #endif
     __label__ lbl1;
     __label__ lbl2;
@@ -168,6 +274,11 @@ if test $ac_cv_prog_emu_cc != no; then
 	CFLAGS=""
 	CPPFLAGS=""
 	AC_TRY_COMPILE([],[
+#if defined(__clang_major__) && __clang_major__ >= 3
+    /* clang 3.x or later is fine */
+#elif defined(__llvm__)
+#error "this version of llvm is unable to correctly compile beam_emu.c"
+#endif
     	__label__ lbl1;
     	__label__ lbl2;
     	int x = magic();
@@ -392,6 +503,8 @@ AC_CACHE_VAL(ac_cv_sys_ipv6_support,
 #ifdef __WIN32__
 #include <winsock2.h>
 #include <ws2tcpip.h>
+#elif __OSE__
+#error "no ipv6"
 #else
 #include <netinet/in.h>
 #endif],
@@ -404,6 +517,8 @@ else
 #ifdef __WIN32__
 #include <winsock2.h>
 #include <ws2tcpip.h>
+#elif __OSE__
+#error "no ipv6"
 #else
 #include <netinet/in.h>
 #endif],
@@ -511,6 +626,103 @@ ifelse([$5], , , [$5
 fi
 ])
 
+dnl ----------------------------------------------------------------------
+dnl
+dnl AC_DOUBLE_MIDDLE_ENDIAN
+dnl
+dnl Checks whether doubles are represented in "middle-endian" format.
+dnl Sets ac_cv_double_middle_endian={no,yes,unknown} accordingly,
+dnl as well as DOUBLE_MIDDLE_ENDIAN.
+dnl
+dnl
+
+AC_DEFUN([AC_C_DOUBLE_MIDDLE_ENDIAN],
+[AC_CACHE_CHECK(whether double word ordering is middle-endian, ac_cv_c_double_middle_endian,
+[# It does not; compile a test program.
+AC_RUN_IFELSE(
+[AC_LANG_SOURCE([[#include <stdlib.h>
+
+int
+main(void)
+{
+  int i = 0;
+  int zero = 0;
+  int bigendian;
+  int zero_index = 0;
+
+  union
+  {
+    long int l;
+    char c[sizeof (long int)];
+  } u;
+
+  /* we'll use the one with 32-bit words */
+  union
+  {
+    double d;
+    unsigned int c[2];
+  } vint;
+
+  union
+  {
+    double d;
+    unsigned long c[2];
+  } vlong;
+
+  union
+  {
+    double d;
+    unsigned short c[2];
+  } vshort;
+
+
+  /* Are we little or big endian?  From Harbison&Steele.  */
+  u.l = 1;
+  bigendian = (u.c[sizeof (long int) - 1] == 1);
+
+  zero_index = bigendian ? 1 : 0;
+
+  vint.d = 1.0;
+  vlong.d = 1.0;
+  vshort.d = 1.0;
+
+  if (sizeof(unsigned int) == 4)
+    {
+      if (vint.c[zero_index] != 0)
+	zero = 1;
+    }
+  else if (sizeof(unsigned long) == 4)
+    {
+      if (vlong.c[zero_index] != 0)
+	zero = 1;
+    }
+  else if (sizeof(unsigned short) == 4)
+    {
+      if (vshort.c[zero_index] != 0)
+	zero = 1;
+    }
+
+  exit (zero);
+}
+]])],
+	      [ac_cv_c_double_middle_endian=no],
+	      [ac_cv_c_double_middle_endian=yes],
+	      [ac_cv_c_double_middle=unknown])])
+case $ac_cv_c_double_middle_endian in
+  yes)
+    m4_default([$1],
+      [AC_DEFINE([DOUBLE_MIDDLE_ENDIAN], 1,
+	[Define to 1 if your processor stores the words in a double in
+	 middle-endian format (like some ARMs).])]) ;;
+  no)
+    $2 ;;
+  *)
+    m4_default([$3],
+      [AC_MSG_WARN([unknown double endianness
+presetting ac_cv_c_double_middle_endian=no (or yes) will help])]) ;;
+esac
+])# AC_C_DOUBLE_MIDDLE_ENDIAN
+
 
 dnl ----------------------------------------------------------------------
 dnl
@@ -535,6 +747,12 @@ if test "X$host_os" = "Xwin32"; then
     THR_LIBS=
     THR_LIB_NAME=win32_threads
     THR_LIB_TYPE=win32_threads
+elif test "X$host_os" = "Xose"; then
+    AC_MSG_RESULT(yes)
+    THR_DEFS="-DOSE_THREADS"
+    THR_LIBS=
+    THR_LIB_NAME=ose_threads
+    THR_LIB_TYPE=ose_threads
 else
     AC_MSG_RESULT(no)
     THR_DEFS=
@@ -547,9 +765,14 @@ dnl Try to find POSIX threads
 dnl The usual pthread lib...
     AC_CHECK_LIB(pthread, pthread_create, THR_LIBS="-lpthread")
 
-dnl FreeBSD has pthreads in special c library, c_r...
+dnl Very old versions of FreeBSD have pthreads in special c library, c_r...
     if test "x$THR_LIBS" = "x"; then
 	AC_CHECK_LIB(c_r, pthread_create, THR_LIBS="-lc_r")
+    fi
+
+dnl QNX has pthreads in standard C library
+    if test "x$THR_LIBS" = "x"; then
+	AC_CHECK_FUNC(pthread_create, THR_LIBS="none_needed")
     fi
 
 dnl On ofs1 the '-pthread' switch should be used
@@ -572,6 +795,9 @@ dnl On ofs1 the '-pthread' switch should be used
     if test "x$THR_LIBS" != "x"; then
 	THR_DEFS="$THR_DEFS -D_THREAD_SAFE -D_REENTRANT -DPOSIX_THREADS"
 	THR_LIB_NAME=pthread
+	if test "x$THR_LIBS" = "xnone_needed"; then
+	    THR_LIBS=
+	fi
 	case $host_os in
 	    solaris*)
 		THR_DEFS="$THR_DEFS -D_POSIX_PTHREAD_SEMANTICS" ;;
@@ -682,6 +908,55 @@ AC_SUBST(ERTS_INTERNAL_X_LIBS)
 
 ])
 
+AC_DEFUN(ETHR_CHK_SYNC_OP,
+[
+    AC_MSG_CHECKING([for $3-bit $1()])
+    case "$2" in
+	"1") sync_call="$1(&var);";;
+	"2") sync_call="$1(&var, ($4) 0);";;
+	"3") sync_call="$1(&var, ($4) 0, ($4) 0);";;
+    esac
+    have_sync_op=no
+    AC_TRY_LINK([],
+	[
+	    $4 res;
+	    volatile $4 var;
+	    res = $sync_call
+	],
+	[have_sync_op=yes])
+    test $have_sync_op = yes && $5
+    AC_MSG_RESULT([$have_sync_op])
+])
+
+AC_DEFUN(ETHR_CHK_INTERLOCKED,
+[
+    ilckd="$1"
+    AC_MSG_CHECKING([for ${ilckd}()])
+    case "$2" in
+	"1") ilckd_call="${ilckd}(var);";;
+	"2") ilckd_call="${ilckd}(var, ($3) 0);";;
+	"3") ilckd_call="${ilckd}(var, ($3) 0, ($3) 0);";;
+	"4") ilckd_call="${ilckd}(var, ($3) 0, ($3) 0, arr);";;
+    esac
+    have_interlocked_op=no
+    AC_TRY_LINK(
+	[
+	#define WIN32_LEAN_AND_MEAN
+	#include <windows.h>
+	#include <intrin.h>
+	],
+	[
+	    volatile $3 *var;
+	    volatile $3 arr[2];
+
+	    $ilckd_call
+	    return 0;
+	],
+	[have_interlocked_op=yes])
+    test $have_interlocked_op = yes && $4
+    AC_MSG_RESULT([$have_interlocked_op])
+])
+
 dnl ----------------------------------------------------------------------
 dnl
 dnl ERL_FIND_ETHR_LIB
@@ -703,6 +978,40 @@ dnl
 
 AC_DEFUN(ERL_FIND_ETHR_LIB,
 [
+
+AC_ARG_ENABLE(native-ethr-impls,
+	      AS_HELP_STRING([--disable-native-ethr-impls],
+                             [disable native ethread implementations]),
+[ case "$enableval" in
+    no) disable_native_ethr_impls=yes ;;
+    *)  disable_native_ethr_impls=no ;;
+  esac ], disable_native_ethr_impls=no)
+
+test "X$disable_native_ethr_impls" = "Xyes" &&
+  AC_DEFINE(ETHR_DISABLE_NATIVE_IMPLS, 1, [Define if you want to disable native ethread implementations])
+
+AC_ARG_ENABLE(x86-out-of-order,
+	      AS_HELP_STRING([--enable-x86-out-of-order],
+                             [enable x86/x84_64 out of order support (default disabled)]))
+
+AC_ARG_ENABLE(prefer-gcc-native-ethr-impls,
+	      AS_HELP_STRING([--enable-prefer-gcc-native-ethr-impls],
+			     [prefer gcc native ethread implementations]),
+[ case "$enableval" in
+    yes) enable_prefer_gcc_native_ethr_impls=yes ;;
+    *)  enable_prefer_gcc_native_ethr_impls=no ;;
+  esac ], enable_prefer_gcc_native_ethr_impls=no)
+
+test $enable_prefer_gcc_native_ethr_impls = yes &&
+  AC_DEFINE(ETHR_PREFER_GCC_NATIVE_IMPLS, 1, [Define if you prefer gcc native ethread implementations])
+
+AC_ARG_WITH(libatomic_ops,
+	    AS_HELP_STRING([--with-libatomic_ops=PATH],
+			   [specify and prefer usage of libatomic_ops in the ethread library]))
+
+AC_ARG_WITH(with_sparc_memory_order,
+	    AS_HELP_STRING([--with-sparc-memory-order=TSO|PSO|RMO],
+			   [specify sparc memory order (defaults to RMO)]))
 
 LM_CHECK_THR_LIB
 ERL_INTERNAL_LIBS
@@ -753,126 +1062,63 @@ case "$THR_LIB_NAME" in
 
 	AC_DEFINE(ETHR_WIN32_THREADS, 1, [Define if you have win32 threads])
 
-	have_ilckd=no
-	AC_MSG_CHECKING([for _InterlockedCompareExchange64()])
-	AC_TRY_LINK([
-			#define WIN32_LEAN_AND_MEAN
-			#include <windows.h>
-		    ],
-		    [
-			volatile __int64 *var;
-			_InterlockedCompareExchange64(var, (__int64) 1, (__int64) 0);
-			return 0;
-		    ],
-		    have_ilckd=yes)
-	AC_MSG_RESULT([$have_ilckd])
-	test $have_ilckd = yes && AC_DEFINE(ETHR_HAVE__INTERLOCKEDCOMPAREEXCHANGE64, 1, [Define if you have _InterlockedCompareExchange64()])
+	if test "X$disable_native_ethr_impls" = "Xyes"; then
+	    have_interlocked_op=no
+	    ethr_have_native_atomics=no
+	else
+	    ETHR_CHK_INTERLOCKED([_InterlockedDecrement], [1], [long], AC_DEFINE_UNQUOTED(ETHR_HAVE__INTERLOCKEDDECREMENT, 1, [Define if you have _InterlockedDecrement()]))
+	    ETHR_CHK_INTERLOCKED([_InterlockedDecrement_rel], [1], [long], AC_DEFINE_UNQUOTED(ETHR_HAVE__INTERLOCKEDDECREMENT_REL, 1, [Define if you have _InterlockedDecrement_rel()]))
+	    ETHR_CHK_INTERLOCKED([_InterlockedIncrement], [1], [long], AC_DEFINE_UNQUOTED(ETHR_HAVE__INTERLOCKEDINCREMENT, 1, [Define if you have _InterlockedIncrement()]))
+	    ETHR_CHK_INTERLOCKED([_InterlockedIncrement_acq], [1], [long], AC_DEFINE_UNQUOTED(ETHR_HAVE__INTERLOCKEDINCREMENT_ACQ, 1, [Define if you have _InterlockedIncrement_acq()]))
+	    ETHR_CHK_INTERLOCKED([_InterlockedExchangeAdd], [2], [long], AC_DEFINE_UNQUOTED(ETHR_HAVE__INTERLOCKEDEXCHANGEADD, 1, [Define if you have _InterlockedExchangeAdd()]))
+	    ETHR_CHK_INTERLOCKED([_InterlockedExchangeAdd_acq], [2], [long], AC_DEFINE_UNQUOTED(ETHR_HAVE__INTERLOCKEDEXCHANGEADD_ACQ, 1, [Define if you have _InterlockedExchangeAdd_acq()]))
+	    ETHR_CHK_INTERLOCKED([_InterlockedAnd], [2], [long], AC_DEFINE_UNQUOTED(ETHR_HAVE__INTERLOCKEDAND, 1, [Define if you have _InterlockedAnd()]))
+	    ETHR_CHK_INTERLOCKED([_InterlockedOr], [2], [long], AC_DEFINE_UNQUOTED(ETHR_HAVE__INTERLOCKEDOR, 1, [Define if you have _InterlockedOr()]))
+	    ETHR_CHK_INTERLOCKED([_InterlockedExchange], [2], [long], AC_DEFINE_UNQUOTED(ETHR_HAVE__INTERLOCKEDEXCHANGE, 1, [Define if you have _InterlockedExchange()]))
+	    ETHR_CHK_INTERLOCKED([_InterlockedCompareExchange], [3], [long], AC_DEFINE_UNQUOTED(ETHR_HAVE__INTERLOCKEDCOMPAREEXCHANGE, 1, [Define if you have _InterlockedCompareExchange()]))
+	    test "$have_interlocked_op" = "yes" && ethr_have_native_atomics=yes
+	    ETHR_CHK_INTERLOCKED([_InterlockedCompareExchange_acq], [3], [long], AC_DEFINE_UNQUOTED(ETHR_HAVE__INTERLOCKEDCOMPAREEXCHANGE_ACQ, 1, [Define if you have _InterlockedCompareExchange_acq()]))
+	    test "$have_interlocked_op" = "yes" && ethr_have_native_atomics=yes
+	    ETHR_CHK_INTERLOCKED([_InterlockedCompareExchange_rel], [3], [long], AC_DEFINE_UNQUOTED(ETHR_HAVE__INTERLOCKEDCOMPAREEXCHANGE_REL, 1, [Define if you have _InterlockedCompareExchange_rel()]))
+	    test "$have_interlocked_op" = "yes" && ethr_have_native_atomics=yes
 
-	AC_CHECK_SIZEOF(void *)
-	case "$ac_cv_sizeof_void_p-$have_ilckd" in
-	    8-no)
-		ethr_have_native_atomics=no
-	  	ethr_have_native_spinlock=no;;
-	    *)
-		ethr_have_native_atomics=yes
-	  	ethr_have_native_spinlock=yes;;
-	esac
+	    ETHR_CHK_INTERLOCKED([_InterlockedDecrement64], [1], [__int64], AC_DEFINE_UNQUOTED(ETHR_HAVE__INTERLOCKEDDECREMENT64, 1, [Define if you have _InterlockedDecrement64()]))
+	    ETHR_CHK_INTERLOCKED([_InterlockedDecrement64_rel], [1], [__int64], AC_DEFINE_UNQUOTED(ETHR_HAVE__INTERLOCKEDDECREMENT64_REL, 1, [Define if you have _InterlockedDecrement64_rel()]))
+	    ETHR_CHK_INTERLOCKED([_InterlockedIncrement64], [1], [__int64], AC_DEFINE_UNQUOTED(ETHR_HAVE__INTERLOCKEDINCREMENT64, 1, [Define if you have _InterlockedIncrement64()]))
+	    ETHR_CHK_INTERLOCKED([_InterlockedIncrement64_acq], [1], [__int64], AC_DEFINE_UNQUOTED(ETHR_HAVE__INTERLOCKEDINCREMENT64_ACQ, 1, [Define if you have _InterlockedIncrement64_acq()]))
+	    ETHR_CHK_INTERLOCKED([_InterlockedExchangeAdd64], [2], [__int64], AC_DEFINE_UNQUOTED(ETHR_HAVE__INTERLOCKEDEXCHANGEADD64, 1, [Define if you have _InterlockedExchangeAdd64()]))
+	    ETHR_CHK_INTERLOCKED([_InterlockedExchangeAdd64_acq], [2], [__int64], AC_DEFINE_UNQUOTED(ETHR_HAVE__INTERLOCKEDEXCHANGEADD64_ACQ, 1, [Define if you have _InterlockedExchangeAdd64_acq()]))
+	    ETHR_CHK_INTERLOCKED([_InterlockedAnd64], [2], [__int64], AC_DEFINE_UNQUOTED(ETHR_HAVE__INTERLOCKEDAND64, 1, [Define if you have _InterlockedAnd64()]))
+	    ETHR_CHK_INTERLOCKED([_InterlockedOr64], [2], [__int64], AC_DEFINE_UNQUOTED(ETHR_HAVE__INTERLOCKEDOR64, 1, [Define if you have _InterlockedOr64()]))
+	    ETHR_CHK_INTERLOCKED([_InterlockedExchange64], [2], [__int64], AC_DEFINE_UNQUOTED(ETHR_HAVE__INTERLOCKEDEXCHANGE64, 1, [Define if you have _InterlockedExchange64()]))
+	    ETHR_CHK_INTERLOCKED([_InterlockedCompareExchange64], [3], [__int64], AC_DEFINE_UNQUOTED(ETHR_HAVE__INTERLOCKEDCOMPAREEXCHANGE64, 1, [Define if you have _InterlockedCompareExchange64()]))
+	    test "$have_interlocked_op" = "yes" && ethr_have_native_atomics=yes
+	    ETHR_CHK_INTERLOCKED([_InterlockedCompareExchange64_acq], [3], [__int64], AC_DEFINE_UNQUOTED(ETHR_HAVE__INTERLOCKEDCOMPAREEXCHANGE64_ACQ, 1, [Define if you have _InterlockedCompareExchange64_acq()]))
+	    test "$have_interlocked_op" = "yes" && ethr_have_native_atomics=yes
+	    ETHR_CHK_INTERLOCKED([_InterlockedCompareExchange64_rel], [3], [__int64], AC_DEFINE_UNQUOTED(ETHR_HAVE__INTERLOCKEDCOMPAREEXCHANGE64_REL, 1, [Define if you have _InterlockedCompareExchange64_rel()]))
+	    test "$have_interlocked_op" = "yes" && ethr_have_native_atomics=yes
 
-	have_ilckd=no
-	AC_MSG_CHECKING([for _InterlockedDecrement64()])
-	AC_TRY_LINK([
-			#define WIN32_LEAN_AND_MEAN
-			#include <windows.h>
-		    ],
-		    [
-			volatile __int64 *var;
-			_InterlockedDecrement64(var);
-			return 0;
-		    ],
-		    have_ilckd=yes)
-	AC_MSG_RESULT([$have_ilckd])
-	test $have_ilckd = yes && AC_DEFINE(ETHR_HAVE__INTERLOCKEDDECREMENT64, 1, [Define if you have _InterlockedDecrement64()])
-
-	have_ilckd=no
-	AC_MSG_CHECKING([for _InterlockedIncrement64()])
-	AC_TRY_LINK([
-			#define WIN32_LEAN_AND_MEAN
-			#include <windows.h>
-		    ],
-		    [
-			volatile __int64 *var;
-			_InterlockedIncrement64(var);
-			return 0;
-		    ],
-		    have_ilckd=yes)
-	AC_MSG_RESULT([$have_ilckd])
-	test $have_ilckd = yes && AC_DEFINE(ETHR_HAVE__INTERLOCKEDINCREMENT64, 1, [Define if you have _InterlockedIncrement64()])
-
-	have_ilckd=no
-	AC_MSG_CHECKING([for _InterlockedExchangeAdd64()])
-	AC_TRY_LINK([
-			#define WIN32_LEAN_AND_MEAN
-			#include <windows.h>
-		    ],
-		    [
-			volatile __int64 *var;
-			_InterlockedExchangeAdd64(var, (__int64) 1);
-			return 0;
-		    ],
-		    have_ilckd=yes)
-	AC_MSG_RESULT([$have_ilckd])
-	test $have_ilckd = yes && AC_DEFINE(ETHR_HAVE__INTERLOCKEDEXCHANGEADD64, 1, [Define if you have _InterlockedExchangeAdd64()])
-
-	have_ilckd=no
-	AC_MSG_CHECKING([for _InterlockedExchange64()])
-	AC_TRY_LINK([
-			#define WIN32_LEAN_AND_MEAN
-			#include <windows.h>
-		    ],
-		    [
-			volatile __int64 *var;
-			_InterlockedExchange64(var, (__int64) 1);
-			return 0;
-		    ],
-		    have_ilckd=yes)
-	AC_MSG_RESULT([$have_ilckd])
-	test $have_ilckd = yes && AC_DEFINE(ETHR_HAVE__INTERLOCKEDEXCHANGE64, 1, [Define if you have _InterlockedExchange64()])
-
-	have_ilckd=no
-	AC_MSG_CHECKING([for _InterlockedAnd64()])
-	AC_TRY_LINK([
-			#define WIN32_LEAN_AND_MEAN
-			#include <windows.h>
-		    ],
-		    [
-			volatile __int64 *var;
-			_InterlockedAnd64(var, (__int64) 1);
-			return 0;
-		    ],
-		    have_ilckd=yes)
-	AC_MSG_RESULT([$have_ilckd])
-	test $have_ilckd = yes && AC_DEFINE(ETHR_HAVE__INTERLOCKEDAND64, 1, [Define if you have _InterlockedAnd64()])
-
-	have_ilckd=no
-	AC_MSG_CHECKING([for _InterlockedOr64()])
-	AC_TRY_LINK([
-			#define WIN32_LEAN_AND_MEAN
-			#include <windows.h>
-		    ],
-		    [
-			volatile __int64 *var;
-			_InterlockedOr64(var, (__int64) 1);
-			return 0;
-		    ],
-		    have_ilckd=yes)
-	AC_MSG_RESULT([$have_ilckd])
-	test $have_ilckd = yes && AC_DEFINE(ETHR_HAVE__INTERLOCKEDOR64, 1, [Define if you have _InterlockedOr64()])
-
+	    ETHR_CHK_INTERLOCKED([_InterlockedCompareExchange128], [4], [__int64], AC_DEFINE_UNQUOTED(ETHR_HAVE__INTERLOCKEDCOMPAREEXCHANGE128, 1, [Define if you have _InterlockedCompareExchange128()]))
+	fi
+	test "$ethr_have_native_atomics" = "yes" && ethr_have_native_spinlock=yes
 	;;
 
-    pthread)
-	ETHR_THR_LIB_BASE_DIR=pthread
-    	AC_DEFINE(ETHR_PTHREADS, 1, [Define if you have pthreads])
+    pthread|ose_threads)
+        case "$THR_LIB_NAME" in
+	     pthread)
+		ETHR_THR_LIB_BASE_DIR=pthread
+		AC_DEFINE(ETHR_PTHREADS, 1, [Define if you have pthreads])
+		;;
+	     ose_threads)
+		AC_DEFINE(ETHR_OSE_THREADS, 1,
+		   [Define if you have OSE style threads])
+		ETHR_THR_LIB_BASE_DIR=ose
+		AC_CHECK_HEADER(ose_spi/ose_spi.h,
+		  AC_DEFINE(HAVE_OSE_SPI_H, 1,
+		    [Define if you have the "ose_spi/ose_spi.h" header file.]))
+		;;
+	esac
+	if test "x$THR_LIB_NAME" = "xpthread"; then
 	case $host_os in
 	    openbsd*)
 		# The default stack size is insufficient for our needs
@@ -931,6 +1177,7 @@ case "$THR_LIB_NAME" in
 	    *) ;;
 	esac
 
+	fi
 	dnl We sometimes need ETHR_DEFS in order to find certain headers
 	dnl (at least for pthread.h on osf1).
 	saved_cppflags="$CPPFLAGS"
@@ -943,7 +1190,6 @@ case "$THR_LIB_NAME" in
 	dnl
 	dnl Check for headers
 	dnl
-
 	AC_CHECK_HEADER(pthread.h, \
 			AC_DEFINE(ETHR_HAVE_PTHREAD_H, 1, \
 [Define if you have the <pthread.h> header file.]))
@@ -976,7 +1222,7 @@ case "$THR_LIB_NAME" in
 	dnl
 	dnl Check for functions
 	dnl
-
+	if test "x$THR_LIB_NAME" = "xpthread"; then
 	AC_CHECK_FUNC(pthread_spin_lock, \
 			[ethr_have_native_spinlock=yes \
 			 AC_DEFINE(ETHR_HAVE_PTHREAD_SPIN_LOCK, 1, \
@@ -1103,80 +1349,131 @@ case "$THR_LIB_NAME" in
 	AC_MSG_RESULT([$linux_futex])
 	test $linux_futex = yes && AC_DEFINE(ETHR_HAVE_LINUX_FUTEX, 1, [Define if you have a linux futex implementation.])
 
-	AC_MSG_CHECKING([for GCC atomic operations])
-	ethr_have_gcc_atomic_ops=no
-	AC_TRY_LINK([],
-		    [
-			long res;
-			volatile long val;
-			res = __sync_val_compare_and_swap(&val, (long) 1, (long) 0);
-			res = __sync_add_and_fetch(&val, (long) 1);
-			res = __sync_sub_and_fetch(&val, (long) 1);
-			res = __sync_fetch_and_and(&val, (long) 1);
-			res = __sync_fetch_and_or(&val, (long) 1);
-		    ],
-		    [ethr_have_native_atomics=yes
-		     ethr_have_gcc_atomic_ops=yes])
-	AC_MSG_RESULT([$ethr_have_gcc_atomic_ops])
-	test $ethr_have_gcc_atomic_ops = yes && AC_DEFINE(ETHR_HAVE_GCC_ATOMIC_OPS, 1, [Define if you have gcc atomic operations])
-
-	case "$host_cpu" in
-	  sun4u | sparc64 | sun4v)
-		ethr_have_native_atomics=yes;; 
-	  i86pc | i*86 | x86_64 | amd64)
-		ethr_have_native_atomics=yes;;
-	  macppc | ppc | "Power Macintosh")
-		ethr_have_native_atomics=yes;;
-	  tile)
-		ethr_have_native_atomics=yes;;
-	  *)
-		;;
-	esac
-
-	AC_MSG_CHECKING([for a usable libatomic_ops implementation])
-	case "x$with_libatomic_ops" in
-	    xno | xyes | x)
-		libatomic_ops_include=
-		;;
-	    *)
-		if test -d "${with_libatomic_ops}/include"; then
-		    libatomic_ops_include="-I$with_libatomic_ops/include"
-		    CPPFLAGS="$CPPFLAGS $libatomic_ops_include"
-		else
-		    AC_MSG_ERROR([libatomic_ops include directory $with_libatomic_ops/include not found])
-		fi;;
-	esac
-	ethr_have_libatomic_ops=no
-	AC_TRY_LINK([#include "atomic_ops.h"],
-		    [
-			volatile AO_t x;
-			AO_t y;
-			int z;
-
-			AO_nop_full();
-			AO_store(&x, (AO_t) 0);
-			z = AO_load(&x);
-			z = AO_compare_and_swap_full(&x, (AO_t) 0, (AO_t) 1);
-		    ],
-		    [ethr_have_native_atomics=yes
-		     ethr_have_libatomic_ops=yes])
-	AC_MSG_RESULT([$ethr_have_libatomic_ops])
-	if test $ethr_have_libatomic_ops = yes; then
-	    AC_CHECK_SIZEOF(AO_t, ,
-			    [
-				#include <stdio.h>
-				#include "atomic_ops.h"
-			    ])
-	    AC_DEFINE_UNQUOTED(ETHR_SIZEOF_AO_T, $ac_cv_sizeof_AO_t, [Define to the size of AO_t if libatomic_ops is used])
-
-	    AC_DEFINE(ETHR_HAVE_LIBATOMIC_OPS, 1, [Define if you have libatomic_ops atomic operations])
-	    if test "x$with_libatomic_ops" != "xno" && test "x$with_libatomic_ops" != "x"; then
-		AC_DEFINE(ETHR_PREFER_LIBATOMIC_OPS_NATIVE_IMPLS, 1, [Define if you prefer libatomic_ops native ethread implementations])
-	    fi
-	    ETHR_DEFS="$ETHR_DEFS $libatomic_ops_include"
-	elif test "x$with_libatomic_ops" != "xno" && test "x$with_libatomic_ops" != "x"; then
-	    AC_MSG_ERROR([No usable libatomic_ops implementation found])
 	fi
+
+	AC_CHECK_SIZEOF(int)
+	AC_CHECK_SIZEOF(long)
+	AC_CHECK_SIZEOF(long long)
+	AC_CHECK_SIZEOF(__int128_t)
+
+	if test "$ac_cv_sizeof_int" = "4"; then
+	    int32="int"
+	elif test "$ac_cv_sizeof_long" = "4"; then
+	    int32="long"
+	elif test "$ac_cv_sizeof_long_long" = "4"; then
+	    int32="long long"
+	else
+	    AC_MSG_ERROR([No 32-bit type found])
+	fi
+
+	if test "$ac_cv_sizeof_int" = "8"; then
+	    int64="int"
+	elif test "$ac_cv_sizeof_long" = "8"; then
+	    int64="long"
+	elif test "$ac_cv_sizeof_long_long" = "8"; then
+	    int64="long long"
+	else
+	    AC_MSG_ERROR([No 64-bit type found])
+	fi
+
+	int128=no
+	if test "$ac_cv_sizeof___int128_t" = "16"; then
+	    int128="__int128_t"
+	fi
+
+	if test "X$disable_native_ethr_impls" = "Xyes"; then
+	    ethr_have_native_atomics=no
+	else
+	    ETHR_CHK_SYNC_OP([__sync_val_compare_and_swap], [3], [32], [$int32], AC_DEFINE(ETHR_HAVE___SYNC_VAL_COMPARE_AND_SWAP32, 1, [Define if you have __sync_val_compare_and_swap() for 32-bit integers]))
+	    test "$have_sync_op" = "yes" && ethr_have_native_atomics=yes
+	    ETHR_CHK_SYNC_OP([__sync_add_and_fetch], [2], [32], [$int32], AC_DEFINE(ETHR_HAVE___SYNC_ADD_AND_FETCH32, 1, [Define if you have __sync_add_and_fetch() for 32-bit integers]))
+	    ETHR_CHK_SYNC_OP([__sync_fetch_and_and], [2], [32], [$int32], AC_DEFINE(ETHR_HAVE___SYNC_FETCH_AND_AND32, 1, [Define if you have __sync_fetch_and_and() for 32-bit integers]))
+	    ETHR_CHK_SYNC_OP([__sync_fetch_and_or], [2], [32], [$int32], AC_DEFINE(ETHR_HAVE___SYNC_FETCH_AND_OR32, 1, [Define if you have __sync_fetch_and_or() for 32-bit integers]))
+
+	    ETHR_CHK_SYNC_OP([__sync_val_compare_and_swap], [3], [64], [$int64], AC_DEFINE(ETHR_HAVE___SYNC_VAL_COMPARE_AND_SWAP64, 1, [Define if you have __sync_val_compare_and_swap() for 64-bit integers]))
+	    test "$have_sync_op" = "yes" && ethr_have_native_atomics=yes
+	    ETHR_CHK_SYNC_OP([__sync_add_and_fetch], [2], [64], [$int64], AC_DEFINE(ETHR_HAVE___SYNC_ADD_AND_FETCH64, 1, [Define if you have __sync_add_and_fetch() for 64-bit integers]))
+	    ETHR_CHK_SYNC_OP([__sync_fetch_and_and], [2], [64], [$int64], AC_DEFINE(ETHR_HAVE___SYNC_FETCH_AND_AND64, 1, [Define if you have __sync_fetch_and_and() for 64-bit integers]))
+	    ETHR_CHK_SYNC_OP([__sync_fetch_and_or], [2], [64], [$int64], AC_DEFINE(ETHR_HAVE___SYNC_FETCH_AND_OR64, 1, [Define if you have __sync_fetch_and_or() for 64-bit integers]))
+
+	    if test $int128 != no; then
+	        ETHR_CHK_SYNC_OP([__sync_val_compare_and_swap], [3], [128], [$int128], AC_DEFINE(ETHR_HAVE___SYNC_VAL_COMPARE_AND_SWAP128, 1, [Define if you have __sync_val_compare_and_swap() for 128-bit integers]))
+	    fi
+
+	    AC_MSG_CHECKING([for a usable libatomic_ops implementation])
+	    case "x$with_libatomic_ops" in
+	        xno | xyes | x)
+	    	    libatomic_ops_include=
+	    	    ;;
+	        *)
+	    	    if test -d "${with_libatomic_ops}/include"; then
+	    	        libatomic_ops_include="-I$with_libatomic_ops/include"
+	    	        CPPFLAGS="$CPPFLAGS $libatomic_ops_include"
+	    	    else
+	    	        AC_MSG_ERROR([libatomic_ops include directory $with_libatomic_ops/include not found])
+	    	    fi;;
+	    esac
+	    ethr_have_libatomic_ops=no
+	    AC_TRY_LINK([#include "atomic_ops.h"],
+	    	        [
+	    	    	    volatile AO_t x;
+	    	    	    AO_t y;
+	    	    	    int z;
+
+	    	    	    AO_nop_full();
+	    	    	    AO_store(&x, (AO_t) 0);
+	    	    	    z = AO_load(&x);
+	    	    	    z = AO_compare_and_swap_full(&x, (AO_t) 0, (AO_t) 1);
+	    	        ],
+	    	        [ethr_have_native_atomics=yes
+	    	         ethr_have_libatomic_ops=yes])
+	    AC_MSG_RESULT([$ethr_have_libatomic_ops])
+	    if test $ethr_have_libatomic_ops = yes; then
+	        AC_CHECK_SIZEOF(AO_t, ,
+	    	    	        [
+	    	    	    	    #include <stdio.h>
+	    	    	    	    #include "atomic_ops.h"
+	    	    	        ])
+	        AC_DEFINE_UNQUOTED(ETHR_SIZEOF_AO_T, $ac_cv_sizeof_AO_t, [Define to the size of AO_t if libatomic_ops is used])
+
+	        AC_DEFINE(ETHR_HAVE_LIBATOMIC_OPS, 1, [Define if you have libatomic_ops atomic operations])
+	        if test "x$with_libatomic_ops" != "xno" && test "x$with_libatomic_ops" != "x"; then
+	    	    AC_DEFINE(ETHR_PREFER_LIBATOMIC_OPS_NATIVE_IMPLS, 1, [Define if you prefer libatomic_ops native ethread implementations])
+	        fi
+	        ETHR_DEFS="$ETHR_DEFS $libatomic_ops_include"
+	    elif test "x$with_libatomic_ops" != "xno" && test "x$with_libatomic_ops" != "x"; then
+	        AC_MSG_ERROR([No usable libatomic_ops implementation found])
+	    fi
+
+	    case "$host_cpu" in
+	      sparc | sun4u | sparc64 | sun4v)
+	    	    case "$with_sparc_memory_order" in
+	    	        "TSO")
+	    	    	    AC_DEFINE(ETHR_SPARC_TSO, 1, [Define if only run in Sparc TSO mode]);;
+	    	        "PSO")
+	    	    	    AC_DEFINE(ETHR_SPARC_PSO, 1, [Define if only run in Sparc PSO, or TSO mode]);;
+	    	        "RMO"|"")
+	    	    	    AC_DEFINE(ETHR_SPARC_RMO, 1, [Define if run in Sparc RMO, PSO, or TSO mode]);;
+	    	        *)
+	    	    	    AC_MSG_ERROR([Unsupported Sparc memory order: $with_sparc_memory_order]);;
+	    	    esac
+	    	    ethr_have_native_atomics=yes;; 
+	      i86pc | i*86 | x86_64 | amd64)
+	    	    if test "$enable_x86_out_of_order" = "yes"; then
+	    	    	    AC_DEFINE(ETHR_X86_OUT_OF_ORDER, 1, [Define if x86/x86_64 out of order instructions should be synchronized])
+	    	    fi
+	    	    ethr_have_native_atomics=yes;;
+	      macppc | ppc | powerpc | "Power Macintosh")
+	    	    ethr_have_native_atomics=yes;;
+	      tile)
+	    	    ethr_have_native_atomics=yes;;
+	      *)
+	    	    ;;
+	    esac
+
+	fi
+
+	test ethr_have_native_atomics = "yes" && ethr_have_native_spinlock=yes
 
 	dnl Restore LIBS
 	LIBS=$saved_libs
@@ -1213,6 +1510,8 @@ AC_CHECK_SIZEOF(long long)
 AC_DEFINE_UNQUOTED(ETHR_SIZEOF_LONG_LONG, $ac_cv_sizeof_long_long, [Define to the size of long long])
 AC_CHECK_SIZEOF(__int64)
 AC_DEFINE_UNQUOTED(ETHR_SIZEOF___INT64, $ac_cv_sizeof___int64, [Define to the size of __int64])
+AC_CHECK_SIZEOF(__int128_t)
+AC_DEFINE_UNQUOTED(ETHR_SIZEOF___INT128_T, $ac_cv_sizeof___int128_t, [Define to the size of __int128_t])
 
 
 case X$erl_xcomp_bigendian in
@@ -1227,81 +1526,103 @@ if test "$ac_cv_c_bigendian" = "yes"; then
     AC_DEFINE(ETHR_BIGENDIAN, 1, [Define if bigendian])
 fi
 
-AC_ARG_ENABLE(native-ethr-impls,
-	      AS_HELP_STRING([--disable-native-ethr-impls],
-                             [disable native ethread implementations]),
-[ case "$enableval" in
-    no) disable_native_ethr_impls=yes ;;
-    *)  disable_native_ethr_impls=no ;;
-  esac ], disable_native_ethr_impls=no)
+case X$erl_xcomp_double_middle_endian in
+    X) ;;
+    Xyes|Xno|Xunknown) ac_cv_c_double_middle_endian=$erl_xcomp_double_middle_endian;;
+    *) AC_MSG_ERROR([Bad erl_xcomp_double_middle_endian value: $erl_xcomp_double_middle_endian]);;
+esac
 
-test "X$disable_native_ethr_impls" = "Xyes" &&
-  AC_DEFINE(ETHR_DISABLE_NATIVE_IMPLS, 1, [Define if you want to disable native ethread implementations])
+AC_C_DOUBLE_MIDDLE_ENDIAN
 
-AC_ARG_ENABLE(prefer-gcc-native-ethr-impls,
-	      AS_HELP_STRING([--enable-prefer-gcc-native-ethr-impls],
-			     [prefer gcc native ethread implementations]),
-[ case "$enableval" in
-    yes) enable_prefer_gcc_native_ethr_impls=yes ;;
-    *)  enable_prefer_gcc_native_ethr_impls=no ;;
-  esac ], enable_prefer_gcc_native_ethr_impls=no)
-
-test $enable_prefer_gcc_native_ethr_impls = yes &&
-  AC_DEFINE(ETHR_PREFER_GCC_NATIVE_IMPLS, 1, [Define if you prefer gcc native ethread implementations])
-
-AC_ARG_WITH(libatomic_ops,
-	    AS_HELP_STRING([--with-libatomic_ops=PATH],
-			   [specify and prefer usage of libatomic_ops in the ethread library]))
-
-AC_ARG_ENABLE(ethread-pre-pentium4-compatibility,
-	      AS_HELP_STRING([--enable-ethread-pre-pentium4-compatibility],
-			     [enable compatibility with x86 processors before pentium 4 (back to 486) in the ethread library]),
-[
-  case "$enable_ethread_pre_pentium4_compatibility" in
-    yes|no) ;;
-    *) enable_ethread_pre_pentium4_compatibility=check;;
-  esac
-],
-[enable_ethread_pre_pentium4_compatibility=check])
-
-test "$cross_compiling" != "yes" || enable_ethread_pre_pentium4_compatibility=no
-
-case "$enable_ethread_pre_pentium4_compatibility-$host_cpu" in
-  check-i86pc | check-i*86)
-    AC_MSG_CHECKING([whether pre pentium 4 compatibility should forced])
-    AC_RUN_IFELSE([
-#if defined(__GNUC__)
-#  if defined(ETHR_PREFER_LIBATOMIC_OPS_NATIVE_IMPLS)
-#    define CHECK_LIBATOMIC_OPS__
-#  else
-#    define CHECK_GCC_ASM__
-#  endif
-#elif defined(ETHR_HAVE_LIBATOMIC_OPS)
-#  define CHECK_LIBATOMIC_OPS__
-#endif
-#if defined(CHECK_LIBATOMIC_OPS__)
-#include "atomic_ops.h"
-#endif
-int main(void)
-{
-#if defined(CHECK_GCC_ASM__)
-    __asm__ __volatile__("mfence" : : : "memory");
-#elif defined(CHECK_LIBATOMIC_OPS__)
-    AO_nop_full();
-#endif
-    return 0;
-}
+ETHR_X86_SSE2_ASM=no
+case "$GCC-$ac_cv_sizeof_void_p-$host_cpu" in
+  yes-4-i86pc | yes-4-i*86 | yes-4-x86_64 | yes-4-amd64)
+    AC_MSG_CHECKING([for gcc sse2 asm support])
+    save_CFLAGS="$CFLAGS"
+    CFLAGS="$CFLAGS -msse2"
+    gcc_sse2_asm=no
+    AC_TRY_COMPILE([],
+	[
+		long long x, *y;
+		__asm__ __volatile__("movq %1, %0\n\t" : "=x"(x) : "m"(*y) : "memory");
 	],
-	[enable_ethread_pre_pentium4_compatibility=no],
-	[enable_ethread_pre_pentium4_compatibility=yes],
-	[enable_ethread_pre_pentium4_compatibility=no])
-    AC_MSG_RESULT([$enable_ethread_pre_pentium4_compatibility]);;
+	[gcc_sse2_asm=yes])
+    CFLAGS="$save_CFLAGS"
+    AC_MSG_RESULT([$gcc_sse2_asm])
+    if test "$gcc_sse2_asm" = "yes"; then
+      AC_DEFINE(ETHR_GCC_HAVE_SSE2_ASM_SUPPORT, 1, [Define if you use a gcc that supports -msse2 and understand sse2 specific asm statements])
+      ETHR_X86_SSE2_ASM=yes
+    fi
+    ;;
   *)
     ;;
 esac
 
-test $enable_ethread_pre_pentium4_compatibility = yes &&
-  AC_DEFINE(ETHR_PRE_PENTIUM4_COMPAT, 1, [Define if you want compatibility with x86 processors before pentium4.])
+case "$GCC-$host_cpu" in
+  yes-i86pc | yes-i*86 | yes-x86_64 | yes-amd64)
+    gcc_dw_cmpxchg_asm=no
+    AC_MSG_CHECKING([for gcc double word cmpxchg asm support])    
+    AC_TRY_COMPILE([],
+	[
+    char xchgd;
+    long new[2], xchg[2], *p;		  
+    __asm__ __volatile__(
+#if ETHR_SIZEOF_PTR == 4 && defined(__PIC__) && __PIC__
+	"pushl %%ebx\n\t"
+	"movl %8, %%ebx\n\t"
+#endif
+#if ETHR_SIZEOF_PTR == 4
+	"lock; cmpxchg8b %0\n\t"
+#else
+	"lock; cmpxchg16b %0\n\t"
+#endif
+	"setz %3\n\t"
+#if ETHR_SIZEOF_PTR == 4 && defined(__PIC__) && __PIC__
+	"popl %%ebx\n\t"
+#endif
+	: "=m"(*p), "=d"(xchg[1]), "=a"(xchg[0]), "=c"(xchgd)
+	: "m"(*p), "1"(xchg[1]), "2"(xchg[0]), "3"(new[1]),
+#if ETHR_SIZEOF_PTR == 4 && defined(__PIC__) && __PIC__
+	  "r"(new[0])
+#else
+	  "b"(new[0])
+#endif
+	: "cc", "memory");
+
+	],
+	[gcc_dw_cmpxchg_asm=yes])
+    if test $gcc_dw_cmpxchg_asm = no && test $ac_cv_sizeof_void_p = 4; then
+      AC_TRY_COMPILE([],
+	  [
+      char xchgd;
+      long new[2], xchg[2], *p;
+#if !defined(__PIC__) || !__PIC__
+#  error nope
+#endif
+      __asm__ __volatile__(
+    	  "pushl %%ebx\n\t"
+	  "movl (%7), %%ebx\n\t"
+	  "movl 4(%7), %%ecx\n\t"
+	  "lock; cmpxchg8b %0\n\t"
+  	  "setz %3\n\t"
+	  "popl %%ebx\n\t"
+	  : "=m"(*p), "=d"(xchg[1]), "=a"(xchg[0]), "=c"(xchgd)
+	  : "m"(*p), "1"(xchg[1]), "2"(xchg[0]), "3"(new)
+	: "cc", "memory");
+
+	],
+	[gcc_dw_cmpxchg_asm=yes])
+      if test "$gcc_dw_cmpxchg_asm" = "yes"; then
+        AC_DEFINE(ETHR_CMPXCHG8B_REGISTER_SHORTAGE, 1, [Define if you get a register shortage with cmpxchg8b and position independent code])
+      fi
+    fi
+    AC_MSG_RESULT([$gcc_dw_cmpxchg_asm])
+    if test "$gcc_dw_cmpxchg_asm" = "yes"; then
+      AC_DEFINE(ETHR_GCC_HAVE_DW_CMPXCHG_ASM_SUPPORT, 1, [Define if you use a gcc that supports the double word cmpxchg instruction])
+    fi;;
+  *)
+    ;;
+esac
 
 AC_DEFINE(ETHR_HAVE_ETHREAD_DEFINES, 1, \
 [Define if you have all ethread defines])
@@ -1312,6 +1633,7 @@ AC_SUBST(ETHR_LIB_NAME)
 AC_SUBST(ETHR_DEFS)
 AC_SUBST(ETHR_THR_LIB_BASE)
 AC_SUBST(ETHR_THR_LIB_BASE_DIR)
+AC_SUBST(ETHR_X86_SSE2_ASM)
 
 ])
 
@@ -1576,17 +1898,42 @@ case $erl_gethrvtime in
 esac
 ])dnl
 
+dnl ----------------------------------------------------------------------
+dnl
+dnl LM_TRY_ENABLE_CFLAG
+dnl
+dnl
+dnl Tries a CFLAG and sees if it can be enabled without compiler errors
+dnl $1: textual cflag to add
+dnl $2: variable to store the modified CFLAG in
+dnl Usage example LM_TRY_ENABLE_CFLAG([-Werror=return-type], [CFLAGS])
+dnl
+dnl
+AC_DEFUN([LM_TRY_ENABLE_CFLAG], [
+    AC_MSG_CHECKING([if we can add $1 to $2 (via CFLAGS)])
+    saved_CFLAGS=$CFLAGS;
+    CFLAGS="$1 $$2";
+    AC_TRY_COMPILE([],[return 0;],can_enable_flag=true,can_enable_flag=false)
+    CFLAGS=$saved_CFLAGS;
+    if test "X$can_enable_flag" = "Xtrue"; then
+        AC_MSG_RESULT([yes])
+        AS_VAR_SET($2, "$1 $$2")
+    else
+        AC_MSG_RESULT([no])
+    fi
+])
+
 dnl ERL_TRY_LINK_JAVA(CLASSES, FUNCTION-BODY
 dnl                   [ACTION_IF_FOUND [, ACTION-IF-NOT-FOUND]])
 dnl Freely inspired by AC_TRY_LINK. (Maybe better to create a 
 dnl AC_LANG_JAVA instead...)
 AC_DEFUN(ERL_TRY_LINK_JAVA,
 [java_link='$JAVAC conftest.java 1>&AC_FD_CC'
-changequote(«, »)dnl
+changequote(, )dnl
 cat > conftest.java <<EOF
-«$1»
+$1
 class conftest { public static void main(String[] args) {
-   «$2»
+   $2
    ; return; }}
 EOF
 changequote([, ])dnl

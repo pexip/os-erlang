@@ -3,7 +3,7 @@
      #
      # %CopyrightBegin%
      #
-     # Copyright Ericsson AB 2009-2011. All Rights Reserved.
+     # Copyright Ericsson AB 2009-2012. All Rights Reserved.
      #
      # The contents of this file are subject to the Erlang Public License,
      # Version 1.1, (the "License"); you may not use this file except in
@@ -39,6 +39,11 @@
   <xsl:param name="mod2app_file" select="''"/>
   <xsl:variable name="m2a" select="document($mod2app_file)"></xsl:variable>
   <xsl:key name="mod2app" match="module" use="@name"/>
+
+  <xsl:key
+        name="mfa"
+	match="func/name[string-length(@arity) > 0 and ancestor::erlref]"
+	use="concat(ancestor::erlref/module,':',@name, '/', @arity)"/>
 
   <xsl:template name="err">
     <xsl:param name="f"/>
@@ -101,10 +106,14 @@
 	</xsl:message>
       </xsl:when>
       <xsl:when test="ancestor::erlref">
+        <!-- Do not to use preceding since it is very slow! -->
+        <xsl:variable name="curModule" select="ancestor::erlref/module"/>
+        <xsl:variable name="mfas"
+                      select="key('mfa',
+                                  concat($curModule,':',$name,'/',$arity))"/>
 	<xsl:choose>
-	  <xsl:when test="preceding-sibling::name[position() = 1
-			  and @name = $name and @arity = $arity]">
-	    <!-- Avoid duplicated anchors.-->
+          <xsl:when test="generate-id($mfas[1]) != generate-id(.)">
+	    <!-- Avoid duplicated anchors. See also menu.funcs. -->
 	  </xsl:when>
 	  <xsl:otherwise>
 	    <a name="{$name}-{$arity}"></a>
@@ -546,14 +555,45 @@
 
   <!-- End of Dialyzer type/spec tags -->
 
+  <!-- Cache for each module all the elements used for navigation. -->
+  <xsl:variable name="erlref.nav" select="exsl:node-set($erlref.nav_rtf)"/>
+
+  <xsl:variable name="erlref.nav_rtf">
+    <xsl:for-each select="//erlref">
+      <xsl:variable name="cval" select="module"/>
+      <xsl:variable name="link_cval"><xsl:value-of select="translate($cval, '&#173;', '')"/></xsl:variable>
+      <module name="{$cval}">
+	<xsl:call-template name="menu.funcs">
+	  <xsl:with-param name="entries" select="funcs/func/name"/>
+	  <xsl:with-param name="cval" select="$cval"/>
+	  <xsl:with-param name="basename" select="$link_cval"/>
+	</xsl:call-template>
+      </module>
+    </xsl:for-each>
+  </xsl:variable>
+
   <!-- Page layout -->
   <xsl:template name="pagelayout">
     <xsl:param name="chapnum"/>
     <xsl:param name="curModule"/>
     <html>
       <head>
-        <link rel="stylesheet" href="{$topdocdir}/otp_doc.css" type="text/css"/>
-        <title>Erlang -- <xsl:value-of select="header/title"/></title>
+        <xsl:choose>
+          <xsl:when test="string-length($stylesheet) > 0">
+            <link rel="stylesheet" href="{$topdocdir}/{$stylesheet}" type="text/css"/>
+          </xsl:when>
+          <xsl:otherwise>
+            <link rel="stylesheet" href="{$topdocdir}/otp_doc.css" type="text/css"/>
+          </xsl:otherwise>
+        </xsl:choose>
+        <xsl:choose>
+          <xsl:when test="string-length($winprefix) > 0">
+            <title><xsl:value-of select="$winprefix"/> -- <xsl:value-of select="header/title"/></title>
+          </xsl:when>
+          <xsl:otherwise>
+            <title>Erlang -- <xsl:value-of select="header/title"/></title>
+          </xsl:otherwise>
+        </xsl:choose>
       </head>
       <body bgcolor="white" text="#000000" link="#0000ff" vlink="#ff00ff" alink="#ff0000">
 
@@ -693,7 +733,14 @@
 
 
   <xsl:template name="menu_top">
-    <img alt="Erlang logo" src="{$topdocdir}/erlang-logo.png"/>
+    <xsl:choose>
+      <xsl:when test="string-length($logo) > 0">
+        <img alt="Erlang logo" src="{$topdocdir}/{$logo}"/>
+      </xsl:when>
+      <xsl:otherwise>
+        <img alt="Erlang logo" src="{$topdocdir}/erlang-logo.png"/>
+      </xsl:otherwise>
+    </xsl:choose>
     <br/>
     <small>
       <xsl:if test="boolean(/book/parts/part)">
@@ -705,7 +752,14 @@
       <xsl:if test="boolean(/book/releasenotes)">
         <a href="release_notes.html">Release Notes</a><br/>
       </xsl:if>
-      <a href="{$pdfdir}/{$appname}-{$appver}.pdf">PDF</a><br/>
+      <xsl:choose>
+	<xsl:when test="string-length($pdfname) > 0">
+	  <a href="{$pdfdir}/{$pdfname}.pdf">PDF</a><br/>
+	</xsl:when>
+	<xsl:otherwise>
+	  <a href="{$pdfdir}/{$appname}-{$appver}.pdf">PDF</a><br/>
+	</xsl:otherwise>
+      </xsl:choose>
       <a href="{$topdocdir}/index.html">Top</a>
     </small>
   </xsl:template>
@@ -1315,11 +1369,25 @@
                   Top of manual page
                 </a>
               </li>
-              <xsl:call-template name="menu.funcs">
-                <xsl:with-param name="entries"
-                  select="funcs/func/name"/>
-                <xsl:with-param name="basename"><xsl:value-of select="$link_cval"/></xsl:with-param>
-              </xsl:call-template>
+              <xsl:call-template name="nl"/>
+                <xsl:choose>
+                  <xsl:when test="local-name() = 'erlref'">
+	            <!-- Use the cached value in order to save time.
+                         value-of a string node is _much_ faster than
+			 copy-of a rtf -->
+		    <xsl:value-of
+		         disable-output-escaping="yes"
+			 select="$erlref.nav/module[@name = $cval]"/>
+                  </xsl:when>
+                  <xsl:otherwise>
+		    <xsl:call-template name="menu.funcs">
+		      <xsl:with-param name="entries"
+			select="funcs/func/name"/>
+		      <xsl:with-param name="basename"><xsl:value-of select="$link_cval"/></xsl:with-param>
+		      <xsl:with-param name="cval" select="$cval"/>
+		    </xsl:call-template>
+                  </xsl:otherwise>
+                </xsl:choose>
             </ul>
           </li>
         </xsl:when>
@@ -1349,6 +1417,7 @@
   <xsl:template name="menu.funcs">
     <xsl:param name="entries"/>
     <xsl:param name="basename"/>
+    <xsl:param name="cval"/>
 
     <xsl:for-each select="$entries">
 
@@ -1434,17 +1503,41 @@
             </xsl:choose>
           </xsl:variable>
 
+	  <!-- Avoid duplicated entries. See also template "spec_name" -->
+          <!-- Do not to use preceding since it is very slow! -->
+          <xsl:variable name="mfas"
+			select="key('mfa',
+				    concat($cval,':',$fname,'/',$arity))"/>
 	  <xsl:choose>
-	    <xsl:when test="preceding-sibling::name[position() = 1
-                            and @name = $fname and @arity = $arity]">
+            <xsl:when test="string-length(@name) > 0 and
+                            generate-id($mfas[1]) != generate-id(.)">
               <!-- Skip. Only works for Dialyzer specs. -->
 	    </xsl:when>
 	    <xsl:otherwise>
+<!--
 	      <li title="{$fname}-{$arity}">
 		<a href="{$basename}.html#{$fname}-{$arity}">
 		  <xsl:value-of select="$fname"/>/<xsl:value-of select="$arity"/>
 		</a>
 	      </li>
+-->
+	      <!-- Generate a text node -->
+	      <xsl:text>&lt;li title="</xsl:text>
+	      <xsl:value-of select="$fname"/>
+	      <xsl:text>-</xsl:text>
+	      <xsl:value-of select="$arity"/>
+	      <xsl:text>">&lt;a href="</xsl:text>
+	      <xsl:value-of select="$basename"/>
+	      <xsl:text>.html#</xsl:text>
+	      <xsl:value-of select="$fname"/>
+	      <xsl:text>-</xsl:text>
+	      <xsl:value-of select="$arity"/>
+	      <xsl:text>"></xsl:text>
+	      <xsl:value-of select="$fname"/>
+	      <xsl:text>/</xsl:text>
+	      <xsl:value-of select="$arity"/>
+	      <xsl:text>&lt;/a>&lt;/li></xsl:text>
+              <xsl:call-template name="nl"/>
 	    </xsl:otherwise>
 	  </xsl:choose>
         </xsl:when>
@@ -1752,7 +1845,14 @@
 
     <xsl:choose>
       <xsl:when test="ancestor::cref">
-        <a name="{substring-before(nametext, '(')}"><span class="bold_code"><xsl:value-of select="ret"/><xsl:text> </xsl:text><xsl:value-of select="nametext"/></span></a><br/>
+        <a name="{substring-before(nametext, '(')}">
+          <span class="bold_code">
+            <xsl:value-of select="ret"/>
+            <xsl:call-template name="maybe-space-after-ret">
+              <xsl:with-param name="s" select="ret"/>
+            </xsl:call-template>
+            <xsl:value-of select="nametext"/>
+          </span></a><br/>
       </xsl:when>
       <xsl:when test="ancestor::erlref">
         <xsl:variable name="fname">
@@ -1779,6 +1879,18 @@
     </xsl:choose>
 
   </xsl:template>
+
+  <xsl:template name="maybe-space-after-ret">
+    <xsl:param name="s"/>
+    <xsl:variable name="last_char"
+	          select="substring($s, string-length($s), 1)"/>
+    <xsl:choose>
+      <xsl:when test="$last_char != '*'">
+        <xsl:text> </xsl:text>
+      </xsl:when>
+    </xsl:choose>
+  </xsl:template>
+
 
   <!-- Type -->
   <xsl:template match="type">
@@ -1854,18 +1966,24 @@
 
     <xsl:choose>
       <xsl:when test="string-length($filepart) > 0">
-        <xsl:variable name="modulepart"><xsl:value-of select="substring-before($filepart, ':')"/></xsl:variable>
+        <!-- "Filepart#Linkpart" (or "Filepart#") -->
+        <xsl:variable name="app_part"><xsl:value-of select="substring-before($filepart, ':')"/></xsl:variable>
         <xsl:choose>
-          <xsl:when test="string-length($modulepart) > 0">
-            <xsl:variable name="filepart1"><xsl:value-of select="substring-after($filepart, ':')"/></xsl:variable>
-            <span class="bold_code"><a href="javascript:erlhref('{$topdocdir}/../','{$modulepart}','{$filepart1}.html#{$linkpart}');"><xsl:apply-templates/></a></span>
+          <xsl:when test="string-length($app_part) > 0">
+            <!-- "AppPart:ModPart#Linkpart" -->
+            <xsl:variable name="mod_part"><xsl:value-of select="substring-after($filepart, ':')"/></xsl:variable>
+            <span class="bold_code"><a href="javascript:erlhref('{$topdocdir}/../','{$app_part}','{$mod_part}.html#{$linkpart}');"><xsl:apply-templates/></a></span>
           </xsl:when>
           <xsl:otherwise>
+            <!-- "Filepart#Linkpart (there is no ':' in Filepart) -->
+            <xsl:variable name="minus_prefix"
+                          select="substring-before($linkpart, '-')"/>
             <xsl:choose>
-              <!-- Dialyzer seealso (the application is unknown) -->
-              <xsl:when test="string-length($specs_file) > 0
+              <xsl:when test="$minus_prefix = 'type'
+                              and string-length($specs_file) > 0
                               and count($i/specs/module[@name=$filepart]) = 0">
-                <!-- Deemed to slow; use key() instead
+                <!-- Dialyzer seealso (the application is unknown) -->
+                <!-- Following code deemed too slow; use key() instead
 		<xsl:variable name="app"
                               select="$m2a/mod2app/module[@name=$filepart]"/>
                 -->
@@ -1877,41 +1995,45 @@
 		      <span class="bold_code"><a href="javascript:erlhref('{$topdocdir}/../','{$app}','{$filepart}.html#{$linkpart}');"><xsl:value-of select="$this"/></a></span>
 		    </xsl:when>
 		    <xsl:otherwise>
-		      <!-- Unknown application; no link -->
-		      <xsl:value-of select="$this"/>
+		      <!-- Unknown application -->
+		      <xsl:message terminate="yes">
+			Error <xsl:value-of select="$filepart"/>: cannot find module exporting type
+		      </xsl:message>
 		    </xsl:otherwise>
 		  </xsl:choose>
                 </xsl:for-each>
               </xsl:when>
               <xsl:when test="string-length($linkpart) > 0">
+                <!-- Still Filepart#Linkpart (there is no ':' in Filepart -->
                 <span class="bold_code"><a href="{$filepart}.html#{$linkpart}"><xsl:apply-templates/></a></span>
               </xsl:when>
               <xsl:otherwise>
+                <!-- "Filepart#" (there is no ':' in Filepart -->
                 <span class="bold_code"><a href="{$filepart}.html"><xsl:apply-templates/></a></span>
               </xsl:otherwise>
             </xsl:choose>
           </xsl:otherwise>
         </xsl:choose>
+      </xsl:when> <!-- string-length($filepart) > 0 -->
+      <xsl:when test="string-length($linkpart) > 0">
+	<!-- "#Linkpart" -->
+	<span class="bold_code"><a href="#{$linkpart}"><xsl:apply-templates/></a></span>
       </xsl:when>
       <xsl:otherwise>
-        <xsl:choose>
-          <xsl:when test="string-length($linkpart) > 0">
-            <span class="bold_code"><a href="#{$linkpart}"><xsl:apply-templates/></a></span>
-          </xsl:when>
-          <xsl:otherwise>
-            <xsl:variable name="modulepart"><xsl:value-of select="substring-before(@marker, ':')"/></xsl:variable>
+	<!-- "AppPart:Mod" or "Mod" (there is no '#') -->
+	<xsl:variable name="app_part"><xsl:value-of select="substring-before(@marker, ':')"/></xsl:variable>
 
-            <xsl:choose>
-              <xsl:when test="string-length($modulepart) > 0">
-                <xsl:variable name="filepart1"><xsl:value-of select="substring-after(@marker, ':')"/></xsl:variable>
-                <span class="bold_code"><a href="javascript:erlhref('{$topdocdir}/../','{$modulepart}','{$filepart1}.html');"><xsl:apply-templates/></a></span>
-              </xsl:when>
-              <xsl:otherwise>
-                <span class="bold_code"><a href="{@marker}.html"><xsl:apply-templates/></a></span>
-              </xsl:otherwise>
-            </xsl:choose>
-          </xsl:otherwise>
-        </xsl:choose>
+	<xsl:choose>
+	  <xsl:when test="string-length($app_part) > 0">
+	    <!-- "App:Mod" -->
+	    <xsl:variable name="mod_part"><xsl:value-of select="substring-after(@marker, ':')"/></xsl:variable>
+	    <span class="bold_code"><a href="javascript:erlhref('{$topdocdir}/../','{$app_part}','{$mod_part}.html');"><xsl:apply-templates/></a></span>
+	  </xsl:when>
+	  <xsl:otherwise>
+	    <!-- "Mod" -->
+	    <span class="bold_code"><a href="{@marker}.html"><xsl:apply-templates/></a></span>
+	  </xsl:otherwise>
+	</xsl:choose>
       </xsl:otherwise>
     </xsl:choose>
 
@@ -2184,7 +2306,7 @@
     <xsl:choose>
       <xsl:when test="string-length($tmp1) > 0 or starts-with($string, $start)">
         <xsl:variable name="tmp2">
-          <xsl:value-of select="substring-after($string, $end)"/>
+          <xsl:value-of select="substring-after(substring-after($string, $start), $end)"/>
         </xsl:variable>
         <xsl:variable name="retstring">
           <xsl:call-template name="remove-paren">
@@ -2198,6 +2320,11 @@
       </xsl:otherwise>
     </xsl:choose>
 
+  </xsl:template>
+
+  <xsl:template name="nl">
+    <xsl:text>
+</xsl:text>
   </xsl:template>
 
 </xsl:stylesheet>

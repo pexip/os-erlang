@@ -1,7 +1,7 @@
 /*
  * %CopyrightBegin%
  * 
- * Copyright Ericsson AB 1997-2009. All Rights Reserved.
+ * Copyright Ericsson AB 1997-2013. All Rights Reserved.
  * 
  * The contents of this file are subject to the Erlang Public License,
  * Version 1.1, (the "License"); you may not use this file except in
@@ -18,6 +18,7 @@
  */
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <errno.h>
 #include <sys/types.h>
 #include <sys/stat.h>
@@ -77,7 +78,7 @@ run_tests(char* argv0, TestCase test_cases[], unsigned number)
     }
 }
 
-
+
 /***********************************************************************
  *
  * R e a d i n g   p a c k e t s
@@ -187,7 +188,7 @@ char *read_packet(int *len)
   return io_buf;
 }
 
-
+
 /***********************************************************************
  * S e n d i n g   r e p l i e s
  *

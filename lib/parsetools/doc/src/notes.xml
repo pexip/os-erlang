@@ -1,10 +1,10 @@
-<?xml version="1.0" encoding="latin1" ?>
+<?xml version="1.0" encoding="utf-8" ?>
 <!DOCTYPE chapter SYSTEM "chapter.dtd">
 
 <chapter>
   <header>
     <copyright>
-      <year>1997</year><year>2010</year>
+      <year>1997</year><year>2013</year>
       <holder>Ericsson AB. All Rights Reserved.</holder>
     </copyright>
     <legalnotice>
@@ -29,6 +29,130 @@
     <file>notes.xml</file>
   </header>
   <p>This document describes the changes made to the Parsetools application.</p>
+
+<section><title>Parsetools 2.0.11</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+          <p>
+	    Application upgrade (appup) files are corrected for the
+	    following applications: </p>
+          <p>
+	    <c>asn1, common_test, compiler, crypto, debugger,
+	    dialyzer, edoc, eldap, erl_docgen, et, eunit, gs, hipe,
+	    inets, observer, odbc, os_mon, otp_mibs, parsetools,
+	    percept, public_key, reltool, runtime_tools, ssh,
+	    syntax_tools, test_server, tools, typer, webtool, wx,
+	    xmerl</c></p>
+          <p>
+	    A new test utility for testing appup files is added to
+	    test_server. This is now used by most applications in
+	    OTP.</p>
+          <p>
+	    (Thanks to Tobias Schlager)</p>
+          <p>
+	    Own Id: OTP-11744</p>
+        </item>
+        <item>
+          <p>
+	    A Yecc example has been updated in the documentation
+	    (Thanks to Pierre Fenoll.)</p>
+          <p>
+	    Own Id: OTP-11749</p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>Parsetools 2.0.10</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+	    <p> A bug causing Yecc to generate badly formed parsers
+	    when encountering very simple recursive rules has been
+	    fixed. (Thanks to Eric Pailleau.) </p>
+          <p>
+	    Own Id: OTP-11269</p>
+        </item>
+        <item>
+	    <p> A bug where Unicode filenames combined with Latin-1
+	    encoding could crash Yecc and Leex has been fixed. </p>
+          <p>
+	    Own Id: OTP-11286</p>
+        </item>
+      </list>
+    </section>
+
+
+    <section><title>Improvements and New Features</title>
+      <list>
+        <item>
+          <p>
+	    Fix leex module`s inability to build unicode-aware
+	    lexers. Thanks to Pierre Fenoll.</p>
+          <p>
+	    Own Id: OTP-11313</p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>Parsetools 2.0.9</title>
+
+    <section><title>Improvements and New Features</title>
+      <list>
+        <item>
+	    <p> Miscellaneous updates due to Unicode support. </p>
+          <p>
+	    Own Id: OTP-10820</p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>Parsetools 2.0.8</title>
+
+    <section><title>Improvements and New Features</title>
+      <list>
+        <item>
+	    <p> Support for Unicode has been implemented. </p>
+          <p>
+	    Own Id: OTP-10302</p>
+        </item>
+        <item>
+	    <p> The file <c>esyntax.yrl</c> has been removed. </p>
+          <p>
+	    Own Id: OTP-10660</p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>Parsetools 2.0.7</title>
+
+    <section><title>Improvements and New Features</title>
+      <list>
+        <item>
+          <p>
+	    Tuple funs (a two-element tuple with a module name and a
+	    function) are now officially deprecated and will be
+	    removed in R16. Use '<c>fun M:F/A</c>' instead. To make
+	    you aware that your system uses tuple funs, the very
+	    first time a tuple fun is applied, a warning will be sent
+	    to the error logger.</p>
+          <p>
+	    Own Id: OTP-9649</p>
+        </item>
+      </list>
+    </section>
+
+</section>
 
 <section><title>Parsetools 2.0.6</title>
 

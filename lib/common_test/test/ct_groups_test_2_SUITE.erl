@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2009-2011. All Rights Reserved.
+%% Copyright Ericsson AB 2009-2012. All Rights Reserved.
 %%
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -171,16 +171,20 @@ test_events(missing_conf) ->
      {?eh,start_logging,{'DEF','RUNDIR'}},
      {?eh,test_start,{'DEF',{'START_TIME','LOGDIR'}}},
      {?eh,start_info,{1,1,2}},
-     {?eh,tc_start,{ct_framework,ct_init_per_group}},
-     {?eh,tc_done,{ct_framework,ct_init_per_group,ok}},
+     {?eh,tc_start,{ct_framework,{init_per_group,group1,
+				  [{suite,missing_conf_SUITE}]}}},
+     {?eh,tc_done,{ct_framework,{init_per_group,group1,
+				 [{suite,missing_conf_SUITE}]},ok}},
      {?eh,tc_start,{missing_conf_SUITE,tc1}},
      {?eh,tc_done,{missing_conf_SUITE,tc1,ok}},
      {?eh,test_stats,{1,0,{0,0}}},
      {?eh,tc_start,{missing_conf_SUITE,tc2}},
      {?eh,tc_done,{missing_conf_SUITE,tc2,ok}},
      {?eh,test_stats,{2,0,{0,0}}},
-     {?eh,tc_start,{ct_framework,ct_end_per_group}},
-     {?eh,tc_done,{ct_framework,ct_end_per_group,ok}},
+     {?eh,tc_start,{ct_framework,{end_per_group,group1,
+				  [{suite,missing_conf_SUITE}]}}},
+     {?eh,tc_done,{ct_framework,{end_per_group,group1,
+				 [{suite,missing_conf_SUITE}]},ok}},
      {?eh,test_done,{'DEF','STOP_TIME'}},
      {?eh,stop_logging,[]}
     ];

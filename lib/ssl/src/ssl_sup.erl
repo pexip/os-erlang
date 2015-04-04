@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 1998-2010. All Rights Reserved.
+%% Copyright Ericsson AB 1998-2014. All Rights Reserved.
 %%
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -24,7 +24,7 @@
 -behaviour(supervisor).
 
 %% API
--export([start_link/0]).
+-export([start_link/0, manager_opts/0]).
 
 %% Supervisor callback
 -export([init/1]).
@@ -41,49 +41,16 @@ start_link() ->
 %%%=========================================================================
 %%%  Supervisor callback
 %%%=========================================================================
--spec init([]) -> {ok,  {SupFlags :: tuple(),  [ChildSpec :: tuple()]}}.
 
 init([]) ->    
-    %% OLD ssl - moved start to ssl.erl only if old
-    %% ssl is acctualy run!
-    %%Child1 = {ssl_server, {ssl_server, start_link, []},
-    %%	       permanent, 2000, worker, [ssl_server]},
-
-    %% Does not start any port programs so it does matter
-    %% so much if it is not used!
-    Child2 = {ssl_broker_sup, {ssl_broker_sup, start_link, []},
-	      permanent, 2000, supervisor, [ssl_broker_sup]},
-
-
-    %% New ssl
     SessionCertManager = session_and_cert_manager_child_spec(),
-    ConnetionManager = connection_manager_child_spec(),
-
-    {ok, {{one_for_all, 10, 3600}, [Child2, SessionCertManager,
-				    ConnetionManager]}}.
-
-%%--------------------------------------------------------------------
-%%% Internal functions
-%%--------------------------------------------------------------------
-
-session_and_cert_manager_child_spec() ->
-    Opts = manager_opts(),
-    Name = ssl_manager,  
-    StartFunc = {ssl_manager, start_link, [Opts]},
-    Restart = permanent, 
-    Shutdown = 4000,
-    Modules = [ssl_manager],
-    Type = worker,
-    {Name, StartFunc, Restart, Shutdown, Type, Modules}.
-
-connection_manager_child_spec() ->
-    Name = ssl_connection,  
-    StartFunc = {ssl_connection_sup, start_link, []},
-    Restart = permanent, 
-    Shutdown = 4000,
-    Modules = [ssl_connection],
-    Type = supervisor,
-    {Name, StartFunc, Restart, Shutdown, Type, Modules}.
+    TLSConnetionManager = tls_connection_manager_child_spec(),
+    %% Not supported yet
+    %%DTLSConnetionManager = tls_connection_manager_child_spec(),
+    %% Handles emulated options so that they inherited by the accept socket, even when setopts is performed on 
+    %% the listen socket
+    ListenOptionsTracker = listen_options_tracker_child_spec(), 
+    {ok, {{one_for_all, 10, 3600}, [SessionCertManager, TLSConnetionManager, ListenOptionsTracker]}}.
 
 
 manager_opts() ->
@@ -101,6 +68,49 @@ manager_opts() ->
 	    CbOpts
     end.
     
+%%--------------------------------------------------------------------
+%%% Internal functions
+%%--------------------------------------------------------------------
+
+session_and_cert_manager_child_spec() ->
+    Opts = manager_opts(),
+    Name = ssl_manager,  
+    StartFunc = {ssl_manager, start_link, [Opts]},
+    Restart = permanent, 
+    Shutdown = 4000,
+    Modules = [ssl_manager],
+    Type = worker,
+    {Name, StartFunc, Restart, Shutdown, Type, Modules}.
+
+tls_connection_manager_child_spec() ->
+    Name = tls_connection,  
+    StartFunc = {tls_connection_sup, start_link, []},
+    Restart = permanent, 
+    Shutdown = 4000,
+    Modules = [tls_connection_sup],
+    Type = supervisor,
+    {Name, StartFunc, Restart, Shutdown, Type, Modules}.
+
+%% dtls_connection_manager_child_spec() ->
+%%     Name = dtls_connection,  
+%%     StartFunc = {dtls_connection_sup, start_link, []},
+%%     Restart = permanent, 
+%%     Shutdown = 4000,
+%%     Modules = [dtls_connection, ssl_connection],
+%%     Type = supervisor,
+%%     {Name, StartFunc, Restart, Shutdown, Type, Modules}.
+
+
+listen_options_tracker_child_spec() ->
+    Name = ssl_socket,  
+    StartFunc = {ssl_listen_tracker_sup, start_link, []},
+    Restart = permanent, 
+    Shutdown = 4000,
+    Modules = [ssl_socket],
+    Type = supervisor,
+    {Name, StartFunc, Restart, Shutdown, Type, Modules}.
+
+
 session_cb_init_args() ->
     case application:get_env(ssl, session_cb_init_args) of
 	{ok, Args} when is_list(Args) ->

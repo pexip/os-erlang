@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 1996-2011. All Rights Reserved.
+%% Copyright Ericsson AB 1996-2013. All Rights Reserved.
 %%
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -47,25 +47,37 @@
 %%%-----------------------------------------------------------------
 %%% This is a low-level release handler.
 %%%-----------------------------------------------------------------
+check_script([restart_new_emulator|Script], LibDirs) ->
+    %% There is no need to check for old processes, since the node
+    %% will be restarted before anything else happens.
+    do_check_script(Script, LibDirs, []);
 check_script(Script, LibDirs) ->
     case catch check_old_processes(Script,soft_purge) of
 	{ok, PurgeMods} ->
-	    {Before, _After} = split_instructions(Script),
-	    case catch lists:foldl(fun(Instruction, EvalState1) ->
-					   eval(Instruction, EvalState1)
-				   end,
-				   #eval_state{libdirs = LibDirs},
-				   Before) of
-		EvalState2 when is_record(EvalState2, eval_state) ->
-		    {ok,PurgeMods};
-		{error, Error} ->
-		    {error, Error};
-		Other ->
-		    {error, Other}
-	    end;
+	    do_check_script(Script, LibDirs, PurgeMods);
 	{error, Mod} ->
 	    {error, {old_processes, Mod}}
     end.
+
+do_check_script(Script, LibDirs, PurgeMods) ->
+    {Before, After} = split_instructions(Script),
+    case catch lists:foldl(fun(Instruction, EvalState1) ->
+				   eval(Instruction, EvalState1)
+			   end,
+			   #eval_state{libdirs = LibDirs},
+			   Before) of
+	       EvalState2 when is_record(EvalState2, eval_state) ->
+		 case catch syntax_check_script(After) of
+		     ok ->
+			 {ok,PurgeMods};
+		     Other ->
+			 {error,Other}
+		 end;
+	       {error, Error} ->
+		 {error, Error};
+	       Other ->
+		 {error, Other}
+	 end.
 
 %% eval_script/1 - For testing only - no apps added, just testing instructions
 eval_script(Script) ->
@@ -83,22 +95,30 @@ eval_script(Script, Apps, LibDirs, NewLibs, Opts) ->
 					       newlibs = NewLibs,
 					       opts = Opts},
 				   Before) of
-		EvalState2 when is_record(EvalState2, eval_state) ->
-		    case catch lists:foldl(fun(Instruction, EvalState3) ->
-						   eval(Instruction, EvalState3)
-					   end,
-					   EvalState2,
-					   After) of
-			EvalState4 when is_record(EvalState4, eval_state) ->
-			    {ok, EvalState4#eval_state.unpurged};
-			restart_new_emulator ->
-			    restart_new_emulator;
-			Error ->
-			    {'EXIT', Error}
-		    end;
-		{error, Error} -> {error, Error};
-		Other -> {error, Other}
-	    end;
+		       EvalState2 when is_record(EvalState2, eval_state) ->
+			 case catch syntax_check_script(After) of
+			     ok ->
+				 case catch lists:foldl(
+					      fun(Instruction, EvalState3) ->
+						      eval(Instruction,
+							   EvalState3)
+					      end,
+					      EvalState2,
+					      After) of
+				     EvalState4
+				       when is_record(EvalState4, eval_state) ->
+					 {ok, EvalState4#eval_state.unpurged};
+				     restart_emulator ->
+					 restart_emulator;
+				     Error ->
+					 {'EXIT', Error}
+				 end;
+			     Other ->
+				 {error,Other}
+			 end;
+		       {error, Error} -> {error, Error};
+		       Other -> {error, Other}
+		 end;
 	{error, Mod} ->
 	    {error, {old_processes, Mod}}
     end.
@@ -174,6 +194,42 @@ do_check_old_code(Mod,Procs) ->
     [Mod].
 
 
+%% Check the last part of the script, i.e. the part after point_of_no_return.
+%% More or less a syntax check in case the script was handwritten.
+syntax_check_script([point_of_no_return | Script]) ->
+    syntax_check_script(Script);
+syntax_check_script([{load, {_,_,_}} | Script]) ->
+    syntax_check_script(Script);
+syntax_check_script([{remove, {_,_,_}} | Script]) ->
+    syntax_check_script(Script);
+syntax_check_script([{purge, _} | Script]) ->
+    syntax_check_script(Script);
+syntax_check_script([{suspend, _} | Script]) ->
+    syntax_check_script(Script);
+syntax_check_script([{resume, _} | Script]) ->
+    syntax_check_script(Script);
+syntax_check_script([{code_change, _} | Script]) ->
+    syntax_check_script(Script);
+syntax_check_script([{code_change, _, _} | Script]) ->
+    syntax_check_script(Script);
+syntax_check_script([{stop, _} | Script]) ->
+    syntax_check_script(Script);
+syntax_check_script([{start, _} | Script]) ->
+    syntax_check_script(Script);
+syntax_check_script([{sync_nodes, _, {_,_,_}} | Script]) ->
+    syntax_check_script(Script);
+syntax_check_script([{sync_nodes, _, _} | Script]) ->
+    syntax_check_script(Script);
+syntax_check_script([{apply, {_,_,_}} | Script]) ->
+    syntax_check_script(Script);
+syntax_check_script([restart_emulator | Script]) ->
+    syntax_check_script(Script);
+syntax_check_script([Illegal | _Script]) ->
+    throw({illegal_instruction_after_point_of_no_return,Illegal});
+syntax_check_script([]) ->
+    ok.
+
+
 %%-----------------------------------------------------------------
 %% An unpurged module is a module for which there exist an old
 %% version of the code.  This should only be the case if there are
@@ -243,7 +299,7 @@ do_check_old_code(Mod,Procs) ->
 %%    must also exectue the same line.  Waits for all these nodes to get
 %%    to this line.
 %% point_of_no_return
-%% restart_new_emulator
+%% restart_emulator
 %% {stop_application, Appl}     - Impl with apply
 %% {unload_application, Appl}   - Impl with {remove..}
 %% {load_application, Appl}     - Impl with {load..}
@@ -293,7 +349,7 @@ eval({load, {Mod, _PrePurgeMethod, PostPurgeMethod}}, EvalState) ->
     {value, {_Mod, Bin, File}} = lists:keysearch(Mod, 1, Bins),
     % load_binary kills all procs running old code
     % if soft_purge, we know that there are no such procs now
-    code:load_binary(Mod, File, Bin),
+    {module,_} = code:load_binary(Mod, File, Bin),
     % Now, the prev current is old.  There might be procs
     % running it.  Find them.
     Unpurged = do_soft_purge(Mod,PostPurgeMethod,EvalState#eval_state.unpurged),
@@ -402,6 +458,8 @@ eval({sync_nodes, Id, Nodes}, EvalState) ->
 eval({apply, {M, F, A}}, EvalState) ->
     apply(M, F, A),
     EvalState;
+eval(restart_emulator, _EvalState) ->
+    throw(restart_emulator);
 eval(restart_new_emulator, _EvalState) ->
     throw(restart_new_emulator).
 
@@ -447,14 +505,19 @@ resume(Pids) ->
 
 change_code(Pids, Mod, Vsn, Extra, Timeout) ->
     Fun = fun(Pid) -> 
-		  case Timeout of
-		      default ->
-			  ok = sys:change_code(Pid, Mod, Vsn, Extra);
-		      _Else ->
-			  ok = sys:change_code(Pid, Mod, Vsn, Extra, Timeout)
+		  case sys_change_code(Pid, Mod, Vsn, Extra, Timeout) of
+		      ok ->
+			  ok;
+		      {error,Reason} ->
+			  throw({code_change_failed,Pid,Mod,Vsn,Reason})
 		  end
 	  end,
     lists:foreach(Fun, Pids).
+
+sys_change_code(Pid, Mod, Vsn, Extra, default) ->
+    sys:change_code(Pid, Mod, Vsn, Extra);
+sys_change_code(Pid, Mod, Vsn, Extra, Timeout) ->
+    sys:change_code(Pid, Mod, Vsn, Extra, Timeout).
 
 stop(Mod, Procs) ->
     lists:zf(fun({undefined, _Name, _Pid, _Mods}) ->
@@ -561,7 +624,7 @@ get_proc_state(Proc) ->
 
 maybe_supervisor_which_children(suspended, Name, Pid) ->
     error_logger:error_msg("release_handler: a which_children call"
-                           " to ~p (~p) was avoided. This supervisor"
+                           " to ~p (~w) was avoided. This supervisor"
                            " is suspended and should likely be upgraded"
                            " differently. Exiting ...~n", [Name, Pid]),
     error(suspended_supervisor);
@@ -572,7 +635,7 @@ maybe_supervisor_which_children(State, Name, Pid) ->
             Res;
         Other ->
             error_logger:error_msg("release_handler: ~p~nerror during"
-                                   " a which_children call to ~p (~p)."
+                                   " a which_children call to ~p (~w)."
                                    " [State: ~p] Exiting ... ~n",
                                    [Other, Name, Pid, State]),
             error(which_children_failed)
@@ -584,7 +647,7 @@ maybe_get_dynamic_mods(Name, Pid) ->
             Res;
         Other ->
             error_logger:error_msg("release_handler: ~p~nerror during a"
-                                   " get_modules call to ~p (~p),"
+                                   " get_modules call to ~p (~w),"
                                    " there may be an error in it's"
                                    " childspec. Exiting ...~n",
                                    [Other, Name, Pid]),

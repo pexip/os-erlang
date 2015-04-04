@@ -266,7 +266,7 @@ public abstract class AbstractConnection extends Thread {
      * 
      * @param dest
      *            the Erlang PID of the remote process.
-     * @param msg
+     * @param payload
      *            the encoded message to send.
      * 
      * @exception java.io.IOException
@@ -959,7 +959,9 @@ public abstract class AbstractConnection extends Thread {
 	} catch (final Exception e) {
 	    final String nn = peer.node();
 	    close();
-	    throw new IOException("Error accepting connection from " + nn);
+	    IOException ioe = new IOException("Error accepting connection from " + nn);
+	    ioe.initCause(e);
+	    throw ioe;
 	}
 	if (traceLevel >= handshakeThreshold) {
 	    System.out.println("<- MD5 ACCEPTED " + peer.host());
@@ -990,7 +992,9 @@ public abstract class AbstractConnection extends Thread {
 	    throw ae;
 	} catch (final Exception e) {
 	    close();
-	    throw new IOException("Cannot connect to peer node");
+	    IOException ioe = new IOException("Cannot connect to peer node");
+	    ioe.initCause(e);
+	    throw ioe;
 	}
     }
 

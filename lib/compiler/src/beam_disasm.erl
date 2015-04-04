@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2000-2011. All Rights Reserved.
+%% Copyright Ericsson AB 2000-2014. All Rights Reserved.
 %%
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -37,7 +37,8 @@
 
 %%-----------------------------------------------------------------------
 
--type literals()     :: 'none' | gb_tree().
+-type index()        :: non_neg_integer().
+-type literals()     :: 'none' | gb_trees:tree(index(), term()).
 -type symbolic_tag() :: 'a' | 'f' | 'h' | 'i' | 'u' | 'x' | 'y' | 'z'.
 -type disasm_tag()   :: symbolic_tag() | 'fr' | 'atom' | 'float' | 'literal'.
 -type disasm_term()  :: 'nil' | {disasm_tag(), _}.
@@ -182,10 +183,14 @@ process_chunks(F) ->
 	    Literals = beam_disasm_literals(LiteralBin),
 	    Code = beam_disasm_code(CodeBin, Atoms, mk_imports(ImportsList),
 				    StrBin, Lambdas, Literals, Module),
-	    Attributes = optional_chunk(F, attributes),
+	    Attributes =
+		case optional_chunk(F, attributes) of
+		    none -> [];
+		    Atts when is_list(Atts) -> Atts
+		end,
 	    CompInfo = 
 		case optional_chunk(F, "CInf") of
-		    none -> none;
+		    none -> [];
 		    CompInfoBin when is_binary(CompInfoBin) ->
 			binary_to_term(CompInfoBin)
 		end,
@@ -198,7 +203,7 @@ process_chunks(F) ->
     end.
 
 %%-----------------------------------------------------------------------
-%% Retrieve an optional chunk or none if the chunk doesn't exist.
+%% Retrieve an optional chunk or return 'none' if the chunk doesn't exist.
 %%-----------------------------------------------------------------------
 
 optional_chunk(F, ChunkTag) ->
@@ -212,7 +217,8 @@ optional_chunk(F, ChunkTag) ->
 %%-----------------------------------------------------------------------
 
 -type l_info() :: {non_neg_integer(), {_,_,_,_,_,_}}.
--spec beam_disasm_lambdas('none' | binary(), gb_tree()) -> 'none' | [l_info()].
+-spec beam_disasm_lambdas('none' | binary(), gb_trees:tree(index(), _)) ->
+        'none' | [l_info()].
 
 beam_disasm_lambdas(none, _) -> none;
 beam_disasm_lambdas(<<_:32,Tab/binary>>, Atoms) ->
@@ -296,6 +302,8 @@ get_function_chunks(Code) ->
 labels_r([], R) -> {R, []};
 labels_r([{label,_}=I|Is], R) ->
     labels_r(Is, [I|R]);
+labels_r([{line,_}=I|Is], R) ->
+    labels_r(Is, [I|R]);
 labels_r(Is, R) -> {R, Is}.
 
 get_funs({[],[]}) -> [];
@@ -335,20 +343,17 @@ local_labels(Funs) ->
 				   local_labels_1(function__code(F), R)
 			   end, [], Funs)).
 
-%% The first clause below attempts to provide some (limited form of)
-%% backwards compatibility; it is not needed for .beam files generated
-%% by the R8 compiler.  The clause should one fine day be taken out.
-local_labels_1([{label,_}|[{label,_}|_]=Code], R) ->
-    local_labels_1(Code, R);
-local_labels_1([{label,_},{func_info,{atom,M},{atom,F},A}|Code], R)
-  when is_atom(M), is_atom(F) ->
-    local_labels_2(Code, R, M, F, A);
-local_labels_1(Code, _) ->
-    ?exit({'local_labels: no label in code',Code}).
+local_labels_1(Code0, R) ->
+    Code1 = lists:dropwhile(fun({label,_}) -> true;
+			       ({line,_}) -> true;
+			       ({func_info,_,_,_}) -> false
+			    end, Code0),
+    [{func_info,{atom,M},{atom,F},A}|Code] = Code1,
+    local_labels_2(Code, R, {M,F,A}).
 
-local_labels_2([{label,[{u,L}]}|Code], R, M, F, A) ->
-    local_labels_2(Code, [{L,{M,F,A}}|R], M, F, A);
-local_labels_2(_, R, _, _, _) -> R.
+local_labels_2([{label,[{u,L}]}|Code], R, MFA) ->
+    local_labels_2(Code, [{L,MFA}|R], MFA);
+local_labels_2(_, R, _) -> R.
 
 %%-----------------------------------------------------------------------
 %% Disassembles a single BEAM instruction; most instructions are handled
@@ -362,6 +367,14 @@ disasm_instr(B, Bs, Atoms, Literals) ->
 	    disasm_select_inst(select_val, Bs, Atoms, Literals);
 	select_tuple_arity ->
 	    disasm_select_inst(select_tuple_arity, Bs, Atoms, Literals);
+	put_map_assoc ->
+	    disasm_map_inst(put_map_assoc, Arity, Bs, Atoms, Literals);
+	put_map_exact ->
+	    disasm_map_inst(put_map_exact, Arity, Bs, Atoms, Literals);
+	get_map_elements ->
+	    disasm_map_inst(get_map_elements, Arity, Bs, Atoms, Literals);
+	has_map_fields ->
+	    disasm_map_inst(has_map_fields, Arity, Bs, Atoms, Literals);
 	_ ->
 	    try decode_n_args(Arity, Bs, Atoms, Literals) of
 		{Args, RestBs} ->
@@ -392,6 +405,16 @@ disasm_select_inst(Inst, Bs, Atoms, Literals) ->
     {List, RestBs} = decode_n_args(Len, Bs4, Atoms, Literals),
     {{Inst, [X,F,{Z,U,List}]}, RestBs}.
 
+disasm_map_inst(Inst, Arity, Bs0, Atoms, Literals) ->
+    {Args0,Bs1} = decode_n_args(Arity, Bs0, Atoms, Literals),
+    %% no droplast ..
+    [Z|Args1]  = lists:reverse(Args0),
+    Args       = lists:reverse(Args1),
+    {U, Bs2}   = decode_arg(Bs1, Atoms, Literals),
+    {u, Len}   = U,
+    {List, RestBs} = decode_n_args(Len, Bs2, Atoms, Literals),
+    {{Inst, Args ++ [{Z,U,List}]}, RestBs}.
+
 %%-----------------------------------------------------------------------
 %% decode_arg([Byte]) -> {Arg, [Byte]}
 %%
@@ -414,11 +437,12 @@ decode_arg([B|Bs]) ->
 	    decode_int(Tag, B, Bs)
     end.
 
--spec decode_arg([byte(),...], gb_tree(), literals()) -> {disasm_term(), [byte()]}.
+-spec decode_arg([byte(),...], gb_trees:tree(index(), _), literals()) ->
+        {disasm_term(), [byte()]}.
 
 decode_arg([B|Bs0], Atoms, Literals) ->
     Tag = decode_tag(B band 2#111),
-    ?NO_DEBUG('Tag = ~p, B = ~p, Bs = ~p~n', [Tag, B, Bs]),
+    ?NO_DEBUG('Tag = ~p, B = ~p, Bs = ~p~n', [Tag, B, Bs0]),
     case Tag of
 	z ->
 	    decode_z_tagged(Tag, B, Bs0, Literals);
@@ -509,7 +533,12 @@ decode_z_tagged(Tag,B,Bs,Literals) when (B band 16#08) =:= 0 ->
 	    decode_alloc_list(Bs, Literals);
 	4 -> % literal
 	    {{u,LitIndex},RestBs} = decode_arg(Bs),
-	    {{literal,gb_trees:get(LitIndex, Literals)},RestBs};
+	    case gb_trees:get(LitIndex, Literals) of
+		Float when is_float(Float) ->
+		    {{float,Float},RestBs};
+		Literal ->
+		    {{literal,Literal},RestBs}
+	    end;
 	_ ->
 	    ?exit({decode_z_tagged,{invalid_extended_tag,N}})
     end;
@@ -1001,6 +1030,7 @@ resolve_inst({gc_bif2,Args},Imports,_,_) ->
     [F,Live,Bif,A1,A2,Reg] = resolve_args(Args),
     {extfunc,_Mod,BifName,_Arity} = lookup(Bif+1,Imports),
     {gc_bif,BifName,F,Live,[A1,A2],Reg};
+
 %%
 %% New instruction in R14, gc_bif with 3 arguments
 %%
@@ -1103,6 +1133,35 @@ resolve_inst({recv_mark,[Lbl]},_,_,_) ->
     {recv_mark,Lbl};
 resolve_inst({recv_set,[Lbl]},_,_,_) ->
     {recv_set,Lbl};
+
+%%
+%% R15A.
+%%
+resolve_inst({line,[Index]},_,_,_) ->
+    {line,resolve_arg(Index)};
+
+%%
+%% 17.0
+%%
+resolve_inst({put_map_assoc,Args},_,_,_) ->
+    [FLbl,Src,Dst,{u,N},{{z,1},{u,_Len},List0}] = Args,
+    List = resolve_args(List0),
+    {put_map_assoc,FLbl,Src,Dst,N,{list,List}};
+resolve_inst({put_map_exact,Args},_,_,_) ->
+    [FLbl,Src,Dst,{u,N},{{z,1},{u,_Len},List0}] = Args,
+    List = resolve_args(List0),
+    {put_map_exact,FLbl,Src,Dst,N,{list,List}};
+resolve_inst({is_map=I,Args0},_,_,_) ->
+    [FLbl|Args] = resolve_args(Args0),
+    {test,I,FLbl,Args};
+resolve_inst({has_map_fields,Args0},_,_,_) ->
+    [FLbl,Src,{{z,1},{u,_Len},List0}] = Args0,
+    List = resolve_args(List0),
+    {test,has_map_fields,FLbl,Src,{list,List}};
+resolve_inst({get_map_elements,Args0},_,_,_) ->
+    [FLbl,Src,{{z,1},{u,_Len},List0}] = Args0,
+    List = resolve_args(List0),
+    {get_map_elements,FLbl,Src,{list,List}};
 
 %%
 %% Catches instructions that are not yet handled.

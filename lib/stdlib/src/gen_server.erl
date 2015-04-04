@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 1996-2010. All Rights Reserved.
+%% Copyright Ericsson AB 1996-2014. All Rights Reserved.
 %%
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -94,12 +94,12 @@
 	 multi_call/2, multi_call/3, multi_call/4,
 	 enter_loop/3, enter_loop/4, enter_loop/5, wake_hib/5]).
 
--export([behaviour_info/1]).
-
 %% System exports
 -export([system_continue/3,
 	 system_terminate/4,
 	 system_code_change/4,
+	 system_get_state/1,
+	 system_replace_state/2,
 	 format_status/2]).
 
 %% Internal exports
@@ -111,13 +111,32 @@
 %%%  API
 %%%=========================================================================
 
--spec behaviour_info(atom()) -> 'undefined' | [{atom(), arity()}].
-
-behaviour_info(callbacks) ->
-    [{init,1},{handle_call,3},{handle_cast,2},{handle_info,2},
-     {terminate,2},{code_change,3}];
-behaviour_info(_Other) ->
-    undefined.
+-callback init(Args :: term()) ->
+    {ok, State :: term()} | {ok, State :: term(), timeout() | hibernate} |
+    {stop, Reason :: term()} | ignore.
+-callback handle_call(Request :: term(), From :: {pid(), Tag :: term()},
+                      State :: term()) ->
+    {reply, Reply :: term(), NewState :: term()} |
+    {reply, Reply :: term(), NewState :: term(), timeout() | hibernate} |
+    {noreply, NewState :: term()} |
+    {noreply, NewState :: term(), timeout() | hibernate} |
+    {stop, Reason :: term(), Reply :: term(), NewState :: term()} |
+    {stop, Reason :: term(), NewState :: term()}.
+-callback handle_cast(Request :: term(), State :: term()) ->
+    {noreply, NewState :: term()} |
+    {noreply, NewState :: term(), timeout() | hibernate} |
+    {stop, Reason :: term(), NewState :: term()}.
+-callback handle_info(Info :: timeout | term(), State :: term()) ->
+    {noreply, NewState :: term()} |
+    {noreply, NewState :: term(), timeout() | hibernate} |
+    {stop, Reason :: term(), NewState :: term()}.
+-callback terminate(Reason :: (normal | shutdown | {shutdown, term()} |
+                               term()),
+                    State :: term()) ->
+    term().
+-callback code_change(OldVsn :: (term() | {down, term()}), State :: term(),
+                      Extra :: term()) ->
+    {ok, NewState :: term()} | {error, Reason :: term()}.
 
 %%%  -----------------------------------------------------------------
 %%% Starts a generic server.
@@ -125,7 +144,7 @@ behaviour_info(_Other) ->
 %%% start(Name, Mod, Args, Options)
 %%% start_link(Mod, Args, Options)
 %%% start_link(Name, Mod, Args, Options) where:
-%%%    Name ::= {local, atom()} | {global, atom()}
+%%%    Name ::= {local, atom()} | {global, atom()} | {via, atom(), term()}
 %%%    Mod  ::= atom(), callback module implementing the 'real' server
 %%%    Args ::= term(), init arguments (to Mod:init/1)
 %%%    Options ::= [{timeout, Timeout} | {debug, [Flag]}]
@@ -177,6 +196,9 @@ call(Name, Request, Timeout) ->
 cast({global,Name}, Request) ->
     catch global:send(Name, cast_msg(Request)),
     ok;
+cast({via, Mod, Name}, Request) ->
+    catch Mod:send(Name, cast_msg(Request)),
+    ok;
 cast({Name,Node}=Dest, Request) when is_atom(Name), is_atom(Node) -> 
     do_cast(Dest, Request);
 cast(Dest, Request) when is_atom(Dest) ->
@@ -197,7 +219,7 @@ reply({To, Tag}, Reply) ->
     catch To ! {Tag, Reply}.
 
 %% ----------------------------------------------------------------- 
-%% Asyncronous broadcast, returns nothing, it's just send'n prey
+%% Asynchronous broadcast, returns nothing, it's just send 'n' pray
 %%-----------------------------------------------------------------  
 abcast(Name, Request) when is_atom(Name) ->
     do_abcast([node() | nodes()], Name, cast_msg(Request)).
@@ -249,7 +271,11 @@ multi_call(Nodes, Name, Req, Timeout)
 enter_loop(Mod, Options, State) ->
     enter_loop(Mod, Options, State, self(), infinity).
 
-enter_loop(Mod, Options, State, ServerName = {_, _}) ->
+enter_loop(Mod, Options, State, ServerName = {Scope, _})
+  when Scope == local; Scope == global ->
+    enter_loop(Mod, Options, State, ServerName, infinity);
+
+enter_loop(Mod, Options, State, ServerName = {via, _, _}) ->
     enter_loop(Mod, Options, State, ServerName, infinity);
 
 enter_loop(Mod, Options, State, Timeout) ->
@@ -310,12 +336,15 @@ init_it(Starter, Parent, Name0, Mod, Args, Options) ->
 
 name({local,Name}) -> Name;
 name({global,Name}) -> Name;
+name({via,_, Name}) -> Name;
 name(Pid) when is_pid(Pid) -> Pid.
 
 unregister_name({local,Name}) ->
     _ = (catch unregister(Name));
 unregister_name({global,Name}) ->
     _ = global:unregister_name(Name);
+unregister_name({via, Mod, Name}) ->
+    _ = Mod:unregister_name(Name);
 unregister_name(Pid) when is_pid(Pid) ->
     Pid.
     
@@ -359,7 +388,7 @@ decode_msg(Msg, Parent, Name, State, Mod, Time, Debug, Hib) ->
     end.
 
 %%% ---------------------------------------------------
-%%% Send/recive functions
+%%% Send/receive functions
 %%% ---------------------------------------------------
 do_send(Dest, Msg) ->
     case catch erlang:send(Dest, Msg, [noconnect]) of
@@ -438,11 +467,11 @@ rec_nodes(Tag, [{N,R}|Tail], Name, Badnodes, Replies, Time, TimerId ) ->
 	{'DOWN', R, _, _, _} ->
 	    rec_nodes(Tag, Tail, Name, [N|Badnodes], Replies, Time, TimerId);
 	{{Tag, N}, Reply} ->  %% Tag is bound !!!
-	    unmonitor(R), 
+	    erlang:demonitor(R, [flush]),
 	    rec_nodes(Tag, Tail, Name, Badnodes, 
 		      [{N,Reply}|Replies], Time, TimerId);
 	{timeout, TimerId, _} ->	
-	    unmonitor(R),
+	    erlang:demonitor(R, [flush]),
 	    %% Collect all replies that already have arrived
 	    rec_nodes_rest(Tag, Tail, Name, [N|Badnodes], Replies)
     end;
@@ -493,10 +522,10 @@ rec_nodes_rest(Tag, [{N,R}|Tail], Name, Badnodes, Replies) ->
 	{'DOWN', R, _, _, _} ->
 	    rec_nodes_rest(Tag, Tail, Name, [N|Badnodes], Replies);
 	{{Tag, N}, Reply} -> %% Tag is bound !!!
-	    unmonitor(R),
+	    erlang:demonitor(R, [flush]),
 	    rec_nodes_rest(Tag, Tail, Name, Badnodes, [{N,Reply}|Replies])
     after 0 ->
-	    unmonitor(R),
+	    erlang:demonitor(R, [flush]),
 	    rec_nodes_rest(Tag, Tail, Name, [N|Badnodes], Replies)
     end;
 rec_nodes_rest(Tag, [N|Tail], Name, Badnodes, Replies) ->
@@ -536,16 +565,6 @@ start_monitor(Node, Name) when is_atom(Node), is_atom(Name) ->
 		Ref when is_reference(Ref) ->
 		    {Node, Ref}
 	    end
-    end.
-
-%% Cancels a monitor started with Ref=erlang:monitor(_, _).
-unmonitor(Ref) when is_reference(Ref) ->
-    erlang:demonitor(Ref),
-    receive
-	{'DOWN', Ref, _, _, _} ->
-	    true
-    after 0 ->
-	    true
     end.
 
 %%% ---------------------------------------------------
@@ -599,7 +618,7 @@ handle_msg({'$gen_call', From, Msg}, Parent, Name, State, Mod, Debug) ->
 	{stop, Reason, Reply, NState} ->
 	    {'EXIT', R} = 
 		(catch terminate(Reason, Name, Msg, Mod, NState, Debug)),
-	    reply(Name, From, Reply, NState, Debug),
+	    _ = reply(Name, From, Reply, NState, Debug),
 	    exit(R);
 	Other ->
 	    handle_common_reply(Other, Parent, Name, Msg, Mod, State, Debug)
@@ -663,6 +682,13 @@ system_code_change([Name, State, Mod, Time], _Module, OldVsn, Extra) ->
 	Else -> Else
     end.
 
+system_get_state([_Name, State, _Mod, _Time]) ->
+    {ok, State}.
+
+system_replace_state(StateFun, [Name, State, Mod, Time]) ->
+    NState = StateFun(State),
+    {ok, NState, [Name, NState, Mod, Time]}.
+
 %%-----------------------------------------------------------------
 %% Format debug messages.  Print them as the call-back module sees
 %% them, not as the real erlang messages.  Use trace for that.
@@ -694,7 +720,8 @@ print_event(Dev, Event, Name) ->
 terminate(Reason, Name, Msg, Mod, State, Debug) ->
     case catch Mod:terminate(Reason, State) of
 	{'EXIT', R} ->
-	    error_info(R, Name, Msg, State, Debug),
+	    FmtState = format_status(terminate, Mod, get(), State),
+	    error_info(R, Name, Msg, FmtState, Debug),
 	    exit(R);
 	_ ->
 	    case Reason of
@@ -705,17 +732,7 @@ terminate(Reason, Name, Msg, Mod, State, Debug) ->
 		{shutdown,_}=Shutdown ->
 		    exit(Shutdown);
 		_ ->
-		    FmtState =
-			case erlang:function_exported(Mod, format_status, 2) of
-			    true ->
-				Args = [get(), State],
-				case catch Mod:format_status(terminate, Args) of
-				    {'EXIT', _} -> State;
-				    Else -> Else
-				end;
-			    _ ->
-				State
-			end,
+		    FmtState = format_status(terminate, Mod, get(), State),
 		    error_info(Reason, Name, Msg, FmtState, Debug),
 		    exit(Reason)
 	    end
@@ -729,16 +746,16 @@ error_info(_Reason, application_controller, _Msg, _State, _Debug) ->
 error_info(Reason, Name, Msg, State, Debug) ->
     Reason1 = 
 	case Reason of
-	    {undef,[{M,F,A}|MFAs]} ->
+	    {undef,[{M,F,A,L}|MFAs]} ->
 		case code:is_loaded(M) of
 		    false ->
-			{'module could not be loaded',[{M,F,A}|MFAs]};
+			{'module could not be loaded',[{M,F,A,L}|MFAs]};
 		    _ ->
 			case erlang:function_exported(M, F, length(A)) of
 			    true ->
 				Reason;
 			    false ->
-				{'function not exported',[{M,F,A}|MFAs]}
+				{'function not exported',[{M,F,A,L}|MFAs]}
 			end
 		end;
 	    _ ->
@@ -803,13 +820,22 @@ get_proc_name({local, Name}) ->
 	    exit(process_not_registered)
     end;    
 get_proc_name({global, Name}) ->
-    case global:safe_whereis_name(Name) of
+    case global:whereis_name(Name) of
 	undefined ->
 	    exit(process_not_registered_globally);
 	Pid when Pid =:= self() ->
 	    Name;
 	_Pid ->
 	    exit(process_not_registered_globally)
+    end;
+get_proc_name({via, Mod, Name}) ->
+    case Mod:whereis_name(Name) of
+	undefined ->
+	    exit({process_not_registered_via, Mod});
+	Pid when Pid =:= self() ->
+	    Name;
+	_Pid ->
+	    exit({process_not_registered_via, Mod})
     end.
 
 get_parent() ->
@@ -825,9 +851,9 @@ get_parent() ->
 name_to_pid(Name) ->
     case whereis(Name) of
 	undefined ->
-	    case global:safe_whereis_name(Name) of
+	    case global:whereis_name(Name) of
 		undefined ->
-		    exit(could_not_find_registerd_name);
+		    exit(could_not_find_registered_name);
 		Pid ->
 		    Pid
 	    end;
@@ -840,23 +866,29 @@ name_to_pid(Name) ->
 %%-----------------------------------------------------------------
 format_status(Opt, StatusData) ->
     [PDict, SysState, Parent, Debug, [Name, State, Mod, _Time]] = StatusData,
-    Header = gen:format_status_header("Status for generic server",
-                                      Name),
+    Header = gen:format_status_header("Status for generic server", Name),
     Log = sys:get_debug(log, Debug, []),
-    DefaultStatus = [{data, [{"State", State}]}],
-    Specfic =
-	case erlang:function_exported(Mod, format_status, 2) of
-	    true ->
-		case catch Mod:format_status(Opt, [PDict, State]) of
-		    {'EXIT', _} -> DefaultStatus;
-                    StatusList when is_list(StatusList) -> StatusList;
-		    Else -> [Else]
-		end;
-	    _ ->
-		DefaultStatus
-	end,
+    Specfic = case format_status(Opt, Mod, PDict, State) of
+		  S when is_list(S) -> S;
+		  S -> [S]
+	      end,
     [{header, Header},
      {data, [{"Status", SysState},
 	     {"Parent", Parent},
 	     {"Logged events", Log}]} |
      Specfic].
+
+format_status(Opt, Mod, PDict, State) ->
+    DefStatus = case Opt of
+		    terminate -> State;
+		    _ -> [{data, [{"State", State}]}]
+		end,
+    case erlang:function_exported(Mod, format_status, 2) of
+	true ->
+	    case catch Mod:format_status(Opt, [PDict, State]) of
+		{'EXIT', _} -> DefStatus;
+		Else -> Else
+	    end;
+	_ ->
+	    DefStatus
+    end.

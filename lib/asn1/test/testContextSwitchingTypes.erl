@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2001-2011. All Rights Reserved.
+%% Copyright Ericsson AB 2001-2013. All Rights Reserved.
 %%
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -19,65 +19,65 @@
 %%
 -module(testContextSwitchingTypes).
 
--export([compile/3]).
--export([test/0]).
+-export([test/1]).
 
 -include_lib("test_server/include/test_server.hrl").
 
+test(Config) ->
+    ValT = 'ContextSwitchingTypes':'val1-T'(),
+    check_EXTERNAL(enc_dec('T', ValT)),
 
-compile(Config,Rules,Options) ->
+    {ok,ValT2} = asn1ct:value('ContextSwitchingTypes', 'T',
+			      [{i,?config(case_dir, Config)}]),
+    check_EXTERNAL(enc_dec('T', ValT2)),
 
-    ?line DataDir = ?config(data_dir,Config),
-    ?line OutDir = ?config(priv_dir,Config),
-    ?line true = code:add_patha(?config(priv_dir,Config)),
-    ?line ok = asn1ct:compile(DataDir ++ "ContextSwitchingTypes",
-			      [Rules,{outdir,OutDir}]++Options).
+    ValEP = 'ContextSwitchingTypes':'val1-EP'(),
+    ValEPDec = enc_dec('EP', ValEP),
+    io:format("~p\n~p\n", [ValEP,ValEPDec]),
 
-
-test() ->
-    ?line ValT = 'ContextSwitchingTypes':'val1-T'(),
-    ?line {ok,Bytes1} =
-	asn1_wrapper:encode('ContextSwitchingTypes','T',ValT),
-    ?line {ok,Result1} = 
-	asn1_wrapper:decode('ContextSwitchingTypes','T',Bytes1),
-    ?line ok = check_EXTERNAL(Result1),
-    ?line {ok,ValT2} = asn1ct:value('ContextSwitchingTypes','T'),
-    ?line {ok,Bytes1_2} =
-	asn1_wrapper:encode('ContextSwitchingTypes','T',ValT2),
-    ?line {ok,Result1_2} = 
-	asn1_wrapper:decode('ContextSwitchingTypes','T',Bytes1_2),
-    ?line ok = check_EXTERNAL(Result1_2),
-
-    ?line ValEP = 'ContextSwitchingTypes':'val1-EP'(),
-    ?line {ok,Bytes2} =
-	asn1_wrapper:encode('ContextSwitchingTypes','EP',ValEP),
-    ?line {ok,_Result2} = 
-	asn1_wrapper:decode('ContextSwitchingTypes','EP',Bytes2),
-
-    ?line ValCS = 'ContextSwitchingTypes':'val1-CS'(),
-    ?line {ok,Bytes3} =
-	asn1_wrapper:encode('ContextSwitchingTypes','CS',ValCS),
-    ?line {ok,_Result3} = 
-	asn1_wrapper:decode('ContextSwitchingTypes','CS',Bytes3).
+    ValCS = 'ContextSwitchingTypes':'val1-CS'(),
+    ValCSDec = enc_dec('EP', ValCS),
+    io:format("~p\n~p\n", [ValCS,ValCSDec]),
+    ok.
 
 
 check_EXTERNAL({'EXTERNAL',Identif,DVD,DV})->
-    ?line ok=check_EXTERNAL_Idef(Identif),
-    ?line ok = check_EXTERNAL_DVD(DVD),
-    ?line ok = check_EXTERNAL_DV(DV).
-check_EXTERNAL_Idef({Alt,_}) when Alt=='context-negotiation';
-				  Alt=='presentation-context-id';
-				  Alt==syntax ->
-    ok;
-check_EXTERNAL_Idef(I) ->
-    {error,"failed on identification alternative",I}.
-check_EXTERNAL_DVD(DVD) when is_list(DVD) ->
-    ok;
-check_EXTERNAL_DVD(asn1_NOVALUE) ->
-    ok;
-check_EXTERNAL_DVD(DVD) ->
-    {error,"failed on data-value-descriptor alternative",DVD}.
-check_EXTERNAL_DV(DV) when is_list(DV);is_binary(DV) ->
-    ok;
-check_EXTERNAL_DV(DV) ->
-    {error,"failed on data-value alternative",DV}.
+    %% EXTERNAL in the 1994 format.
+    case Identif of
+	{'context-negotiation',_} ->
+	    ok;
+	{'presentation-context-id',Id} ->
+	    true = is_integer(Id);
+	{syntax,ObjId} ->
+	    check_object_identifier(ObjId)
+    end,
+    check_EXTERNAL_DVD(DVD),
+    check_EXTERNAL_DV(DV);
+check_EXTERNAL({'EXTERNAL',ObjId,IndirectRef,Descriptor,Enc})->
+    %% EXTERNAL in the 1990 format.
+    check_object_identifier(ObjId),
+    true = is_integer(IndirectRef),
+    true = is_binary(Descriptor) orelse is_list(Descriptor),
+    case Enc of
+	{arbitrary,_} -> ok;
+	{'single-ASN1-type',_} -> ok;
+	{'octet-aligned',_} -> ok
+    end.
+
+check_EXTERNAL_DVD(DVD) when is_list(DVD) -> ok;
+check_EXTERNAL_DVD(asn1_NOVALUE) -> ok.
+
+check_EXTERNAL_DV(DV) when is_list(DV); is_binary(DV) -> ok.
+
+check_object_identifier(Tuple) when is_tuple(Tuple) ->
+    %% An OBJECT IDENTIFIER is a tuple with integer elements.
+    case [E || E <- tuple_to_list(Tuple),
+	       not is_integer(E)] of
+	[] -> ok
+    end.
+
+enc_dec(T, V0) ->
+    M = 'ContextSwitchingTypes',
+    {ok,Enc} = M:encode(T, V0),
+    {ok,V} = M:decode(T, Enc),
+    V.

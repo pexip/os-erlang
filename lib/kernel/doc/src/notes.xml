@@ -1,10 +1,10 @@
-<?xml version="1.0" encoding="latin1" ?>
+<?xml version="1.0" encoding="utf-8" ?>
 <!DOCTYPE chapter SYSTEM "chapter.dtd">
 
 <chapter>
   <header>
     <copyright>
-      <year>2004</year><year>2011</year>
+      <year>2004</year><year>2013</year>
       <holder>Ericsson AB. All Rights Reserved.</holder>
     </copyright>
     <legalnotice>
@@ -29,6 +29,1235 @@
     <file>notes.xml</file>
   </header>
   <p>This document describes the changes made to the Kernel application.</p>
+
+<section><title>Kernel 3.0.3</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+          <p>
+	    Accept inet:ip_address() in net_adm:names/1</p>
+          <p>
+	    Own Id: OTP-12154</p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>Kernel 3.0.2</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+          <p>
+	    OTP-11850 fixed filelib:wildcard/1 to work with broken
+	    symlinks. This correction, however, introduced problems
+	    since symlinks were no longer followed for functions like
+	    filelib:ensure_dir/1, filelib:is_dir/1,
+	    filelib:file_size/1, etc. This is now corrected.</p>
+          <p>
+	    Own Id: OTP-12054 Aux Id: seq12660 </p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>Kernel 3.0.1</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+          <p>
+	    If the Config given to
+	    application_controller:change_application_data included
+	    other config files, it was only expanded for already
+	    existing (loaded) applications. If an upgrade added a new
+	    application which had config data in an included config
+	    file, the new application did not get correct config
+	    data.</p>
+          <p>
+	    This is now changed so config data will be expanded for
+	    all applications.</p>
+          <p>
+	    Own Id: OTP-11864</p>
+        </item>
+        <item>
+	    <p>It was allowed to re-load pre-loaded modules such as
+	    <c>erlang</c>, but that could cause strange and unwanted
+	    things to happen, such as call <c>apply/3</c> to loop.
+	    Pre-loaded modules are now sticky by default. (Thanks to
+	    Loïc Hoguin for reporting this bug.)</p>
+	    <p><c>code:add_path("/ending/in/slash/")</c> removes the
+	    trailing slash, adding <c>/ending/in/slash</c> to the
+	    code path. However,
+	    <c>code:del_path("/ending/in/slash/")</c> would fail to
+	    remove the path since it did not remove the trailing
+	    slash. This has been fixed.</p>
+          <p>
+	    Own Id: OTP-11913</p>
+        </item>
+        <item>
+          <p>
+	    Fix erts_debug:size/1 to handle Map sizes</p>
+          <p>
+	    Own Id: OTP-11923</p>
+        </item>
+        <item>
+	    <p>The documentation for <c>file:file_info/1</c> has been
+	    removed. The function itself was removed a long time
+	    ago.</p>
+          <p>
+	    Own Id: OTP-11982</p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>Kernel 3.0</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+          <p>
+	    Fixed a deadlock possibility in terminate application</p>
+          <p>
+	    Own Id: OTP-11171</p>
+        </item>
+        <item>
+          <p>
+	    Fixed bug where sendfile would return the wrong error
+	    code for a remotely closed socket if the socket was in
+	    passive mode. (Thanks to Vincent Siliakus for reporting
+	    the bug.)</p>
+          <p>
+	    Own Id: OTP-11614</p>
+        </item>
+        <item>
+          <p>
+	    The new option <c>persistent</c> is added to
+	    <c>application:set_env/4</c> and
+	    <c>application:unset_env/3</c>. An environment key set
+	    with the <c>persistent</c> option will not be overridden
+	    by the ones configured in the application resource file
+	    on load. This means persistent values will stick after
+	    the application is loaded and also on application reload.
+	    (Thanks to José Valim)</p>
+          <p>
+	    Own Id: OTP-11708</p>
+        </item>
+        <item>
+          <p>
+	    The spec for file:set_cwd/1 is modified to also accept
+	    binaries as arguments. This has always been allowed in
+	    the code, but it was not reflected in the spec since
+	    binaries are mostly used for raw file names. Raw file
+	    names are names that are not encoded according to
+	    file:native_name_encoding(), and these are not allowed in
+	    file:set_cwd/1. The spec is now, however, more allowing
+	    in order to avoid unnecessary dialyzer warnings. Raw file
+	    names will still fail in runtime with reason
+	    'no_translation'. (Thanks to José Valim)</p>
+          <p>
+	    Own Id: OTP-11787</p>
+        </item>
+      </list>
+    </section>
+
+    <section><title>Improvements and New Features</title>
+      <list>
+        <item>
+          <p>
+	    heart:set_cmd/1 is updated to allow unicode code points >
+	    255 in the given heart command</p>
+          <p>
+	    Own Id: OTP-10843</p>
+        </item>
+        <item>
+	    <p> Dialyzer's <c>unmatched_return</c> warnings have been
+	    corrected. </p>
+          <p>
+	    Own Id: OTP-10908</p>
+        </item>
+        <item>
+          <p>
+	    Make erlang:open_port/2 spawn and spawn_executable handle
+	    unicode.</p>
+          <p>
+	    Own Id: OTP-11105</p>
+        </item>
+        <item>
+          <p>
+	    Erlang/OTP has been ported to the realtime operating
+	    system OSE. The port supports both smp and non-smp
+	    emulator. For details around the port and how to started
+	    see the User's Guide in the <seealso
+	    marker="ose:ose_intro">ose</seealso> application. </p>
+          <p>
+	    Note that not all parts of Erlang/OTP has been ported. </p>
+          <p>
+	    Notable things that work are: non-smp and smp emulators,
+	    OSE signal interaction, crypto, asn1, run_erl/to_erl,
+	    tcp, epmd, distribution and most if not all non-os
+	    specific functionality of Erlang.</p>
+          <p>
+	    Notable things that does not work are: udp/sctp, os_mon,
+	    erl_interface, binding of schedulers.</p>
+          <p>
+	    Own Id: OTP-11334</p>
+        </item>
+        <item>
+          <p>
+	    Add the {active,N} socket option for TCP, UDP, and SCTP,
+	    where N is an integer in the range -32768..32767, to
+	    allow a caller to specify the number of data messages to
+	    be delivered to the controlling process. Once the
+	    socket's delivered message count either reaches 0 or is
+	    explicitly set to 0 with inet:setopts/2 or by including
+	    {active,0} as an option when the socket is created, the
+	    socket transitions to passive ({active, false}) mode and
+	    the socket's controlling process receives a message to
+	    inform it of the transition. TCP sockets receive
+	    {tcp_passive,Socket}, UDP sockets receive
+	    {udp_passive,Socket} and SCTP sockets receive
+	    {sctp_passive,Socket}. </p>
+          <p>
+	    The socket's delivered message counter defaults to 0, but
+	    it can be set using {active,N} via any gen_tcp, gen_udp,
+	    or gen_sctp function that takes socket options as
+	    arguments, or via inet:setopts/2. New N values are added
+	    to the socket's current counter value, and negative
+	    numbers can be used to reduce the counter value.
+	    Specifying a number that would cause the socket's counter
+	    value to go above 32767 causes an einval error. If a
+	    negative number is specified such that the counter value
+	    would become negative, the socket's counter value is set
+	    to 0 and the socket transitions to passive mode. If the
+	    counter value is already 0 and inet:setopts(Socket,
+	    [{active,0}]) is specified, the counter value remains at
+	    0 but the appropriate passive mode transition message is
+	    generated for the socket.</p>
+          <p>
+	    Thanks to Steve Vinoski</p>
+          <p>
+	    Own Id: OTP-11368</p>
+        </item>
+        <item>
+          <p>
+	    A call to either the <c>garbage_collect/1</c> BIF or the
+	    <c>check_process_code/2</c> BIF may trigger garbage
+	    collection of another processes than the process calling
+	    the BIF. The previous implementations performed these
+	    kinds of garbage collections without considering the
+	    internal state of the process being garbage collected. In
+	    order to be able to more easily and more efficiently
+	    implement yielding native code, these types of garbage
+	    collections have been rewritten. A garbage collection
+	    like this is now triggered by an asynchronous request
+	    signal, the actual garbage collection is performed by the
+	    process being garbage collected itself, and finalized by
+	    a reply signal to the process issuing the request. Using
+	    this approach processes can disable garbage collection
+	    and yield without having to set up the heap in a state
+	    that can be garbage collected.</p>
+          <p>
+	    The <seealso
+	    marker="erts:erlang#garbage_collect/2"><c>garbage_collect/2</c></seealso>,
+	    and <seealso
+	    marker="erts:erlang#check_process_code/3"><c>check_process_code/3</c></seealso>
+	    BIFs have been introduced. Both taking an option list as
+	    last argument. Using these, one can issue asynchronous
+	    requests.</p>
+          <p>
+	    <c>code:purge/1</c> and <c>code:soft_purge/1</c> have
+	    been rewritten to utilize asynchronous
+	    <c>check_process_code</c> requests in order to
+	    parallelize work.</p>
+          <p>
+	    Characteristics impact: A call to the
+	    <c>garbage_collect/1</c> BIF or the
+	    <c>check_process_code/2</c> BIF will normally take longer
+	    time to complete while the system as a whole wont be as
+	    much negatively effected by the operation as before. A
+	    call to <c>code:purge/1</c> and <c>code:soft_purge/1</c>
+	    may complete faster or slower depending on the state of
+	    the system while the system as a whole wont be as much
+	    negatively effected by the operation as before.</p>
+          <p>
+	    Own Id: OTP-11388 Aux Id: OTP-11535, OTP-11648 </p>
+        </item>
+        <item>
+          <p>
+	    Add sync option to file:open/2.</p>
+          <p>
+	    The sync option adds the POSIX O_SYNC flag to the open
+	    system call on platforms that support the flag or its
+	    equivalent, e.g., FILE_FLAG_WRITE_THROUGH on Windows. For
+	    platforms that don't support it, file:open/2 returns
+	    {error, enotsup} if the sync option is passed in. Thank
+	    to Steve Vinoski and Joseph Blomstedt</p>
+          <p>
+	    Own Id: OTP-11498</p>
+        </item>
+        <item>
+	    <p> The contract of <c>inet:ntoa/1</c> has been
+	    corrected. </p> <p> Thanks to Max Treskin. </p>
+          <p>
+	    Own Id: OTP-11730</p>
+        </item>
+      </list>
+    </section>
+</section>
+
+<section><title>Kernel 2.16.4.1</title>
+
+  <section><title>Known Bugs and Problems</title>
+  <list>
+    <item>
+      <p>
+        When using gen_tcp:connect and the <c>fd</c> option with
+        <c>port</c> and/or <c>ip</c>, the <c>port</c> and
+        <c>ip</c> options were ignored. This has been fixed so
+        that if <c>port</c> and/or <c>ip</c> is specified
+        together with <c>fd</c> a bind is requested for that
+        <c>fd</c>. If <c>port</c> and/or <c>ip</c> is not
+      specified bind will not be called.</p>
+      <p>
+      Own Id: OTP-12061</p>
+    </item>
+  </list>
+  </section>
+</section>
+
+<section><title>Kernel 2.16.4</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+          <p>
+	    Fix the typespec for the inet:ifget/2 and inet:ifget/3
+	    return value. Thanks to Ali Sabil.</p>
+          <p>
+	    Own Id: OTP-11377</p>
+        </item>
+        <item>
+          <p>
+	    Fix various typos in erts, kernel and ssh. Thanks to
+	    Martin Hässler.</p>
+          <p>
+	    Own Id: OTP-11414</p>
+        </item>
+        <item>
+          <p>
+	    Fix rpc multicall sample code. Thanks to Edwin Fine.</p>
+          <p>
+	    Own Id: OTP-11471</p>
+        </item>
+        <item>
+          <p>
+	    Under rare circumstances a process calling <seealso
+	    marker="kernel:inet#close/1"><c>inet:close/1</c></seealso>,
+	    <seealso
+	    marker="kernel:gen_tcp#close/1"><c>gen_tcp:close/1</c></seealso>,
+	    <seealso
+	    marker="kernel:gen_udp#close/1"><c>gen_udp:close/1</c></seealso>,
+	    or <seealso
+	    marker="kernel:gen_sctp#close/1"><c>gen_sctp:close/1</c></seealso>
+	    could hang in the call indefinitely.</p>
+          <p>
+	    Own Id: OTP-11491</p>
+        </item>
+      </list>
+    </section>
+
+
+    <section><title>Improvements and New Features</title>
+      <list>
+        <item>
+          <p>
+	    Add more SCTP errors as described in RFC 4960. Thanks to
+	    Artem Teslenko.</p>
+          <p>
+	    Own Id: OTP-11379</p>
+        </item>
+        <item>
+          <p>
+	    Add new BIF os:unsetenv/1 which deletes an environment
+	    variable. Thanks to Martin Hässler.</p>
+          <p>
+	    Own Id: OTP-11446</p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>Kernel 2.16.3</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+          <p>
+	    Fix indentation of User switch command help in Erlang
+	    shell. Thanks to Sylvain Benner.</p>
+          <p>
+	    Own Id: OTP-11209</p>
+        </item>
+      </list>
+    </section>
+
+
+    <section><title>Improvements and New Features</title>
+      <list>
+        <item>
+          <p>
+	    The previous undocumented function ntoa/1 has been added
+	    to inet docs and exported in the inet module.</p>
+          <p>
+	    Own Id: OTP-10676 Aux Id: OTP-10314 </p>
+        </item>
+        <item>
+          <p>
+	    Fix typo in abcast() function comment. Thanks to Johannes
+	    Weissl.</p>
+          <p>
+	    Own Id: OTP-11219</p>
+        </item>
+        <item>
+          <p>
+	    Add application:ensure_all_started/1-2. Thanks to Fred
+	    Hebert.</p>
+          <p>
+	    Own Id: OTP-11250</p>
+        </item>
+        <item>
+          <p>
+	    Make edlin understand a few important control keys.
+	    Thanks to Stefan Zegenhagen.</p>
+          <p>
+	    Own Id: OTP-11251</p>
+        </item>
+        <item>
+          <p>
+	    Cleanup of hipe_unified_loader, eliminating uses of
+	    is_subtype/2 in specs, change module-local void functions
+	    to return 'ok' instead of [] and made sure there are no
+	    dialyzer warnings with --Wunmatched_returns. Thanks to
+	    Kostis Sagonas.</p>
+          <p>
+	    Own Id: OTP-11301</p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>Kernel 2.16.2</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+          <p>
+	    A bug in prim_inet has been corrected. If the port owner
+	    was killed at a bad time while closing the socket port
+	    the port could become orphaned hence causing port and
+	    socket leaking. Reported by Fred Herbert, Dmitry Belyaev
+	    and others.</p>
+          <p>
+	    Own Id: OTP-10497 Aux Id: OTP-10562 </p>
+        </item>
+        <item>
+          <p>
+	    A few bugs regarding case sensitivity for hostname
+	    resolution while using e.g the internal lookup types
+	    'file' and 'dns' has been corrected. When looking up
+	    hostnames ASCII letters a-z are to be regarded as the
+	    same as A-Z according to RFC 4343 "Domain Name System
+	    (DNS) Case Insensitivity Clarification", and this was not
+	    always the case.</p>
+          <p>
+	    Own Id: OTP-10689 Aux Id: seq12227 </p>
+        </item>
+      </list>
+    </section>
+
+
+    <section><title>Improvements and New Features</title>
+      <list>
+        <item>
+          <p>
+	    Add <c>application:ensure_started/1,2</c>. It is
+	    equivavlent to <c>application:start/1,2</c> except it
+	    returns <c>ok</c> for already started applications.</p>
+          <p>
+	    Own Id: OTP-10910</p>
+        </item>
+        <item>
+          <p>
+	    Optimize communication with file io server. Thanks to
+	    Anthony Ramine.</p>
+          <p>
+	    Own Id: OTP-11040</p>
+        </item>
+        <item>
+	    <p>Erlang source files with non-ASCII characters are now
+	    encoded in UTF-8 (instead of latin1).</p>
+          <p>
+	    Own Id: OTP-11041 Aux Id: OTP-10907 </p>
+        </item>
+        <item>
+          <p>
+	    Optimization of simultaneous <c>inet_db</c> operations on
+	    the same socket by using a lock free implementation.</p>
+          <p>
+	    Impact on the characteristics of the system: Improved
+	    performance.</p>
+          <p>
+	    Own Id: OTP-11074</p>
+        </item>
+        <item>
+          <p>
+	    The <c>high_msgq_watermark</c> and
+	    <c>low_msgq_watermark</c> <c>inet</c> socket options
+	    introduced in OTP-R16A could only be set on TCP sockets.
+	    These options are now generic and can be set on all types
+	    of sockets.</p>
+          <p>
+	    Own Id: OTP-11075 Aux Id: OTP-10336 </p>
+        </item>
+        <item>
+          <p>
+	    Fix deep list argument error under Windows in os:cmd/1.
+	    Thanks to Aleksandr Vinokurov .</p>
+          <p>
+	    Own Id: OTP-11104</p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>Kernel 2.16.1</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+	    <p> A bug that could cause a crash with wrong reason has
+	    been corrected in the <c>application_controller</c>
+	    module. </p>
+          <p>
+	    Own Id: OTP-10754</p>
+        </item>
+        <item>
+          <p>
+	    Fix <c>code:is_module_native/1</c> that sometimes in R16A
+	    returned false for hipe compiled modules containing BIFs
+	    such as <c>lists</c>.</p>
+          <p>
+	    Own Id: OTP-10870</p>
+        </item>
+        <item>
+          <p>
+	    Respect <c>{exit_on_close,false}</c> option on tcp socket
+	    in non-passive mode when receiving fails (due to an
+	    ill-formed packet for example) by only doing a half close
+	    and still allow sending on the socket. (Thanks to Anthony
+	    Molinaro and Steve Vinoski for reporting the problem)</p>
+          <p>
+	    Own Id: OTP-10879</p>
+        </item>
+      </list>
+    </section>
+
+
+    <section><title>Improvements and New Features</title>
+      <list>
+        <item>
+          <p>
+	    Slightly nicer error message when node start fails due to
+	    duplicate name. Thanks to Magnus Henoch.</p>
+          <p>
+	    Own Id: OTP-10797</p>
+        </item>
+        <item>
+	    <p> Miscellaneous updates due to Unicode support. </p>
+          <p>
+	    Own Id: OTP-10820</p>
+        </item>
+        <item>
+          <p>
+	    Add a new function code:get_mode() can be used to detect
+	    how the code servers behaves. Thanks to Vlad Dumitrescu</p>
+          <p>
+	    Own Id: OTP-10823</p>
+        </item>
+        <item>
+          <p>
+	    Fix type of error Reason on gen_tcp:send/2. Thanks to
+	    Sean Cribbs.</p>
+          <p>
+	    Own Id: OTP-10839</p>
+        </item>
+        <item>
+	    <p><c>file:list_dir_all/1</c> and
+	    <c>file:read_link_all/1</c> that can handle raw file
+	    names have been added. See the User Guide for STDLIB for
+	    information about raw file names.</p>
+          <p>
+	    Own Id: OTP-10852</p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>Kernel 2.16</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+          <p>
+	    It is no longer possible to have <c>{Mod,Vsn}</c> in the
+	    'modules' list in a .app file.</p>
+          <p>
+	    This was earlier possible, although never documented in
+	    the .app file reference manual. It was however visible in
+	    the documentation of <c>application:load/[1,2]</c>, where
+	    the same term as in a .app file can be used as the first
+	    argument.</p>
+          <p>
+	    The possibility has been removed since the <c>Vsn</c>
+	    part was never used.</p>
+          <p>
+	    *** POTENTIAL INCOMPATIBILITY ***</p>
+          <p>
+	    Own Id: OTP-10417</p>
+        </item>
+        <item>
+	    <p> The contract of <c>erl_ddll:format_error/1</c> has
+	    been corrected. (Thanks to Joseph Wayne Norton.) </p>
+          <p>
+	    Own Id: OTP-10473</p>
+        </item>
+        <item>
+          <p>
+	    Change printout of application crash message on startup
+	    to formated strings (Thanks to Serge Aleynikov)</p>
+          <p>
+	    Own Id: OTP-10620</p>
+        </item>
+        <item>
+	    <p> The type <c>ascii_string()</c> in the <c>base64</c>
+	    module has been corrected. The type
+	    <c>file:file_info()</c> has been cleaned up. The type
+	    <c>file:fd()</c> has been made opaque in the
+	    documentation. </p>
+          <p>
+	    Own Id: OTP-10624 Aux Id: kunagi-352 [263] </p>
+        </item>
+      </list>
+    </section>
+
+
+    <section><title>Improvements and New Features</title>
+      <list>
+        <item>
+          <p>
+	    Inet exported functionality</p>
+          <p>
+	    inet:parse_ipv4_address/1,
+	    inet:parse_ipv4strict_address/1,
+	    inet:parse_ipv6_address/1,
+	    inet:parse_ipv6strict_address/1, inet:parse_address/1 and
+	    inet:parse_strict_address is now exported from the inet
+	    module.</p>
+          <p>
+	    Own Id: OTP-8067 Aux Id: kunagi-274 [185] </p>
+        </item>
+        <item>
+          <p>
+	    A boolean socket option 'ipv6_v6only' for IPv6 sockets
+	    has been added. The default value of the option is OS
+	    dependent, so applications aiming to be portable should
+	    consider using <c>{ipv6_v6only,true}</c> when creating an
+	    <c>inet6</c> listening/destination socket, and if
+	    neccesary also create an <c>inet</c> socket on the same
+	    port for IPv4 traffic. See the documentation.</p>
+          <p>
+	    Own Id: OTP-8928 Aux Id: kunagi-193 [104] </p>
+        </item>
+        <item>
+	    <p> Support for Unicode has been implemented. </p>
+          <p>
+	    Own Id: OTP-10302</p>
+        </item>
+        <item>
+          <p>
+	    The documentation for <c>global:register_name/3</c> has
+	    been updated to mention that the use of
+	    <c>{Module,Function}</c> as the method argument (resolve
+	    function) is deprecated.</p>
+          <p>
+	    Own Id: OTP-10419</p>
+        </item>
+        <item>
+          <p>
+	    Fixed bug where sendfile on oracle solaris would return
+	    an error when a partial send was done.</p>
+          <p>
+	    Own Id: OTP-10549</p>
+        </item>
+        <item>
+          <p>
+	    The <c>error_handler</c> module will now call
+	    <c>'$handle_undefined_function'/2</c> if an attempt is
+	    made to call a non-existing function in a module that
+	    exists. See the documentation for <c>error_handler</c>
+	    module for details.</p>
+          <p>
+	    Own Id: OTP-10617 Aux Id: kunagi-340 [251] </p>
+        </item>
+        <item>
+	    <p>Where necessary a comment stating encoding has been
+	    added to Erlang files. The comment is meant to be removed
+	    in Erlang/OTP R17B when UTF-8 becomes the default
+	    encoding. </p>
+          <p>
+	    Own Id: OTP-10630</p>
+        </item>
+        <item>
+          <p>
+	    Do not return wrong terms unnecessarily. (Thanks to
+	    Kostis Sagonas.)</p>
+          <p>
+	    Own Id: OTP-10662</p>
+        </item>
+        <item>
+	    <p> Some examples overflowing the width of PDF pages have
+	    been corrected. </p>
+          <p>
+	    Own Id: OTP-10665</p>
+        </item>
+        <item>
+	    <p>Add file:allocate/3 operation</p>
+	    <p>This operation allows pre-allocation of space for
+	    files. It succeeds only on systems that support such
+	    operation. (Thanks to Filipe David Manana)</p>
+          <p>
+	    Own Id: OTP-10680</p>
+        </item>
+        <item>
+          <p>
+	    Add application:get_key/3. The new function provides a
+	    default value for a configuration parameter. Thanks to
+	    Serge Aleynikov.</p>
+          <p>
+	    Own Id: OTP-10694</p>
+        </item>
+        <item>
+          <p>
+	    Add search to Erlang shell's history. Thanks to Fred
+	    Herbert.</p>
+          <p>
+	    Own Id: OTP-10739</p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>Kernel 2.15.3</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+          <p>
+	    Ensure 'erl_crash.dump' when asked for it. This will
+	    change erl_crash.dump behaviour.</p>
+          <p>
+	    * Not setting ERL_CRASH_DUMP_SECONDS will now terminate
+	    beam immediately on a crash without writing a crash dump
+	    file.</p>
+          <p>
+	    * Setting ERL_CRASH_DUMP_SECONDS to 0 will also terminate
+	    beam immediately on a crash without writing a crash dump
+	    file, i.e. same as not setting ERL_CRASH_DUMP_SECONDS
+	    environment variable.</p>
+          <p>
+	    * Setting ERL_CRASH_DUMP_SECONDS to a negative value will
+	    let the beam wait indefinitely on the crash dump file
+	    being written.</p>
+          <p>
+	    * Setting ERL_CRASH_DUMP_SECONDS to a positive value will
+	    let the beam wait that many seconds on the crash dump
+	    file being written.</p>
+          <p>
+	    A positive value will set an alarm/timeout for restart
+	    both in beam and in heart if heart is running.</p>
+          <p>
+	    *** POTENTIAL INCOMPATIBILITY ***</p>
+          <p>
+	    Own Id: OTP-10422 Aux Id: kunagi-250 [161] </p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>Kernel 2.15.2</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+          <p>
+	    Fixed issue where using controlling_process/2 with self()
+	    as the second argument caused the port to leak if self()
+	    crashes. (Thanks to Ricardo Catalinas Jiménez)</p>
+          <p>
+	    Own Id: OTP-10094</p>
+        </item>
+        <item>
+          <p>
+	    When sending large files using the file:sendfile fallback
+	    file:sendfile would crash. This is now fixed.</p>
+          <p>
+	    Own Id: OTP-10098</p>
+        </item>
+        <item>
+          <p>
+	    Fix rpc:call/5 for local calls with a finite Timeout
+	    (Thanks to Tomer Chachamu)</p>
+          <p>
+	    Own Id: OTP-10149</p>
+        </item>
+        <item>
+          <p>
+	    fix escript/primary archive reloading</p>
+          <p>
+	    If the mtime of an escript/primary archive file changes
+	    after being added to the code path, correctly reload the
+	    archive and update the cache. (Thanks to Tuncer Ayaz)</p>
+          <p>
+	    Own Id: OTP-10151</p>
+        </item>
+        <item>
+          <p>
+	    Support added for home directories named with non-ASCII
+	    characters (codepoints above 127) on a system running in
+	    Unicode file mode (e.g. on MacOSX or Linux with startup
+	    arguments +fnu or +fna with the right LOCALE). Also
+	    environment variables with Unicode content are supported
+	    in applicable environments.</p>
+          <p>
+	    Own Id: OTP-10160</p>
+        </item>
+        <item>
+          <p>
+	    Allow mixed IPv4 and IPv6 addresses to sctp_bindx</p>
+          <p>
+	    Also allow mixed address families to bind, since the
+	    first address on a multihomed sctp socket must be bound
+	    with bind, while the rest are to be bound using
+	    sctp_bindx. At least Linux supports adding address of
+	    mixing families. Make inet_set_faddress function
+	    available also when HAVE_SCTP is not defined, since we
+	    use it to find an address for bind to be able to mix ipv4
+	    and ipv6 addresses. Thanks to Tomas Abrahamsson</p>
+          <p>
+	    Own Id: OTP-10217</p>
+        </item>
+      </list>
+    </section>
+
+
+    <section><title>Improvements and New Features</title>
+      <list>
+        <item>
+	    <p>Document inet options: high_watermark, priority,
+	    linger and a some other options that previously was
+	    undocumented.</p>
+          <p>
+	    Own Id: OTP-10053</p>
+        </item>
+        <item>
+	    <p>Remove bit8 option support from inet</p>
+          <p>
+	    Own Id: OTP-10056</p>
+        </item>
+        <item>
+	    <p> The type of the disk log header has been corrected.
+	    (Thanks to Niclas Eklund.) </p>
+          <p>
+	    Own Id: OTP-10131</p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>Kernel 2.15.1</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+          <p>
+	    Driver output has been corrected so output of large
+	    binaries (> 4 GiB) now does not silently fail or crash
+	    the emulator, but either outputs the binary or fails the
+	    call. This means that writing a binary > 4 Gib to file
+	    now works but on e.g 64-bit Windows (that has
+	    scatter/gather I/O buffer segment lengths of 32 bits)
+	    fails. The behaviour may change in the future to always
+	    write the binary, in parts if necessary.</p>
+          <p>
+	    Own Id: OTP-9820 Aux Id: OTP-9795 </p>
+        </item>
+        <item>
+          <p>
+	    erts: minor fix for unnecessary condition erts: change
+	    SENDFILE_CHUNK_SIZE from signed to unsigned (Thanks to
+	    jovi zhang)</p>
+          <p>
+	    Own Id: OTP-9872</p>
+        </item>
+        <item>
+	    <p> Two contracts in <c>gen_sctp</c> have been corrected.
+	    </p>
+          <p>
+	    Own Id: OTP-9874</p>
+        </item>
+        <item>
+	    <p>If a process calls a module with an running on_load
+	    handler, the process is supposed to be suspended. But if
+	    the module with the on_load handler was loading used
+	    <c>code:load_binary/3</c>, the call would instead fail
+	    with an <c>undef</c> exception.</p>
+          <p>
+	    Own Id: OTP-9875</p>
+        </item>
+        <item>
+          <p>
+	    File name and error reason is now returned if creation of
+	    a cookie fails. (Thanks to Magnus Henoch)</p>
+          <p>
+	    Own Id: OTP-9954</p>
+        </item>
+        <item>
+          <p>
+	    Fix port leak in <c>zlib</c> when passing invalid data to
+	    <c>compress,uncompress,zip,unzip,gzip,gunzip</c>.</p>
+          <p>
+	    Own Id: OTP-9981</p>
+        </item>
+        <item>
+          <p>
+	    Various typographical errors corrected in documentation
+	    for the global, error_logger, etop, lists, ets and
+	    supervisor modules and in the c_portdriver and kernel_app
+	    documentation. (Thanks to Ricardo Catalinas Jiménez)</p>
+          <p>
+	    Own Id: OTP-9987</p>
+        </item>
+        <item>
+	    <p> Fix returned error from gen_tcp:accept/1,2 when
+	    running out of ports
+          <p>
+	    The {error, enfile} return value is badly misleading and
+	    confusing for this case, since the Posix ENFILE errno
+	    value has a well-defined meaning that has nothing to do
+	    with Erlang ports. The fix changes the return value to
+	    {error, system_limit}, which is consistent with e.g.
+	    various file(3) functions. inet:format_error/1 has also
+	    been updated to support system_limit in the same manner
+	    as file:format_error/1. (Thanks to Per Hedeland)</p></p>
+          <p>
+	    Own Id: OTP-9990</p>
+        </item>
+        <item>
+	    <p><c>erts_debug:size/1</c> has been corrected to take
+	    sharing in the environment of funs into account. For funs
+	    it used to always give the same result as
+	    <c>erts_debug:flat_size/1</c>.</p>
+          <p>
+	    Own Id: OTP-9991</p>
+        </item>
+        <item>
+          <p>
+	    In some cases when the process doing file:sendfile
+	    crashes while sending the file the efile_drv code would
+	    not clean up after itself correctly. This has now been
+	    fixed.</p>
+          <p>
+	    Own Id: OTP-9993</p>
+        </item>
+        <item>
+          <p>
+	    On BSD based platforms file:sendfile would sometime go
+	    into an infinite loop when sending big files. This has
+	    now been fixed.</p>
+          <p>
+	    Own Id: OTP-9994</p>
+        </item>
+        <item>
+	    <p>While <c>disk_log</c> eagerly collects logged terms
+	    for better performance, collecting too much data may
+	    choke the system and cause huge binaries to be
+	    written.</p>
+	    <p>The problem was addressed in OTP-9764, but the
+	    situation was not improved in all cases.</p>
+	    <p>(Thanks to Richard Carlsson.)</p>
+          <p>
+	    Own Id: OTP-9999 Aux Id: OTP-9764 </p>
+        </item>
+        <item>
+          <p>
+	    The documentation of .app files incorrectly said that the
+	    default value for the <c>mod</c> parameter is
+	    <c>undefined</c>. This is now corrected to <c>[]</c>.</p>
+          <p>
+	    Own Id: OTP-10002</p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>Kernel 2.15</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+	    <p> Calls to <c>global:whereis_name/1</c> have been
+	    substituted for calls to
+	    <c>global:safe_whereis_name/1</c> since the latter is not
+	    safe at all.</p>
+	    <p>The reason for not doing this earlier is that setting
+	    a global lock masked out a bug concerning the restart of
+	    supervised children. The bug has now been fixed by a
+	    modification of <c>global:whereis_name/1</c>. (Thanks to
+	    Ulf Wiger for code contribution.)</p>
+	    <p>A minor race conditions in <c>gen_fsm:start*</c> has
+	    been fixed: if one of these functions returned <c>{error,
+	    Reason}</c> or ignore, the name could still be registered
+	    (either locally or in <c>global</c>. (This is the same
+	    modification as was done for gen_server in OTP-7669.)</p>
+	    <p>The undocumented function
+	    <c>global:safe_whereis_name/1</c> has been removed. </p>
+          <p>
+	    Own Id: OTP-9212 Aux Id: seq7117, OTP-4174 </p>
+        </item>
+        <item>
+          <p>
+	    Honor option <c>packet_size</c> for http packet parsing
+	    by both TCP socket and <c>erlang:decode_packet</c>. This
+	    gives the ability to accept HTTP headers larger than the
+	    default setting, but also avoid DoS attacks by accepting
+	    lines only up to whatever length you wish to allow. For
+	    consistency, packet type <c>line</c> also honor option
+	    <c>packet_size</c>. (Thanks to Steve Vinoski)</p>
+          <p>
+	    Own Id: OTP-9389</p>
+        </item>
+        <item>
+	    <p> <c>disk_log:reopen/2,3</c> and
+	    <c>disk_log:breopen/3</c> could return the error reason
+	    from <c>file:rename/2</c> rather than the reason
+	    <c>{file_error, Filename, Reason}</c>. This bug has been
+	    fixed. </p> <p> The message <c>{disk_log, Node, {error,
+	    disk_log_stopped}}</c> which according the documentation
+	    is sent upon failure to truncate or reopen a disk log was
+	    sometimes turned into a reply. This bug has been fixed.
+	    </p>
+          <p>
+	    *** POTENTIAL INCOMPATIBILITY ***</p>
+          <p>
+	    Own Id: OTP-9508</p>
+        </item>
+        <item>
+          <p>
+	    Environment variable 'shutdown_timeout' is added to
+	    kernel application. Earlier, application_controller would
+	    hang forever if an application top supervisor did not
+	    terminate upon a shutdown request. If this new
+	    environment variable is set to a positive integer T, then
+	    application controller will now give up after T
+	    milliseconds and instead brutally kill the application.
+	    For backwards compatibility, the default value for
+	    shutdown_timeout is 'infinity'.</p>
+          <p>
+	    Own Id: OTP-9540</p>
+        </item>
+        <item>
+          <p>
+	    Add '-callback' attributes in stdlib's behaviours</p>
+          <p>
+	    Replace the behaviour_info(callbacks) export in stdlib's
+	    behaviours with -callback' attributes for all the
+	    callbacks. Update the documentation with information on
+	    the callback attribute Automatically generate
+	    'behaviour_info' function from '-callback' attributes</p>
+          <p>
+	    'behaviour_info(callbacks)' is a special function that is
+	    defined in a module which describes a behaviour and
+	    returns a list of its callbacks.</p>
+          <p>
+	    This function is now automatically generated using the
+	    '-callback' specs. An error is returned by lint if user
+	    defines both '-callback' attributes and the
+	    behaviour_info/1 function. If no type info is needed for
+	    a callback use a generic spec for it. Add '-callback'
+	    attribute to language syntax</p>
+          <p>
+	    Behaviours may define specs for their callbacks using the
+	    familiar spec syntax, replacing the '-spec' keyword with
+	    '-callback'. Simple lint checks are performed to ensure
+	    that no callbacks are defined twice and all types
+	    referred are declared.</p>
+          <p>
+	    These attributes can be then used by tools to provide
+	    documentation to the behaviour or find discrepancies in
+	    the callback definitions in the callback module.</p>
+          <p>
+	    Add callback specs into 'application' module in kernel
+	    Add callback specs to tftp module following internet
+	    documentation Add callback specs to inets_service module
+	    following possibly deprecated comments</p>
+          <p>
+	    Own Id: OTP-9621</p>
+        </item>
+        <item>
+          <p>
+	    make tab completion work in remote shells (Thanks to Mats
+	    Cronqvist)</p>
+          <p>
+	    Own Id: OTP-9673</p>
+        </item>
+        <item>
+          <p>
+	    Add missing parenthesis in heart doc.</p>
+          <p>
+	    Add missing spaces in the Reference Manual distributed
+	    section.</p>
+          <p>
+	    In the HTML version of the doc those spaces are necessary
+	    to separate those words.</p>
+          <p>
+	    Own Id: OTP-9693</p>
+        </item>
+        <item>
+          <p>
+	    Fixes net_kernel:get_net_ticktime() doc</p>
+          <p>
+	    Adds missing description when `ignored' is returned.
+	    (Thanks to Ricardo Catalinas Jiménez )</p>
+          <p>
+	    Own Id: OTP-9713</p>
+        </item>
+        <item>
+	    <p> While <c>disk_log</c> eagerly collects logged terms
+	    for better performance, collecting too much data may
+	    choke the system and cause huge binaries to be written.
+	    In order to remedy the situation a (small) limit on the
+	    amount of data that is collected before writing to disk
+	    has been introduced. </p>
+          <p>
+	    Own Id: OTP-9764</p>
+        </item>
+        <item>
+          <p>
+	    <list> <item><p>Correct callback spec in application
+	    module</p></item> <item><p>Refine warning about callback
+	    specs with extra ranges</p></item> <item><p>Cleanup
+	    autoimport compiler directives</p></item> <item><p>Fix
+	    Dialyzer's warnings in typer</p></item> <item><p>Fix
+	    Dialyzer's warning for its own code</p></item>
+	    <item><p>Fix bug in Dialyzer's behaviours
+	    analysis</p></item> <item><p>Fix crash in
+	    Dialyzer</p></item> <item><p>Variable substitution was
+	    not generalizing any unknown variables.</p></item>
+	    </list></p>
+          <p>
+	    Own Id: OTP-9776</p>
+        </item>
+        <item>
+          <p>
+	    Fix a crash when file:change_time/2,3 are called with
+	    invalid dates</p>
+          <p>
+	    Calling file:change_time/2,3 with an invalid date tuple
+	    (e.g file:change_time("file.txt", {undefined,
+	    undefined})) will cause file_server_2 to crash.
+	    error_logger will shutdown and the whole VM will stop.
+	    Change behavior to validate given dates on system
+	    boundaries. (i.e before issuing a server call).(Thanks to
+	    Ahmed Omar)</p>
+          <p>
+	    Own Id: OTP-9785</p>
+        </item>
+      </list>
+    </section>
+
+
+    <section><title>Improvements and New Features</title>
+      <list>
+        <item>
+	    <p> An option list argument can now be passed to
+	    <c>file:read_file_info/2, file:read_link_info/2</c> and
+	    <c>file:write_file_info/3</c> and set time type
+	    information in the call. Valid options are <c>{time,
+	    local}, {time, universal}</c> and <c>{time, posix}</c>.
+	    In the case of <c>posix</c> time no conversions are made
+	    which makes the operation a bit faster. </p>
+          <p>
+	    Own Id: OTP-7687</p>
+        </item>
+        <item>
+	    <p><c>file:list_dir/1,2</c> will now fill an buffer
+	    entire with filenames from the efile driver before
+	    sending it to an erlang process. This will speed up this
+	    file operation in most cases.</p>
+          <p>
+	    Own Id: OTP-9023</p>
+        </item>
+        <item>
+	    <p>gen_sctp:open/0-2 may now return
+	    {error,eprotonosupport} if SCTP is not supported</p>
+	    <p>gen_sctp:peeloff/1 has been implemented and creates a
+	    one-to-one socket which also are supported now</p>
+          <p>
+	    *** POTENTIAL INCOMPATIBILITY ***</p>
+          <p>
+	    Own Id: OTP-9239</p>
+        </item>
+        <item>
+          <p>
+	    Sendfile has been added to the file module's API.
+	    sendfile/2 is used to read data from a file and send it
+	    to a tcp socket using a zero copying mechanism if
+	    available on that OS.</p>
+          <p>
+	    Thanks to Tuncer Ayaz and Steve Vinovski for original
+	    implementation</p>
+          <p>
+	    Own Id: OTP-9240</p>
+        </item>
+        <item>
+          <p>
+	    Tuple funs (a two-element tuple with a module name and a
+	    function) are now officially deprecated and will be
+	    removed in R16. Use '<c>fun M:F/A</c>' instead. To make
+	    you aware that your system uses tuple funs, the very
+	    first time a tuple fun is applied, a warning will be sent
+	    to the error logger.</p>
+          <p>
+	    Own Id: OTP-9649</p>
+        </item>
+      </list>
+    </section>
+
+</section>
 
 <section><title>Kernel 2.14.5</title>
 
@@ -108,7 +1337,7 @@
         <item>
           <p>
 	    Fix typo in doc of rpc:pmap/3 (Thanks to Ricardo
-	    Catalinas Jim�nez)</p>
+	    Catalinas Jiménez)</p>
           <p>
 	    Own Id: OTP-9168</p>
         </item>

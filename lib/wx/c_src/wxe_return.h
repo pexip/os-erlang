@@ -1,7 +1,7 @@
 /*
  * %CopyrightBegin%
  * 
- * Copyright Ericsson AB 2008-2009. All Rights Reserved.
+ * Copyright Ericsson AB 2008-2013. All Rights Reserved.
  * 
  * The contents of this file are subject to the Erlang Public License,
  * Version 1.1, (the "License"); you may not use this file except in
@@ -48,9 +48,9 @@ WX_DECLARE_OBJARRAY(ErlDrvTermData, wxErlDrvTermDataArray);
 class wxeReturn {
 
 public:
-    wxeReturn (ErlDrvPort          _port,  
-            ErlDrvTermData      _caller, 
-            bool                _isResult=false);
+    wxeReturn (ErlDrvTermData      _port,
+	       ErlDrvTermData      _caller,
+	       bool                _isResult=false);
 
     ~wxeReturn();
 
@@ -108,6 +108,8 @@ public:
 
     void add(wxArrayInt val);
 
+    void add(wxArrayDouble val);
+
     void add(wxUIntPtr *val);
 
     void add(const wxHtmlLinkInfo *val);
@@ -128,7 +130,7 @@ private:
     
 //    WxeApp*                 wxe_app;
     ErlDrvTermData          caller;
-    ErlDrvPort              port; 
+    ErlDrvTermData          port;
 //    wxeMemEnv               *memEnv;
     wxErlDrvTermDataArray   rt;
     wxArrayDouble           temp_float;

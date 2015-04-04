@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2005-2010. All Rights Reserved.
+%% Copyright Ericsson AB 2005-2013. All Rights Reserved.
 %%
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -23,37 +23,51 @@
 
 -module(ssh_io).
 
--export([yes_no/1, read_password/1, read_line/1, format/2]).
--import(lists, [reverse/1]).
+-export([yes_no/2, read_password/2, read_line/2, format/2]).
+-include("ssh.hrl").
 
+read_line(Prompt, Ssh) ->
+    format("~s", [listify(Prompt)]),
+    proplists:get_value(user_pid, Ssh) ! {self(), question},
+    receive
+	Answer ->
+	    Answer
+    end.
 
-read_line(Prompt) when is_list(Prompt) ->
-    io:get_line(list_to_atom(Prompt));
-read_line(Prompt) when is_atom(Prompt) ->
-    io:get_line(Prompt).
-
-read_ln(Prompt) ->
-    trim(read_line(Prompt)).
-
-yes_no(Prompt) ->
+yes_no(Prompt, Ssh) ->
     io:format("~s [y/n]?", [Prompt]),
-    case read_ln('') of
-	"y" -> yes;
-	"n" -> no;
-	"Y" -> yes;
-	"N" -> no;
-	_ ->
-	    io:format("please answer y or n\n"),
-	    yes_no(Prompt)
+    proplists:get_value(user_pid, Ssh#ssh.opts) ! {self(), question},
+    receive
+	Answer ->
+	    case trim(Answer) of
+		"y" -> yes;
+		"n" -> no;
+		"Y" -> yes;
+		"N" -> no;
+		y -> yes;
+		n -> no;
+		_ ->
+		    io:format("please answer y or n\n"),
+		    yes_no(Prompt, Ssh)
+	    end
     end.
 
 
-read_password(Prompt) ->
+read_password(Prompt, Ssh) ->
     format("~s", [listify(Prompt)]),
-    case io:get_password() of
-	"" ->
-	    read_password(Prompt);
-	Pass -> Pass
+    case is_list(Ssh) of
+	false ->
+	    proplists:get_value(user_pid, Ssh#ssh.opts) ! {self(), user_password};
+	_ ->
+	    proplists:get_value(user_pid, Ssh) ! {self(), user_password}
+    end,
+    receive
+	Answer ->
+	    case Answer of
+		"" ->
+		    read_password(Prompt, Ssh);
+		Pass -> Pass
+	    end
     end.
 
 listify(A) when is_atom(A) ->
@@ -66,7 +80,9 @@ format(Fmt, Args) ->
 
 
 trim(Line) when is_list(Line) ->
-    reverse(trim1(reverse(trim1(Line))));
+    lists:reverse(trim1(lists:reverse(trim1(Line))));
+trim(Line) when is_binary(Line) ->
+    trim(unicode:characters_to_list(Line));
 trim(Other) -> Other.
 
 trim1([$\s|Cs]) -> trim(Cs);

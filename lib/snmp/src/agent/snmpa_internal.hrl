@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2006-2011. All Rights Reserved.
+%% Copyright Ericsson AB 2006-2012. All Rights Reserved.
 %%
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -22,8 +22,18 @@
 
 -include_lib("snmp/src/app/snmp_internal.hrl").
 
--define(DEFAULT_LOCAL_ENGINE_ID, snmp_framework_mib:get_engine_id()).
+%% The DEFAULT_LOCAL_ENGINE_ID macro can only be used by the master_agent!!
+-define(DEFAULT_LOCAL_ENGINE_ID,  snmp_framework_mib:get_engine_id()). 
 -define(DEFAULT_NOTIF_EXTRA_INFO, {snmpa_default_notification_extra_info}).
+
+%% -- Max number of VBs in a Get-BULK response --
+%% (( The default value, 1000, is *way* more   ))
+%% (( then there is room for in a normal pdu   ))
+%% (( (unless the max pdu size has been        ))
+%% (( cranked way up), so this value should    ))
+%% (( suffice as "infinity" without actually   ))
+%% (( causing memory issues for the VM ...     ))
+-define(DEFAULT_GB_MAX_VBS, 1000).
 
 -define(snmpa_info(F, A),    ?snmp_info("agent",    F, A)).
 -define(snmpa_warning(F, A), ?snmp_warning("agent", F, A)).

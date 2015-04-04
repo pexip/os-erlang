@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2008-2010. All Rights Reserved.
+%% Copyright Ericsson AB 2008-2013. All Rights Reserved.
 %%
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -23,10 +23,41 @@
 
 -include("ssh_connect.hrl").
 
+-callback init(Args :: term()) ->
+    {ok, State :: term()} | {ok, State :: term(), timeout() | hibernate} |
+    {stop, Reason :: term()} | ignore.
+-callback handle_call(Request :: term(), From :: {pid(), Tag :: term()},
+                      State :: term()) ->
+    {reply, Reply :: term(), NewState :: term()} |
+    {reply, Reply :: term(), NewState :: term(), timeout() | hibernate} |
+    {noreply, NewState :: term()} |
+    {noreply, NewState :: term(), timeout() | hibernate} |
+    {stop, Reason :: term(), Reply :: term(), NewState :: term()} |
+    {stop, Reason :: term(), NewState :: term()}.
+-callback handle_cast(Request :: term(), State :: term()) ->
+    {noreply, NewState :: term()} |
+    {noreply, NewState :: term(), timeout() | hibernate} |
+    {stop, Reason :: term(), NewState :: term()}.
+
+-callback terminate(Reason :: (normal | shutdown | {shutdown, term()} |
+                               term()),
+                    State :: term()) ->
+    term().
+-callback code_change(OldVsn :: (term() | {down, term()}), State :: term(),
+                      Extra :: term()) ->
+    {ok, NewState :: term()} | {error, Reason :: term()}.
+
+-callback handle_msg(Msg ::term(), State :: term()) ->
+    {ok, State::term()} | {stop, ChannelId::integer(), State::term()}. 
+
+-callback handle_ssh_msg({ssh_cm, ConnectionRef::term(), SshMsg::term()}, 
+ 			 State::term()) -> {ok, State::term()} | 
+ 					   {stop, ChannelId::integer(), 
+ 					    State::term()}.
 -behaviour(gen_server).
 
 %%% API
--export([behaviour_info/1, start/4, start/5, start_link/4, start_link/5, call/2, call/3,
+-export([start/4, start/5, start_link/4, start_link/5, call/2, call/3,
 	 cast/2, reply/2, enter_loop/1]).
 
 %% gen_server callbacks
@@ -49,17 +80,6 @@
 %%====================================================================
 %% API
 %%====================================================================
-
-%%% Optionel callbacks handle_call/3, handle_cast/2, handle_msg/2,
-%%% code_change/3
-behaviour_info(callbacks) ->
-    [
-     {init, 1}, 
-     {terminate, 2}, 
-     {handle_ssh_msg, 2},
-     {handle_msg, 2}
-     ].
-
 
 call(ChannelPid, Msg) ->
     call(ChannelPid, Msg, infinity).
@@ -213,7 +233,7 @@ handle_info({ssh_cm, ConnectionManager, {closed, ChannelId}},
 		   close_sent = false} = State) ->
     %% To be on the safe side, i.e. the manager has already been terminated.
     (catch ssh_connection:close(ConnectionManager, ChannelId)),
-    {stop, normal, State};
+    {stop, normal, State#state{close_sent = true}};
 
 handle_info({ssh_cm, _, _} = Msg, #state{cm = ConnectionManager,
 			channel_cb = Module, 
@@ -264,7 +284,7 @@ handle_info(Msg, #state{cm = ConnectionManager, channel_cb = Module,
 terminate(Reason, #state{cm = ConnectionManager, 
  			 channel_id = ChannelId,
  			 close_sent = false} = State) ->
-    ssh_connection:close(ConnectionManager, ChannelId),
+    catch ssh_connection:close(ConnectionManager, ChannelId),
     terminate(Reason, State#state{close_sent = true});
 terminate(_, #state{channel_cb = Cb, channel_state = ChannelState}) ->
     catch Cb:terminate(Cb, ChannelState),

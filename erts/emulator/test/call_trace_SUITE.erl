@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %% 
-%% Copyright Ericsson AB 1999-2011. All Rights Reserved.
+%% Copyright Ericsson AB 1999-2012. All Rights Reserved.
 %% 
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -25,6 +25,7 @@
 	 init_per_testcase/2,end_per_testcase/2,
 	 hipe/1,process_specs/1,basic/1,flags/1,errors/1,pam/1,change_pam/1,
 	 return_trace/1,exception_trace/1,on_load/1,deep_exception/1,
+	 upgrade/1,
 	 exception_nocatch/1,bit_syntax/1]).
 
 %% Helper functions.
@@ -46,6 +47,7 @@ suite() -> [{ct_hooks,[ts_install_cth]}].
 all() -> 
     Common = [errors, on_load],
     NotHipe = [process_specs, basic, flags, pam, change_pam,
+	       upgrade,
 	       return_trace, exception_trace, deep_exception,
 	       exception_nocatch, bit_syntax],
     Hipe = [hipe],
@@ -76,7 +78,13 @@ init_per_testcase(Func, Config) when is_atom(Func), is_list(Config) ->
 
 end_per_testcase(_Func, Config) ->
     Dog = ?config(watchdog, Config),
-    ?t:timetrap_cancel(Dog).
+    ?t:timetrap_cancel(Dog),
+
+    %% Reloading the module will clear all trace patterns, and
+    %% in a debug-compiled emulator run assertions of the counters
+    %% for the number of traced exported functions in this module.
+
+    c:l(?MODULE).
 
 hipe(Config) when is_list(Config) ->
     ?line 0 = erlang:trace_pattern({?MODULE,worker_foo,1}, true),
@@ -165,10 +173,14 @@ worker_loop() ->
 worker_foo(_Arg) ->
     ok.
 
-basic(doc) ->    
-    "Basic test of the call tracing (we trace one process).";
-basic(suite) -> [];
-basic(Config) when is_list(Config) ->
+%% Basic test of the call tracing (we trace one process).
+basic(_Config) ->
+    case test_server:is_native(lists) of
+	true -> {skip,"lists is native"};
+	false -> basic()
+    end.
+
+basic() ->
     ?line start_tracer(),
     ?line trace_info(self(), flags),
     ?line trace_info(self(), tracer),
@@ -181,7 +193,12 @@ basic(Config) when is_list(Config) ->
     %% Trace some functions...
 
     ?line trace_func({lists,'_','_'}, []),
+
+    %% Make sure that tracing the same functions more than once
+    %% does not cause any problems.
     ?line 3 = trace_func({?MODULE,foo,'_'}, true),
+    ?line 3 = trace_func({?MODULE,foo,'_'}, true),
+    ?line 1 = trace_func({?MODULE,bar,0}, true),
     ?line 1 = trace_func({?MODULE,bar,0}, true),
     ?line {traced,global} = trace_info({?MODULE,bar,0}, traced),
     ?line 1 = trace_func({erlang,list_to_integer,1}, true),
@@ -263,9 +280,127 @@ foo() -> foo0.
 foo(X) -> X+1.
 foo(X, Y) -> X+Y.
 
-flags(doc) -> "Test flags (arity, timestamp) for call_trace/3. "
-		  "Also, test the '{tracer,Pid}' option.";
-flags(Config) when is_list(Config) ->
+
+%% Note that the semantics that this test case verifies
+%% are not explicitly specified in the docs (what I could find in R15B).
+%% This test case was written to verify that we do not change
+%% any behaviour with the introduction of "block-free" upgrade in R16.
+%% In short: Do not refer to this test case as an authority of how it must work.
+upgrade(doc) ->
+    "Test tracing on module being upgraded";
+upgrade(Config) when is_list(Config) ->
+    V1 = compile_version(my_upgrade_test, 1, Config),
+    V2 = compile_version(my_upgrade_test, 2, Config),
+    start_tracer(),
+    upgrade_do(V1, V2, false),
+    upgrade_do(V1, V2, true).
+
+upgrade_do(V1, V2, TraceLocalVersion) ->
+    {module,my_upgrade_test} = erlang:load_module(my_upgrade_test, V1),
+
+
+    %% Test that trace is cleared after load_module
+
+    trace_func({my_upgrade_test,'_','_'}, [], [global]),
+    case TraceLocalVersion of
+	true -> trace_func({my_upgrade_test,local_version,0}, [], [local]);
+	_ -> ok
+    end,
+    1 = my_upgrade_test:version(),
+    1 = my_upgrade_test:do_local(),
+    1 = my_upgrade_test:do_real_local(),
+    put('F1_exp', my_upgrade_test:make_fun_exp()),
+    put('F1_loc', my_upgrade_test:make_fun_local()),
+    1 = (get('F1_exp'))(),
+    1 = (get('F1_loc'))(),
+
+    Self = self(),
+    expect({trace,Self,call,{my_upgrade_test,version,[]}}),
+    expect({trace,Self,call,{my_upgrade_test,do_local,[]}}),
+    expect({trace,Self,call,{my_upgrade_test,do_real_local,[]}}),
+    case TraceLocalVersion of
+	true -> expect({trace,Self,call,{my_upgrade_test,local_version,[]}});
+	_ -> ok
+    end,
+    expect({trace,Self,call,{my_upgrade_test,make_fun_exp,[]}}),
+    expect({trace,Self,call,{my_upgrade_test,make_fun_local,[]}}),
+    expect({trace,Self,call,{my_upgrade_test,version,[]}}), % F1_exp
+    case TraceLocalVersion of
+	true -> expect({trace,Self,call,{my_upgrade_test,local_version,[]}}); % F1_loc
+	_ -> ok
+    end,
+
+    {module,my_upgrade_test} = erlang:load_module(my_upgrade_test, V2),
+    2 = my_upgrade_test:version(),
+    put('F2_exp', my_upgrade_test:make_fun_exp()),
+    put('F2_loc', my_upgrade_test:make_fun_local()),
+    2 = (get('F1_exp'))(),
+    1 = (get('F1_loc'))(),
+    2 = (get('F2_exp'))(),
+    2 = (get('F2_loc'))(),
+    expect(),
+
+    put('F1_exp', undefined),
+    put('F1_loc', undefined),
+    erlang:garbage_collect(),
+    erlang:purge_module(my_upgrade_test),
+
+    % Test that trace is cleared after delete_module
+
+    trace_func({my_upgrade_test,'_','_'}, [], [global]),
+    case TraceLocalVersion of
+	true -> trace_func({my_upgrade_test,local_version,0}, [], [local]);
+	_ -> ok
+    end,
+    2 = my_upgrade_test:version(),
+    2 = my_upgrade_test:do_local(),
+    2 = my_upgrade_test:do_real_local(),
+    2 = (get('F2_exp'))(),
+    2 = (get('F2_loc'))(),
+
+    expect({trace,Self,call,{my_upgrade_test,version,[]}}),
+    expect({trace,Self,call,{my_upgrade_test,do_local,[]}}),
+    expect({trace,Self,call,{my_upgrade_test,do_real_local,[]}}),
+    case TraceLocalVersion of
+	true -> expect({trace,Self,call,{my_upgrade_test,local_version,[]}});
+	_ -> ok
+    end,
+    expect({trace,Self,call,{my_upgrade_test,version,[]}}), % F2_exp
+    case TraceLocalVersion of
+	true -> expect({trace,Self,call,{my_upgrade_test,local_version,[]}}); % F2_loc
+	_ -> ok
+    end,
+
+    true = erlang:delete_module(my_upgrade_test),
+    {'EXIT',{undef,_}} = (catch my_upgrade_test:version()),
+    {'EXIT',{undef,_}} = (catch ((get('F2_exp'))())),
+    2 = (get('F2_loc'))(),
+    expect(),
+
+    put('F2_exp', undefined),
+    put('F2_loc', undefined),
+    erlang:garbage_collect(),
+    erlang:purge_module(my_upgrade_test),
+    ok.
+
+compile_version(Module, Version, Config) ->
+    Data = ?config(data_dir, Config),
+    File = filename:join(Data, atom_to_list(Module)),
+    {ok,Module,Bin} = compile:file(File, [{d,'VERSION',Version},
+					    binary,report]),
+    Bin.
+
+
+
+%% Test flags (arity, timestamp) for call_trace/3.
+%% Also, test the '{tracer,Pid}' option.
+flags(_Config) ->
+    case test_server:is_native(filename) of
+	true -> {skip,"filename is native"};
+	false -> flags()
+    end.
+
+flags() ->
     ?line Tracer = start_tracer_loop(),
     ?line trace_pid(self(), true, [call,{tracer,Tracer}]),
 
@@ -428,9 +563,14 @@ pam_foo(A, B) ->
     {ok,A,B}.
 
 
-change_pam(doc) -> "Test changing PAM programs for a function.";
-change_pam(suite) -> [];
-change_pam(Config) when is_list(Config) ->
+%% Test changing PAM programs for a function.
+change_pam(_Config) ->
+    case test_server:is_native(lists) of
+	true -> {skip,"lists is native"};
+	false -> change_pam()
+    end.
+
+change_pam() ->
     ?line start_tracer(),
     ?line Self = self(),
 
@@ -468,10 +608,11 @@ change_pam_trace(Prog) ->
     {match_spec,Prog} = trace_info({erlang,process_info,2}, match_spec),
     ok.
 
-return_trace(doc) -> "Test the new return trace.";
-return_trace(suite) -> [];
-return_trace(Config) when is_list(Config) ->
-    return_trace().
+return_trace(_Config) ->
+    case test_server:is_native(lists) of
+	true -> {skip,"lists is native"};
+	false -> return_trace()
+    end.
 
 return_trace() ->
     X = {save,me},
@@ -521,7 +662,7 @@ return_trace() ->
     ?line {match_spec,Prog2} = trace_info({erlang,atom_to_list,1}, match_spec),
 
     ?line lists:seq(2, 7),
-    ?line atom_to_list(non_literal(nisse)),
+    ?line _ = atom_to_list(non_literal(nisse)),
     ?line expect({trace,Self,return_from,{lists,seq,2},[2,3,4,5,6,7]}),
     ?line expect({trace,Self,return_from,{erlang,atom_to_list,1},"nisse"}),
 
@@ -539,10 +680,11 @@ return_trace() ->
 nasty() ->
     exit(good_bye).
 
-exception_trace(doc) -> "Test the new exception trace.";
-exception_trace(suite) -> [];
-exception_trace(Config) when is_list(Config) ->
-    exception_trace().
+exception_trace(_Config) ->
+    case test_server:is_native(lists) of
+	true -> {skip,"lists is native"};
+	false -> exception_trace()
+    end.
 
 exception_trace() ->
     X = {save,me},
@@ -600,7 +742,7 @@ exception_trace() ->
 	trace_info({erlang,atom_to_list,1}, match_spec),
 
     ?line lists:seq(2, 7),
-    ?line atom_to_list(non_literal(nisse)),
+    ?line _ = atom_to_list(non_literal(nisse)),
     ?line expect({trace,Self,return_from,{lists,seq,2},[2,3,4,5,6,7]}),
     ?line expect({trace,Self,return_from,{erlang,atom_to_list,1},"nisse"}),
 
@@ -934,6 +1076,10 @@ exception_nocatch(Config) when is_list(Config) ->
     exception_nocatch().
 
 exception_nocatch() ->
+    Deep4LocThrow = get_deep_4_loc({throw,[42]}),
+    Deep4LocError = get_deep_4_loc({error,[42]}),
+    Deep4LocBadmatch = get_deep_4_loc({'=',[a,b]}),
+
     Prog = [{'_',[],[{exception_trace}]}],
     ?line 1 = erlang:trace_pattern({?MODULE,deep_1,'_'}, Prog),
     ?line 1 = erlang:trace_pattern({?MODULE,deep_2,'_'}, Prog),
@@ -959,8 +1105,9 @@ exception_nocatch() ->
 			   {trace,t2,exception_from,{erlang,throw,1},
 			    {error,{nocatch,Q2}}}],
 			  exception_from, {error,{nocatch,Q2}}),
-    ?line expect({trace,T2,exit,{{nocatch,Q2},[{erlang,throw,[Q2]},
-					       {?MODULE,deep_4,1}]}}),
+    ?line expect({trace,T2,exit,{{nocatch,Q2},[{erlang,throw,[Q2],[]},
+					       {?MODULE,deep_4,1,
+						Deep4LocThrow}]}}),
     ?line Q3 = {dump,[dump,{dump}]},
     ?line T3 = 
 	exception_nocatch(?LINE, error, [Q3], 4, 
@@ -968,17 +1115,28 @@ exception_nocatch() ->
 			   {trace,t3,exception_from,{erlang,error,1},
 			    {error,Q3}}],
 			  exception_from, {error,Q3}),
-    ?line expect({trace,T3,exit,{Q3,[{erlang,error,[Q3]},
-				     {?MODULE,deep_4,1}]}}),
+    ?line expect({trace,T3,exit,{Q3,[{erlang,error,[Q3],[]},
+				     {?MODULE,deep_4,1,Deep4LocError}]}}),
     ?line T4 = 
 	exception_nocatch(?LINE, '=', [17,4711], 5, [], 
 			  exception_from, {error,{badmatch,4711}}),
-    ?line expect({trace,T4,exit,{{badmatch,4711},[{?MODULE,deep_4,1}]}}),
+    ?line expect({trace,T4,exit,{{badmatch,4711},
+				 [{?MODULE,deep_4,1,Deep4LocBadmatch}]}}),
     %%
     ?line erlang:trace_pattern({?MODULE,'_','_'}, false),
     ?line erlang:trace_pattern({erlang,'_','_'}, false),
     ?line expect(),
     ?line ok.
+
+get_deep_4_loc(Arg) ->
+    try
+	deep_4(Arg),
+	?t:fail(should_not_return_to_here)
+    catch
+	_:_ ->
+	    [{?MODULE,deep_4,1,Loc0}|_] = erlang:get_stacktrace(),
+	    Loc0
+    end.
 
 exception_nocatch(Line, B, Q, N, Extra, Tag, R) ->
     ?line io:format("== Subtest: ~w", [Line]),
@@ -1035,7 +1193,7 @@ bs_sum_b(Acc, <<>>) -> Acc.
     
 
 
-
+
 %%% Help functions.
 
 expect() ->
@@ -1118,11 +1276,13 @@ trace_info(What, Key) ->
     Res.
     
 trace_func(MFA, MatchSpec) ->
-    get(tracer) ! {apply,self(),{erlang,trace_pattern,[MFA, MatchSpec]}},
+    trace_func(MFA, MatchSpec, []).
+trace_func(MFA, MatchSpec, Flags) ->
+    get(tracer) ! {apply,self(),{erlang,trace_pattern,[MFA, MatchSpec, Flags]}},
     Res = receive
 	      {apply_result,Result} -> Result
 	  end,
-    ok = io:format("trace_pattern(~p, ~p) -> ~p", [MFA,MatchSpec,Res]),
+    ok = io:format("trace_pattern(~p, ~p, ~p) -> ~p", [MFA,MatchSpec,Flags,Res]),
     Res.
 
 trace_pid(Pid, On, Flags) ->

@@ -2,7 +2,7 @@
 /*
  * %CopyrightBegin%
  *
- * Copyright Ericsson AB 1998-2011. All Rights Reserved.
+ * Copyright Ericsson AB 1998-2013. All Rights Reserved.
  *
  * The contents of this file are subject to the Erlang Public License,
  * Version 1.1, (the "License"); you may not use this file except in
@@ -52,7 +52,7 @@ static int epmd_main(int, char **, int);
 
 int epmd_dbg(int level,int port) /* Utility to debug epmd... */
 {
-  char* argv[MAX_DEBUG+2];
+  char* argv[MAX_DEBUG+4];
   char  ibuff[100];
   int   argc = 0;
   
@@ -64,7 +64,7 @@ int epmd_dbg(int level,int port) /* Utility to debug epmd... */
   if(port)
     {
       argv[argc++] = "-port";
-      sprintf(ibuff,"%d",port);
+      erts_snprintf(ibuff, sizeof(ibuff), "%d",port);
       argv[argc++] = ibuff;
     }
   argv[argc] = NULL;
@@ -175,6 +175,9 @@ int main(int argc, char** argv)
     g->nodes.reg = g->nodes.unreg = g->nodes.unreg_tail = NULL;
     g->nodes.unreg_count = 0;
     g->active_conn    = 0;
+#ifdef HAVE_SYSTEMD_SD_DAEMON_H
+    g->is_systemd     = 0;
+#endif
 
     for (i = 0; i < MAX_LISTEN_SOCKETS; i++)
 	g->listenfd[i] = -1;
@@ -248,8 +251,12 @@ int main(int argc, char** argv)
 	    else
 		usage(g);
 	    epmd_cleanup_exit(g,0);
-	}
-	else
+#ifdef HAVE_SYSTEMD_SD_DAEMON_H
+	} else if (strcmp(argv[0], "-systemd") == 0) {
+            g->is_systemd = 1;
+            argv++; argc--;
+#endif
+	} else
 	    usage(g);
     }
     dbg_printf(g,1,"epmd running - daemon = %d",g->is_daemon);
@@ -286,7 +293,7 @@ static void run_daemon(EpmdVars *g)
     /* fork to make sure first child is not a process group leader */
     if (( child_pid = fork()) < 0)
       {
-#ifndef NO_SYSLOG
+#ifdef HAVE_SYSLOG_H
 	syslog(LOG_ERR,"erlang mapper daemon cant fork %m");
 #endif
 	epmd_cleanup_exit(g,1);
@@ -312,7 +319,7 @@ static void run_daemon(EpmdVars *g)
 
     if ((child_pid = fork()) < 0)
       {
-#ifndef NO_SYSLOG
+#ifdef HAVE_SYSLOG_H
 	syslog(LOG_ERR,"erlang mapper daemon cant fork 2'nd time %m");
 #endif
 	epmd_cleanup_exit(g,1);
@@ -389,7 +396,7 @@ static void run_daemon(EpmdVars *g)
 }
 #endif
 
-#if defined(VXWORKS)
+#if defined(VXWORKS) || defined(__OSE__)
 static void run_daemon(EpmdVars *g)
 {
     run(g);
@@ -454,6 +461,11 @@ static void usage(EpmdVars *g)
     fprintf(stderr, "        Forcibly unregisters a name with epmd\n");
     fprintf(stderr, "        (only allowed if -relaxed_command_check was given when \n");
     fprintf(stderr, "        epmd was started).\n");
+#ifdef HAVE_SYSTEMD_SD_DAEMON_H
+    fprintf(stderr, "    -systemd\n");
+    fprintf(stderr, "        Wait for socket from systemd. The option makes sense\n");
+    fprintf(stderr, "        when started from .socket unit.\n");
+#endif
     epmd_cleanup_exit(g,1);
 }
 
@@ -483,10 +495,14 @@ static void dbg_gen_printf(int onsyslog,int perr,int from_level,
 
   if (g->is_daemon)
     {
-#ifndef NO_SYSLOG
+#ifdef HAVE_SYSLOG_H
       if (onsyslog)
 	{
-	  erts_vsnprintf(buf, DEBUG_BUFFER_SIZE, format, args);
+	  int len;
+	  len = erts_vsnprintf(buf, DEBUG_BUFFER_SIZE, format, args);
+	  if (perr != 0 && len < sizeof(buf)) {
+	      erts_snprintf(buf+len, sizeof(buf)-len, ": %s", strerror(perr));
+	  }
 	  syslog(LOG_ERR,"epmd: %s",buf);
 	}
 #endif

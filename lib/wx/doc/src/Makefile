@@ -1,7 +1,7 @@
 #
 # %CopyrightBegin%
 #
-# Copyright Ericsson AB 2008-2010. All Rights Reserved.
+# Copyright Ericsson AB 2008-2012. All Rights Reserved.
 #
 # The contents of this file are subject to the Erlang Public License,
 # Version 1.1, (the "License"); you may not use this file except in
@@ -22,7 +22,7 @@
 # ----------------------------------------------------
 include ../../vsn.mk
 include ../../config.mk
-APPLICATION=wxErlang
+APPLICATION=wx
 
 ErlMods         = wx.erl wx_object.erl
 
@@ -33,40 +33,7 @@ GenMods         = $(shell ls ../../src/gen | grep 'wx[A-Z].*\.erl') \
 
 ModsNoExt	= $(ErlMods:%.erl=%) $(GenMods:%.erl=%)
 
-ifneq ($(INSIDE_ERLSRC),true)
-# ----------------------------------------------------
-# Standalone release
-# ----------------------------------------------------
-Mods            = $(ErlMods:%=../../src/%) $(GenMods:%=../../src/gen/%)
-HTML_FILES      = $(ErlMods:%.erl=../html/%.html) $(GenMods:%.erl=../html/%.html)
-
-GIF_FILES       = ../html/erlang.png
-EXTRA_FILES     = ../html/index.html \
-	../html/modules-frame.html \
-	../html/overview-summary.html \
-	../html/packages-frame.html
-
-HTML_STYLESHEET_FILES = ../html/stylesheet.css
-
-html:   ../html/edoc-info
-
-docs:	../html/edoc-info
-
-../html/edoc-info: $(Mods)
-	@echo  "Building documentation."
-	-mkdir -p ../html
-	erl -noshell -pa doc -run edoc_run application "wx" '"../.."' '[{private,true},no_packages,{dir,"../html"}, {sort_functions,false}]'
-
-clean:
-	rm -f *~
-	(cd ../html; rm -f *.html *.css erlang.png edoc-info)
-
-opt debug:	
-else
 # Release directory specification
-# ----------------------------------------------------
-# Inside the erlang src
-# ----------------------------------------------------
 
 XML_APPLICATION_FILES = ref_man.xml
 XML_REF3_FILES = $(ErlMods:%.erl=%.xml) $(GenMods:%.erl=%.xml)
@@ -96,10 +63,10 @@ HTML_REF_MAN_FILE = $(HTMLDIR)/index.html
 TOP_PDF_FILE = $(PDFDIR)/$(APPLICATION)-$(VSN).pdf
 
 # ----------------------------------------------------
-# FLAGS 
+# FLAGS
 # ----------------------------------------------------
-XML_FLAGS += 
-DVIPS_FLAGS += 
+XML_FLAGS +=
+DVIPS_FLAGS +=
 
 # ----------------------------------------------------
 # Targets
@@ -117,30 +84,30 @@ man: $(MAN3_FILES)
 
 gifs: $(GIF_FILES:%=$(HTMLDIR)/%)
 
-xml: $(XML_REF3_FILES) $(XML_CHAPTER_FILES) 
+xml: $(XML_REF3_FILES) $(XML_CHAPTER_FILES)
 
-ref_man.xml: ref_man.xml.src 
+ref_man.xml: ref_man.xml.src
 	@echo Preparing ref_man.xml
 	@cat ref_man.xml.src > ref_man.xml
 	@for d in $(ModsNoExt); do         \
 		echo "  <xi:include href=\"$$d.xml\"/>" >> ref_man.xml ; \
 	done
 	@echo "</application>" >> ref_man.xml
-	@echo 
+	@echo
 
-$(ErlMods:%.erl=%.xml):
-	escript $(DOCGEN)/priv/bin/xml_from_edoc.escript -def vsn $(VSN) -sort_functions false ../../src/$(@:%.xml=%.erl)
+$(ErlMods:%.erl=%.xml): ../../src/$(@:%.xml=%.erl)
+	escript $(DOCGEN)/priv/bin/xml_from_edoc.escript -def vsn $(VSN) -preprocess true -sort_functions false ../../src/$(@:%.xml=%.erl)
 
-$(GenMods:%.erl=%.xml):
-	escript $(DOCGEN)/priv/bin/xml_from_edoc.escript -def vsn $(VSN) -sort_functions false ../../src/gen/$(@:%.xml=%.erl)
+$(GenMods:%.erl=%.xml): ../../src/gen/$(@:%.xml=%.erl)
+	escript $(DOCGEN)/priv/bin/xml_from_edoc.escript -def vsn $(VSN) -i ../../src -preprocess true -sort_functions false ../../src/gen/$(@:%.xml=%.erl)
 
-$(XML_CHAPTER_FILES):
-	escript $(DOCGEN)/priv/bin/xml_from_edoc.escript -def vsn $(VSN) -chapter ../overview.edoc 
+$(XML_CHAPTER_FILES): ../overview.edoc
+	escript $(DOCGEN)/priv/bin/xml_from_edoc.escript -def vsn $(VSN) -chapter ../overview.edoc
 
-debug opt: 
+debug opt:
 
 clean clean_docs:
-	rm -rf  $(HTMLDIR)/* 
+	rm -rf  $(HTMLDIR)/*
 	rm -f $(MAN3DIR)/*
 	rm -f $(TOP_PDF_FILE) $(TOP_PDF_FILE:%.pdf=%.fo)
 	rm -f errs core *~ ../html/edoc-info
@@ -148,22 +115,20 @@ clean clean_docs:
 
 # ----------------------------------------------------
 # Release Target
-# ---------------------------------------------------- 
+# ----------------------------------------------------
 include $(ERL_TOP)/make/otp_release_targets.mk
 
 
 release_docs_spec: docs
-	$(INSTALL_DIR) $(RELSYSDIR)/doc/pdf
-	$(INSTALL_DATA) $(TOP_PDF_FILE) $(RELSYSDIR)/doc/pdf
-	$(INSTALL_DIR) $(RELSYSDIR)/doc/html
+	$(INSTALL_DIR) "$(RELSYSDIR)/doc/pdf"
+	$(INSTALL_DATA) $(TOP_PDF_FILE) "$(RELSYSDIR)/doc/pdf"
+	$(INSTALL_DIR) "$(RELSYSDIR)/doc/html"
 	$(INSTALL_DATA) $(HTMLDIR)/*  \
-		$(RELSYSDIR)/doc/html
-	$(INSTALL_DATA) $(INFO_FILE) $(RELSYSDIR)
-	$(INSTALL_DIR) $(RELEASE_PATH)/man/man3
-	$(INSTALL_DATA) $(MAN3_FILES) $(RELEASE_PATH)/man/man3
+		"$(RELSYSDIR)/doc/html"
+	$(INSTALL_DATA) $(INFO_FILE) "$(RELSYSDIR)"
+	$(INSTALL_DIR) "$(RELEASE_PATH)/man/man3"
+	$(INSTALL_DATA) $(MAN3_FILES) "$(RELEASE_PATH)/man/man3"
 
-release_spec: 
+release_spec:
 
 release_tests_spec:
-
-endif

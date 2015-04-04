@@ -2,7 +2,7 @@
 
 # %CopyrightBegin%
 #
-# Copyright Ericsson AB 1997-2011. All Rights Reserved.
+# Copyright Ericsson AB 1997-2014. All Rights Reserved.
 #
 # The contents of this file are subject to the Erlang Public License,
 # Version 1.1, (the "License"); you may not use this file except in
@@ -17,6 +17,7 @@
 #
 # %CopyrightEnd%
 
-SNMP_VSN = 4.21.1
-PRE_VSN  =
-APP_VSN  = "snmp-$(SNMP_VSN)$(PRE_VSN)"
+APPLICATION = snmp
+SNMP_VSN    = 5.1
+PRE_VSN     =
+APP_VSN     = "$(APPLICATION)-$(SNMP_VSN)$(PRE_VSN)"

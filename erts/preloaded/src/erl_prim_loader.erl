@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 1996-2011. All Rights Reserved.
+%% Copyright Ericsson AB 1996-2013. All Rights Reserved.
 %%
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -42,14 +42,14 @@
 
 %% Public
 -export([start/3, set_path/1, get_path/0, get_file/1, get_files/2,
-         list_dir/1, read_file_info/1, get_cwd/0, get_cwd/1]).
+         list_dir/1, read_file_info/1, read_link_info/1, get_cwd/0, get_cwd/1]).
 
 %% Used by erl_boot_server
 -export([prim_init/0, prim_get_file/2, prim_list_dir/2,
-         prim_read_file_info/2, prim_get_cwd/2]).
+         prim_read_file_info/3, prim_get_cwd/2]).
 
 %% Used by escript and code
--export([set_primary_archive/3, release_archives/0]).
+-export([set_primary_archive/4, release_archives/0]).
 
 -include_lib("kernel/include/file.hrl").
 
@@ -129,7 +129,7 @@ start(Id, Pgm0, Hosts) ->
             {error,Reason}
     end.
 
-%% Hosts must be a list on form ['1.2.3.4' ...]
+%% Hosts must be a list of form ['1.2.3.4' ...]
 start_it("inet", Id, Pid, Hosts) ->
     process_flag(trap_exit, true),
     ?dbg(inet, {Id,Pid,Hosts}),
@@ -149,8 +149,18 @@ start_it("inet", Id, Pid, Hosts) ->
 
 start_it("efile", Id, Pid, _Hosts) ->
     process_flag(trap_exit, true),
-    {ok, Port} = prim_file:open([binary]),
-    init_ack(Pid),
+    {ok, Port} = prim_file:start(),
+    %% Check that we started in a valid directory.
+    case prim_file:get_cwd(Port) of
+	{error, _} ->
+	    %% At this point in the startup, we have no error_logger at all.
+	    Report = "Invalid current directory or invalid filename "
+		"mode: loader cannot read current directory\n",
+	    erlang:display(Report),
+	    exit({error, invalid_current_directory});
+	_ ->
+	    init_ack(Pid)
+    end,
     MultiGet = case erlang:system_info(thread_pool_size) of
                    0 -> false;
                    _ -> true
@@ -213,6 +223,12 @@ list_dir(Dir) ->
 read_file_info(File) ->
     check_file_result(read_file_info, File, request({read_file_info,File})).
 
+-spec read_link_info(Filename) -> {'ok', FileInfo} | 'error' when
+      Filename :: string(),
+      FileInfo :: file:file_info().
+read_link_info(File) ->
+    check_file_result(read_link_info, File, request({read_link_info,File})).
+
 -spec get_cwd() -> {'ok', string()} | 'error'.
 get_cwd() ->
     check_file_result(get_cwd, [], request({get_cwd,[]})).
@@ -222,15 +238,16 @@ get_cwd(Drive) ->
     check_file_result(get_cwd, Drive, request({get_cwd,[Drive]})).
 
 -spec set_primary_archive(File :: string() | 'undefined', 
-                          ArchiveBin :: binary() | 'undefined',
-			  FileInfo :: #file_info{} | 'undefined')
+			  ArchiveBin :: binary() | 'undefined',
+			  FileInfo :: #file_info{} | 'undefined',
+			  ParserFun :: fun())
 			 -> {ok, [string()]} | {error,_}.
 
-set_primary_archive(undefined, undefined, undefined) ->
-    request({set_primary_archive, undefined, undefined, undefined});
-set_primary_archive(File, ArchiveBin, FileInfo)
+set_primary_archive(undefined, undefined, undefined, ParserFun) ->
+    request({set_primary_archive, undefined, undefined, undefined, ParserFun});
+set_primary_archive(File, ArchiveBin, FileInfo, ParserFun)
   when is_list(File), is_binary(ArchiveBin), is_record(FileInfo, file_info) ->
-    request({set_primary_archive, File, ArchiveBin, FileInfo}).
+    request({set_primary_archive, File, ArchiveBin, FileInfo, ParserFun}).
 
 -spec release_archives() -> 'ok' | {'error', _}.
 
@@ -250,6 +267,8 @@ request(Req) ->
 check_file_result(_, _, {error,enoent}) ->
     error;
 check_file_result(_, _, {error,enotdir}) ->
+    error;
+check_file_result(_, _, {error,einval}) ->
     error;
 check_file_result(Func, Target, {error,Reason}) ->   
     case (catch atom_to_list(Reason)) of
@@ -312,14 +331,20 @@ loop(State, Parent, Paths) ->
                     {read_file_info,File} ->
                         {Res,State1} = handle_read_file_info(State, File),
                         {Res,State1,Paths};
+                    {read_link_info,File} ->
+                        {Res,State1} = handle_read_link_info(State, File),
+                        {Res,State1,Paths};
                     {get_cwd,[]} ->
                         {Res,State1} = handle_get_cwd(State, []),
                         {Res,State1,Paths};
                     {get_cwd,[_]=Args} ->
                         {Res,State1} = handle_get_cwd(State, Args),
                         {Res,State1,Paths};
-                    {set_primary_archive,File,Bin,FileInfo} ->
-                        {Res,State1} = handle_set_primary_archive(State, File, Bin, FileInfo),
+                    {set_primary_archive,File,ArchiveBin,FileInfo,ParserFun} ->
+                        {Res,State1} =
+			    handle_set_primary_archive(State, File,
+						       ArchiveBin, FileInfo,
+						       ParserFun),
                         {Res,State1,Paths};
                     release_archives ->
                         {Res,State1} = handle_release_archives(State),
@@ -359,8 +384,8 @@ handle_get_file(State = #state{loader = efile}, Paths, File) ->
 handle_get_file(State = #state{loader = inet}, Paths, File) ->
     ?SAFE2(inet_get_file_from_port(State, File, Paths), State).
 
-handle_set_primary_archive(State= #state{loader = efile}, File, Bin, FileInfo) ->
-    ?SAFE2(efile_set_primary_archive(State, File, Bin, FileInfo), State).
+handle_set_primary_archive(State= #state{loader = efile}, File, ArchiveBin, FileInfo, ParserFun) ->
+    ?SAFE2(efile_set_primary_archive(State, File, ArchiveBin, FileInfo, ParserFun), State).
 
 handle_release_archives(State= #state{loader = efile}) ->
     ?SAFE2(efile_release_archives(State), State).
@@ -371,9 +396,14 @@ handle_list_dir(State = #state{loader = inet}, Dir) ->
     ?SAFE2(inet_list_dir(State, Dir), State).
 
 handle_read_file_info(State = #state{loader = efile}, File) ->
-    ?SAFE2(efile_read_file_info(State, File), State);
+    ?SAFE2(efile_read_file_info(State, File, true), State);
 handle_read_file_info(State = #state{loader = inet}, File) ->
     ?SAFE2(inet_read_file_info(State, File), State).
+
+handle_read_link_info(State = #state{loader = efile}, File) ->
+    ?SAFE2(efile_read_file_info(State, File, false), State);
+handle_read_link_info(State = #state{loader = inet}, File) ->
+    ?SAFE2(inet_read_link_info(State, File), State).
 
 handle_get_cwd(State = #state{loader = efile}, Drive) ->
     ?SAFE2(efile_get_cwd(State, Drive), State);
@@ -430,7 +460,7 @@ efile_multi_get_file_from_port2(_MFs, 0, _Max, State, _Paths, _Fun, _Ref, Ret) -
 
 efile_par_get_file(Ref, State, {Mod,File} = MF, Paths, Pid, Fun) ->
     %% One port for each file read in "parallel":
-    case prim_file:open([binary]) of
+    case prim_file:start() of
         {ok, Port} ->
             Port0 = State#state.data,
             State1 = State#state{data = Port},
@@ -484,8 +514,10 @@ efile_get_file_from_port3(State, File, [P | Paths]) ->
 efile_get_file_from_port3(State, _File, []) ->
     {{error,enoent},State}.
 
-efile_set_primary_archive(#state{prim_state = PS} = State, File, Bin, FileInfo) ->
-    {Res, PS2} = prim_set_primary_archive(PS, File, Bin, FileInfo),
+efile_set_primary_archive(#state{prim_state = PS} = State, File,
+			  ArchiveBin, FileInfo, ParserFun) ->
+    {Res, PS2} = prim_set_primary_archive(PS, File, ArchiveBin,
+					  FileInfo, ParserFun),
     {Res,State#state{prim_state = PS2}}.
 
 efile_release_archives(#state{prim_state = PS} = State) ->
@@ -496,8 +528,8 @@ efile_list_dir(#state{prim_state = PS} = State, Dir) ->
     {Res, PS2} = prim_list_dir(PS, Dir),
     {Res, State#state{prim_state = PS2}}.
 
-efile_read_file_info(#state{prim_state = PS} = State, File) ->
-    {Res, PS2} = prim_read_file_info(PS, File),
+efile_read_file_info(#state{prim_state = PS} = State, File, FollowLinks) ->
+    {Res, PS2} = prim_read_file_info(PS, File, FollowLinks),
     {Res, State#state{prim_state = PS2}}.
 
 efile_get_cwd(#state{prim_state = PS} = State, Drive) ->
@@ -700,6 +732,10 @@ inet_list_dir(State, Dir) ->
 inet_read_file_info(State, File) ->
     inet_send_and_rcv({read_file_info,File}, read_file_info, State).
 
+%% -> {{ok,Info},State} | {{error,Reason},State}
+inet_read_link_info(State, File) ->
+    inet_send_and_rcv({read_link_info,File}, read_link_info, State).
+
 %% -> {{ok,Cwd},State} | {{error,Reason},State}
 inet_get_cwd(State, []) ->
     inet_send_and_rcv(get_cwd, get_cwd, State);
@@ -729,7 +765,7 @@ udp_options() ->
 %% INET version IPv4 addresses
 %%
 ll_tcp_connect(LocalPort, IP, RemotePort) ->
-    case ll_open_set_bind(tcp, ?INET_FAMILY, tcp_options(),
+    case ll_open_set_bind(tcp, ?INET_FAMILY, stream, tcp_options(),
                           ?INET_ADDRESS, LocalPort) of
         {ok,S} ->
             case prim_inet:connect(S, IP, RemotePort, tcp_timeout()) of
@@ -743,11 +779,11 @@ ll_tcp_connect(LocalPort, IP, RemotePort) ->
 %% Open and initialize an udp port for broadcast
 %%
 ll_udp_open(P) ->
-    ll_open_set_bind(udp, ?INET_FAMILY, udp_options(), ?INET_ADDRESS, P).
+    ll_open_set_bind(udp, ?INET_FAMILY, dgram, udp_options(), ?INET_ADDRESS, P).
 
 
-ll_open_set_bind(Protocol, Family, SOpts, IP, Port) ->
-    case prim_inet:open(Protocol, Family) of
+ll_open_set_bind(Protocol, Family, Type, SOpts, IP, Port) ->
+    case prim_inet:open(Protocol, Family, Type) of
         {ok, S} ->
             case prim_inet:setopts(S, SOpts) of
                 ok ->
@@ -791,7 +827,7 @@ prim_release_archives(PS) ->
 prim_do_release_archives(PS, [{ArchiveFile, DictVal} | KeyVals], Acc) ->
     Res = 
 	case DictVal of
-	    {primary, _PrimZip, _FI} ->
+	    {primary, _PrimZip, _FI, _ParserFun} ->
 		ok; % Keep primary archive
 	    {Cache, _FI} ->
 		debug(PS, {release, cache, ArchiveFile}),
@@ -809,7 +845,7 @@ prim_do_release_archives(PS, [], []) ->
 prim_do_release_archives(PS, [], Errors) ->
     {{error, Errors}, PS#prim_state{primary_archive = undefined}}.
 
-prim_set_primary_archive(PS, undefined, undefined, undefined) ->
+prim_set_primary_archive(PS, undefined, undefined, undefined, _ParserFun) ->
     debug(PS, {set_primary_archive, clean}),
     case PS#prim_state.primary_archive of
         undefined ->
@@ -817,48 +853,40 @@ prim_set_primary_archive(PS, undefined, undefined, undefined) ->
             debug(PS, {return, Res}),
             {Res, PS};
         ArchiveFile ->
-            {primary, PrimZip, _FI} = erase(ArchiveFile),
+            {primary, PrimZip, _FI, _ParserFun2} = erase(ArchiveFile),
             ok = prim_zip:close(PrimZip),
             PS2 = PS#prim_state{primary_archive = undefined},
             Res = {ok, []},
             debug(PS2, {return, Res}),
             {Res, PS2}
     end;
-prim_set_primary_archive(PS, ArchiveFile, ArchiveBin, #file_info{} = FileInfo)
-  when is_list(ArchiveFile), is_binary(ArchiveBin) ->
+
+prim_set_primary_archive(PS, ArchiveFile0, ArchiveBin,
+			 #file_info{} = FileInfo, ParserFun)
+  when is_list(ArchiveFile0), is_binary(ArchiveBin) ->
     %% Try the archive file
-    debug(PS, {set_primary_archive, ArchiveFile, byte_size(ArchiveBin)}),
+    debug(PS, {set_primary_archive, ArchiveFile0, byte_size(ArchiveBin)}),
+    ArchiveFile = real_path(absname(ArchiveFile0)),
     {Res3, PS3} =
         case PS#prim_state.primary_archive of
             undefined ->
-                Fun =
-                    fun({Funny, _GI, _GB}, A) ->
-                            case Funny of
-                                ["", "nibe", RevApp] -> % Reverse ebin
-                                    %% Collect ebin directories in archive
-                                    Ebin = reverse(RevApp) ++ "/ebin",
-				    {true, [Ebin | A]};
-                                _ ->
-                                    {true, A}
-                            end
-                    end,
-                Ebins0 = [ArchiveFile],
-                case open_archive({ArchiveFile, ArchiveBin}, FileInfo, Ebins0, Fun) of
-                    {ok, PrimZip, {RevEbins, FI, _}} ->
-                        Ebins = reverse(RevEbins),
+                case load_prim_archive(ArchiveFile, ArchiveBin, FileInfo) of
+                    {ok, PrimZip, FI, Ebins} ->
                         debug(PS, {set_primary_archive, Ebins}),
-                        put(ArchiveFile, {primary, PrimZip, FI}),
-                        {{ok, Ebins}, PS#prim_state{primary_archive = ArchiveFile}};
+                        put(ArchiveFile, {primary, PrimZip, FI, ParserFun}),
+                        {{ok, Ebins},
+                         PS#prim_state{primary_archive = ArchiveFile}};
                     Error ->
                         debug(PS, {set_primary_archive, Error}),
                         {Error, PS}
                 end;
             OldArchiveFile ->
                 debug(PS, {set_primary_archive, clean}),
-                {primary, PrimZip, _FI} = erase(OldArchiveFile),
+                {primary, PrimZip, _FI, _ParserFun} = erase(OldArchiveFile),
                 ok = prim_zip:close(PrimZip),
                 PS2 = PS#prim_state{primary_archive = undefined},
-                prim_set_primary_archive(PS2, ArchiveFile, ArchiveBin, FileInfo)
+                prim_set_primary_archive(PS2, ArchiveFile, ArchiveBin,
+					 FileInfo, ParserFun)
         end,
     debug(PS3, {return, Res3}),
     {Res3, PS3}.
@@ -873,11 +901,11 @@ prim_get_file(PS, File) ->
                 {Res, PS};
             {archive, ArchiveFile, FileInArchive} ->
                 debug(PS, {archive_get_file, ArchiveFile, FileInArchive}),
-                FunnyFile = funny_split(FileInArchive, $/),
+                FileComponents = path_split(FileInArchive),
                 Fun =
-                    fun({Funny, _GetInfo, GetBin}, Acc) ->
+                    fun({Components, _GetInfo, GetBin}, Acc) ->
                             if
-                                Funny =:= FunnyFile ->
+                                Components =:= FileComponents ->
                                     {false, {ok, GetBin()}};
                                 true ->
                                     {true, Acc}
@@ -900,11 +928,11 @@ prim_list_dir(PS, Dir) ->
                 {Res, PS};
             {archive, ArchiveFile, FileInArchive} ->
                 debug(PS, {archive_list_dir, ArchiveFile, FileInArchive}),
-                FunnyDir = funny_split(FileInArchive, $/),
+                DirComponents = path_split(FileInArchive),
                 Fun =
-                    fun({Funny, _GetInfo, _GetBin}, {Status, Names} = Acc) ->
-                            case Funny of
-                                [RevName | FD] when FD =:= FunnyDir ->
+                    fun({Components, _GetInfo, _GetBin}, {Status, Names} = Acc) ->
+                            case Components of
+                                [RevName | DC] when DC =:= DirComponents ->
                                     case RevName of
                                         "" ->
                                             %% The listed directory
@@ -914,16 +942,16 @@ prim_list_dir(PS, Dir) ->
                                             Name = reverse(RevName),
                                             {true, {Status, [Name | Names]}}
                                     end;
-                                ["", RevName | FD] when FD =:= FunnyDir ->
+                                ["", RevName | DC] when DC =:= DirComponents ->
                                     %% Directory
                                     Name = reverse(RevName),
                                     {true, {Status, [Name | Names]}};
-                                [RevName] when FunnyDir =:= [""] ->
-                                    %% Top file
+                                [RevName] when DirComponents =:= [""] ->
+                                    %% File in top directory
                                     Name = reverse(RevName),
                                     {true, {ok, [Name | Names]}};
-                                ["", RevName] when FunnyDir =:= [""] ->
-                                    %% Top file
+                                ["", RevName] when DirComponents =:= [""] ->
+                                    %% Directory in top directory
                                     Name = reverse(RevName),
                                     {true, {ok, [Name | Names]}};
                                 _ ->
@@ -941,16 +969,18 @@ prim_list_dir(PS, Dir) ->
     debug(PS, {return, Res2}),
     {Res2, PS3}.
 
--spec prim_read_file_info(prim_state(), file:filename()) ->
+-spec prim_read_file_info(prim_state(), file:filename(), boolean()) ->
 	{{'ok', #file_info{}}, prim_state()}
       | {{'error', term()}, prim_state()}.
-prim_read_file_info(PS, File) ->
+prim_read_file_info(PS, File, FollowLinks) ->
     debug(PS, {read_file_info, File}),
     {Res2, PS2} =
         case name_split(PS#prim_state.primary_archive, File) of
             {file, PrimFile} ->
-                Res = prim_file:read_file_info(PrimFile),
-                {Res, PS};
+                case FollowLinks of
+                    true -> {prim_file:read_file_info(PrimFile), PS};
+                    false -> {prim_file:read_link_info(PrimFile), PS}
+                end;
             {archive, ArchiveFile, []} ->
                 %% Fake top directory
                 debug(PS, {archive_read_file_info, ArchiveFile}),
@@ -962,15 +992,14 @@ prim_read_file_info(PS, File) ->
                 end;
             {archive, ArchiveFile, FileInArchive} ->
                 debug(PS, {archive_read_file_info, File}),
-                FunnyFile = funny_split(FileInArchive, $/),
+                FileComponents = path_split(FileInArchive),
                 Fun =
-                    fun({Funny, GetInfo, _GetBin}, Acc)  ->
-			    case Funny of
-				[H | T] when  H =:= "",
-					      T =:= FunnyFile ->
+                    fun({Components, GetInfo, _GetBin}, Acc)  ->
+			    case Components of
+				["" | F] when F =:= FileComponents ->
                                     %% Directory
                                     {false, {ok, GetInfo()}};
-                                F when F =:= FunnyFile ->
+                                F when F =:= FileComponents ->
                                     %% Plain file
                                     {false, {ok, GetInfo()}};
                                 _ ->
@@ -1011,7 +1040,7 @@ apply_archive(PS, Fun, Acc, Archive) ->
 		    %% put(Archive, {Error, FI}),
 		    {Error, PS}
 	    end;
-        {primary, PrimZip, FI} ->
+        {primary, PrimZip, FI, ParserFun} ->
 	    case prim_file:read_file_info(Archive) of
                 {ok, FI2} 
 		  when FI#file_info.mtime =:= FI2#file_info.mtime ->
@@ -1022,9 +1051,19 @@ apply_archive(PS, Fun, Acc, Archive) ->
 			    debug(PS, {primary, Error}),
 			    {Error, PS}
 		    end;
+		{ok, FI2} ->
+		    ok = clear_cache(Archive, {ok, PrimZip}),
+		    case load_prim_archive(Archive, FI2, ParserFun) of
+			{ok, PrimZip2, FI3, _Ebins} ->
+			    debug(PS, {cache, {update, Archive}}),
+			    put(Archive, {primary, PrimZip2, FI3, ParserFun});
+			Error2 ->
+			    debug(PS, {cache, {clear, Error2}})
+		    end,
+		    apply_archive(PS, Fun, Acc, Archive);
 		Error ->
 		    debug(PS, {cache, {clear, Error}}),
-		    clear_cache(Archive, {ok, PrimZip}),
+		    ok = clear_cache(Archive, {ok, PrimZip}),
 		    apply_archive(PS, Fun, Acc, Archive)
 	    end;
         {Cache, FI} ->
@@ -1063,50 +1102,69 @@ open_archive(Archive, Acc, Fun) ->
 	    {error, Reason}
     end.
 
+%% Open the given archive and iterate through all files with an own
+%% wrapper fun in order to identify each file as a component list as
+%% returned from path_split/1.
+%%
+%% In the archive (zip) file, directory elements might or might not be
+%% present. To ensure consistency, a directory element is added if it
+%% does not already exist (ensure_virtual_dirs/6). NOTE that there will
+%% be no such directory element for the top directory of the archive.
 open_archive(Archive, FileInfo, Acc, Fun) ->
     FakeFI = FileInfo#file_info{type = directory},
     Wrapper =
-	fun({N, GI, GB}, {A, I, FunnyDirs}) -> % Full iteration at open
-		Funny = funny_split(N, $/),
-		FunnyDirs2 =
-		    case Funny of
-			["" | FunnyDir] ->
-			    [FunnyDir | FunnyDirs];
+	fun({N, GI, GB}, {A, I, Dirs}) ->
+		Components = path_split(N),
+		Dirs2 =
+		    case Components of
+			["" | Dir] ->
+			    %% This is a directory
+			    [Dir | Dirs];
 			_ ->
-			    FunnyDirs
+			    %% This is a regular file
+			    Dirs
 		    end,
-		{Includes, FunnyDirs3, A2} = 
-		    ensure_virtual_dirs(Funny, Fun, FakeFI, [{true, Funny}], FunnyDirs2, A),
-		{_Continue, A3} = Fun({Funny, GI, GB}, A2),
-		{true, Includes, {A3, I, FunnyDirs3}}
+		{Includes, Dirs3, A2} =
+		    ensure_virtual_dirs(Components, Fun, FakeFI,
+					[{true, Components}], Dirs2, A),
+		{_Continue, A3} = Fun({Components, GI, GB}, A2),
+		{true, Includes, {A3, I, Dirs3}}
 	end,
     prim_zip:open(Wrapper, {Acc, FakeFI, []}, Archive).
 
-ensure_virtual_dirs(Funny, Fun, FakeFI, Includes, FunnyDirs, Acc) ->
-    case Funny of
-	[_ | FunnyDir] ->
-	    case lists:member(FunnyDir, FunnyDirs) of % BIF
+ensure_virtual_dirs(Components, Fun, FakeFI, Includes, Dirs, Acc) ->
+    case Components of
+	[_] ->
+	    %% Don't add virtual dir for top directory
+	    {Includes, Dirs, Acc};
+	[_ | Dir] ->
+	    case lists:member(Dir, Dirs) of % BIF
 		false ->
+		    %% The directory does not yet exist - add it
 		    GetInfo = fun() -> FakeFI end,
 		    GetBin = fun() -> <<>> end,
-		    VirtualDir = ["" | FunnyDir],
+		    VirtualDir = ["" | Dir],
 		    Includes2 = [{true, VirtualDir, GetInfo, GetBin} | Includes],
-		    FunnyDirs2 = [FunnyDir | FunnyDirs],
-		    {I, F, Acc2} = ensure_virtual_dirs(FunnyDir, Fun, FakeFI, Includes2, FunnyDirs2, Acc),
+		    Dirs2 = [Dir | Dirs],
+
+		    %% Recursively ensure dir elements on all levels
+		    {I, F, Acc2} = ensure_virtual_dirs(Dir, Fun, FakeFI,
+						       Includes2, Dirs2, Acc),
+
 		    {_Continue, Acc3} = Fun({VirtualDir, GetInfo, GetBin}, Acc2),
 		    {I, F, Acc3};
 		true ->
-		    {reverse(Includes), FunnyDirs, Acc}
-	    end;
-	[] ->
-	    {reverse(Includes), FunnyDirs, Acc}
+		    %% The directory element does already exist
+		    %% Recursivly ensure dir elements on all levels
+		    ensure_virtual_dirs(Dir,Fun,FakeFI,Includes,Dirs,Acc)
+	    end
     end.
 
 foldl_archive(PrimZip, Acc, Fun) ->
     Wrapper =
-        fun({Funny, GI, GB}, A) ->
+        fun({Components, GI, GB}, A) ->
                 %% Allow partial iteration at foldl
-                {Continue, A2} = Fun({Funny, GI, GB}, A),
+                {Continue, A2} = Fun({Components, GI, GB}, A),
                 {Continue, true, A2}
         end,                        
     prim_zip:foldl(Wrapper, Acc, PrimZip).
@@ -1202,16 +1260,31 @@ reverse([A, B]) ->
 reverse([A, B | L]) ->
     lists:reverse(L, [B, A]). % BIF
                         
-%% Returns all lists in reverse order
-funny_split(List, Sep) ->
-   funny_split(List, Sep, [], []).
+%% Returns a reversed list of path components, each component itself a
+%% reversed list (string), e.g.
+%% /path/to/file -> ["elif","ot","htap",""]
+%% /path/to/dir/ -> ["","rid","ot","htap",""]
+%% Note the "" marking leading and trailing / (slash).
+path_split(List) ->
+   path_split(List, [], []).
 
-funny_split([Sep | Tail], Sep, Path, Paths) ->
-    funny_split(Tail, Sep, [], [Path | Paths]);
-funny_split([Head | Tail], Sep, Path, Paths) ->
-    funny_split(Tail, Sep, [Head | Path], Paths);
-funny_split([], _Sep, Path, Paths) ->
+path_split([$/ | Tail], Path, Paths) ->
+    path_split(Tail, [], [Path | Paths]);
+path_split([Head | Tail], Path, Paths) ->
+    path_split(Tail, [Head | Path], Paths);
+path_split([], Path, Paths) ->
     [Path | Paths].
+
+%% The opposite of path_split/1
+path_join(Paths) ->
+    path_join(Paths,[]).
+
+path_join([""],Acc) ->
+    Acc;
+path_join([Path],Acc) ->
+    reverse(Path) ++ Acc;
+path_join([Path|Paths],Acc) ->
+    path_join(Paths,"/" ++ reverse(Path) ++ Acc).
 
 name_split(ArchiveFile, File0) ->
     File = absname(File0),
@@ -1235,26 +1308,22 @@ do_name_split(undefined, File) ->
 	    %% False match. Assume plain file
             {file, File}
     end;
-do_name_split(ArchiveFile0, File) ->
+do_name_split(ArchiveFile, File) ->
     %% Look first in primary archive
-    ArchiveFile = absname(ArchiveFile0),
-    case string_match(File, ArchiveFile, []) of
+    case string_match(real_path(File), ArchiveFile, []) of
         no_match ->
             %% Archive or plain file
             do_name_split(undefined, File);
         {match, _RevPrimArchiveFile, FileInArchive} ->
             %% Primary archive
-            case FileInArchive of
-                [$/ | FileInArchive2] ->
-                    {archive, ArchiveFile, FileInArchive2};
-                _ ->
-                    {archive, ArchiveFile, FileInArchive}
-            end
+	    {archive, ArchiveFile, FileInArchive}
     end.
 
 string_match([Char | File], [Char | Archive], RevTop) ->
     string_match(File, Archive, [Char | RevTop]);
-string_match(File, [], RevTop) ->
+string_match([] = File, [], RevTop) ->
+    {match, RevTop, File};
+string_match([$/ | File], [], RevTop) ->
     {match, RevTop, File};
 string_match(_File, _Archive, _RevTop) ->
     no_match.
@@ -1314,14 +1383,14 @@ absname(Name) ->
 	    case prim_file:get_cwd() of
 		{ok, Cwd} ->
 		    Cwd ++ "/" ++ Name2;
-		{error, _} -> 
+		{error, _} ->
 		    Name2
 	    end;
 	volumerelative ->
 	    case prim_file:get_cwd() of
 		{ok, Cwd} ->
 		    absname_vr(Name2, Cwd);
-		{error, _} -> 
+		{error, _} ->
 		    Name2
 	    end
     end.
@@ -1345,17 +1414,12 @@ absname_vr([Drive, $\: | NameRest], _) ->
 %% Assumes normalized name
 pathtype(Name) when is_list(Name) -> 
     case erlang:system_info(os_type) of
+	{ose, _}  ->
+	    unix_pathtype(Name);
 	{unix, _}  -> 
 	    unix_pathtype(Name);
 	{win32, _} ->
-	    win32_pathtype(Name);
-	{vxworks, _} ->
-	    case vxworks_first(Name) of
-		{device, _Rest, _Dev} ->
-		    absolute;
-		_ ->
-		    relative
-	    end
+	    win32_pathtype(Name)
     end.
 
 unix_pathtype(Name) ->
@@ -1380,56 +1444,16 @@ win32_pathtype(Name) ->
 	    win32_pathtype([Char | List++Rest]);
 	[$/, $/|_] -> 
 	    absolute;
-	[$\\, $/|_] -> 
-	    absolute;
-	[$/, $\\|_] ->
-	    absolute;
-	[$\\, $\\|_] -> 
-	    absolute;
 	[$/|_] -> 
 	    volumerelative;
-	[$\\|_] -> 
-	    volumerelative;
 	[C1, C2, List | Rest] when is_list(List) ->
-	    pathtype([C1, C2|List ++ Rest]);
+	    win32_pathtype([C1, C2|List ++ Rest]);
 	[_Letter, $:, $/|_] -> 
-	    absolute;
-	[_Letter, $:, $\\|_] ->
 	    absolute;
 	[_Letter, $:|_] -> 
 	    volumerelative;
 	_ -> 
 	    relative
-    end.
-
-vxworks_first(Name) ->
-    case Name of
-	[] ->
-	    {not_device, [], []};
-	[$/ | T] ->
-	    vxworks_first2(device, T, [$/]);
-	[$\\ | T] ->
-	    vxworks_first2(device, T, [$/]);
-	[H | T] when is_list(H) ->
-	    vxworks_first(H ++ T);
-	[H | T] ->
-	    vxworks_first2(not_device, T, [H])
-    end.
-
-vxworks_first2(Devicep, Name, FirstComp) ->
-    case Name of 
-	[] ->
-    {Devicep, [], FirstComp};
-	[$/ |T ] ->
-	    {Devicep, [$/ | T], FirstComp};
-	[$\\ | T] ->
-	    {Devicep, [$/ | T], FirstComp};
-	[$: | T]->
-	    {device, T, [$: | FirstComp]};
-	[H | T] when is_list(H) ->
-	    vxworks_first2(Devicep, H ++ T, FirstComp);
-	[H | T] ->
-	    vxworks_first2(Devicep, T, [H | FirstComp])
     end.
 
 normalize(Name, Acc) ->
@@ -1439,9 +1463,88 @@ normalize(Name, Acc) ->
 	[Atom | Rest] when is_atom(Atom) ->
 	    normalize(atom_to_list(Atom) ++ Rest, Acc);
 	[$\\ | Chars] ->
-	    normalize(Chars, [$/ | Acc]);
+	    case erlang:system_info(os_type) of
+                {win32, _} ->
+		    normalize(Chars, [$/ | Acc]);
+		_ ->
+		    normalize(Chars, [$\\ | Acc])
+	    end;
 	[Char | Chars] ->
 	    normalize(Chars, [Char | Acc]);
 	[] ->
 	    reverse(Acc)
+    end.
+
+%% Remove .. and . from the path, e.g.
+%% /path/./to/this/../file -> /path/to/file
+%% This includes resolving symlinks.
+%%
+%% This is done to ensure that paths are totally normalized before
+%% comparing to find out if a file is inside the primary archive or
+%% not.
+real_path(Name) ->
+    real_path(Name,reverse(path_split(Name)),[],[]).
+
+real_path(_Name,[],Acc,_Links) ->
+    path_join(Acc);
+real_path(Name,["."|Paths],Acc,Links) ->
+    real_path(Name,Paths,Acc,Links);
+real_path(Name,[".."|Paths],[""]=Acc,Links) ->
+    %% /.. -> / (can't get higher than root)
+    real_path(Name,Paths,Acc,Links);
+real_path(Name,[".."|Paths],[Prev|Acc],Links) when Prev=/=".." ->
+    real_path(Name,Paths,Acc,Links);
+real_path(Name,[Path|Paths],Acc,Links) ->
+    This = [Path|Acc],
+    ThisFile = path_join(This),
+    case lists:member(ThisFile,Links) of
+	true -> % circular!!
+	    Name;
+	false ->
+	    case prim_file:read_link(ThisFile) of
+		{ok,Link} ->
+		    case reverse(path_split(Link)) of
+			[""|_] = LinkPaths ->
+			    real_path(Name,LinkPaths++Paths,[],[ThisFile|Links]);
+			LinkPaths ->
+                % windows currently does not allow creation of relative symlinks
+                % across different drives
+				case erlang:system_info(os_type) of
+                 {win32, _} ->
+                     real_path(Name,LinkPaths++Paths,[],[ThisFile|Links]);
+                 _ ->
+                     real_path(Name,LinkPaths++Paths,Acc,[ThisFile|Links])
+                end
+		    end;
+		_ ->
+		    real_path(Name,Paths,This,Links)
+	    end
+    end.
+
+load_prim_archive(ArchiveFile, ArchiveBin, #file_info{}=FileInfo) ->
+    Fun = fun({Components, _GI, _GB}, A) ->
+		  case Components of
+		      ["", "nibe", RevApp] -> % Reverse ebin
+			  %% Collect ebin directories in archive
+			  Ebin = lists:reverse(RevApp, "/ebin"),
+			  {true, [Ebin | A]};
+		      _ ->
+			  {true, A}
+		  end
+	  end,
+    Ebins0 = [ArchiveFile],
+    case open_archive({ArchiveFile, ArchiveBin}, FileInfo,
+		      Ebins0, Fun) of
+	{ok, PrimZip, {RevEbins, FI, _}} ->
+	    Ebins = reverse(RevEbins),
+	    {ok, PrimZip, FI, Ebins};
+	Error ->
+	    Error
+    end;
+load_prim_archive(ArchiveFile, FileInfo, ParserFun) ->
+    case ParserFun(ArchiveFile) of
+	{ok, ArchiveBin} ->
+	    load_prim_archive(ArchiveFile, ArchiveBin, FileInfo);
+	Error ->
+	    Error
     end.

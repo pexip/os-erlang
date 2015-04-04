@@ -1,7 +1,7 @@
 /*
  * %CopyrightBegin%
  * 
- * Copyright Ericsson AB 2001-2011. All Rights Reserved.
+ * Copyright Ericsson AB 2001-2012. All Rights Reserved.
  * 
  * The contents of this file are subject to the Erlang Public License,
  * Version 1.1, (the "License"); you may not use this file except in
@@ -31,6 +31,7 @@
 #include "erl_process.h"
 #include "bif.h"
 #include "big.h"
+#include "erl_map.h"
 #include "hipe_debug.h"
 #include "hipe_mode_switch.h"
 #include "hipe_arch.h"
@@ -151,18 +152,40 @@ BIF_RETTYPE hipe_bifs_modeswitch_debug_off_0(BIF_ALIST_0)
     BIF_RET(am_true);
 }
 
-/* BIFs for handling the message area */
+#if defined(ERTS_ENABLE_LOCK_CHECK) && defined(ERTS_SMP)
 
-BIF_RETTYPE hipe_bifs_show_message_area_0(BIF_ALIST_0)
+BIF_RETTYPE hipe_debug_bif_wrapper(BIF_ALIST_1);
+
+#    define ERTS_SMP_REQ_PROC_MAIN_LOCK(P) \
+       if ((P)) erts_proc_lc_require_lock((P), ERTS_PROC_LOCK_MAIN,\
+					  __FILE__, __LINE__)
+#    define ERTS_SMP_UNREQ_PROC_MAIN_LOCK(P) \
+        if ((P)) erts_proc_lc_unrequire_lock((P), ERTS_PROC_LOCK_MAIN)
+
+BIF_RETTYPE hipe_debug_bif_wrapper(BIF_ALIST_1)
 {
-#ifdef HYBRID
-#ifdef DEBUG
-    print_message_area();
-#else
-    printf("Only available in debug compiled emulator\r\n");
-#endif
-    BIF_RET(am_true);
-#else
-    BIF_RET(am_false);
-#endif
+    typedef BIF_RETTYPE Bif(BIF_ALIST_1);
+    Bif* fp = (Bif*) (BIF_P->hipe.bif_callee);
+    BIF_RETTYPE res;
+    ERTS_SMP_UNREQ_PROC_MAIN_LOCK(BIF_P);
+    res = (*fp)(BIF_P, BIF__ARGS);
+    ERTS_SMP_REQ_PROC_MAIN_LOCK(BIF_P);
+    return res;
+}
+
+#endif /* ERTS_ENABLE_LOCK_CHECK && ERTS_SMP */
+
+
+BIF_RETTYPE hipe_bifs_debug_native_called_2(BIF_ALIST_2)
+{
+    erts_printf("hipe_debug_native_called: %T(%T)\r\n", BIF_ARG_1, BIF_ARG_2);
+    BIF_RET(am_ok);
+}
+
+/* Stub-BIF for LLVM:
+ * Reloads BP, SP (in llvm unwind label) */
+
+BIF_RETTYPE hipe_bifs_llvm_fix_pinned_regs_0(BIF_ALIST_0)
+{
+    BIF_RET(am_ok);
 }

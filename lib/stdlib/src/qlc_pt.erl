@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2004-2011. All Rights Reserved.
+%% Copyright Ericsson AB 2004-2014. All Rights Reserved.
 %%
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -31,9 +31,6 @@
 %% Also in qlc.erl.
 -define(QLC_Q(L1, L2, L3, L4, LC, Os), 
         {call,L1,{remote,L2,{atom,L3,?APIMOD},{atom,L4,?Q}},[LC | Os]}).
--define(QLC_QQ(L1, L2, L3, L4, L5, L6, LC, Os), % packages...
-        {call,L1,{remote,L2,{record_field,L3,{atom,L4,''},
-                             {atom,L5,?APIMOD}},{atom,L6,?Q}},[LC | Os]}).
 -define(IMP_Q(L1, L2, LC, Os), {call,L,{atom,L2,?Q},[LC | Os]}).
 
 %% Also in qlc.erl.
@@ -217,7 +214,7 @@ compile_messages(Forms, FormsNoShadows, Options, State) ->
             end,
     {_,BGens} = qual_fold(BGenF, [], [], FormsNoShadows, State),
     GenForm = used_genvar_check(FormsNoShadows, State),
-    ?DEBUG("GenForm = ~s~n", [catch erl_pp:form(GenForm)]),
+    ?DEBUG("GenForm = ~ts~n", [catch erl_pp:form(GenForm)]),
     WarnFun = fun(Id, LC, A) -> {tag_lines(LC, get_lcid_no(Id)), A} end,
     {WForms,ok} = qlc_mapfold(WarnFun, ok, Forms, State),
     {Es,Ws} = compile_forms(WForms ++ [GenForm], Options),
@@ -340,7 +337,7 @@ compile_errors(FormsNoShadows) ->
         {[], _Warnings} ->
             [];
         {Errors, _Warnings} ->
-            ?DEBUG("got errors ~p~n", [Errors]),
+            ?DEBUG("got errors ~tp~n", [Errors]),
             lists:flatmap(fun({_File,Es}) -> Es end, Errors)
     end.
 
@@ -1221,13 +1218,14 @@ lu_skip(ColConstants, FilterData, PatternFrame, PatternVars,
                  %% column, the filter will not be skipped.
                  %% (an example: {X=1} <- ..., X =:= 1).
                  length(D = Cols -- PatternColumns) =:= 1,
-                 Frame <- SFs,
-                 begin
+                 {{_,Col} = Column, Constants} <- D,
+                 %% Check that the following holds for all frames.
+                 lists:all(
+                   fun(Frame) ->
                      %% The column is compared/matched against a constant.
                      %% If there are no more comparisons/matches then
                      %% the filter can be replaced by the lookup of
                      %% the constant.
-                     [{{_,Col} = Column, Constants}] = D,
                      {VarI, FrameI} = unify_column(Frame, PV, Col, BindFun,
                                                    Imported),
                      VarValues = deref_skip(VarI, FrameI, LookupOp, Imported),
@@ -1256,7 +1254,7 @@ lu_skip(ColConstants, FilterData, PatternFrame, PatternVars,
                      length(VarValues) =< 1 andalso
                      (Constants -- LookedUpConstants =:= []) andalso
                      bindings_is_subset(Frame, F2, Imported)
-                 end],
+                   end, SFs)],
     ColFils = family_list(ColFil),
     %% The skip tag 'all' means that all filters are covered by the lookup.
     %% It does not imply that there is only one generator as is the case
@@ -2186,7 +2184,7 @@ try_ms(E, P, Fltr, State) ->
             {function,L,foo,0,[{clause,L,[],[],[MS0]}]} = lists:last(X),
             MS = erl_parse:normalise(var2const(MS0)),
             XMS = ets:match_spec_compile(MS),
-            true = is_binary(XMS),
+            true = ets:is_compiled_ms(XMS),
             {ok, MS, MS0} 
         end of
         {'EXIT', _Reason} ->
@@ -2475,13 +2473,6 @@ qlcmf(?QLC_Q(L1, L2, L3, L4, LC0, Os0), F, Imp, A0, No0) when length(Os0) < 2 ->
     NL = make_lcid(L1, No),
     {T, A} = F(NL, LC, A2),
     {?QLC_Q(L1, L2, L3, L4, T, Os), A, No + 1};
-qlcmf(?QLC_QQ(L1, L2, L3, L4, L5, L6, LC0, Os0),
-      F, Imp, A0, No0) when length(Os0) < 2 ->
-    {Os, A1, No1} = qlcmf(Os0, F, Imp, A0, No0),
-    {LC, A2, No} = qlcmf(LC0, F, Imp, A1, No1), % nested...
-    NL = make_lcid(L1, No),
-    {T, A} = F(NL, LC, A2),
-    {?QLC_QQ(L1, L2, L3, L4, L5, L6, T, Os), A, No + 1};
 qlcmf(?IMP_Q(L1, L2, LC0, Os0), F, Imp=true, A0, No0) when length(Os0) < 2 ->
     {Os, A1, No1} = qlcmf(Os0, F, Imp, A0, No0),
     {LC, A2, No} = qlcmf(LC0, F, Imp, A1, No1), % nested...
@@ -2550,6 +2541,19 @@ nos({'fun',L,{clauses,Cs}}, S) ->
                {clause,Ln,H,G,B}
            end || {clause,Ln,H0,G0,B0} <- Cs],
     {{'fun',L,{clauses,NCs}}, S};
+nos({named_fun,Loc,Name,Cs}, S) ->
+    {{var,NLoc,NName}, S1} = case Name of
+                                 '_' ->
+                                     S;
+                                 Name ->
+                                     nos_pattern({var,Loc,Name}, S)
+                               end,
+    NCs = [begin
+               {H, S2} = nos_pattern(H0, S1),
+               {[G, B], _} = nos([G0, B0], S2),
+               {clause,CLoc,H,G,B}
+           end || {clause,CLoc,H0,G0,B0} <- Cs],
+    {{named_fun,NLoc,NName,NCs}, S};
 nos({lc,L,E0,Qs0}, S) ->
     %% QLCs as well as LCs. It is OK to modify LCs as long as they
     %% occur within QLCs--the warning messages have already been found
@@ -2723,6 +2727,9 @@ var2const(E) ->
 
 var_map(F, {var, _, _}=V) ->
     F(V);
+var_map(F, {named_fun,NLoc,NName,Cs}) ->
+    {var,Loc,Name} = F({var,NLoc,NName}),
+    {named_fun,Loc,Name,var_map(F, Cs)};
 var_map(F, T) when is_tuple(T) ->
     list_to_tuple(var_map(F, tuple_to_list(T)));
 var_map(F, [E | Es]) ->
@@ -2752,7 +2759,7 @@ family(L) ->
 display_forms(Forms) ->
     io:format("Forms ***~n"),
     lists:foreach(fun(Form) ->
-                          io:format("~s~n", [catch erl_pp:form(Form)])
+                          io:format("~ts~n", [catch erl_pp:form(Form)])
                   end, Forms),
     io:format("End Forms ***~n").
 -else.

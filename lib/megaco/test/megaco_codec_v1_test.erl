@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %% 
-%% Copyright Ericsson AB 2003-2011. All Rights Reserved.
+%% Copyright Ericsson AB 2003-2013. All Rights Reserved.
 %% 
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -66,11 +66,7 @@
 	 
 	 ber_test_msgs/1, 
 	 
-	 ber_bin_test_msgs/1, 
-	
 	 per_test_msgs/1,
-	
-	 per_bin_test_msgs/1,
 	
 	 erl_dist_m_test_msgs/1,
 
@@ -371,9 +367,9 @@ profile_decode_text_messages(Slogan, Codec, Config, Msgs0) ->
 		decode_text_messages(Codec, Config, Bins, [])
 	  end,
     %% Make a dry run, just to make sure all modules are loaded:
-    io:format("make a dry run..~n", []),
+    io:format("make a dry run...~n", []),
     (catch Fun()),
-    io:format("make the run..~n", []),
+    io:format("make the run...~n", []),
     megaco_profile:profile(Slogan, Fun).
 
 %% (catch megaco_codec_v1_test:profile_encode_compact_text_messages()).
@@ -420,20 +416,9 @@ decode_text_messages(Codec, Config, [Msg|Msgs], Acc) ->
 
 %% ----
 
-expand(RootCase) ->
-    expand([RootCase], []).
-
-expand([], Acc) ->
-    lists:flatten(lists:reverse(Acc));
-expand([Case|Cases], Acc) ->
-    case (catch apply(?MODULE,Case,[suite])) of
-	[] ->
-	    expand(Cases, [Case|Acc]);
-	C when is_list(C) ->
-	    expand(Cases, [expand(C, [])|Acc]);
-	_ ->
-	    expand(Cases, [Case|Acc])
-    end.
+tickets() ->
+    %% io:format("~w:tickets -> entry~n", [?MODULE]),
+    megaco_test_lib:tickets(?MODULE).
 
 
 %% ----
@@ -476,9 +461,7 @@ groups() ->
 			    {group, flex_compact}]},
      {binary,          [], [{group, bin}, 
 			    {group, ber}, 
-			    {group, ber_bin},
-			    {group, per}, 
-			    {group, per_bin}]},
+			    {group, per}]},
      {erl_dist,        [], [{group, erl_dist_m}]},
      {pretty,          [], [pretty_test_msgs]},
      {compact,         [], [compact_test_msgs]},
@@ -486,9 +469,7 @@ groups() ->
      {flex_compact,    [], flex_compact_cases()},
      {bin,             [], [bin_test_msgs]}, 
      {ber,             [], [ber_test_msgs]},
-     {ber_bin,         [], [ber_bin_test_msgs]},
      {per,             [], [per_test_msgs]},
-     {per_bin,         [], [per_bin_test_msgs]},
      {erl_dist_m,      [], [erl_dist_m_test_msgs]},
      {tickets,         [], [{group, compact_tickets}, 
 			    {group, pretty_tickets},
@@ -602,61 +583,56 @@ end_per_group(_GroupName, Config) ->
     Config.
 
 flex_pretty_cases() -> 
-    [flex_pretty_test_msgs].
+    [
+     flex_pretty_test_msgs
+    ].
 
 flex_compact_cases() -> 
-    [flex_compact_test_msgs, flex_compact_dm_timers1,
-     flex_compact_dm_timers2, flex_compact_dm_timers3,
-     flex_compact_dm_timers4, flex_compact_dm_timers5,
-     flex_compact_dm_timers6].
-
-%% Support for per_bin was added to ASN.1 as of version
-%% 1.3.2 (R8). And later merged into 1.3.1.3 (R7). These
-%% releases are identical (as far as I know).
-%% 
+    [
+     flex_compact_test_msgs, 
+     flex_compact_dm_timers1,
+     flex_compact_dm_timers2, 
+     flex_compact_dm_timers3,
+     flex_compact_dm_timers4, 
+     flex_compact_dm_timers5,
+     flex_compact_dm_timers6
+    ].
 
 flex_compact_tickets_cases() -> 
-    [flex_compact_otp7431_msg01a,
-     flex_compact_otp7431_msg01b, flex_compact_otp7431_msg02,
-     flex_compact_otp7431_msg03, flex_compact_otp7431_msg04,
-     flex_compact_otp7431_msg05, flex_compact_otp7431_msg06,
-     flex_compact_otp7431_msg07].
+    [
+     flex_compact_otp7431_msg01a,
+     flex_compact_otp7431_msg01b, 
+     flex_compact_otp7431_msg02,
+     flex_compact_otp7431_msg03, 
+     flex_compact_otp7431_msg04,
+     flex_compact_otp7431_msg05, 
+     flex_compact_otp7431_msg06,
+     flex_compact_otp7431_msg07
+    ].
 
 flex_pretty_tickets_cases() -> 
-    [flex_pretty_otp5042_msg1, flex_pretty_otp5085_msg1,
-     flex_pretty_otp5085_msg2, flex_pretty_otp5085_msg3,
-     flex_pretty_otp5085_msg4, flex_pretty_otp5085_msg5,
-     flex_pretty_otp5085_msg6, flex_pretty_otp5085_msg7,
-     flex_pretty_otp5600_msg1, flex_pretty_otp5600_msg2,
-     flex_pretty_otp5601_msg1, flex_pretty_otp5793_msg01,
-     flex_pretty_otp7431_msg01, flex_pretty_otp7431_msg02,
-     flex_pretty_otp7431_msg03, flex_pretty_otp7431_msg04,
-     flex_pretty_otp7431_msg05, flex_pretty_otp7431_msg06,
-     flex_pretty_otp7431_msg07].
+    [
+     flex_pretty_otp5042_msg1, 
+     flex_pretty_otp5085_msg1,
+     flex_pretty_otp5085_msg2, 
+     flex_pretty_otp5085_msg3,
+     flex_pretty_otp5085_msg4, 
+     flex_pretty_otp5085_msg5,
+     flex_pretty_otp5085_msg6, 
+     flex_pretty_otp5085_msg7,
+     flex_pretty_otp5600_msg1, 
+     flex_pretty_otp5600_msg2,
+     flex_pretty_otp5601_msg1, 
+     flex_pretty_otp5793_msg01,
+     flex_pretty_otp7431_msg01, 
+     flex_pretty_otp7431_msg02,
+     flex_pretty_otp7431_msg03, 
+     flex_pretty_otp7431_msg04,
+     flex_pretty_otp7431_msg05, 
+     flex_pretty_otp7431_msg06,
+     flex_pretty_otp7431_msg07
+    ].
 
-%% ----
-
-tickets() ->
-    Flag  = process_flag(trap_exit, true),    
-    Cases = expand(tickets),
-    Fun   = fun(Case) ->
-		    C = init_per_testcase(Case, [{tc_timeout, 
-						  timer:minutes(10)}]),
-		    io:format("Eval ~w~n", [Case]),
-		    Result = 
-			case (catch apply(?MODULE, Case, [C])) of
-			    {'EXIT', Reason} ->
- 				io:format("~n~p exited:~n   ~p~n", 
- 					  [Case, Reason]),
-				{error, {Case, Reason}};
-			    Res ->
-				Res
-			end,
-		    end_per_testcase(Case, C),
-		    Result
-	    end,
-    process_flag(trap_exit, Flag),
-    lists:map(Fun, Cases).
 
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -1266,17 +1242,6 @@ ber_test_msgs(Config) when is_list(Config) ->
    
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
-ber_bin_test_msgs(suite) ->
-    [];
-ber_bin_test_msgs(Config) when is_list(Config) ->
-    ?ACQUIRE_NODES(1, Config),
-    Msgs = msgs1(),
-    DynamicDecode = true,
-    test_msgs(megaco_ber_bin_encoder, DynamicDecode, [], Msgs).
-
-
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-
 per_test_msgs(suite) ->
     [];
 per_test_msgs(Config) when is_list(Config) ->
@@ -1284,17 +1249,6 @@ per_test_msgs(Config) when is_list(Config) ->
     Msgs = msgs1(),
     DynamicDecode = false,
     test_msgs(megaco_per_encoder, DynamicDecode, [], Msgs).
-
-
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-
-per_bin_test_msgs(suite) ->
-    [];
-per_bin_test_msgs(Config) when is_list(Config) ->
-    ?ACQUIRE_NODES(1, Config),
-    Msgs = msgs1(),
-    DynamicDecode = false,
-    test_msgs(megaco_per_bin_encoder, DynamicDecode, [], Msgs).
 
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -3328,7 +3282,7 @@ pretty_otp5068_msg1() ->
       190,
       asn1_NOVALUE,
       {actionReplies,
-       [{'ActionReply',  %% Comments: Detta upprepas många gånger
+       [{'ActionReply',  %% Comments: This is repeated many times.
 	 0,
 	 asn1_NOVALUE,
 	 asn1_NOVALUE,

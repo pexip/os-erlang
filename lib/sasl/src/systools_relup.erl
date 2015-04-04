@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %% 
-%% Copyright Ericsson AB 1996-2011. All Rights Reserved.
+%% Copyright Ericsson AB 1996-2013. All Rights Reserved.
 %% 
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -112,6 +112,12 @@
 -export([mk_relup/3, mk_relup/4, format_error/1, format_warning/1]).
 -include("systools.hrl").
 
+-define(R15_SASL_VSN,"2.2").
+
+%% Used by release_handler:find_script/4.
+%% Also used by kernel, stdlib and sasl tests
+-export([appup_search_for_version/2]).
+
 %%-----------------------------------------------------------------
 %% mk_relup(TopRelFile, BaseUpRelDcs, BaseDnRelDcs)
 %% mk_relup(TopRelFile, BaseUpRelDcs, BaseDnRelDcs, Opts) -> Ret
@@ -200,7 +206,13 @@ do_mk_relup(TopRelFile, BaseUpRelDcs, BaseDnRelDcs, Path, Opts) ->
 	%% TopRel = #release
 	%% NameVsnApps = [{{Name, Vsn}, #application}]
 	{ok, TopRel, NameVsnApps, Ws0} ->
-	    %%
+	    case lists:member({warning,missing_sasl},Ws0) of
+		true ->
+		    throw({error,?MODULE,{missing_sasl,TopRel}});
+		false ->
+		    ok
+	    end,
+
 	    %% TopApps = [#application]
 	    TopApps = lists:map(fun({_, App}) -> App end, NameVsnApps),
 
@@ -247,7 +259,21 @@ foreach_baserel_up(TopRel, TopApps, [BaseRelDc|BaseRelDcs], Path, Opts,
 	       Ws, Acc) ->
     BaseRelFile = extract_filename(BaseRelDc),
 
-    {ok, BaseRel} = systools_make:read_release(BaseRelFile, Path),
+    {BaseRel, {BaseNameVsns, BaseApps}, Ws0} =
+	case systools_make:get_release(BaseRelFile, Path) of
+	    {ok, BR, NameVsnApps, Warns} ->
+		case lists:member({warning,missing_sasl},Warns) of
+		    true ->
+			throw({error,?MODULE,{missing_sasl,BR}});
+		    false ->
+			%% NameVsnApps = [{{Name,Vsn},#application}]
+			%% Gives two lists - [{Name,Vsn}] and [#application]
+			{BR,lists:unzip(NameVsnApps),Warns}
+		end;
+	    Other1 ->
+		throw(Other1)
+	end,
+
 
     %%
     %% BaseRel = #release
@@ -257,29 +283,23 @@ foreach_baserel_up(TopRel, TopApps, [BaseRelDc|BaseRelDcs], Path, Opts,
     %% application, one for each added applications, and one for
     %% each removed applications.
     %%
-    {RUs1, Ws1} = collect_appup_scripts(up, TopApps, BaseRel, Ws, []),
+    {RUs1, Ws1} = collect_appup_scripts(up, TopApps, BaseRel, Ws0++Ws, []),
 
     {RUs2, Ws2} = create_add_app_scripts(BaseRel, TopRel, RUs1, Ws1),
 
     {RUs3, Ws3} = create_remove_app_scripts(BaseRel, TopRel, RUs2, Ws2),
 
-    {RUs4, Ws4} = 
-	check_for_emulator_restart(TopRel, BaseRel, RUs3, Ws3, Opts),
-
-    BaseApps =
-	case systools_make:get_release(BaseRelFile, Path) of
-	    {ok, _, NameVsnApps, _Warns} ->
-		lists:map(fun({_,App}) -> App end, NameVsnApps);
-	    Other1 ->
-		throw(Other1)
-	end,
+    {RUs4, Ws4} = check_for_emulator_restart(TopRel, BaseRel, RUs3, Ws3, Opts),
 
     case systools_rc:translate_scripts(up, RUs4, TopApps, BaseApps) of
-	{ok, RUs} ->
+	{ok, RUs5} ->
+
+	    {RUs, Ws5} = fix_r15_sasl_upgrade(RUs5,Ws4,BaseNameVsns),
+
 	    VDR = {BaseRel#release.vsn,
 		   extract_description(BaseRelDc), RUs},
 	    foreach_baserel_up(TopRel, TopApps, BaseRelDcs, Path, 
-			       Opts, Ws4, [VDR| Acc]);
+			       Opts, Ws5, [VDR| Acc]);
 	XXX ->
 	    throw(XXX)
     end;
@@ -294,42 +314,41 @@ foreach_baserel_dn(TopRel, TopApps, [BaseRelDc|BaseRelDcs], Path, Opts,
 	       Ws, Acc) ->
     BaseRelFile = extract_filename(BaseRelDc),
 
-    {ok, BaseRel} = systools_make:read_release(BaseRelFile, Path),
+    {BaseRel, BaseApps, Ws0} =
+	case systools_make:get_release(BaseRelFile, Path) of
+	    %%
+	    %% NameVsnApps = [{{Name, Vsn}, #application}]
+	    {ok, BR, NameVsnApps, Warns} ->
+		case lists:member({warning,missing_sasl},Warns) of
+		    true ->
+			throw({error,?MODULE,{missing_sasl,BR}});
+		    false ->
+			%% NApps = [#application]
+			NApps = lists:map(fun({_,App}) -> App end, NameVsnApps),
+			{BR, NApps, Warns}
+		end;
+	    Other ->
+		throw(Other)
+	end,
 
     %% BaseRel = #release
 
     %% RUs = (release upgrade scripts)
     %%
-    {RUs1, Ws1} = collect_appup_scripts(dn, TopApps, BaseRel, Ws, []),
+    {RUs1, Ws1} = collect_appup_scripts(dn, TopApps, BaseRel, Ws0++Ws, []),
 
-    {BaseApps, Ws2} =
-	case systools_make:get_release(BaseRelFile, Path) of
-	    %%
-	    %% NameVsnApps = [{{Name, Vsn}, #application}]
-	    {ok, _, NameVsnApps, Warns} ->
-		%%
-		%% NApps = [#application]
-		NApps = lists:map(fun({_,App}) -> App end, NameVsnApps),
-		{NApps, Warns ++ Ws1};
-	    Other ->
-		throw(Other)
-	end,
+    {RUs2, Ws2} = create_add_app_scripts(TopRel, BaseRel, RUs1, Ws1),
 
-    RUs2 = RUs1,
+    {RUs3, Ws3} = create_remove_app_scripts(TopRel, BaseRel, RUs2, Ws2),
 
-    {RUs3, Ws3} = create_add_app_scripts(TopRel, BaseRel, RUs2, Ws2),
+    {RUs4, Ws4} = check_for_emulator_restart(TopRel, BaseRel, RUs3, Ws3, Opts),
 
-    {RUs4, Ws4} = create_remove_app_scripts(TopRel, BaseRel, RUs3, Ws3),
-
-    {RUs5, Ws5} = check_for_emulator_restart(TopRel, BaseRel,
-					     RUs4, Ws4, Opts),
-
-    case systools_rc:translate_scripts(dn, RUs5, BaseApps, TopApps) of
+    case systools_rc:translate_scripts(dn, RUs4, BaseApps, TopApps) of
 	{ok, RUs} ->
 	    VDR = {BaseRel#release.vsn,
 		   extract_description(BaseRelDc), RUs},
 	    foreach_baserel_dn(TopRel, TopApps, BaseRelDcs, Path, 
-			       Opts, Ws5, [VDR| Acc]);
+			       Opts, Ws4, [VDR| Acc]);
 	XXX -> 
 	    throw(XXX)
     end;
@@ -343,13 +362,41 @@ foreach_baserel_dn( _, _, [], _, _, Ws, Acc) ->
 %%
 check_for_emulator_restart(#release{erts_vsn = Vsn1, name = N1}, 
                            #release{erts_vsn = Vsn2, name = N2}, RUs, Ws, 
-                           _Opts) when Vsn1 /= Vsn2 ->
-    {RUs++[[restart_new_emulator]], [{erts_vsn_changed, {N1, N2}} | Ws]};
+                           Opts) when Vsn1 /= Vsn2 ->
+    %% Automatically insert a restart_new_emulator instruction when
+    %% erts version is changed. Also allow extra restart at the end of
+    %% the upgrade if restart_emulator option is given.
+    NewRUs = [[restart_new_emulator]|RUs],
+    NewWs = [{erts_vsn_changed, {{N1,Vsn1}, {N2,Vsn2}}} | Ws],
+    check_for_restart_emulator_opt(NewRUs, NewWs, Opts);
 check_for_emulator_restart(_, _, RUs, Ws, Opts) ->
+    check_for_restart_emulator_opt(RUs, Ws, Opts).
+
+check_for_restart_emulator_opt(RUs, Ws, Opts) ->
     case get_opt(restart_emulator, Opts) of
-	true -> {RUs++[[restart_new_emulator]], Ws};
+	true -> {RUs++[[restart_emulator]], Ws};
 	_ -> {RUs, Ws}
     end.
+
+
+%% Special handling of the upgrade from pre R15 to post R15. In R15,
+%% upgrade of the emulator was improved by moving the restart of the
+%% emulator before the rest of the upgrade instructions. However, it
+%% can only work if the release_handler is already upgraded to a post
+%% R15 version. If not, the upgrade instructions must be backwards
+%% compatible - i.e. restart_new_emulator will be the last
+%% instruction, executed after all code loading, code_change etc.
+fix_r15_sasl_upgrade([restart_new_emulator | RestRUs]=RUs, Ws, BaseApps) ->
+    case lists:keyfind(sasl,1,BaseApps) of
+	{sasl,Vsn} when Vsn < ?R15_SASL_VSN ->
+	    {lists:delete(restart_emulator,RestRUs) ++ [restart_new_emulator],
+	     [pre_R15_emulator_upgrade|Ws]};
+	_ ->
+	    {RUs,Ws}
+    end;
+fix_r15_sasl_upgrade(RUs, Ws, _BaseApps) ->
+    {RUs,Ws}.
+
 
 %% collect_appup_scripts(Mode, TopApps, BaseRel, Ws, RUs) -> {NRUs, NWs}
 %% Mode = up | dn
@@ -440,12 +487,28 @@ get_script_from_appup(Mode, TopApp, BaseVsn, Ws, RUs) ->
 		  %% XXX Why is this a warning only?
 		  [{bad_vsn, {TopVsn, TopApp#application.vsn}}| Ws]
 	  end,
-    case lists:keysearch(BaseVsn, 1, VsnRUs) of
-	{value, {_, RU}} ->
+    case appup_search_for_version(BaseVsn, VsnRUs) of
+	{ok, RU} ->
 	    {RUs ++ [RU], Ws1};
-	_ ->
+	error ->
 	    throw({error, ?MODULE, {no_relup, FName, TopApp, BaseVsn}})
     end.
+
+appup_search_for_version(BaseVsn,[{BaseVsn,RU}|_]) ->
+    {ok,RU};
+appup_search_for_version(BaseVsn,[{Vsn,RU}|VsnRUs]) when is_binary(Vsn) ->
+    case re:run(BaseVsn,Vsn,[unicode,{capture,first,list}]) of
+	{match,[BaseVsn]} ->
+	    {ok, RU};
+	_ ->
+	    appup_search_for_version(BaseVsn,VsnRUs)
+    end;
+appup_search_for_version(BaseVsn,[_|VsnRUs]) ->
+    appup_search_for_version(BaseVsn,VsnRUs);
+appup_search_for_version(_,[]) ->
+    error.
+
+
 
 
 %% Primitives for the "lists of release names" that we upgrade from
@@ -460,7 +523,7 @@ to_list(X) when is_atom(X) -> atom_to_list(X);
 to_list(X) when is_list(X) -> X.
 
 
-%% write_relup_file(Relup, Opts) -> {ok. Relup}
+%% write_relup_file(Relup, Opts) -> ok
 %% 
 %% Writes a relup file.
 %%
@@ -482,12 +545,17 @@ write_relup_file(Relup, Opts) ->
 	    case file:open(Filename, [write]) of
 		{ok, Fd} ->
 		    io:format(Fd, "~p.~n", [Relup]),
-		    file:close(Fd);
+		    case file:close(Fd) of
+			ok -> ok;
+			{error,Reason} ->
+			    throw({error, ?MODULE,
+				   {file_problem, {"relup", {close,Reason}}}})
+		    end;
 		{error, Reason} ->
-		    throw({error, ?MODULE, {file_problem, {"relup", Reason}}})
+		    throw({error, ?MODULE,
+			   {file_problem, {"relup", {open, Reason}}}})
 	    end
-    end,
-    {ok, Relup}.    
+    end.
 
 add_code_path(Opts) ->
     case get_opt(path, Opts) of
@@ -534,16 +602,17 @@ print_error({error, Mod, Error}) ->
 print_error(Other) ->
     io:format("Error: ~p~n", [Other]).
 
-format_error({file_problem, {"relup", _Posix}}) ->
-    io_lib:format("Could not open file relup~n", []);
 format_error({file_problem, {File, What}}) ->
-    io_lib:format("Could not ~p file ~p~n", [get_reason(What), File]);
+    io_lib:format("Could not ~w file ~ts~n", [get_reason(What), File]);
 format_error({no_relup, File, App, Vsn}) ->
-    io_lib:format("No release upgrade script entry for ~p-~s to ~p-~s "
-		  "in file ~p~n",
+    io_lib:format("No release upgrade script entry for ~w-~ts to ~w-~ts "
+		  "in file ~ts~n",
 		  [App#application.name, App#application.vsn, 
 		   App#application.name, Vsn, File]);
-
+format_error({missing_sasl,Release}) ->
+    io_lib:format("No sasl application in release ~ts, ~ts. "
+		  "Can not be upgraded.",
+		  [Release#release.name, Release#release.vsn]);
 format_error(Error) ->
     io:format("~p~n", [Error]).
 
@@ -561,27 +630,29 @@ print_warning(W, Opts) ->
 		     "*WARNING* "
 	     end,
     S = format_warning(Prefix, W),
-    io:format("~s", [S]).
+    io:format("~ts", [S]).
 
 format_warning(W) ->
     format_warning("*WARNING* ", W).
 
 format_warning(Prefix, {erts_vsn_changed, {Rel1, Rel2}}) ->
-    io_lib:format("~sThe ERTS version changed between ~p and ~p~n",
+    io_lib:format("~tsThe ERTS version changed between ~p and ~p~n",
 		  [Prefix, Rel1, Rel2]);
 format_warning(Prefix, What) ->
-    io_lib:format("~s~p~n",[Prefix, What]).
+    io_lib:format("~ts~p~n",[Prefix, What]).
 
 
 get_reason({error, {open, _, _}}) -> open;
 get_reason({error, {read, _, _}}) -> read;
 get_reason({error, {parse, _, _}}) -> parse;
+get_reason({error, {close, _, _}}) -> close;
 get_reason({error, {open, _}}) -> open;
 get_reason({error, {read, _}}) -> read;
 get_reason({error, {parse, _}}) -> parse;
 get_reason({open, _}) -> open;
 get_reason({read, _}) -> read;
 get_reason({parse, _}) -> parse;
+get_reason({close, _}) -> close;
 get_reason(open) -> open;
 get_reason(read) -> read;
 get_reason(parse) -> parse.

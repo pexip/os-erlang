@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %% 
-%% Copyright Ericsson AB 1996-2009. All Rights Reserved.
+%% Copyright Ericsson AB 1996-2011. All Rights Reserved.
 %% 
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -65,11 +65,11 @@
 %% Shadow argument macros 
 -define(loadShadowArgs, 
 	{loadTable, string, record_info(fields, loadTable), 5000,
-	 {os_mon_mib, update_load_table}}). 
+	 fun os_mon_mib:update_load_table/0}).
 	
 -define(diskShadowArgs, 
 	{diskTable, {integer, integer}, record_info(fields, diskTable), 5000,
-	 {os_mon_mib, update_disk_table}}). 
+	 fun os_mon_mib:update_disk_table/0}).
 
 %% Misc
 -record(diskAlloc, {diskDescr, diskId}).

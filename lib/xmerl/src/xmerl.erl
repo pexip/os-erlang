@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %% 
-%% Copyright Ericsson AB 2003-2009. All Rights Reserved.
+%% Copyright Ericsson AB 2003-2011. All Rights Reserved.
 %% 
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -303,18 +303,17 @@ apply_tag_cb(Ms, F, Args) ->
     apply_cb(Ms, F, '#element#', Args).
 
 apply_cb(Ms, F, Df, Args) ->
-    apply_cb(Ms, F, Df, Args, Ms).
+    apply_cb(Ms, F, Df, Args, length(Args)).
 
-apply_cb([M|Ms], F, Df, Args, Ms0) ->
-    case catch apply(M, F, Args) of
-	{'EXIT', {undef,[{M,F,_}|_]}} ->
-	    apply_cb(Ms, F, Df, Args, Ms0);
-	{'EXIT', Reason} ->
-	    exit(Reason);
-	Res ->
-	    Res
+apply_cb(Ms, F, Df, Args, A) ->
+    apply_cb(Ms, F, Df, Args, A, Ms).
+
+apply_cb([M|Ms], F, Df, Args, A, Ms0) ->
+    case erlang:function_exported(M, F, A) of
+        true -> apply(M, F, Args);
+        false -> apply_cb(Ms, F, Df, Args, A, Ms0)
     end;
-apply_cb([], Df, Df, Args, _Ms0) ->
+apply_cb([], Df, Df, Args, A, _Ms0) ->
     exit({unknown_tag, {Df, Args}});
-apply_cb([], F, Df, Args, Ms0) ->
-    apply_cb(Ms0, Df, Df, [F|Args]).
+apply_cb([], F, Df, Args, A, Ms0) ->
+    apply_cb(Ms0, Df, Df, [F|Args], A+1).

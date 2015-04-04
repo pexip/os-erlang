@@ -4,9 +4,9 @@ Patch allows to use standard man path with erl -man command.
 (Erlang manual pages are placed to /usr/share/man/ hierarchy
 as required by Debian policy.)
 
---- erlang-14.b.4-dfsg.orig/erts/etc/common/erlexec.c
-+++ erlang-14.b.4-dfsg/erts/etc/common/erlexec.c
-@@ -728,8 +728,10 @@
+--- a/erts/etc/common/erlexec.c
++++ b/erts/etc/common/erlexec.c
+@@ -722,8 +722,10 @@
  			error("-man not supported on Windows");
  #else
  			argv[i] = "man";

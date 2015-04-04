@@ -2,7 +2,7 @@
 %%
 %% %CopyrightBegin%
 %% 
-%% Copyright Ericsson AB 2004-2010. All Rights Reserved.
+%% Copyright Ericsson AB 2004-2012. All Rights Reserved.
 %% 
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -39,7 +39,8 @@
 -compile({no_auto_import,[error/2]}).
 -export([wait_for_tables/1, wait_for_tables/2, wait_for_tables/3,
 	 is_loaded/0, is_loaded/1, is_running/0, is_running/1, 
-	 info/2, error/2, unique/1, keysearch/2, keysearch/3]).
+	 info/2, error/2, unique/1, keysearch/2, keysearch/3,
+	check_illegal_tcp_options/1]).
 
 %%----------------------------------------------------------------------
 %% Internal exports
@@ -178,6 +179,38 @@ error(Format, Args) ->
 				 "~n===========================================~n",
 				 Args).
 
+
+
+
+
+%%----------------------------------------------------------------------
+%% function : check_illegal_tcp_options/1
+%% Arguments: 
+%% Returns  : 
+%% Exception: 
+%% Effect   : 
+%%----------------------------------------------------------------------
+check_illegal_tcp_options(Options) ->
+    check_illegal_tcp_options(Options, []).
+
+check_illegal_tcp_options([],[]) ->
+    ok;
+check_illegal_tcp_options([],IllegalOpts) ->
+    {error, IllegalOpts};
+check_illegal_tcp_options([{active, V} |T], IllegalOpts) ->
+    check_illegal_tcp_options(T,[{active, V} |IllegalOpts]);
+check_illegal_tcp_options([{packet, V} |T], IllegalOpts) ->
+    check_illegal_tcp_options(T,[{packet, V} |IllegalOpts]);
+check_illegal_tcp_options([{mode, V} |T], IllegalOpts) ->
+    check_illegal_tcp_options(T,[{mode, V} |IllegalOpts]);
+check_illegal_tcp_options([list |T], IllegalOpts) ->
+    check_illegal_tcp_options(T,[list |IllegalOpts]);
+check_illegal_tcp_options([binary |T], IllegalOpts) ->
+    check_illegal_tcp_options(T,[binary |IllegalOpts]);
+check_illegal_tcp_options([{reuseaddr, V} |T], IllegalOpts) ->
+    check_illegal_tcp_options(T,[{reuseaddr, V} |IllegalOpts]);
+check_illegal_tcp_options([_H|T], IllegalOpts) ->
+    check_illegal_tcp_options(T, IllegalOpts).
 
 %%----------------------------------------------------------------------
 %% Internal functions

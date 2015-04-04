@@ -1,4 +1,4 @@
-<?xml version="1.0" encoding="latin1" ?>
+<?xml version="1.0" encoding="utf-8" ?>
 <!DOCTYPE terms SYSTEM "terms.dtd">
 
 <terms>
@@ -792,13 +792,6 @@ See pattern matching.    </def>
     <def>
 The queue of not yet received messages that are in the mailbox of a process.    </def>
     <resp>olin</resp>
-  </term>
-  <term>
-    <id>Mnemosyne</id>
-    <shortdef>Mnemosyne</shortdef>
-    <def>
-Mnemosyne was the query language of Mnesia up to the R11B release. Supersed by QLC.</def>
-    <resp>hakan</resp>
   </term>
   <term>
     <id>Mnesia</id>

@@ -2,7 +2,7 @@
 %%
 %% %CopyrightBegin%
 %% 
-%% Copyright Ericsson AB 2002-2009. All Rights Reserved.
+%% Copyright Ericsson AB 2002-2012. All Rights Reserved.
 %% 
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -24,13 +24,13 @@
   {modules, [cerl_cconv,
 	     cerl_closurean,
 	     cerl_hipeify,
-	     cerl_hybrid_transform,
 	     cerl_lib,
 	     cerl_messagean,
 	     cerl_pmatch,
 	     cerl_prettypr,
 	     cerl_to_icode,
 	     cerl_typean,
+	     elf_format,
 	     erl_bif_types,
 	     erl_types,
 	     hipe,
@@ -74,7 +74,6 @@
 	     hipe_arm_specific,
 	     hipe_bb,
 	     hipe_beam_to_icode,
-	     hipe_ceach,
 	     hipe_coalescing_regalloc,
 	     hipe_consttab,
 	     hipe_data_pp,
@@ -110,6 +109,10 @@
 	     hipe_ig,
 	     hipe_ig_moves,
 	     hipe_jit,
+	     hipe_llvm,
+	     hipe_llvm_liveness,
+	     hipe_llvm_main,
+	     hipe_llvm_merge,
 	     hipe_ls_regalloc,
 	     hipe_main,
 	     hipe_moves,
@@ -161,6 +164,7 @@
 	     hipe_rtl_symbolic,
 	     hipe_rtl_to_amd64,
 	     hipe_rtl_to_arm,
+	     hipe_rtl_to_llvm,
 	     hipe_rtl_to_ppc,
 	     hipe_rtl_to_sparc,
 	     hipe_rtl_to_x86,
@@ -194,7 +198,6 @@
 	     hipe_tagscheme,
 	     hipe_temp_map,
 	     hipe_timing,
-	     hipe_tool,
 	     hipe_vectors,
 	     hipe_x86,
 	     hipe_x86_assemble,
@@ -219,4 +222,6 @@
 	     hipe_x86_x87]},
   {registered,[]},
   {applications, [kernel,stdlib]},
-  {env, []}]}.
+  {env, []},
+  {runtime_dependencies, ["syntax_tools-1.6.14","stdlib-2.0","kernel-3.0",
+			  "erts-6.0","compiler-5.0"]}]}.

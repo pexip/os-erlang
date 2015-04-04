@@ -1,7 +1,7 @@
 %% 
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 1996-2010. All Rights Reserved.
+%% Copyright Ericsson AB 1996-2014. All Rights Reserved.
 %%
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -161,7 +161,6 @@ get_timeout() ->
 	    get_timeout(os:type())
     end.
 
-get_timeout(vxworks) -> 7000;
 get_timeout(_)       -> 3500.
 
 %%----------------------------------------------------------------------
@@ -236,21 +235,23 @@ init({Options, CallerPid}) ->
 	    VsnHdrD = 
 		{Com, User, EngineId, CtxEngineId, mk_seclevel(SecLevel)},
 	    io:format("[~w] ~p -> VsnHdrD: ~p~n", [?MODULE, self(), VsnHdrD]),
+	    IpFamily = get_value(ipfamily, Options, inet),
+	    io:format("[~w] ~p -> IpFamily: ~p~n", [?MODULE, self(), IpFamily]),
 	    AgIp = case snmp_misc:assq(agent, Options) of
 		       {value, Tuple4} when is_tuple(Tuple4) andalso 
 					    (size(Tuple4) =:= 4) ->
 			   Tuple4;
 		       {value, Host} when is_list(Host) ->
-			   {ok, Ip} = snmp_misc:ip(Host),
+			   {ok, Ip} = snmp_misc:ip(Host, IpFamily),
 			   Ip
 		   end,
 	    io:format("[~w] ~p -> AgIp: ~p~n", [?MODULE, self(), AgIp]),
 	    Quiet = lists:member(quiet, Options),
 	    io:format("[~w] ~p -> Quiet: ~p~n", [?MODULE, self(), Quiet]),
-	    PackServ = start_packet_server(Quiet, Options, CallerPid, 
-					   AgIp, Udp, TrapUdp, 
-					   VsnHdrD, Version, Dir, RecBufSz, 
-					   PacksDbg),
+	    PackServ =
+		start_packet_server(
+		  Quiet, Options, CallerPid, AgIp, Udp, TrapUdp,
+		  VsnHdrD, Version, Dir, RecBufSz, PacksDbg, IpFamily),
 	    d("init -> packet server: ~p",[PackServ]),
 	    State = #state{parent        = CallerPid,
 			   quiet         = Quiet,
@@ -264,29 +265,31 @@ init({Options, CallerPid}) ->
     end.
 
 start_packet_server(false, _Options, _CallerPid, AgIp, Udp, TrapUdp, 
-		    VsnHdrD, Version, Dir, RecBufSz, PacksDbg) ->
+		    VsnHdrD, Version, Dir, RecBufSz, PacksDbg, IpFamily) ->
     d("start_packet_server -> entry", []),
-    ?PACK_SERV:start_link_packet({msg, self()}, 
-				 AgIp, Udp, TrapUdp, 
-				 VsnHdrD, Version, Dir, RecBufSz,
-				 PacksDbg);
+    ?PACK_SERV:start_link_packet(
+       {msg, self()}, AgIp, Udp, TrapUdp,
+       VsnHdrD, Version, Dir, RecBufSz, PacksDbg, IpFamily);
 start_packet_server(true, Options, CallerPid, AgIp, Udp, TrapUdp, 
-		    VsnHdrD, Version, Dir, RecBufSz, PacksDbg) ->
+		    VsnHdrD, Version, Dir, RecBufSz, PacksDbg, IpFamily) ->
     Type =  get_value(receive_type, Options, pdu),
     d("start_packet_server -> entry with"
       "~n   CallerPid: ~p"
       "~n   when"
       "~n   Type:      ~p",[CallerPid, Type]),
-    ?PACK_SERV:start_link_packet({Type, CallerPid}, 
-				    AgIp, Udp, TrapUdp,
-				    VsnHdrD, Version, Dir, RecBufSz,
-				    PacksDbg).
+    ?PACK_SERV:start_link_packet(
+       {Type, CallerPid}, AgIp, Udp, TrapUdp,
+       VsnHdrD, Version, Dir, RecBufSz, PacksDbg, IpFamily).
 
 is_options_ok([{mibs,List}|Opts]) when is_list(List) ->
     is_options_ok(Opts);
 is_options_ok([quiet|Opts])  ->
     is_options_ok(Opts);
 is_options_ok([{agent,_}|Opts]) ->
+    is_options_ok(Opts);
+is_options_ok([{ipfamily,IpFamily}|Opts])
+  when IpFamily =:= inet;
+       IpFamily =:= inet6 ->
     is_options_ok(Opts);
 is_options_ok([{agent_udp,Int}|Opts]) when is_integer(Int) ->
     is_options_ok(Opts);
@@ -658,7 +661,8 @@ make_vb(Oid) ->
     #varbind{oid = Oid, variabletype = 'NULL', value = 'NULL'}.
 
 make_request_id() ->
-    random:uniform(16#FFFFFFF-1).
+    %% random:uniform(16#FFFFFFF-1).
+    snmp_test_mgr_counter_server:increment(mgr_request_id, 1, 1, 2147483647).
 
 echo_pdu(PDU, MiniMIB) ->
     io:format("~s", [snmp_misc:format_pdu(PDU, MiniMIB)]).
@@ -1124,16 +1128,11 @@ d(F,A) -> d(get(debug),F,A).
 
 d(true,F,A) ->
     io:format("*** [~s] MGR_DBG *** " ++ F ++ "~n",
-	      [format_timestamp(now())|A]);
+	      [formated_timestamp()|A]);
 d(_,_F,_A) -> 
     ok.
 
-format_timestamp({_N1, _N2, N3} = Now) ->
-    {Date, Time}   = calendar:now_to_datetime(Now),
-    {YYYY,MM,DD}   = Date,
-    {Hour,Min,Sec} = Time,
-    FormatDate =
-        io_lib:format("~.4w:~.2.0w:~.2.0w ~.2.0w:~.2.0w:~.2.0w 4~w",
-                      [YYYY,MM,DD,Hour,Min,Sec,round(N3/1000)]),
-    lists:flatten(FormatDate).
+
+formated_timestamp() ->
+    snmp_test_lib:formated_timestamp().
 

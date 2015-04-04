@@ -1,19 +1,337 @@
-erlang (1:14.b.4-dfsg-1ubuntu1) precise; urgency=low
+erlang (1:17.3-dfsg-4) unstable; urgency=medium
 
-  * Merge from Debian testing.  Remaining changes:
-    - debian/patches/fix-pointer-conversion.patch: Remove implicit 
-      integer to pointer conversion (patch refreshed)
-    - Drop libwxgtk2.8-dev build dependency. Wx isn't in main, and not
-      supposed to.
-    - Drop erlang-wx binary.
-    - Drop erlang-wx dependency from -megaco, -common-test, and -reltool, they
-      do not really need wx. Also drop it from -debugger; the GUI needs wx,
-      but it apparently has CLI bits as well, and is also needed by -megaco,
-      so let's keep the package for now.
-  * Dropped changes:
-    debian/patches/tcp.patch: applied upstream
+  * Added a patch from upstream which fixes TLS POODLE vulnerability in
+    the Erlang SSL application (CVE-2015-2774) (closes: #781839).
+  * Fixed erts_gzinflate_buffer() declaration to prevent possible buffer
+    overflow (closes: #747593).
+  * Replaced libsystemd-daemon-dev by libsystemd-dev in build dependencies
+    (closes: #779750).
 
- -- Clint Byrum <clint@ubuntu.com>  Thu, 15 Dec 2011 16:41:11 -0800
+ -- Sergei Golovan <sgolovan@debian.org>  Sat, 04 Apr 2015 17:00:55 +0300
+
+erlang (1:17.3-dfsg-3) unstable; urgency=medium
+
+  * Added a patch by Olly Betts which updates hard-coded wx constant values
+    for wx3.0 (closes: #766790).
+  * Disabled SSLv3 protocol in the ssl application (closes: #771359).
+
+ -- Sergei Golovan <sgolovan@debian.org>  Sun, 30 Nov 2014 22:39:28 +0300
+
+erlang (1:17.3-dfsg-2) unstable; urgency=medium
+
+  * Removed erlang-pman, erlang-toolbar, erlang-tv packages because the
+    corresponding applications were removed from the upstream distribution.
+  * Fixed the packages dependencies (mostly removed obsolete dependencies
+    on erlang-gs).
+  * Bumped standards version to 3.9.6.
+
+ -- Sergei Golovan <sgolovan@debian.org>  Sun, 05 Oct 2014 13:13:55 +0400
+
+erlang (1:17.3-dfsg-1) unstable; urgency=medium
+
+  * New upstream release.
+  * Refreshed patches. Removed patch which fixed some functions not
+    following symlinks since it has been included into the upstream release.
+  * Added a patch from upstream which fixes empty SNI-extension processing.
+
+ -- Sergei Golovan <sgolovan@debian.org>  Sat, 27 Sep 2014 19:05:53 +0400
+
+erlang (1:17.1-dfsg-7) unstable; urgency=medium
+
+  * Don't use /home/epmd as epmd home directory.
+
+ -- Sergei Golovan <sgolovan@debian.org>  Mon, 18 Aug 2014 08:21:59 +0400
+
+erlang (1:17.1-dfsg-6) unstable; urgency=medium
+
+  * Added missing dependency on adduser.
+  * Switched to the new release versioning in debian/watch uscan control file.
+
+ -- Sergei Golovan <sgolovan@debian.org>  Sun, 17 Aug 2014 14:51:11 +0400
+
+erlang (1:17.1-dfsg-5) unstable; urgency=medium
+
+  * Enabled systemd support in epmd. The epmd unit is not enabled by default
+    though.
+  * Fixed SVN URL in the source package debian/control Vcs field.
+
+ -- Sergei Golovan <sgolovan@debian.org>  Thu, 14 Aug 2014 13:44:54 +0400
+
+erlang (1:17.1-dfsg-4) unstable; urgency=medium
+
+  * Created new file erlang-mode.emacsen-compat with zero value to comply
+    with emacsen-common policy.
+
+ -- Sergei Golovan <sgolovan@debian.org>  Mon, 14 Jul 2014 13:34:09 +0400
+
+erlang (1:17.1-dfsg-3) unstable; urgency=medium
+
+  * Added patch by upstream which fixes regression in 17.1 (a few functions
+    in the filelib module do not follow symlinks, closes: #754083).
+
+ -- Sergei Golovan <sgolovan@debian.org>  Mon, 07 Jul 2014 18:53:29 +0400
+
+erlang (1:17.1-dfsg-2) unstable; urgency=medium
+
+  * Fixed stopping and starting Erlang based services on upgrading the
+    erlang-base and erlang-base-hipe packages.
+
+ -- Sergei Golovan <sgolovan@debian.org>  Mon, 07 Jul 2014 08:22:41 +0400
+
+erlang (1:17.1-dfsg-1) unstable; urgency=low
+
+  * New upstream release.
+  * Removed patch which defines HiPE architecture for powerpc because it
+    has been applied upstream.
+
+ -- Sergei Golovan <sgolovan@debian.org>  Thu, 26 Jun 2014 09:43:41 +0400
+
+erlang (1:17.0-dfsg-3) unstable; urgency=low
+
+  * Removed the erlang-appmon package because the corresponding Erlang
+    appmon application is dropped upstream.
+
+ -- Sergei Golovan <sgolovan@debian.org>  Wed, 07 May 2014 10:43:47 +0400
+
+erlang (1:17.0-dfsg-2) unstable; urgency=low
+
+  * Added missing link /usr/include/erl_native_features_config.h
+    (closes: #746308)
+
+ -- Sergei Golovan <sgolovan@debian.org>  Sun, 04 May 2014 08:57:47 +0400
+
+erlang (1:17.0-dfsg-1) unstable; urgency=low
+
+  * New upstream release.
+  * Removed patch which fixed CVE-2014-1693 because it is applied upstream.
+  * Provide erlang-abi-17.0 because of the bump in driver version to 3, but
+    don't remove the old erlang-abi-15.b yet because the older version 2
+    is still loadable.
+
+ -- Sergei Golovan <sgolovan@debian.org>  Thu, 10 Apr 2014 11:30:28 +0400
+
+erlang (1:16.b.3.1-dfsg-3) unstable; urgency=low
+
+  * Fixed CVE-2014-1693 by checking if the user, file, directory names
+    contain <CR> or <LF> (closes: #738132).
+
+ -- Sergei Golovan <sgolovan@debian.org>  Sun, 16 Mar 2014 09:23:01 +0400
+
+erlang (1:16.b.3.1-dfsg-2) unstable; urgency=low
+
+  * Fixed symlinks to jquery.min.js and jquery.tablesorter.min.js
+    (closes: #739141).
+
+ -- Sergei Golovan <sgolovan@debian.org>  Sun, 16 Feb 2014 09:12:05 +0400
+
+erlang (1:16.b.3.1-dfsg-1) unstable; urgency=low
+
+  * New upstream bugfix release.
+  * Removed lib/common_test/priv/*.js from the source because they are
+    minified Javascript files without source. Also, added libjs-jquery and
+    libjs-jquery-tablesorter to the erlang-common-test dependencies
+    (closes: #735896).
+  * Bumped standards version to 3.9.5.
+
+ -- Sergei Golovan <sgolovan@debian.org>  Mon, 27 Jan 2014 21:46:45 +0400
+
+erlang (1:16.b.3-dfsg-1) unstable; urgency=low
+
+  * New upstream release.
+  * Refreshed patches.
+  * Removed patch wich fixes segfault in erlang-wx because it is applied
+    upstream.
+  * Removed link diameterc.1.gz because the original manpage is renamed
+    from diameter-compile.1.gz to diameterc.1.gz.
+
+ -- Sergei Golovan <sgolovan@debian.org>  Thu, 12 Dec 2013 12:03:35 +0400
+
+erlang (1:16.b.2-dfsg-2) unstable; urgency=low
+
+  * Switched to wxWidgets 3.0 from 2.8 for erlang-wx application.
+  * Fixed segfault on adding items to a wxListBox widget (reproducible with
+    wxWidgets 3.0).
+  * Added new erlang-dbg package with symbol files for libraries and
+    binaries in the other packages (except erlang-base-hipe).
+
+ -- Sergei Golovan <sgolovan@debian.org>  Thu, 21 Nov 2013 14:51:50 +0400
+
+erlang (1:16.b.2-dfsg-1) unstable; urgency=low
+
+  * New upstream release.
+  * Removed patches for odbcserver and dets fixes because the bugs were
+    fixed upstream.
+  * Limited number of simultaneous jobs to 4 to use less build resources
+    which makes build easier on systems with less memory.
+  * Bumped debhelper compatibility version to 8.
+  * Use dh_lintian to install lintian overrides.
+
+ -- Sergei Golovan <sgolovan@debian.org>  Thu, 19 Sep 2013 22:19:04 +0400
+
+erlang (1:16.b.1-dfsg-5) unstable; urgency=low
+
+  * Require libsctp-dev in build dependencies for all linux architectures
+    (closes: #634614).
+  * Added patch by upstream which fixes bad_object_header errors in dets
+    (closes: #720415).
+  * Ensure that Java bytecode is compatible with Java 1.5.
+
+ -- Sergei Golovan <sgolovan@debian.org>  Sat, 24 Aug 2013 00:24:27 +0400
+
+erlang (1:16.b.1-dfsg-4) unstable; urgency=low
+
+  * Fixed the binary packages interdependencies.
+  * Removed the erlang-inviso package because the inviso application was
+    dropped from the upstream distribution.
+
+ -- Sergei Golovan <sgolovan@debian.org>  Sun, 07 Jul 2013 09:27:53 +0400
+
+erlang (1:16.b.1-dfsg-3) unstable; urgency=low
+
+  * Fixed crash in odbcserver if it's executed with unexpected data on stdin.
+
+ -- Sergei Golovan <sgolovan@debian.org>  Sat, 06 Jul 2013 17:21:38 +0400
+
+erlang (1:16.b.1-dfsg-2) unstable; urgency=low
+
+  * Updated the erlang-diameter package description (closes: #713907).
+
+ -- Sergei Golovan <sgolovan@debian.org>  Mon, 24 Jun 2013 14:16:56 +0400
+
+erlang (1:16.b.1-dfsg-1) unstable; urgency=low
+
+  * New upstream release.
+  * Refreshed patches, removed the dialyzer patch which is included into
+    the upstream tarball.
+  * Switched to xz compressed tarball to save bandwidth. It is recompressed
+    already to remove non-free RFCs, so no harm in changing compressor.
+
+ -- Sergei Golovan <sgolovan@debian.org>  Wed, 19 Jun 2013 14:10:46 +0400
+
+erlang (1:16.b-dfsg-3) unstable; urgency=low
+
+  * Upload to unstable.
+  * Switched to 3.0 (quilt) source format.
+  * Bumped standards version to 3.9.4.
+
+ -- Sergei Golovan <sgolovan@debian.org>  Mon, 06 May 2013 08:30:31 +0400
+
+erlang (1:16.b-dfsg-2) experimental; urgency=low
+
+  * Added patch by Maxim Treskin which fixes dialyzer error "duplicates
+    modules".
+
+ -- Sergei Golovan <sgolovan@debian.org>  Thu, 21 Mar 2013 14:37:46 +0400
+
+erlang (1:16.b-dfsg-1) experimental; urgency=low
+
+  * New upstream release.
+
+ -- Sergei Golovan <sgolovan@debian.org>  Thu, 28 Feb 2013 09:08:37 +0400
+
+erlang (1:15.b.1-dfsg-4) unstable; urgency=low
+
+  * Added link for to_erl communication program to /usr/bin. Also created
+    manpage for to_erl(1) by copying the relevant info from
+    /usr/share/doc/erlang-doc/doc/embedded/embedded_solaris.html.
+
+ -- Sergei Golovan <sgolovan@debian.org>  Sun, 27 Jan 2013 17:49:31 +0400
+
+erlang (1:15.b.3.1-dfsg-1) experimental; urgency=low
+
+  * New upstream bugfix release (closes: #697950).
+
+ -- Sergei Golovan <sgolovan@debian.org>  Thu, 17 Jan 2013 13:24:17 +0400
+
+erlang (1:15.b.3-dfsg-1) experimental; urgency=low
+
+  * New upstream release (upload to experimental because of freeze).
+  * Removed debian/patches/m68k.patch which doesn't work anymore anyway.
+  * Created a separate manpage for to_erl(1) by copying the relevant info
+    from /usr/share/doc/erlang-doc/doc/embedded/embedded_solaris.html.
+
+ -- Sergei Golovan <sgolovan@debian.org>  Tue, 08 Jan 2013 13:11:35 +0400
+
+erlang (1:15.b.2-dfsg-2) experimental; urgency=low
+
+  * Added link for to_erl communication program to /usr/bin. Also linked its
+    manpage to run_erl.1 because there's no direct documentation on to_erl and
+    it's intended to use in cooperation with run_erl.
+
+ -- Sergei Golovan <sgolovan@debian.org>  Sun, 21 Oct 2012 13:04:16 +0400
+
+erlang (1:15.b.2-dfsg-1) experimental; urgency=low
+
+  * New upstream release (upload to experimental because of freeze).
+  * Refreshed patches.
+  * Added -j option to make calls in debian/rules to make the build faster
+    (the new upstream release supports parallel build).
+
+ -- Sergei Golovan <sgolovan@debian.org>  Fri, 07 Sep 2012 14:15:37 +0400
+
+erlang (1:15.b.1-dfsg-3) unstable; urgency=low
+
+  * Moved kernel and stdlib include files from erlang-dev to the erlang-base
+    and erlang-base-hipe packages, and snmp include to erlang-snmp because
+    they are needed to run escripts. This makes two recommended dependencies
+    on erlang-dev unnecesary.
+  * Moved sources of the erl_docgen application to the erlang-src package.
+  * Switched to xz compression of binary packages to save mirror disk space
+    and network bandwidth.
+
+ -- Sergei Golovan <sgolovan@debian.org>  Sat, 02 Jun 2012 01:02:17 +0400
+
+erlang (1:15.b.1-dfsg-2) unstable; urgency=low
+
+  * Depend on procps unconditionally since it works for all architectures now.
+  * Create symlinks to erlang-mode sources when installing it to any Emacs
+    flavor. This helps to use M-x describe-function for erlang mode in Emacs
+    (closes: #670345).
+  * Removed stale symlink to /usr/lib/erlang/usr/include/driver.h.
+  * Fixed a few errors in manpages and added missing whatis entries.
+
+ -- Sergei Golovan <sgolovan@debian.org>  Thu, 31 May 2012 16:13:21 +0400
+
+erlang (1:15.b.1-dfsg-1) unstable; urgency=low
+
+  * New upstream release.
+  * Added new package erlang-eldap with Erlang LDAP library.
+  * Added eldap application license to debian/copyright.
+  * Use (debian-pkg-add-load-path-item <path>) instead of manipulating
+    load-path directly in 50erlang-mode.el Emacs startup file as required
+    by Debian Emacd policy (closes: #663408).
+  * Bumped standards version to 3.9.3.
+
+ -- Sergei Golovan <sgolovan@debian.org>  Wed, 04 Apr 2012 11:09:17 +0400
+
+erlang (1:15.b-dfsg-2) unstable; urgency=low
+
+  * Upload to unstable.
+  * Remove a bunch of additional files on clean.
+  * Verified that R15B builds fine on GNU/Hurd (closes: #636510).
+  * Build SMP-aware Erlang emulator for GNU/Hurd.
+  * Included all HiPE application sources into erlang-src package
+    (closes: #653417).
+
+ -- Sergei Golovan <sgolovan@debian.org>  Wed, 11 Jan 2012 17:10:17 +0400
+
+erlang (1:15.b-dfsg-1) experimental; urgency=low
+
+  * New upstream release.
+  * Upload to experimental because this release breaks external drivers
+    API along with ABI, so several applications are to be fixed.
+  * Removed SSL patch because the old SSL implementation is removed from
+    the upstream distribution.
+  * Removed never used patch which added native code to erlang beam files.
+  * Removed the erlang-docbuilder binary package because the docbuilder
+    application was dropped by upstream.
+  * Documented dropping ${erlang-docbuilder:Depends} substvar in
+    erlang-depends(1) manpage.
+  * Made erlang-base and erlang-base-hipe provide virtual package
+    erlang-abi-15.b (the number means the first erlang version, which
+    provides current ABI).
+
+ -- Sergei Golovan <sgolovan@debian.org>  Thu, 15 Dec 2011 19:20:10 +0400
 
 erlang (1:14.b.4-dfsg-1) unstable; urgency=low
 
@@ -36,40 +354,6 @@ erlang (1:14.b.3-dfsg-1) unstable; urgency=low
   * Bumped standards version to 3.9.2.
 
  -- Sergei Golovan <sgolovan@debian.org>  Wed, 08 Jun 2011 08:39:43 +0400
-
-erlang (1:14.b.2-dfsg-3ubuntu2) oneiric; urgency=low
-
-  * debian/patches/fix-pointer-conversion.patch: Remove implicit 
-    integer to pointer conversion (LP: #778474)
-
- -- Clint Byrum <clint@ubuntu.com>  Fri, 06 May 2011 06:10:07 -0700
-
-erlang (1:14.b.2-dfsg-3ubuntu1) oneiric; urgency=low
-
-  * Merge from debian unstable.  Remaining changes:
-    - Drop libwxgtk2.8-dev build dependency. Wx isn't in main, and not
-      supposed to.
-    - Drop erlang-wx binary.
-    - Drop erlang-wx dependency from -megaco, -common-test, and -reltool, they
-      do not really need wx. Also drop it from -debugger; the GUI needs wx,
-      but it apparently has CLI bits as well, and is also needed by -megaco,
-      so let's keep the package for now.
-    - debian/patches/series: Do what I meant, and enable build-options.patch
-      instead.
-  * Additional changes:
-    - Drop erlang-wx from -et
-  * Dropped Changes:
-    - patches/pcre-crash.patch: CVE-2008-2371: outer level option with
-      alternatives caused crash. (Applied Upstream)
-    - fix for ssl certificate verification in newSSL: 
-      ssl_cacertfile_fix.patch (Applied Upstream)
-    - debian/patches/series: Enable native.patch again, to get stripped beam
-      files and reduce the package size again. (build-options is what
-      actually accomplished this)
-    - Remove build-options.patch on advice from upstream and because it caused
-      odd build failures.
-
- -- Clint Byrum <clint@ubuntu.com>  Thu, 05 May 2011 15:48:43 -0700
 
 erlang (1:14.b.2-dfsg-3) unstable; urgency=low
 
@@ -248,33 +532,6 @@ erlang (1:13.b.3-dfsg-3) unstable; urgency=low
 
  -- Sergei Golovan <sgolovan@debian.org>  Sun, 07 Feb 2010 15:01:16 +0300
 
-erlang (1:13.b.3-dfsg-2ubuntu3) maverick; urgency=low
-
-  * fix for ssl certificate verification in newSSL: ssl_cacertfile_fix.patch
-    (LP: #643787)
-
- -- Samuele Pedroni (Canonical Services Ltd.) <samuele.pedroni@canonical.com>  Fri, 24 Sep 2010 09:35:12 +0200
-
-erlang (1:13.b.3-dfsg-2ubuntu2) lucid; urgency=low
-
-  * CVE-2008-2371: outer level option with alternatives caused crash.
-    (LP: #535090). 
-
- -- Ralf Doering <rdoering@netsys-it.de>  Thu, 11 Mar 2010 15:20:06 +0100
-
-erlang (1:13.b.3-dfsg-2ubuntu1) lucid; urgency=low
-
-  * Merge with Debian testing; remaining Ubuntu changes:
-    - Drop libwxgtk2.8-dev build dependency. Wx isn't in main, and not
-      supposed to. (LP #438365)
-    - Drop erlang-wx binary.
-    - Drop erlang-wx dependency from -megaco, -common-test, and -reltool, they
-      do not really need wx. Also drop it from -debugger; the GUI needs wx,
-      but it apparently has CLI bits as well, and is also needed by -megaco,
-      so let's keep the package for now.
-
- -- Elliot Murphy <elliot@ubuntu.com>  Mon, 21 Dec 2009 21:54:16 -0500
-
 erlang (1:13.b.3-dfsg-2) unstable; urgency=low
 
   * Fixed dialyzer(1) manpage which was placed into section 3 and conflicted
@@ -292,34 +549,6 @@ erlang (1:13.b.3-dfsg-1) unstable; urgency=low
     erlang-manpages binary package and xsltproc build dependency.
 
  -- Sergei Golovan <sgolovan@debian.org>  Sat, 19 Dec 2009 19:44:54 +0300
-
-erlang (1:13.b.2.1-dfsg-1ubuntu3) lucid; urgency=low
-
-  * build-options.patch: Fix to apply to current version.
-  * debian/patches/series: Do what I meant, and enable build-options.patch
-    instead.
-
- -- Martin Pitt <martin.pitt@ubuntu.com>  Mon, 07 Dec 2009 10:28:47 +0100
-
-erlang (1:13.b.2.1-dfsg-1ubuntu2) lucid; urgency=low
-
-  * debian/patches/series: Enable native.patch again, to get stripped beam
-    files and reduce the package size again. (LP: #493278)
-
- -- Martin Pitt <martin.pitt@ubuntu.com>  Mon, 07 Dec 2009 09:02:37 +0100
-
-erlang (1:13.b.2.1-dfsg-1ubuntu1) lucid; urgency=low
-
-  * Merge with Debian testing; remaining Ubuntu changes:
-    - Drop libwxgtk2.8-dev build dependency. Wx isn't in main, and not
-      supposed to. (LP #438365)
-    - Drop erlang-wx binary.
-    - Drop erlang-wx dependency from -megaco, -common-test, and -reltool, they
-      do not really need wx. Also drop it from -debugger; the GUI needs wx,
-      but it apparently has CLI bits as well, and is also needed by -megaco,
-      so let's keep the package for now.
-
- -- Martin Pitt <martin.pitt@ubuntu.com>  Fri, 06 Nov 2009 18:54:42 +0100
 
 erlang (1:13.b.2.1-dfsg-1) unstable; urgency=low
 
@@ -376,19 +605,6 @@ erlang (1:13.b.1-dfsg-3) unstable; urgency=low
   * Bumped standards version to 3.8.2.
 
  -- Sergei Golovan <sgolovan@debian.org>  Tue, 30 Jun 2009 14:13:14 +0400
-
-erlang (1:13.b.1-dfsg-2ubuntu1) karmic; urgency=low
-
-  * debian/control:
-    - Drop libwxgtk2.8-dev build dependency. Wx isn't in main, and not
-      supposed to. (LP: #438365)
-    - Drop erlang-wx binary.
-    - Drop erlang-wx dependency from -megaco, -common-test, and -reltool, they
-      do not really need wx. Also drop it from -debugger; the GUI needs wx,
-      but it apparently has CLI bits as well, and is also needed by -megaco,
-      so let's keep the package for now.
-
- -- Martin Pitt <martin.pitt@ubuntu.com>  Fri, 16 Oct 2009 09:40:16 +0200
 
 erlang (1:13.b.1-dfsg-2) unstable; urgency=low
 
@@ -1650,4 +1866,3 @@ erlang (47.4.0-1) unstable; urgency=low
   * Erlang sources for libraries and tools are removed from the bin dist.
 
  -- Mark Ng <ng@debian.org>  Thu,  4 Feb 1999 23:21:00 +1100
-

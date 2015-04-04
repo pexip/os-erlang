@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %% 
-%% Copyright Ericsson AB 1997-2009. All Rights Reserved.
+%% Copyright Ericsson AB 1997-2012. All Rights Reserved.
 %% 
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -25,7 +25,17 @@
 
 -behaviour(supervisor).
 
+%% External API
+-export([start_link/0]).
+
+%% Supervisor callbacks
 -export([init/1]).
+
+%%%=========================================================================
+%%%  External functions
+%%%=========================================================================
+start_link() ->
+    supervisor:start_link({local, ?MODULE}, ?MODULE, []).
 
 %%%=========================================================================
 %%%  Supervisor callback

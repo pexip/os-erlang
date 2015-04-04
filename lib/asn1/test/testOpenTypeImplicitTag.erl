@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2002-2010. All Rights Reserved.
+%% Copyright Ericsson AB 2002-2012. All Rights Reserved.
 %%
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -19,34 +19,14 @@
 %%
 -module(testOpenTypeImplicitTag).
 
--export([compile/3]).
 -export([main/1]).
 
 -include_lib("test_server/include/test_server.hrl").
 
-
-compile(Config,Rules,Options) ->
-
-    ?line DataDir = ?config(data_dir,Config),
-    ?line OutDir = ?config(priv_dir,Config),
-    ?line true = code:add_patha(?config(priv_dir,Config)),
-    ?line ok = asn1ct:compile(DataDir ++ "OpenTypeImplicitTag",[Rules,{outdir,OutDir}]++Options).
-
-
-
 main(_Rules) ->
-
-    ?line {ok,Bytes1} = 
-	asn1_wrapper:encode('OpenTypeImplicitTag','Seq',
-			    {'Seq',[1,1,255],[1,1,255],12,[1,1,255]}),
-    ?line {ok,{'Seq',_,_,12,_}} = 
-	asn1_wrapper:decode('OpenTypeImplicitTag','Seq',
-			    lists:flatten(Bytes1)),
-
-    ?line {ok,Bytes2} = 
-	asn1_wrapper:encode('OpenTypeImplicitTag','Seq',
-			    {'Seq',[1,1,255],asn1_NOVALUE,12,[1,1,255]}),
-    ?line {ok,{'Seq',_,asn1_NOVALUE,12,_}} = 
-	asn1_wrapper:decode('OpenTypeImplicitTag','Seq',
-			    lists:flatten(Bytes2)),
+    roundtrip('Seq', {'Seq',<<1,1,255>>,<<1,1,255>>,12,<<1,1,255>>}),
+    roundtrip('Seq', {'Seq',<<1,1,255>>,asn1_NOVALUE,12,<<1,1,255>>}),
     ok.
+
+roundtrip(T, V) ->
+    asn1_test_lib:roundtrip('OpenTypeImplicitTag', T, V).

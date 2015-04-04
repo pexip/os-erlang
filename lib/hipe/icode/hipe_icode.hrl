@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %% 
-%% Copyright Ericsson AB 2004-2009. All Rights Reserved.
+%% Copyright Ericsson AB 2004-2014. All Rights Reserved.
 %% 
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -21,12 +21,6 @@
 %% Contains type and record definitions for all Icode data structures.
 %%
 %%=====================================================================
-
-%%---------------------------------------------------------------------
-%% THIS DOES NOT REALLY BELONG HERE -- PLEASE REMOVE ASAP!
-%%---------------------------------------------------------------------
-
--type ordset(T)	 :: [T].
 
 %%---------------------------------------------------------------------
 %% Include files needed for the compilation of this header file
@@ -64,11 +58,11 @@
 -type icode_if_op()  :: '>' | '<' | '>=' | '=<' | '=:=' | '=/=' | '==' | '/='
                       | 'fixnum_eq' | 'fixnum_neq' | 'fixnum_lt'
                       | 'fixnum_le' | 'fixnum_ge' | 'fixnum_gt' 
-                      | 'suspend_msg_timeout'.
+                      | 'op_exact_eqeq_2' | 'suspend_msg_timeout'.
 
--type icode_type_test()	:: 'atom' | 'bignum' | 'binary' | 'bitrst' | 'boolean'
-                         | 'cons' | 'constant' | 'fixnum' | 'float'
-                         | 'function' | 'function2' | 'integer' | 'list' | 'nil'
+-type icode_type_test()	:: 'atom' | 'bignum' | 'binary' | 'bitstr' | 'boolean'
+                         | 'cons' | 'fixnum' | 'float'  | 'function'
+                         | 'function2' | 'integer' | 'list' | 'map' | 'nil'
                          | 'number' | 'pid' | 'port' | 'reference' | 'tuple'
                          | {'atom', atom()} | {'integer', integer()}
                          | {'record', atom(), non_neg_integer()}
@@ -88,7 +82,7 @@
 -type icode_call_type()   :: 'local' | 'primop' | 'remote'.
 -type icode_exit_class()  :: 'error' | 'exit' | 'rethrow' | 'throw'.
 
--type icode_comment_text() :: atom() | string() | {atom(), term()}.
+-type icode_comment_text() :: atom() | string().
 
 -type icode_info() :: [{'arg_types', [erl_types:erl_type()]}].
 
@@ -113,7 +107,6 @@
 				   fail_label :: icode_lbl(),
 				   length     :: non_neg_integer(),
 				   cases      :: [icode_switch_case()]}).
-
 
 -record(icode_type, {test        :: icode_type_test(),
 		     args        :: [icode_term_arg()],
@@ -184,5 +177,6 @@
 		var_range	:: {non_neg_integer(), non_neg_integer()},
 		label_range	:: {icode_lbl(), icode_lbl()},
 		info = []       :: icode_info()}).
+-type icode() :: #icode{}.
 
 %%---------------------------------------------------------------------

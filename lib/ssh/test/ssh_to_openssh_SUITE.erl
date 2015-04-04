@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2008-2011. All Rights Reserved.
+%% Copyright Ericsson AB 2008-2013. All Rights Reserved.
 %%
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -21,7 +21,6 @@
 -module(ssh_to_openssh_SUITE).
 
 -include_lib("common_test/include/ct.hrl").
--include("test_server_line.hrl").
 
 %% Note: This directive should only be used in test suites.
 -compile(export_all).
@@ -29,105 +28,89 @@
 -define(TIMEOUT, 50000).
 -define(SSH_DEFAULT_PORT, 22).
 
-%% Test server callback functions
 %%--------------------------------------------------------------------
-%% Function: init_per_suite(Config) -> Config
-%% Config - [tuple()]
-%%   A list of key/value pairs, holding the test case configuration.
-%% Description: Initialization before the whole suite
-%%
-%% Note: This function is free to add any key/value pairs to the Config
-%% variable, but should NOT alter/remove any existing entries.
+%% Common Test interface functions -----------------------------------
 %%--------------------------------------------------------------------
-init_per_suite(Config) ->
-    case catch crypto:start() of
-	ok ->
-	    ssh_test_lib:make_dsa_files(Config),
-	    Config;
-	_Else ->
-	    {skip,"Could not start crypto!"}
-    end.
 
-%%--------------------------------------------------------------------
-%% Function: end_per_suite(Config) -> _
-%% Config - [tuple()]
-%%   A list of key/value pairs, holding the test case configuration.
-%% Description: Cleanup after the whole suite
-%%--------------------------------------------------------------------
-end_per_suite(_Config) ->
-    crypto:stop(),
-    ok.
-
-%%--------------------------------------------------------------------
-%% Function: init_per_testcase(TestCase, Config) -> Config
-%% Case - atom()
-%%   Name of the test case that is about to be run.
-%% Config - [tuple()]
-%%   A list of key/value pairs, holding the test case configuration.
-%%
-%% Description: Initialization before each test case
-%%
-%% Note: This function is free to add any key/value pairs to the Config
-%% variable, but should NOT alter/remove any existing entries.
-%% Description: Initialization before each test case
-%%--------------------------------------------------------------------
-init_per_testcase(_TestCase, Config) ->
-    ssh:start(),
-    Config.
-
-%%--------------------------------------------------------------------
-%% Function: end_per_testcase(TestCase, Config) -> _
-%% Case - atom()
-%%   Name of the test case that is about to be run.
-%% Config - [tuple()]
-%%   A list of key/value pairs, holding the test case configuration.
-%% Description: Cleanup after each test case
-%%--------------------------------------------------------------------
-end_per_testcase(_TestCase, _Config) ->
-    ssh:stop(),
-    ok.
-
-%%--------------------------------------------------------------------
-%% Function: all(Clause) -> TestCases
-%% Clause - atom() - suite | doc
-%% TestCases - [Case]
-%% Case - atom()
-%%   Name of a test case.
-%% Description: Returns a list of all test cases in this test suite
-%%--------------------------------------------------------------------
 all() -> 
     case os:find_executable("ssh") of
 	false -> 
 	    {skip, "openSSH not installed on host"};
 	_ ->
-	    [erlang_shell_client_openssh_server,
-	     erlang_client_openssh_server_exec,
-	     erlang_client_openssh_server_exec_compressed,
-	     erlang_server_openssh_client_exec,
-	     erlang_server_openssh_client_exec_compressed,
-	     erlang_client_openssh_server_setenv,
-	     erlang_client_openssh_server_publickey_rsa,
-	     erlang_client_openssh_server_publickey_dsa,
-	     erlang_server_openssh_client_pulic_key_dsa,
-	     erlang_client_openssh_server_password]
+	    [{group, erlang_client},
+	     {group, erlang_server}
+	     ]
     end.
 
 groups() -> 
-    [].
+    [{erlang_client, [], [erlang_shell_client_openssh_server,
+			  erlang_client_openssh_server_exec,
+			  erlang_client_openssh_server_exec_compressed,
+			  erlang_client_openssh_server_setenv,
+			  erlang_client_openssh_server_publickey_rsa,
+			  erlang_client_openssh_server_publickey_dsa,
+			  erlang_client_openssh_server_password,
+			  erlang_client_openssh_server_nonexistent_subsystem
+			 ]},
+     {erlang_server, [], [erlang_server_openssh_client_exec,
+			  erlang_server_openssh_client_exec_compressed,
+			  erlang_server_openssh_client_pulic_key_dsa,
+			  erlang_server_openssh_client_cipher_suites,
+			  erlang_server_openssh_client_macs]}
+    ].
 
-init_per_group(_GroupName, Config) ->
-	Config.
+init_per_suite(Config) ->
+    case catch crypto:start() of
+	ok ->
+	    case gen_tcp:connect("localhost", 22, []) of
+		{error,econnrefused} ->
+		    {skip,"No openssh deamon"};
+		_ ->
+		    Config
+	    end;
+	_Else ->
+	    {skip,"Could not start crypto!"}
+    end.
 
-end_per_group(_GroupName, Config) ->
-	Config.
+end_per_suite(_Config) ->
+    crypto:stop(),
+    ok.
 
-%% TEST cases starts here.
+init_per_group(erlang_server, Config) ->
+    DataDir = ?config(data_dir, Config),
+    UserDir = ?config(priv_dir, Config),
+    ssh_test_lib:setup_dsa_known_host(DataDir, UserDir),
+    Config;
+init_per_group(_, Config) ->
+    Config.
+
+end_per_group(erlang_server, Config) ->
+    UserDir = ?config(priv_dir, Config),
+    ssh_test_lib:clean_dsa(UserDir),
+    Config;
+end_per_group(_, Config) ->
+    Config.
+
+init_per_testcase(erlang_server_openssh_client_cipher_suites, Config) ->
+    check_ssh_client_support(Config);
+
+init_per_testcase(erlang_server_openssh_client_macs, Config) ->
+    check_ssh_client_support(Config);
+
+init_per_testcase(_TestCase, Config) ->
+    ssh:start(),
+    Config.
+
+end_per_testcase(_TestCase, _Config) ->
+    ssh:stop(),
+    ok.
+
 %%--------------------------------------------------------------------
-erlang_shell_client_openssh_server(doc) ->
-    ["Test that ssh:shell/2 works"];
+%% Test Cases --------------------------------------------------------
+%%--------------------------------------------------------------------
 
-erlang_shell_client_openssh_server(suite) ->
-    [];
+erlang_shell_client_openssh_server() ->
+    [{doc, "Test that ssh:shell/2 works"}].
 
 erlang_shell_client_openssh_server(Config) when is_list(Config) ->
     process_flag(trap_exit, true),
@@ -143,21 +126,18 @@ erlang_shell_client_openssh_server(Config) when is_list(Config) ->
 		    ok
 	    end;
 	Other0 ->
-	    test_server:fail({unexpected_msg, Other0})
+	    ct:fail({unexpected_msg, Other0})
     end,
     receive
 	{'EXIT', Shell, normal} ->
 	    ok;
 	Other1 ->
-	    test_server:fail({unexpected_msg, Other1})
+	    ct:fail({unexpected_msg, Other1})
     end.
 
 %--------------------------------------------------------------------
-erlang_client_openssh_server_exec(doc) ->
-    ["Test api function ssh_connection:exec"];
-
-erlang_client_openssh_server_exec(suite) ->
-    [];
+erlang_client_openssh_server_exec() ->
+    [{doc, "Test api function ssh_connection:exec"}].
 
 erlang_client_openssh_server_exec(Config) when is_list(Config) ->
     ConnectionRef = ssh_test_lib:connect(?SSH_DEFAULT_PORT, [{silently_accept_hosts, true},
@@ -171,11 +151,11 @@ erlang_client_openssh_server_exec(Config) when is_list(Config) ->
 	    ssh_test_lib:receive_exec_end(ConnectionRef, ChannelId0);
 	{unexpected_msg,{ssh_cm, ConnectionRef, {exit_status, ChannelId0, 0}}
 	 = ExitStatus0} ->
-	    test_server:format("0: Collected data ~p", [ExitStatus0]),
+	    ct:pal("0: Collected data ~p", [ExitStatus0]),
 	    ssh_test_lib:receive_exec_result(Data0,
 					     ConnectionRef, ChannelId0);
 	Other0 ->
-	    test_server:fail(Other0)
+	    ct:fail(Other0)
     end,
 
     {ok, ChannelId1} = ssh_connection:session_channel(ConnectionRef, infinity),
@@ -187,19 +167,16 @@ erlang_client_openssh_server_exec(Config) when is_list(Config) ->
 	    ssh_test_lib:receive_exec_end(ConnectionRef, ChannelId1);
 	{unexpected_msg,{ssh_cm, ConnectionRef, {exit_status, ChannelId1, 0}}
 	 = ExitStatus1} ->
-	    test_server:format("0: Collected data ~p", [ExitStatus1]),
+	    ct:pal("0: Collected data ~p", [ExitStatus1]),
 	    ssh_test_lib:receive_exec_result(Data1,
 					     ConnectionRef, ChannelId1);
 	Other1 ->
-	    test_server:fail(Other1)
+	    ct:fail(Other1)
     end.
 
 %%--------------------------------------------------------------------
-erlang_client_openssh_server_exec_compressed(doc) ->
-    ["Test that compression option works"];
-
-erlang_client_openssh_server_exec_compressed(suite) ->
-    [];
+erlang_client_openssh_server_exec_compressed() ->
+    [{doc, "Test that compression option works"}].
 
 erlang_client_openssh_server_exec_compressed(Config) when is_list(Config) ->
     ConnectionRef = ssh_test_lib:connect(?SSH_DEFAULT_PORT, [{silently_accept_hosts, true},
@@ -214,75 +191,176 @@ erlang_client_openssh_server_exec_compressed(Config) when is_list(Config) ->
 	    ssh_test_lib:receive_exec_end(ConnectionRef, ChannelId);
 	{unexpected_msg,{ssh_cm, ConnectionRef,
 			 {exit_status, ChannelId, 0}} = ExitStatus} ->
-	    test_server:format("0: Collected data ~p", [ExitStatus]),
+	    ct:pal("0: Collected data ~p", [ExitStatus]),
 	    ssh_test_lib:receive_exec_result(Data,  ConnectionRef, ChannelId);
 	Other ->
-	    test_server:fail(Other)
+	    ct:fail(Other)
     end.
 
 %%--------------------------------------------------------------------
-erlang_server_openssh_client_exec(doc) ->
-    ["Test that exec command works."];
-
-erlang_server_openssh_client_exec(suite) ->
-    [];
+erlang_server_openssh_client_exec() ->
+    [{doc, "Test that exec command works."}].
 
 erlang_server_openssh_client_exec(Config) when is_list(Config) ->
     SystemDir = ?config(data_dir, Config),
-    
+    PrivDir = ?config(priv_dir, Config),
+    KnownHosts = filename:join(PrivDir, "known_hosts"),
+
     {Pid, Host, Port} = ssh_test_lib:daemon([{system_dir, SystemDir},
 					     {failfun, fun ssh_test_lib:failfun/2}]),
     
 
-    test_server:sleep(500),
+    ct:sleep(500),
 
     Cmd = "ssh -p " ++ integer_to_list(Port) ++
-	" -o StrictHostKeyChecking=no "++ Host ++ " 1+1.",
+	" -o UserKnownHostsFile=" ++ KnownHosts ++ " " ++ Host ++ " 1+1.",
+
+    ct:pal("Cmd: ~p~n", [Cmd]),
+
     SshPort = open_port({spawn, Cmd}, [binary]),
 
     receive
         {SshPort,{data, <<"2\n">>}} ->
 	    ok
     after ?TIMEOUT ->
-	    test_server:fail("Did not receive answer")
+	    ct:fail("Did not receive answer")
 
     end,
      ssh:stop_daemon(Pid).
 
 %%--------------------------------------------------------------------
-erlang_server_openssh_client_exec_compressed(doc) ->
-    ["Test that exec command works."];
+erlang_server_openssh_client_cipher_suites() ->
+    [{doc, "Test that we can connect with different cipher suites."}].
 
-erlang_server_openssh_client_exec_compressed(suite) ->
-    [];
+erlang_server_openssh_client_cipher_suites(Config) when is_list(Config) ->
+    SystemDir = ?config(data_dir, Config),
+    PrivDir = ?config(priv_dir, Config),
+    KnownHosts = filename:join(PrivDir, "known_hosts"),
+
+    {Pid, Host, Port} = ssh_test_lib:daemon([{system_dir, SystemDir},
+					     {failfun, fun ssh_test_lib:failfun/2}]),
+
+
+    ct:sleep(500),
+
+    Supports = crypto:supports(),
+    Ciphers = proplists:get_value(ciphers, Supports),
+    Tests = [
+        {"3des-cbc", lists:member(des3_cbc, Ciphers)},
+        {"aes128-cbc", lists:member(aes_cbc128, Ciphers)},
+        {"aes128-ctr", lists:member(aes_ctr, Ciphers)},
+        {"aes256-cbc", false}
+    ],
+    lists:foreach(fun({Cipher, Expect}) ->
+        Cmd = "ssh -p " ++ integer_to_list(Port) ++
+        " -o UserKnownHostsFile=" ++ KnownHosts ++ " " ++ Host ++ " " ++
+        " -c " ++ Cipher ++ " 1+1.",
+
+        ct:pal("Cmd: ~p~n", [Cmd]),
+
+        SshPort = open_port({spawn, Cmd}, [binary, stderr_to_stdout]),
+
+        case Expect of
+            true ->
+                receive
+                    {SshPort,{data, <<"2\n">>}} ->
+                       ok
+                after ?TIMEOUT ->
+                    ct:fail("Did not receive answer")
+                end;
+            false ->
+                receive
+                    {SshPort,{data, <<"no matching cipher found", _/binary>>}} ->
+                        ok
+                after ?TIMEOUT ->
+                    ct:fail("Did not receive no matching cipher message")
+                end
+        end
+    end, Tests),
+
+     ssh:stop_daemon(Pid).
+
+%%--------------------------------------------------------------------
+erlang_server_openssh_client_macs() ->
+    [{doc, "Test that we can connect with different MACs."}].
+
+erlang_server_openssh_client_macs(Config) when is_list(Config) ->
+    SystemDir = ?config(data_dir, Config),
+    PrivDir = ?config(priv_dir, Config),
+    KnownHosts = filename:join(PrivDir, "known_hosts"),
+
+    {Pid, Host, Port} = ssh_test_lib:daemon([{system_dir, SystemDir},
+                         {failfun, fun ssh_test_lib:failfun/2}]),
+
+
+    ct:sleep(500),
+
+    Supports = crypto:supports(),
+    Hashs = proplists:get_value(hashs, Supports),
+    MACs = [{"hmac-sha1", lists:member(sha, Hashs)},
+        {"hmac-sha2-256", lists:member(sha256, Hashs)},
+        {"hmac-md5-96", false},
+        {"hmac-ripemd160", false}],
+    lists:foreach(fun({MAC, Expect}) ->
+        Cmd = "ssh -p " ++ integer_to_list(Port) ++
+        " -o UserKnownHostsFile=" ++ KnownHosts ++ " " ++ Host ++ " " ++
+        " -o MACs=" ++ MAC ++ " 1+1.",
+
+        ct:pal("Cmd: ~p~n", [Cmd]),
+
+        SshPort = open_port({spawn, Cmd}, [binary, stderr_to_stdout]),
+
+        case Expect of
+            true ->
+                receive
+                    {SshPort,{data, <<"2\n">>}} ->
+                       ok
+                after ?TIMEOUT ->
+                    ct:fail("Did not receive answer")
+                end;
+            false ->
+                receive
+                    {SshPort,{data, <<"no matching mac found", _/binary>>}} ->
+                        ok
+                after ?TIMEOUT ->
+                    ct:fail("Did not receive no matching mac message")
+                end
+        end
+    end, MACs),
+
+     ssh:stop_daemon(Pid).
+
+%%--------------------------------------------------------------------
+erlang_server_openssh_client_exec_compressed() ->
+    [{doc, "Test that exec command works."}].
 
 erlang_server_openssh_client_exec_compressed(Config) when is_list(Config) ->
     SystemDir = ?config(data_dir, Config),
+    PrivDir = ?config(priv_dir, Config),
+    KnownHosts = filename:join(PrivDir, "known_hosts"),
+
     {Pid, Host, Port} = ssh_test_lib:daemon([{system_dir, SystemDir},
 					     {compression, zlib},
 					     {failfun, fun ssh_test_lib:failfun/2}]),
 
-    test_server:sleep(500),
+    ct:sleep(500),
 
     Cmd = "ssh -p " ++ integer_to_list(Port) ++
-	" -o StrictHostKeyChecking=no -C "++ Host ++ " 1+1.",
+	" -o UserKnownHostsFile=" ++ KnownHosts ++ " -C "++ Host ++ " 1+1.",
     SshPort = open_port({spawn, Cmd}, [binary]),
 
     receive
         {SshPort,{data, <<"2\n">>}} ->
 	    ok
     after ?TIMEOUT ->
-	    test_server:fail("Did not receive answer")
+	    ct:fail("Did not receive answer")
 
     end,
     ssh:stop_daemon(Pid).
 
 %%--------------------------------------------------------------------
-erlang_client_openssh_server_setenv(doc) ->
-    ["Test api function ssh_connection:setenv"];
-
-erlang_client_openssh_server_setenv(suite) ->
-    [];
+erlang_client_openssh_server_setenv() ->
+    [{doc, "Test api function ssh_connection:setenv"}].
 
 erlang_client_openssh_server_setenv(Config) when is_list(Config) ->
     ConnectionRef =
@@ -308,15 +386,15 @@ erlang_client_openssh_server_setenv(Config) when is_list(Config) ->
 			 {data,0,1, UnxpectedData}}} ->
 	    %% Some os may return things as
 	    %% ENV_TEST: Undefined variable.\n"
-	    test_server:format("UnxpectedData: ~p", [UnxpectedData]),
+	    ct:pal("UnxpectedData: ~p", [UnxpectedData]),
 	    ssh_test_lib:receive_exec_end(ConnectionRef, ChannelId);
 	{unexpected_msg,{ssh_cm, ConnectionRef, {exit_status, ChannelId, 0}}
 	 = ExitStatus} ->
-	    test_server:format("0: Collected data ~p", [ExitStatus]),
+	    ct:pal("0: Collected data ~p", [ExitStatus]),
 	    ssh_test_lib:receive_exec_result(Data,
 					     ConnectionRef, ChannelId);
 	Other ->
-	    test_server:fail(Other)
+	    ct:fail(Other)
     end.
 
 %%--------------------------------------------------------------------
@@ -324,103 +402,98 @@ erlang_client_openssh_server_setenv(Config) when is_list(Config) ->
 %% setenv not meaningfull on erlang ssh daemon!
 
 %%--------------------------------------------------------------------
-erlang_client_openssh_server_publickey_rsa(doc) ->
-    ["Validate using rsa publickey."];
-erlang_client_openssh_server_publickey_rsa(suite) ->
-    [];
+erlang_client_openssh_server_publickey_rsa() ->
+    [{doc, "Validate using rsa publickey."}].
 erlang_client_openssh_server_publickey_rsa(Config) when is_list(Config) ->
     {ok,[[Home]]} = init:get_argument(home),
-    SrcDir =  filename:join(Home, ".ssh"),
-    UserDir = ?config(priv_dir, Config),
-    case ssh_test_lib:copyfile(SrcDir, UserDir, "id_rsa") of
-	{ok, _} ->
-	    ConnectionRef =
-		ssh_test_lib:connect(?SSH_DEFAULT_PORT,
-				     [{user_dir, UserDir},
-				      {public_key_alg, ssh_rsa},
-				      {user_interaction, false},
-				      silently_accept_hosts]),
-	    {ok, Channel} =
-		ssh_connection:session_channel(ConnectionRef, infinity),
-	    ok = ssh_connection:close(ConnectionRef, Channel),
-	    ok = ssh:close(ConnectionRef),
-	    ok = file:delete(filename:join(UserDir, "id_rsa"));
-	{error, enoent} ->
-	    {skip, "no ~/.ssh/id_rsa"}
+    KeyFile =  filename:join(Home, ".ssh/id_rsa"),
+    case file:read_file(KeyFile) of
+	{ok, Pem} ->
+	    case public_key:pem_decode(Pem) of
+		[{_,_, not_encrypted}] ->
+		    ConnectionRef =
+			ssh_test_lib:connect(?SSH_DEFAULT_PORT,
+					     [{public_key_alg, ssh_rsa},
+					      {user_interaction, false},
+					      silently_accept_hosts]),
+		    {ok, Channel} =
+			ssh_connection:session_channel(ConnectionRef, infinity),
+		    ok = ssh_connection:close(ConnectionRef, Channel),
+		    ok = ssh:close(ConnectionRef);
+		_ ->
+		    {skip, {error, "Has pass phrase can not be used by automated test case"}} 
+	    end;
+	_ ->
+	    {skip, "no ~/.ssh/id_rsa"}  
     end.
+	
 
 %%--------------------------------------------------------------------
-erlang_client_openssh_server_publickey_dsa(doc) ->
-    ["Validate using dsa publickey."];
-erlang_client_openssh_server_publickey_dsa(suite) ->
-    [];
+erlang_client_openssh_server_publickey_dsa() ->
+    [{doc, "Validate using dsa publickey."}].
 erlang_client_openssh_server_publickey_dsa(Config) when is_list(Config) ->
     {ok,[[Home]]} = init:get_argument(home),
-    SrcDir =  filename:join(Home, ".ssh"),
-    UserDir = ?config(priv_dir, Config),
-    case ssh_test_lib:copyfile(SrcDir, UserDir, "id_dsa") of
-	{ok, _} ->
-	    ConnectionRef =
-		ssh_test_lib:connect(?SSH_DEFAULT_PORT,
-				     [{user_dir, UserDir},
-				      {public_key_alg, ssh_dsa},
-				      {user_interaction, false},
-				      silently_accept_hosts]),
-	    {ok, Channel} =
-		ssh_connection:session_channel(ConnectionRef, infinity),
-	    ok = ssh_connection:close(ConnectionRef, Channel),
-	    ok = ssh:close(ConnectionRef),
-	    ok = file:delete(filename:join(UserDir, "id_dsa"));
-	{error, enoent} ->
-	    {skip, "no ~/.ssh/id_dsa"}
+    KeyFile =  filename:join(Home, ".ssh/id_dsa"),
+    case file:read_file(KeyFile) of
+	{ok, Pem} ->
+	    case public_key:pem_decode(Pem) of
+		[{_,_, not_encrypted}] ->
+		    ConnectionRef =
+			ssh_test_lib:connect(?SSH_DEFAULT_PORT,
+					     [{public_key_alg, ssh_dsa},
+					      {user_interaction, false},
+					      silently_accept_hosts]),
+		    {ok, Channel} =
+			ssh_connection:session_channel(ConnectionRef, infinity),
+		    ok = ssh_connection:close(ConnectionRef, Channel),
+		    ok = ssh:close(ConnectionRef);
+		_ ->
+		    {skip, {error, "Has pass phrase can not be used by automated test case"}} 
+	    end;
+	_ ->
+	    {skip, "no ~/.ssh/id_dsa"}  
     end.
-
 %%--------------------------------------------------------------------
-erlang_server_openssh_client_pulic_key_dsa(doc) ->
-    ["Validate using dsa publickey."];
-
-erlang_server_openssh_client_pulic_key_dsa(suite) ->
-    [];
-
+erlang_server_openssh_client_pulic_key_dsa() ->
+    [{doc, "Validate using dsa publickey."}].
 erlang_server_openssh_client_pulic_key_dsa(Config) when is_list(Config) ->
     SystemDir = ?config(data_dir, Config),
+    PrivDir = ?config(priv_dir, Config),
+    KnownHosts = filename:join(PrivDir, "known_hosts"),
+
     {Pid, Host, Port} = ssh_test_lib:daemon([{system_dir, SystemDir},
 					     {public_key_alg, ssh_dsa},
 					     {failfun, fun ssh_test_lib:failfun/2}]),
     
-    test_server:sleep(500),
+    ct:sleep(500),
 
     Cmd = "ssh -p " ++ integer_to_list(Port) ++
-	" -o StrictHostKeyChecking=no "++ Host ++ " 1+1.",
+	" -o UserKnownHostsFile=" ++ KnownHosts ++
+	" " ++ Host ++ " 1+1.",
     SshPort = open_port({spawn, Cmd}, [binary]),
 
     receive
         {SshPort,{data, <<"2\n">>}} ->
 	    ok
     after ?TIMEOUT ->
-	    test_server:fail("Did not receive answer")
-
+	    ct:fail("Did not receive answer")
     end,
      ssh:stop_daemon(Pid).
 
 %%--------------------------------------------------------------------
-erlang_client_openssh_server_password(doc) ->
-    ["Test client password option"];
-
-erlang_client_openssh_server_password(suite) ->
-    [];
-
+erlang_client_openssh_server_password() ->
+    [{doc, "Test client password option"}].
 erlang_client_openssh_server_password(Config) when is_list(Config) ->
     %% to make sure we don't public-key-auth
     UserDir = ?config(data_dir, Config),
     {error, Reason0} =
-	ssh_test_lib:connect(?SSH_DEFAULT_PORT, [{silently_accept_hosts, true},
+	ssh:connect(any, ?SSH_DEFAULT_PORT, [{silently_accept_hosts, true},
 						 {user, "foo"},
 						 {password, "morot"},
 						 {user_interaction, false},
 						 {user_dir, UserDir}]),
     
-    test_server:format("Test of user foo that does not exist. "
+    ct:pal("Test of user foo that does not exist. "
 		       "Error msg: ~p~n", [Reason0]),
 
     User = string:strip(os:cmd("whoami"), right, $\n),
@@ -428,17 +501,31 @@ erlang_client_openssh_server_password(Config) when is_list(Config) ->
     case length(string:tokens(User, " ")) of
 	1 ->
 	    {error, Reason1} =
-		ssh_test_lib:connect(?SSH_DEFAULT_PORT,
-				     [{silently_accept_hosts, true},
-				      {user, User},
-				      {password, "foo"},
-				      {user_interaction, false},
-				      {user_dir, UserDir}]),
-	    test_server:format("Test of wrong Pasword.  "
+		ssh:connect(any, ?SSH_DEFAULT_PORT,
+			    [{silently_accept_hosts, true},
+			     {user, User},
+			     {password, "foo"},
+			     {user_interaction, false},
+			     {user_dir, UserDir}]),
+	    ct:pal("Test of wrong Pasword.  "
 			       "Error msg: ~p~n", [Reason1]);
 	_ ->
-	    test_server:format("Whoami failed reason: ~n", [])
+	    ct:pal("Whoami failed reason: ~n", [])
 	end.
+
+%%--------------------------------------------------------------------
+
+erlang_client_openssh_server_nonexistent_subsystem() ->
+    [{doc, "Test client password option"}].
+erlang_client_openssh_server_nonexistent_subsystem(Config) when is_list(Config) ->
+
+    ConnectionRef = ssh_test_lib:connect(?SSH_DEFAULT_PORT,
+					 [{user_interaction, false},
+					  silently_accept_hosts]),
+
+    {ok, ChannelId} = ssh_connection:session_channel(ConnectionRef, infinity),
+
+    failure = ssh_connection:subsystem(ConnectionRef, ChannelId, "foo", infinity).
 
 %%--------------------------------------------------------------------
 %
@@ -446,13 +533,35 @@ erlang_client_openssh_server_password(Config) when is_list(Config) ->
 %%
 %%--------------------------------------------------------------------
 %%--------------------------------------------------------------------
-%%% Internal functions
+%%% Internal functions -----------------------------------------------
 %%--------------------------------------------------------------------
 receive_hej() ->
     receive
 	<<"Hej\n">> = Hej->
-	    test_server:format("Expected result: ~p~n", [Hej]);
+	    ct:pal("Expected result: ~p~n", [Hej]);
 	Info ->
-	    test_server:format("Extra info: ~p~n", [Info]),
+	    ct:pal("Extra info: ~p~n", [Info]),
 	    receive_hej()
+    end.
+
+%%--------------------------------------------------------------------
+%%--------------------------------------------------------------------
+%% Check if we have a "newer" ssh client that supports these test cases
+%%--------------------------------------------------------------------
+check_ssh_client_support(Config) ->
+    Port = open_port({spawn, "ssh -Q cipher"}, [exit_status, stderr_to_stdout]),
+    case check_ssh_client_support2(Port) of
+	0 -> % exit status from command (0 == ok)
+	    ssh:start(),
+	    Config;
+	_ ->
+	    {skip, "test case not supported by ssh client"}
+    end.
+
+check_ssh_client_support2(P) ->
+    receive
+	{P, {data, _A}} ->
+	    check_ssh_client_support2(P);
+	{P, {exit_status, E}} ->
+	    E
     end.

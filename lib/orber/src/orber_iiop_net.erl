@@ -2,7 +2,7 @@
 %%
 %% %CopyrightBegin%
 %% 
-%% Copyright Ericsson AB 1997-2009. All Rights Reserved.
+%% Copyright Ericsson AB 1997-2012. All Rights Reserved.
 %% 
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -157,49 +157,76 @@ terminate(_Reason, _State) ->
     ok.
 
 %%-----------------------------------------------------------------
-%% Func: parse_options/2
+%% Func: get_options/2
 %%-----------------------------------------------------------------
 get_options(normal, _Options) ->
     [];
-get_options(ssl, Options) ->
-    Verify = orber_tb:keysearch(ssl_server_verify, Options, 
-				orber_env:ssl_server_verify()),
-    Depth = orber_tb:keysearch(ssl_server_depth, Options, 
-			       orber_env:ssl_server_depth()),
-    Cert = orber_tb:keysearch(ssl_server_certfile, Options, 
-			      orber_env:ssl_server_certfile()),
-    CaCert = orber_tb:keysearch(ssl_server_cacertfile, Options, 
-				orber_env:ssl_server_cacertfile()),
-    Pwd = orber_tb:keysearch(ssl_server_password, Options, 
-			     orber_env:ssl_server_password()),
-    Key = orber_tb:keysearch(ssl_server_keyfile, Options, 
-			       orber_env:ssl_server_keyfile()),
-    Ciphers = orber_tb:keysearch(ssl_server_ciphers, Options, 
-				 orber_env:ssl_server_ciphers()),
-    Timeout = orber_tb:keysearch(ssl_server_cachetimeout, Options, 
-				 orber_env:ssl_server_cachetimeout()),
-    [{verify, Verify},
-     {depth, Depth} |
-     ssl_server_extra_options([{certfile, Cert},
-			       {cacertfile, CaCert},
-			       {password, Pwd},
-			       {keyfile, Key},
-			       {ciphers, Ciphers},
-			       {cachetimeout, Timeout}], [])].
+get_options(ssl, Options) ->    
+    SSLOpts = 
+	case orber_tb:keysearch(ssl_server_options, Options,
+				orber_env:ssl_server_options()) of
+	    [] ->
+		Verify = orber_tb:keysearch(ssl_server_verify, Options, 
+					    orber_env:ssl_server_verify()),
+		Depth = orber_tb:keysearch(ssl_server_depth, Options, 
+					   orber_env:ssl_server_depth()),
+		Cert = orber_tb:keysearch(ssl_server_certfile, Options, 
+					  orber_env:ssl_server_certfile()),
+		CaCert = orber_tb:keysearch(ssl_server_cacertfile, Options, 
+					    orber_env:ssl_server_cacertfile()),
+		Pwd = orber_tb:keysearch(ssl_server_password, Options, 
+					 orber_env:ssl_server_password()),
+		Key = orber_tb:keysearch(ssl_server_keyfile, Options, 
+					 orber_env:ssl_server_keyfile()),
+		Ciphers = orber_tb:keysearch(ssl_server_ciphers, Options, 
+					     orber_env:ssl_server_ciphers()),
+		Timeout = orber_tb:keysearch(ssl_server_cachetimeout, Options, 
+					     orber_env:ssl_server_cachetimeout()),
+		KeepAlive = orber_tb:keysearch(ssl_server_cachetimeout, Options, 
+					       orber_env:iiop_ssl_in_keepalive()),
+		[{verify, Verify},
+		 {depth, Depth},
+		 {certfile, Cert},
+		 {cacertfile, CaCert},
+		 {password, Pwd},
+		 {keyfile, Key},
+		 {ciphers, Ciphers},
+		 {cachetimeout, Timeout},
+		 {keepalive, KeepAlive}];
+	    Opts ->	
+		case orber_tb:check_illegal_tcp_options(Opts) of
+		    ok -> 
+			check_old_ssl_server_options(Options),
+			Opts;
+		    {error, IllegalOpts} ->
+			error_logger:error_report([{application, orber},
+						   "TCP options not allowed to set on a connection", 
+						   IllegalOpts]),
+			error("Illegal TCP option")
+		end
+	end,
+    ssl_server_extra_options(SSLOpts, []).
 
 %%-----------------------------------------------------------------
 %% Func: parse_options/2
 %%-----------------------------------------------------------------
 parse_options([{port, Type, Port} | Rest], State) ->
     Options = get_options(Type, []),
-    Options2 = case orber_env:ip_address_variable_defined() of
-		   false ->
-		       Options;
-		   Host ->
-		       IPVersion = orber:ip_version(),
-		       {ok, IP} = inet:getaddr(Host, IPVersion),
-		       [{ip, IP} | Options]
-	       end,
+    Family = orber_env:ip_version(),
+    IPFamilyOptions = 
+	case Family of
+	    inet -> [inet];
+	    inet6 -> [inet6, {ipv6_v6only, true}]
+	end,    
+    Options2 = 
+	case orber_env:ip_address_variable_defined() of
+	    false ->
+		IPFamilyOptions ++ Options;
+	    Host ->
+		{ok, IP} = inet:getaddr(Host, Family),
+		IPFamilyOptions ++ [{ip, IP} |Options]
+	end,
+
     {ok, Listen, NewPort} = orber_socket:listen(Type, Port, Options2, true),
     {ok, Pid} = orber_iiop_socketsup:start_accept(Type, Listen, 0),
     link(Pid),
@@ -263,26 +290,36 @@ handle_call({remove, Ref}, _From, State) ->
 	    {reply, ok, State}
     end;
 handle_call({add, IP, Type, Port, AllOptions}, _From, State) ->
-    Family = orber_env:ip_version(),
+    Family = orber_tb:keysearch(ip_family, AllOptions, orber_env:ip_version()),
+    IPFamilyOptions = 
+	case Family of
+	    inet -> [inet];
+	    inet6 -> [inet6, {ipv6_v6only, true}]
+	end,   
     case inet:getaddr(IP, Family) of
 	{ok, IPTuple} ->
-	    Options = [{ip, IPTuple}|get_options(Type, AllOptions)],
-	    Ref = make_ref(),
-	    ProxyOptions = filter_options(AllOptions, []),
-	    case orber_socket:listen(Type, Port, Options, false) of
-		{ok, Listen, NewPort} ->
-		    {ok, Pid} = orber_iiop_socketsup:start_accept(Type, Listen, Ref,
-								  ProxyOptions),
-		    link(Pid),
-		    ets:insert(?CONNECTION_DB, #listen{pid = Pid, 
-						       socket = Listen, 
-						       port = NewPort, 
-						       type = Type, ref = Ref,
-						       options = Options,
-						       proxy_options = ProxyOptions}),
-		    {reply, {ok, Ref}, State};
-		Error ->
-		    {reply, Error, State}
+	    try 
+		Options = IPFamilyOptions ++ [{ip, IPTuple} |get_options(Type, AllOptions)],
+	        Ref = make_ref(),
+	        ProxyOptions = filter_options(AllOptions, []),
+	        case orber_socket:listen(Type, Port, Options, false) of
+		    {ok, Listen, NewPort} ->
+			{ok, Pid} = orber_iiop_socketsup:start_accept(Type, Listen, Ref,
+								      ProxyOptions),
+			link(Pid),
+			ets:insert(?CONNECTION_DB, #listen{pid = Pid, 
+							   socket = Listen, 
+							   port = NewPort, 
+							   type = Type, ref = Ref,
+							   options = Options,
+							   proxy_options = ProxyOptions}),
+			{reply, {ok, Ref}, State};
+		    Error ->
+			{reply, Error, State}
+		end
+            catch
+		error:Reason ->
+		    {reply, {error, Reason}, State}
 	    end;
 	Other ->
 	    {reply, Other, State}
@@ -390,11 +427,10 @@ handle_info({'EXIT', Pid, _Reason}, State) when is_pid(Pid) ->
 		 ref = Ref, options = Options, proxy_options = POpts}] ->
 	    ets:delete(?CONNECTION_DB, Pid),
 	    unlink(Pid),
-	    NewListen = new_listen_socket(Type, Listen, Port, Options),
-	    {ok, NewPid} = orber_iiop_socketsup:start_accept(Type, NewListen, 
+	    {ok, NewPid} = orber_iiop_socketsup:start_accept(Type, Listen, 
 							     Ref, POpts),
 	    link(NewPid),
-	    ets:insert(?CONNECTION_DB, #listen{pid = NewPid, socket = NewListen, 
+	    ets:insert(?CONNECTION_DB, #listen{pid = NewPid, socket = Listen, 
 					       port = Port, type = Type, 
 					       ref = Ref, options = Options, 
 					       proxy_options = POpts}),
@@ -420,23 +456,6 @@ handle_info({'EXIT', Pid, _Reason}, State) when is_pid(Pid) ->
 handle_info(_, State) ->
     {noreply,  State}.
 
-new_listen_socket(normal, ListenFd, _Port, _Options) ->
-    ListenFd;
-new_listen_socket(ssl, ListenFd, Port, Options) ->
-    Generation = orber_env:ssl_generation(),
-    if
-	Generation > 2 ->
-	    ListenFd;
-	true ->
-	    case is_process_alive(ssl:pid(ListenFd)) of
-		true ->
-		    ListenFd;
-		_ ->
-		    {ok, Listen, _NP} = orber_socket:listen(ssl, Port, Options, true),
-		    Listen
-	    end
-    end.
-
 from_list(List) ->
     from_list(List, queue:new()).
 
@@ -461,3 +480,31 @@ update_counter(#state{max_connections = infinity} = State, _) ->
 update_counter(State, Value) ->
     State#state{counter = State#state.counter + Value}.
 
+
+check_old_ssl_server_options(Options) ->
+    try
+	0 = orber_tb:keysearch(ssl_server_verify, Options, 
+			       orber_env:ssl_server_verify()),
+    	1 = orber_tb:keysearch(ssl_server_depth, Options, 
+			       orber_env:ssl_server_depth()),
+     	[] = orber_tb:keysearch(ssl_server_certfile, Options, 
+				orber_env:ssl_server_certfile()),
+	[] = orber_tb:keysearch(ssl_server_cacertfile, Options, 
+				orber_env:ssl_server_cacertfile()),
+	[] = orber_tb:keysearch(ssl_server_password, Options, 
+				orber_env:ssl_server_password()),
+	[] = orber_tb:keysearch(ssl_server_keyfile, Options, 
+				orber_env:ssl_server_keyfile()),
+	[] = orber_tb:keysearch(ssl_server_ciphers, Options, 
+				orber_env:ssl_server_ciphers()),
+	infinity = orber_tb:keysearch(ssl_server_cachetimeout, Options, 
+				      orber_env:ssl_server_cachetimeout()),
+	false = orber_tb:keysearch(iiop_ssl_in_keepalive, Options, 
+				   orber_env:iiop_ssl_in_keepalive())
+    catch
+	_:_ ->
+					      io:format("hej\n",[]),
+	    error_logger:warning_report([{application, orber},
+			 "Ignoring deprecated ssl server options used together with the ssl_server_options"])
+    end.
+   

@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %% 
-%% Copyright Ericsson AB 1996-2009. All Rights Reserved.
+%% Copyright Ericsson AB 1996-2011. All Rights Reserved.
 %% 
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -45,7 +45,7 @@ init([]) ->
 	    Pid = start_slave(Master),
 	    {ok, Pid, Pid};
 	{M, F, A} ->
-	    case start_user({M, F}, A) of
+	    case start_user(M, F, A) of
 		{ok, Pid} ->
 		    {ok, Pid, Pid};
 		Error ->
@@ -95,8 +95,8 @@ terminate(_Reason, UserPid) ->
 %% is guaranteed that the user is started.
 %%-----------------------------------------------------------------
 
-start_user(Func,A) ->
-    apply(Func, A),
+start_user(Mod, Func, A) ->
+    apply(Mod, Func, A),
     wait_for_user_p(100).
 
 wait_for_user_p(0) ->

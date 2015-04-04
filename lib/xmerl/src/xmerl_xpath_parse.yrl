@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %% 
-%% Copyright Ericsson AB 2003-2009. All Rights Reserved.
+%% Copyright Ericsson AB 2003-2011. All Rights Reserved.
 %% 
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -144,6 +144,7 @@ Expect 2.
 %% [7]
 'NodeTest' -> 'NameTest' : '$1' .
 'NodeTest' -> 'node_type' '(' ')' : {node_type, value('$1')} .
+'NodeTest' -> 'processing-instruction' '(' ')' : {node_type, value('$1')} .
 'NodeTest' -> 'processing-instruction' '(' 'literal' ')' 
 	: {processing_instruction, value('$3')} .
 

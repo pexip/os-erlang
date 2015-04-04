@@ -29,7 +29,7 @@ include $(ERL_TOP)/make/$(TARGET)/otp.mk
 # Macros
 #
 
-SUB_DIRECTORIES = src
+SUB_DIRECTORIES = src doc/src
 
 include vsn.mk
 VSN = $(TYPER_VSN)

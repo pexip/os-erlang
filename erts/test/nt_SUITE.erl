@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 1998-2011. All Rights Reserved.
+%% Copyright Ericsson AB 1998-2013. All Rights Reserved.
 %%
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -74,7 +74,7 @@ end_per_testcase(_Func, Config) ->
     ok.    
 
 erlsrv() ->
-    os:find_executable(erlsrv).
+    "\"" ++ os:find_executable(erlsrv) ++ "\"".
 
 
 recv_prog_output(Port) -> 
@@ -270,8 +270,11 @@ service_prio(Config) when is_list(Config) ->
     ?line {ok, OldProcs} = get_current_procs(Config),
     ?line start_service(Name),
     ?line {ok, NewProcs} = get_current_procs(Config),
+    timer:sleep(2000),
+    ?line {ok, NewProcs2} = get_current_procs(Config),
     ?line remove_service(Name),
     ?line Diff = arrived_procs(OldProcs,NewProcs),
+    io:format("NewProcs ~p~n after sleep~n ~p~n",[Diff, arrived_procs(OldProcs,NewProcs2)]),
     %% Not really correct, could fail if another heart is
     %% started at the same time...
     ?line {value, {"heart.exe",_,"high"}} = 
@@ -490,12 +493,12 @@ middleman(Waitfor) ->
 match_event(_X, []) ->
     nomatch;
 match_event({Time,Cat,Fac,Sev,Mes},[{Pid,Ref,{Cat,Fac,Sev,MesRE}} | Tail]) ->
-    case regexp:match(Mes,MesRE) of
-	{match,_,_} ->
+    case re:run(Mes,MesRE,[{capture,none}]) of
+	match ->
 	    %%io:format("Match!~n"),
 	    {ok,{Pid,Ref,Time,Mes},Tail};
-	_Z ->
-	    %%io:format("No match (~p)~n",[_Z]),
+	nomatch ->
+	    %%io:format("No match~n"),
 	    case match_event({Time,Cat,Fac,Sev,Mes},Tail) of
 		{ok,X,Rest} ->
 		    {ok,X,[{Pid,Ref,{Cat,Fac,Sev,MesRE}} | Rest]};
@@ -539,7 +542,7 @@ get_current_procs(Config) ->
     ?line erl_parse:parse_term(Tok).
 
 nt_info(Config) when is_list(Config) ->
-    ?line filename:join(?config(data_dir, Config), "nt_info").
+    ?line "\"" ++ filename:join(?config(data_dir, Config), "nt_info") ++ "\"".
 
 
 logdir(Config) ->

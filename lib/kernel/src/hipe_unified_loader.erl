@@ -34,9 +34,15 @@
 
 -module(hipe_unified_loader).
 
+-compile(no_native).
+% 'no_native' is a workaround to avoid "The code server called unloaded module"
+% caused by Mod:module_info(exports) in patch_to_emu_step1() called by post_beam_load.
+% Reproducable with hipelibs and asn1_SUITE.
+% I think the real solution would be to let BIF erlang:load_module/2 redirect all
+% hipe calls to the module and thereby remove post_beam_load.
+
 -export([chunk_name/1,
 	 %% Only the code and code_server modules may call the entries below!
-	 load_hipe_modules/0,
 	 load_native_code/2,
 	 post_beam_load/1,
 	 load_module/3,
@@ -78,18 +84,8 @@ chunk_name(Architecture) ->
 
 %%========================================================================
 
--spec load_hipe_modules() -> 'ok'.
-%% @doc
-%%    Ensures HiPE's loader modules are loaded.
-%%    Called from code.erl at start-up.
-
-load_hipe_modules() ->
-  ok.
-
-%%========================================================================
-
 -spec load_native_code(Mod, binary()) -> 'no_native' | {'module', Mod}
-					  when is_subtype(Mod, atom()).
+					  when Mod :: atom().
 %% @doc
 %%    Loads the native code of a module Mod.
 %%    Returns {module,Mod} on success (for compatibility with
@@ -152,8 +148,8 @@ version_check(Version, Mod) when is_atom(Mod) ->
 
 %%========================================================================
 
--spec load_module(Mod, binary(), _) -> 'bad_crc' | {'module',Mod}
-	     				when is_subtype(Mod,atom()).
+-spec load_module(Mod, binary(), _) -> 'bad_crc' | {'module', Mod}
+					when Mod :: atom().
 load_module(Mod, Bin, Beam) ->
   erlang:system_flag(multi_scheduling, block),
   try
@@ -173,8 +169,8 @@ load_module(Mod, Bin, Beam, OldReferencesToPatch) ->
 
 %%========================================================================
 
--spec load(Mod, binary()) -> 'bad_crc' | {'module',Mod}
-			      when is_subtype(Mod,atom()).
+-spec load(Mod, binary()) -> 'bad_crc' | {'module', Mod} when Mod :: atom().
+
 load(Mod, Bin) ->
   erlang:system_flag(multi_scheduling, block),
   try
@@ -198,6 +194,13 @@ load_common(Mod, Bin, Beam, OldReferencesToPatch) ->
    CodeSize,  CodeBinary,  Refs,
    0,[] % ColdSize, CRrefs
   ] = binary_to_term(Bin),
+  ?debug_msg("***** ErLLVM *****~nVersion: ~s~nCheckSum: ~w~nConstAlign: ~w~n" ++
+    "ConstSize: ~w~nConstMap: ~w~nLabelMap: ~w~nExportMap ~w~nRefs ~w~n",
+    [Version, CheckSum, ConstAlign, ConstSize, ConstMap, LabelMap, ExportMap,
+      Refs]),
+  %% Write HiPE binary code to a file in the current directory in order to
+  %% debug by disassembling.
+  %% file:write_file("erl.o", CodeBinary, [binary]),
   %% Check that we are loading up-to-date code.
   version_check(Version, Mod),
   case hipe_bifs:check_crc(CheckSum) of
@@ -207,32 +210,46 @@ load_common(Mod, Bin, Beam, OldReferencesToPatch) ->
 	   "please regenerate native code for this runtime system\n", [Mod]),
       bad_crc;
     true ->
+      put(closures_to_patch, []),
       %% Create data segment
-      {ConstAddr,ConstMap2} = create_data_segment(ConstAlign, ConstSize, ConstMap),
+      {ConstAddr,ConstMap2} =
+	create_data_segment(ConstAlign, ConstSize, ConstMap),
       %% Find callees for which we may need trampolines.
       CalleeMFAs = find_callee_mfas(Refs),
       %% Write the code to memory.
-      {CodeAddress,Trampolines} = enter_code(CodeSize, CodeBinary, CalleeMFAs, Mod, Beam),
+      {CodeAddress,Trampolines} =
+	enter_code(CodeSize, CodeBinary, CalleeMFAs, Mod, Beam),
       %% Construct CalleeMFA-to-trampoline mapping.
       TrampolineMap = mk_trampoline_map(CalleeMFAs, Trampolines),
       %% Patch references to code labels in data seg.
-      patch_consts(LabelMap, ConstAddr, CodeAddress),
+      ok = patch_consts(LabelMap, ConstAddr, CodeAddress),
       %% Find out which functions are being loaded (and where).
       %% Note: Addresses are sorted descending.
       {MFAs,Addresses} = exports(ExportMap, CodeAddress),
       %% Remove references to old versions of the module.
       ReferencesToPatch = get_refs_from(MFAs, []),
-      remove_refs_from(MFAs),
+      %% io:format("References to patch: ~w~n", [ReferencesToPatch]),
+      ok = remove_refs_from(MFAs),
       %% Patch all dynamic references in the code.
       %%  Function calls, Atoms, Constants, System calls
-      patch(Refs, CodeAddress, ConstMap2, Addresses, TrampolineMap),
+      ok = patch(Refs, CodeAddress, ConstMap2, Addresses, TrampolineMap),
+
       %% Tell the system where the loaded funs are. 
       %%  (patches the BEAM code to redirect to native.)
       case Beam of
 	[] ->
-	  export_funs(Addresses);
+	  %% This module was previously loaded as BEAM code during system
+	  %% start-up before the code server has started (-enable-native-libs
+	  %% is active), so we must now patch the pre-existing entries in the
+	  %% fun table with the native code addresses for all closures.
+	  lists:foreach(fun({FE, DestAddress}) ->
+			    hipe_bifs:set_native_address_in_fe(FE, DestAddress)
+			end, erase(closures_to_patch)),
+	  export_funs(Addresses),
+	  ok;
 	BeamBinary when is_binary(BeamBinary) ->
 	  %% Find all closures in the code.
+	  [] = erase(closures_to_patch),	%Clean up, assertion.
 	  ClosurePatches = find_closure_patches(Refs),
 	  AddressesOfClosuresToPatch =
 	    calculate_addresses(ClosurePatches, CodeAddress, Addresses),
@@ -245,6 +262,9 @@ load_common(Mod, Bin, Beam, OldReferencesToPatch) ->
       %% The call to export_funs/1 above updated the native addresses
       %% for the targets, so passing 'Addresses' is not needed.
       redirect(ReferencesToPatch),
+      %% Final clean up.
+      _ = erase(hipe_patch_closures),
+      _ = erase(hipe_assert_code_area),
       ?debug_msg("****************Loader Finished****************\n", []),
       {module,Mod}  % for compatibility with code:load_file/1
   end.
@@ -326,7 +346,7 @@ trampoline_map_get(MFA, Map) -> gb_trees:get(MFA, Map).
 trampoline_map_lookup(_, []) -> []; % archs not using trampolines
 trampoline_map_lookup(Primop, Map) ->
   case gb_trees:lookup(Primop, Map) of
-    {value,X} -> X;
+    {value, X} -> X;
     _ -> []
   end.
 
@@ -341,11 +361,16 @@ exports(ExportMap, BaseAddress) ->
   exports(ExportMap, BaseAddress, [], []).
 
 exports([Offset,M,F,A,IsClosure,IsExported|Rest], BaseAddress, MFAs, Addresses) ->
-  MFA = {M,F,A},
-  Address = BaseAddress + Offset,
-  FunDef = #fundef{address=Address, mfa=MFA, is_closure=IsClosure,
-		   is_exported=IsExported},
-  exports(Rest, BaseAddress, [MFA|MFAs], [FunDef|Addresses]);
+  case IsExported andalso erlang:is_builtin(M, F, A) of
+    true ->
+      exports(Rest, BaseAddress, MFAs, Addresses);
+    _false ->
+      MFA = {M,F,A},
+      Address = BaseAddress + Offset,
+      FunDef = #fundef{address=Address, mfa=MFA, is_closure=IsClosure,
+		       is_exported=IsExported},
+      exports(Rest, BaseAddress, [MFA|MFAs], [FunDef|Addresses])
+  end;
 exports([], _, MFAs, Addresses) ->
   {MFAs, Addresses}.
 
@@ -368,7 +393,7 @@ offsets_to_addresses(Os, Base) ->
 find_closure_patches([{Type,Refs} | Rest]) ->
   case ?EXT2PATCH_TYPE(Type) of 
     load_address -> 
-      find_closure_refs(Refs,Rest);
+      find_closure_refs(Refs, Rest);
     _ ->
       find_closure_patches(Rest)
   end;
@@ -403,16 +428,17 @@ export_funs([FunDef | Addresses]) ->
   hipe_bifs:set_native_address(MFA, Address, IsClosure),
   export_funs(Addresses);
 export_funs([]) ->
-  true.
+  ok.
 
 export_funs(Mod, Beam, Addresses, ClosuresToPatch) ->
- Fs = [{F,A,Address} || #fundef{address=Address, mfa={_M,F,A}} <- Addresses],
- code:make_stub_module(Mod, Beam, {Fs,ClosuresToPatch}).
+  Fs = [{F,A,Address} || #fundef{address=Address, mfa={_M,F,A}} <- Addresses],
+  Mod = code:make_stub_module(Mod, Beam, {Fs,ClosuresToPatch}),
+  ok.
 
 %%========================================================================
 %% Patching 
 %%  @spec patch(refs(), BaseAddress::integer(), ConstAndZone::term(),
-%%              Addresses::term(), TrampolineMap::term()) -> term()
+%%              Addresses::term(), TrampolineMap::term()) -> 'ok'.
 %%   @type refs()=[{RefType::integer(), Reflist::reflist()} | refs()]
 %%
 %%   @type reflist()=   [{Data::term(), Offsets::offests()}|reflist()]
@@ -425,7 +451,7 @@ export_funs(Mod, Beam, Addresses, ClosuresToPatch) ->
 %%
 
 patch([{Type,SortedRefs}|Rest], CodeAddress, ConstMap2, Addresses, TrampolineMap) ->
- ?debug_msg("Patching ~w at [~w+offset] with ~w\n",
+  ?debug_msg("Patching ~w at [~w+offset] with ~w\n",
 	     [Type,CodeAddress,SortedRefs]),
   case ?EXT2PATCH_TYPE(Type) of 
     call_local -> 
@@ -436,7 +462,7 @@ patch([{Type,SortedRefs}|Rest], CodeAddress, ConstMap2, Addresses, TrampolineMap
       patch_all(Other, SortedRefs, CodeAddress, {ConstMap2,CodeAddress}, Addresses)
   end,
   patch(Rest, CodeAddress, ConstMap2, Addresses, TrampolineMap);
-patch([], _, _, _, _) -> true.
+patch([], _, _, _, _) -> ok.
 
 %%----------------------------------------------------------------
 %% Handle a 'call_local' or 'call_remote' patch.
@@ -458,14 +484,14 @@ patch_call([{DestMFA,Offsets}|SortedRefs], BaseAddress, Addresses, RemoteOrLocal
   end,
   patch_call(SortedRefs, BaseAddress, Addresses, RemoteOrLocal, TrampolineMap);
 patch_call([], _, _, _, _) ->
-  true.
+  ok.
 
 patch_bif_call_list([Offset|Offsets], BaseAddress, BifAddress, Trampoline) ->
   CallAddress = BaseAddress+Offset,
   ?ASSERT(assert_local_patch(CallAddress)),
   patch_call_insn(CallAddress, BifAddress, Trampoline),
   patch_bif_call_list(Offsets, BaseAddress, BifAddress, Trampoline);
-patch_bif_call_list([], _, _, _) -> [].
+patch_bif_call_list([], _, _, _) -> ok.
 
 patch_mfa_call_list([Offset|Offsets], BaseAddress, DestMFA, DestAddress, Addresses, RemoteOrLocal, Trampoline) ->
   CallAddress = BaseAddress+Offset,
@@ -473,7 +499,7 @@ patch_mfa_call_list([Offset|Offsets], BaseAddress, DestMFA, DestAddress, Address
   ?ASSERT(assert_local_patch(CallAddress)),
   patch_call_insn(CallAddress, DestAddress, Trampoline),
   patch_mfa_call_list(Offsets, BaseAddress, DestMFA, DestAddress, Addresses, RemoteOrLocal, Trampoline);
-patch_mfa_call_list([], _, _, _, _, _, _) -> [].
+patch_mfa_call_list([], _, _, _, _, _, _) -> ok.
 
 patch_call_insn(CallAddress, DestAddress, Trampoline) ->
   %% This assertion is false when we're called from redirect/2.
@@ -486,7 +512,7 @@ patch_call_insn(CallAddress, DestAddress, Trampoline) ->
 patch_all(Type, [{Dest,Offsets}|Rest], BaseAddress, ConstAndZone, Addresses)->
   patch_all_offsets(Type, Dest, Offsets, BaseAddress, ConstAndZone, Addresses),
   patch_all(Type, Rest, BaseAddress, ConstAndZone, Addresses);
-patch_all(_, [], _, _, _) -> true.
+patch_all(_, [], _, _, _) -> ok.
 
 patch_all_offsets(Type, Data, [Offset|Offsets], BaseAddress,
 		  ConstAndZone, Addresses) ->
@@ -496,7 +522,7 @@ patch_all_offsets(Type, Data, [Offset|Offsets], BaseAddress,
   patch_offset(Type, Data, Address, ConstAndZone, Addresses),
   ?debug_msg("Patching done\n",[]),
   patch_all_offsets(Type, Data, Offsets, BaseAddress, ConstAndZone, Addresses);
-patch_all_offsets(_, _, [], _, _, _) -> true.
+patch_all_offsets(_, _, [], _, _, _) -> ok.
 
 %%----------------------------------------------------------------
 %% Handle any patch type except 'call_local' or 'call_remote'.
@@ -509,7 +535,7 @@ patch_offset(Type, Data, Address, ConstAndZone, Addresses) ->
       Atom = Data,
       patch_atom(Address, Atom);
     sdesc ->
-      patch_sdesc(Data, Address, ConstAndZone);
+      patch_sdesc(Data, Address, ConstAndZone, Addresses);
     x86_abs_pcrel ->
       patch_instr(Address, Data, x86_abs_pcrel)
     %% _ ->
@@ -522,14 +548,16 @@ patch_atom(Address, Atom) ->
   patch_instr(Address, hipe_bifs:atom_to_word(Atom), atom).
 
 patch_sdesc(?STACK_DESC(SymExnRA, FSize, Arity, Live),
-	    Address, {_ConstMap2,CodeAddress}) ->
+	    Address, {_ConstMap2,CodeAddress}, _Addresses) ->
   ExnRA =
     case SymExnRA of
       [] -> 0; % No catch
       LabelOffset -> CodeAddress + LabelOffset
     end,
   ?ASSERT(assert_local_patch(Address)),
-  hipe_bifs:enter_sdesc({Address, ExnRA, FSize, Arity, Live}).
+  DBG_MFA = ?IF_DEBUG(address_to_mfa_lth(Address, _Addresses), {undefined,undefined,0}),
+  hipe_bifs:enter_sdesc({Address, ExnRA, FSize, Arity, Live, DBG_MFA}).
+
 
 %%----------------------------------------------------------------
 %% Handle a 'load_address'-type patch.
@@ -554,12 +582,17 @@ patch_closure(DestMFA, Uniq, Index, Address, Addresses) ->
   case get(hipe_patch_closures) of
     false ->
       []; % This is taken care of when registering the module.
-    true -> % We are not loading a module patch these closures
+    true ->
+      %% We are replacing a previosly loaded BEAM module with native code,
+      %% so we must reference the pre-existing entries in the fun table
+      %% from the native code. We must delay actually patching the native
+      %% address into the fun entry to ensure that the native code cannot
+      %% be called until it has been completely fixed up.
       RemoteOrLocal = local, % closure code refs are local
       DestAddress = get_native_address(DestMFA, Addresses, RemoteOrLocal),
       BEAMAddress = hipe_bifs:fun_to_address(DestMFA),
-      FE = hipe_bifs:make_fe(DestAddress, mod(DestMFA), 
-			     {Uniq, Index, BEAMAddress}),
+      FE = hipe_bifs:get_fe(mod(DestMFA), {Uniq, Index, BEAMAddress}),
+      put(closures_to_patch, [{FE,DestAddress}|get(closures_to_patch)]),
       ?debug_msg("Patch FE(~w) to 0x~.16b->0x~.16b (emu:0x~.16b)\n",
 		 [DestMFA, FE, DestAddress, BEAMAddress]),
       ?ASSERT(assert_local_patch(Address)),
@@ -736,7 +769,7 @@ find_const(ConstNo, []) ->
 %%
 
 add_ref(CalleeMFA, Address, Addresses, RefType, Trampoline, RemoteOrLocal) ->
-  CallerMFA = address_to_mfa(Address, Addresses),
+  CallerMFA = address_to_mfa_lth(Address, Addresses),
   %% just a sanity assertion below
   true = case RemoteOrLocal of
 	   local ->
@@ -749,11 +782,31 @@ add_ref(CalleeMFA, Address, Addresses, RefType, Trampoline, RemoteOrLocal) ->
   %% io:format("Adding ref ~w\n",[{CallerMFA, CalleeMFA, Address, RefType}]),
   hipe_bifs:add_ref(CalleeMFA, {CallerMFA,Address,RefType,Trampoline,RemoteOrLocal}).
 
-address_to_mfa(Address, [#fundef{address=Adr, mfa=MFA}|_Rest]) when Address >= Adr -> MFA;
-address_to_mfa(Address, [_ | Rest]) -> address_to_mfa(Address, Rest);
-address_to_mfa(Address, []) -> 
-  ?error_msg("Local adddress not found ~w\n",[Address]),
-  exit({?MODULE, local_address_not_found}).
+% For FunDefs sorted from low to high addresses
+address_to_mfa_lth(Address, FunDefs) ->
+    case address_to_mfa_lth(Address, FunDefs, false) of
+	false ->
+	    ?error_msg("Local adddress not found ~w\n",[Address]),
+	    exit({?MODULE, local_address_not_found});
+	MFA ->
+	    MFA
+    end.
+    
+address_to_mfa_lth(Address, [#fundef{address=Adr, mfa=MFA}|Rest], Prev) ->
+  if Address < Adr -> 
+	  Prev;
+     true -> 
+	  address_to_mfa_lth(Address, Rest, MFA)
+  end;
+address_to_mfa_lth(_Address, [], Prev) -> 
+    Prev.
+
+% For FunDefs sorted from high to low addresses
+%% address_to_mfa_htl(Address, [#fundef{address=Adr, mfa=MFA}|_Rest]) when Address >= Adr -> MFA;
+%% address_to_mfa_htl(Address, [_ | Rest]) -> address_to_mfa_htl(Address, Rest);
+%% address_to_mfa_htl(Address, []) -> 
+%%   ?error_msg("Local adddress not found ~w\n",[Address]),
+%%   exit({?MODULE, local_address_not_found}).
 
 %%----------------------------------------------------------------
 %% Change callers of the given module to instead trap to BEAM.
@@ -779,7 +832,7 @@ patch_to_emu_step1(Mod) ->
       %% Find all call sites that call these MFAs. As a side-effect,
       %% create native stubs for any MFAs that are referred.
       ReferencesToPatch = get_refs_from(MFAs, []),
-      remove_refs_from(MFAs),
+      ok = remove_refs_from(MFAs),
       ReferencesToPatch;
     false ->
       %% The first time we load the module, no redirection needs to be done.
@@ -823,11 +876,8 @@ get_refs_from(MFAs, []) ->
   mark_referred_from(MFAs),
   MFAs.
 
-mark_referred_from([MFA|MFAs]) ->
-  hipe_bifs:mark_referred_from(MFA),
-  mark_referred_from(MFAs);
-mark_referred_from([]) ->
-  [].
+mark_referred_from(MFAs) ->
+  lists:foreach(fun(MFA) -> hipe_bifs:mark_referred_from(MFA) end, MFAs).
 
 %%--------------------------------------------------------------------
 %% Given a list of MFAs with referred_from references, update their
@@ -835,11 +885,8 @@ mark_referred_from([]) ->
 %%
 %% The {MFA,Refs} list must come from get_refs_from/2.
 %%
-redirect([MFA|Rest]) ->
-  hipe_bifs:redirect_referred_from(MFA),
-  redirect(Rest);
-redirect([]) ->
-  ok.
+redirect(MFAs) ->
+  lists:foreach(fun(MFA) -> hipe_bifs:redirect_referred_from(MFA) end, MFAs).
 
 %%--------------------------------------------------------------------
 %% Given a list of MFAs, remove all referred_from references having
@@ -851,11 +898,8 @@ redirect([]) ->
 %% list. The refers_to list is used here to find the CalleeMFAs whose
 %% referred_from lists should be updated.
 %%
-remove_refs_from([CallerMFA|CallerMFAs]) ->
-  hipe_bifs:remove_refs_from(CallerMFA),
-  remove_refs_from(CallerMFAs);
-remove_refs_from([]) ->
-  [].
+remove_refs_from(MFAs) ->
+  lists:foreach(fun(MFA) -> hipe_bifs:remove_refs_from(MFA) end, MFAs).
 
 %%--------------------------------------------------------------------
 

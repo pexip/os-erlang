@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 1996-2010. All Rights Reserved.
+%% Copyright Ericsson AB 1996-2014. All Rights Reserved.
 %%
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -17,6 +17,7 @@
 %% %CopyrightEnd%
 %%
 -module(gen).
+-compile({inline,[get_node/1]}).
 
 %%%-----------------------------------------------------------------
 %%% This module implements the really generic stuff of the generic
@@ -36,7 +37,9 @@
 %%-----------------------------------------------------------------
 
 -type linkage()    :: 'link' | 'nolink'.
--type emgr_name()  :: {'local', atom()} | {'global', term()}.
+-type emgr_name()  :: {'local', atom()}
+                    | {'global', term()}
+                    | {'via', Module :: module(), Name :: term()}.
 
 -type start_ret()  :: {'ok', pid()} | 'ignore' | {'error', term()}.
 
@@ -53,7 +56,7 @@
 %% start(GenMod, LinkP, Name, Mod, Args, Options)
 %%    GenMod = atom(), callback module implementing the 'real' fsm
 %%    LinkP = link | nolink
-%%    Name = {local, atom()} | {global, term()}
+%%    Name = {local, atom()} | {global, term()} | {via, atom(), term()}
 %%    Args = term(), init arguments (to Mod:init/1)
 %%    Options = [{timeout, Timeout} | {debug, [Flag]} | {spawn_opt, OptionList}]
 %%      Flag = trace | log | {logfile, File} | statistics | debug
@@ -158,9 +161,12 @@ call(Name, Label, Request, Timeout)
 	    exit(noproc)
     end;
 %% Global by name
-call({global, _Name}=Process, Label, Request, Timeout)
-  when Timeout =:= infinity;
-       is_integer(Timeout), Timeout >= 0 ->
+call(Process, Label, Request, Timeout)
+  when ((tuple_size(Process) == 2 andalso element(1, Process) == global)
+	orelse
+	  (tuple_size(Process) == 3 andalso element(1, Process) == via))
+       andalso
+       (Timeout =:= infinity orelse (is_integer(Timeout) andalso Timeout >= 0)) ->
     case where(Process) of
 	Pid when is_pid(Pid) ->
 	    Node = node(Pid),
@@ -191,16 +197,6 @@ call({_Name, Node}=Process, Label, Request, Timeout)
     end.
 
 do_call(Process, Label, Request, Timeout) ->
-    %% We trust the arguments to be correct, i.e
-    %% Process is either a local or remote pid,
-    %% or a {Name, Node} tuple (of atoms) and in this 
-    %% case this node (node()) _is_ distributed and Node =/= node().
-    Node = case Process of
- 	       {_S, N} when is_atom(N) ->
- 		   N;
- 	       _ when is_pid(Process) ->
- 		   node(Process)
-	   end,
     try erlang:monitor(process, Process) of
 	Mref ->
 	    %% If the monitor/2 call failed to set up a connection to a
@@ -219,15 +215,12 @@ do_call(Process, Label, Request, Timeout) ->
 		    erlang:demonitor(Mref, [flush]),
 		    {ok, Reply};
 		{'DOWN', Mref, _, _, noconnection} ->
+		    Node = get_node(Process),
 		    exit({nodedown, Node});
 		{'DOWN', Mref, _, _, Reason} ->
 		    exit(Reason)
 	    after Timeout ->
-		    erlang:demonitor(Mref),
-		    receive
-			{'DOWN', Mref, _, _, _} -> true
-		    after 0 -> true
-		    end,
+		    erlang:demonitor(Mref, [flush]),
 		    exit(timeout)
 	    end
     catch
@@ -238,6 +231,7 @@ do_call(Process, Label, Request, Timeout) ->
 	    %% Do the best possible with monitor_node/2.
 	    %% This code may hang indefinitely if the Process 
 	    %% does not exist. It is only used for featureweak remote nodes.
+	    Node = get_node(Process),
 	    monitor_node(Node, true),
 	    receive
 		{nodedown, Node} -> 
@@ -248,6 +242,18 @@ do_call(Process, Label, Request, Timeout) ->
 		    Process ! {Label, {self(), Tag}, Request},
 		    wait_resp(Node, Tag, Timeout)
 	    end
+    end.
+
+get_node(Process) ->
+    %% We trust the arguments to be correct, i.e
+    %% Process is either a local or remote pid,
+    %% or a {Name, Node} tuple (of atoms) and in this
+    %% case this node (node()) _is_ distributed and Node =/= node().
+    case Process of
+	{_S, N} when is_atom(N) ->
+	    N;
+	_ when is_pid(Process) ->
+	    node(Process)
     end.
 
 wait_resp(Node, Tag, Timeout) ->
@@ -273,7 +279,8 @@ reply({To, Tag}, Reply) ->
 %%%-----------------------------------------------------------------
 %%%  Misc. functions.
 %%%-----------------------------------------------------------------
-where({global, Name}) -> global:safe_whereis_name(Name);
+where({global, Name}) -> global:whereis_name(Name);
+where({via, Module, Name}) -> Module:whereis_name(Name);
 where({local, Name})  -> whereis(Name).
 
 name_register({local, Name} = LN) ->
@@ -287,7 +294,15 @@ name_register({global, Name} = GN) ->
     case global:register_name(Name, self()) of
 	yes -> true;
 	no -> {false, where(GN)}
+    end;
+name_register({via, Module, Name} = GN) ->
+    case Module:register_name(Name, self()) of
+	yes ->
+	    true;
+	no ->
+	    {false, where(GN)}
     end.
+
 
 timeout(Options) ->
     case opt(timeout, Options) of

@@ -1,7 +1,7 @@
 %% 
 %% %CopyrightBegin%
 %% 
-%% Copyright Ericsson AB 2004-2009. All Rights Reserved.
+%% Copyright Ericsson AB 2004-2014. All Rights Reserved.
 %% 
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -36,13 +36,13 @@ handle_error(ReqId, Reason, UserData) ->
     ignore.
 
 
-handle_agent(Addr, Port, Type, SnmpInfo, UserData) ->
-    info("received handle_agent:"
-	 "~n   Addr:     ~p"
-	 "~n   Port:     ~p"
-	 "~n   Type:     ~p"
-	 "~n   SnmpInfo: ~p"
-	 "~n   UserData: ~p", [Addr, Port, Type, SnmpInfo, UserData]),
+handle_agent(Domain, Address, Type, SnmpInfo, UserData) ->
+    info("received handle_agent:~n"
+	 "   Domain:   ~p~n"
+	 "   Address:  ~p~n"
+	 "   Type:     ~p~n"
+	 "   SnmpInfo: ~p~n"
+	 "   UserData: ~p", [Domain, Address, Type, SnmpInfo, UserData]),
     ignore.
 
 
@@ -62,7 +62,7 @@ handle_trap(TargetName, SnmpTrap, UserData) ->
 	 "~n   SnmpTrap: ~p"
 	 "~n   UserData: ~p", 
 	 [TargetName, SnmpTrap, UserData]),
-    ok.
+    ignore.
 
 
 handle_inform(TargetName, SnmpInform, UserData) ->
@@ -80,7 +80,7 @@ handle_report(TargetName, SnmpReport, UserData) ->
 	 "~n   SnmpReport: ~p"
 	 "~n   UserData:   ~p", 
 	 [TargetName, SnmpReport, UserData]),
-    ok.
+    ignore.
 
 
 info(F, A) ->

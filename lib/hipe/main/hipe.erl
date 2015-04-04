@@ -2,7 +2,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2001-2010. All Rights Reserved.
+%% Copyright Ericsson AB 2001-2013. All Rights Reserved.
 %%
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -47,9 +47,8 @@
 %%
 %% <h3>Using the direct interface - for advanced users only</h3>
 %%
-%% To compile a module or a specific function to native code and
-%% automatically load the code into memory, call <a
-%% href="#c-1"><code>hipe:c(Module)</code></a> or <a
+%% To compile a module to native code and automatically load the code
+%% into memory, call <a href="#c-1"><code>hipe:c(Module)</code></a> or <a
 %% href="#c-2"><code>hipe:c(Module, Options)</code></a>. Note that all
 %% options are specific to the HiPE compiler. See the <a
 %% href="#index">function index</a> for other compiler functions.
@@ -201,6 +200,7 @@
 	 compile_core/4,
  	 file/1,
  	 file/2,
+        llvm_support_available/0,
 	 load/1,
 	 help/0,
 	 help_hiper/0,
@@ -221,11 +221,10 @@
 %%-------------------------------------------------------------------
 
 -type mod() :: atom().
--type c_unit() :: mod() | mfa().
 -type f_unit() :: mod() | binary().
 -type ret_rtl() :: [_].
--type c_ret() :: {'ok', c_unit()} | {'error', term()} |
-                 {'ok', c_unit(), ret_rtl()}. %% The last for debugging only
+-type c_ret() :: {'ok', mod()} | {'error', term()} |
+                 {'ok', mod(), ret_rtl()}. %% The last for debugging only
 -type compile_file() :: atom() | string() | binary().
 -type compile_ret() :: {hipe_architecture(), binary()} | list().
 
@@ -244,8 +243,7 @@
 %%
 %% @see load/2
 
--spec load(Mod) -> {'module', Mod} | {'error', term()}
-			when is_subtype(Mod, mod()).
+-spec load(Mod) -> {'module', Mod} | {'error', term()} when Mod :: mod().
 
 load(Mod) ->
   load(Mod, beam_file(Mod)).
@@ -267,7 +265,7 @@ load(Mod) ->
 %% @see load/1
 
 -spec load(Mod, string()) -> {'module', Mod} | {'error', term()}
-				    when is_subtype(Mod, mod()).
+				   when Mod :: mod().
 
 load(Mod, BeamFileName) when is_list(BeamFileName) ->
   Architecture = erlang:system_info(hipe_architecture),
@@ -278,47 +276,44 @@ load(Mod, BeamFileName) when is_list(BeamFileName) ->
   end.
 
 %% @spec c(Name) -> {ok, Name} | {error, Reason}
-%%       Name = mod() | mfa()
+%%       Name = mod()
 %%       Reason = term()
 %%
 %% @equiv c(Name, [])
 
--spec c(c_unit()) -> c_ret().
+-spec c(mod()) -> c_ret().
 
 c(Name) ->
   c(Name, []).
 
 %% @spec c(Name, options()) -> {ok, Name} | {error, Reason}
-%%     Name = mod() | mfa()
+%%     Name = mod()
 %%     options() = [option()]
 %%     option() = term()
 %%     Reason = term()
-%%
-%% @type mfa() = {M::mod(),F::fun(),A::arity()}.
-%%       A fully qualified function name.
 %%
 %% @type fun() = atom(). A function identifier.
 %%
 %% @type arity() = integer(). A function arity; always nonnegative.
 %% 
 %% @doc User-friendly native code compiler interface. Reads BEAM code
-%% from the corresponding "Module<code>.beam</code>" file in the system
-%% path, and compiles either a single function or the whole module to
-%% native code. By default, the compiled code is loaded directly. See
-%% above for documentation of options.
+%% from the corresponding "Module<code>.beam</code>" file in the
+%% system path, and compiles the whole module to native code. By
+%% default, the compiled code is loaded directly. See above for
+%% documentation of options.
 %%
 %% @see c/1
 %% @see c/3
 %% @see f/2
 %% @see compile/2
 
--spec c(c_unit(), comp_options()) -> c_ret().
+-spec c(mod(), comp_options()) -> c_ret().
 
 c(Name, Options) ->
   c(Name, beam_file(Name), Options).
 
 %% @spec c(Name, File, options()) -> {ok, Name} | {error, Reason}
-%%     Name = mod() | mfa()
+%%     Name = mod()
 %%     File = filename() | binary()
 %%     Reason = term()
 %%
@@ -329,7 +324,6 @@ c(Name, Options) ->
 %% @see f/2
 
 c(Name, File, Opts) ->
-  %% No server if only one function is compiled
   Opts1 = user_compile_opts(Opts),
   case compile(Name, File, Opts1) of
     {ok, Res} ->
@@ -359,8 +353,7 @@ f(File) ->
 %%     Reason = term()
 %%
 %% @doc Like <code>c/3</code>, but takes the module name from the
-%% specified <code>File</code>. This always compiles the whole module;
-%% there is no possibility to compile just a single function.
+%% specified <code>File</code>.
 %%
 %% @see c/3
 
@@ -381,26 +374,26 @@ user_compile_opts(Opts) ->
 
 
 %% @spec compile(Name) -> {ok, {Target,Binary}} | {error, Reason}
-%%       Name = mod() | mfa()
+%%       Name = mod()
 %%       Binary = binary()
 %%       Reason = term()
 %% 
 %% @equiv compile(Name, [])
 
--spec compile(c_unit()) -> {'ok', compile_ret()} | {'error', term()}.
+-spec compile(mod()) -> {'ok', compile_ret()} | {'error', term()}.
 
 compile(Name) ->
   compile(Name, []).
 
 %% @spec compile(Name, options()) -> {ok, {Target,Binary}} | {error, Reason}
-%%       Name = mod() | mfa()
+%%       Name = mod()
 %%       Binary = binary()
 %%       Reason = term()
 %%
-%% @doc Direct compiler interface, for advanced use. This just compiles
-%% the named function or module, reading BEAM code from the
-%% corresponding "Module<code>.beam</code>" file in the system path.
-%% Returns <code>{ok, Binary}</code> if successful, or <code>{error,
+%% @doc Direct compiler interface, for advanced use. This just
+%% compiles the module, reading BEAM code from the corresponding
+%% "Module<code>.beam</code>" file in the system path.  Returns
+%% <code>{ok, Binary}</code> if successful, or <code>{error,
 %% Reason}</code> otherwise. By default, it does <em>not</em> load the
 %% binary to memory (the <code>load</code> option can be used to
 %% activate automatic loading). <code>File</code> can be either a file
@@ -412,15 +405,13 @@ compile(Name) ->
 %% @see file/2
 %% @see load/2
 
--spec compile(c_unit(), comp_options()) -> {'ok', compile_ret()} | {'error', _}.
+-spec compile(mod(), comp_options()) -> {'ok', compile_ret()} | {'error', _}.
 
 compile(Name, Options) ->
   compile(Name, beam_file(Name), Options).
 
--spec beam_file(mod() | mfa()) -> string().
+-spec beam_file(mod()) -> string().
 
-beam_file({M,F,A}) when is_atom(M), is_atom(F), is_integer(A), A >= 0 ->
-  beam_file(M);
 beam_file(Module) when is_atom(Module) ->
   case code:which(Module) of
     non_existing ->
@@ -432,7 +423,7 @@ beam_file(Module) when is_atom(Module) ->
 
 %% @spec compile(Name, File, options()) ->
 %%           {ok, {Target, Binary}} | {error, Reason}
-%%       Name = mod() | mfa()
+%%       Name = mod()
 %%       File = filename() | binary()
 %%       Binary = binary()
 %%       Reason = term()
@@ -442,18 +433,11 @@ beam_file(Module) when is_atom(Module) ->
 %%
 %% @see compile/2
 
--spec compile(c_unit(), compile_file(), comp_options()) ->
+-spec compile(mod(), compile_file(), comp_options()) ->
 	 {'ok', compile_ret()} | {'error', term()}.
 
-compile(Name, File, Opts0) ->
-  Opts1 = expand_kt2(Opts0),
-  Opts = 
-    case Name of
-      {_Mod, _Fun, _Arity} ->
-	[no_concurrent_comp|Opts1];
-      _ ->
-	Opts1
-    end,
+compile(Name, File, Opts0) when is_atom(Name) ->
+  Opts = expand_kt2(Opts0),
   case proplists:get_value(core, Opts) of
     true when is_binary(File) ->
       ?error_msg("Cannot get Core Erlang code from BEAM binary.",[]),
@@ -486,23 +470,11 @@ compile(Name, File, Opts0) ->
 	  ?EXIT({cant_compile_source_code, Error})
       end;
     Other when Other =:= false; Other =:= undefined ->
-      NewOpts =
-	case proplists:get_value(use_callgraph, Opts) of
-	  No when No =:= false; No =:= undefined -> Opts;
-	  _ ->
-	    case Name of
-	      {_M,_F,_A} ->
-		%% There is no point in using the callgraph or concurrent_comp
-		%% when analyzing just one function.
-		[no_use_callgraph, no_concurrent_comp|Opts];
-	      _ -> Opts
-	    end
-	end,
       DisasmFun = fun (_) -> disasm(File) end,
       IcodeFun = fun (Code, Opts_) ->
 		     get_beam_icode(Name, Code, File, Opts_)
 		 end,
-      run_compiler(Name, DisasmFun, IcodeFun, NewOpts)
+      run_compiler(Name, DisasmFun, IcodeFun, Opts)
   end.
 
 -spec compile_core(mod(), cerl:c_module(), compile_file(), comp_options()) ->
@@ -510,12 +482,7 @@ compile(Name, File, Opts0) ->
 
 compile_core(Name, Core0, File, Opts) ->
   Core = cerl:from_records(Core0),
-  Core1 = case (erlang:system_info(heap_type) =:= hybrid)
-	    andalso proplists:get_bool(hybrid, Opts) of
-	    true -> cerl_hybrid_transform:transform(Core, Opts);
-	    false -> Core
-	  end,
-  compile(Name, Core1, File, Opts).
+  compile(Name, Core, File, Opts).
 
 %% @spec compile(Name, Core, File, options()) ->
 %%           {ok, {Target, Binary}} | {error, Reason}
@@ -555,7 +522,7 @@ compile(Name, Core, File, Opts) when is_atom(Name) ->
 %% @equiv file(File, [])
 
 -spec file(Mod) -> {'ok', Mod, compile_ret()} | {'error', term()}
-			  when is_subtype(Mod, mod()).
+		     when Mod :: mod().
 
 file(File) ->
   file(File, []).
@@ -575,7 +542,7 @@ file(File) ->
 
 -spec file(Mod, comp_options()) -> {'ok', Mod, compile_ret()}
 				|  {'error', term()}
-				     when is_subtype(Mod, mod()).
+				     when Mod :: mod().
 file(File, Options) when is_atom(File) ->
   case beam_lib:info(File) of
     L when is_list(L) ->
@@ -604,7 +571,7 @@ disasm(File) ->
     #beam_file{labeled_exports = LabeledExports,
 	       compile_info = CompInfo,
 	       code = BeamCode} ->
-      {options, CompOpts} = lists:keyfind(options, 1, CompInfo),
+      CompOpts = proplists:get_value(options, CompInfo, []),
       HCompOpts = case lists:keyfind(hipe, 1, CompOpts) of
 		    {hipe, L} when is_list(L) -> L;
 		    {hipe, X} -> [X];
@@ -625,11 +592,6 @@ fix_beam_exports([{F,A,_}|BeamExports], Exports) ->
 fix_beam_exports([], Exports) ->
   Exports.
 
-get_beam_icode({M,_F,_A} = MFA, {BeamCode, Exports}, _File, Options) ->
-  ?option_time({ok, Icode} = 
-	       (catch {ok, hipe_beam_to_icode:mfa(BeamCode, MFA, Options)}),
-	       "BEAM-to-Icode", Options),
-  {{M, Exports, Icode}, false};
 get_beam_icode(Mod, {BeamCode, Exports}, File, Options) ->
   ?option_time({ok, Icode} =
 	       (catch {ok, hipe_beam_to_icode:module(BeamCode, Options)}),
@@ -687,7 +649,18 @@ run_compiler_1(DisasmFun, IcodeFun, Options) ->
 			    %% The full option expansion is not done
 			    %% until the DisasmFun returns.
 			    {Code, CompOpts} = DisasmFun(Options),
-			    Opts = expand_options(Options ++ CompOpts),
+			    Opts0 = expand_options(Options ++ CompOpts),
+                           Opts =
+                             case proplists:get_bool(to_llvm, Opts0) andalso
+                                 not llvm_support_available() of
+                               true ->
+                                 ?error_msg("No LLVM version 3.4 or greater "
+                                            "found in $PATH; aborting "
+                                            "native code compilation.\n", []),
+                                 ?EXIT(cant_find_required_llvm_version);
+                               false ->
+                                 Opts0
+                             end,
 			    check_options(Opts),
 			    ?when_option(verbose, Options,
 					 ?debug_msg("Options: ~p.\n",[Opts])),
@@ -798,13 +771,15 @@ finalize_fun_concurrent(MfaIcodeList, Exports, Opts) ->
   case MfaIcodeList of
     [{{M,_,_},_}|_] ->
       CallGraph = hipe_icode_callgraph:construct_callgraph(MfaIcodeList),
-      Closures = [{MFA, true} || {MFA, Icode} <- MfaIcodeList,
-				 hipe_icode:icode_is_closure(Icode)],
-      Exported = [{{M, F, A}, false} || {F, A} <- Exports],
+      Exported = [{M, F, A} || {F, A} <- Exports],
+      Closures = [MFA || {MFA, Icode} <- MfaIcodeList,
+			 hipe_icode:icode_is_closure(Icode)],
+      %% In principle, a function could both be exported and used as a
+      %% closure so make sure to add it only once in Escaping below
+      Escaping = ordsets:from_list(Exported ++ Closures),
       NonEscaping = [MFA || {{_M, F, A} = MFA, Icode} <- MfaIcodeList, 
 			    not lists:member({F, A}, Exports),
 			    not hipe_icode:icode_is_closure(Icode)],
-      Escaping = Closures ++ Exported,
       TypeServerFun =
 	fun() ->
 	    hipe_icode_coordinator:coordinate(CallGraph, Escaping,
@@ -858,7 +833,9 @@ finalize_fun_sequential({MFA, Icode}, Opts, Servers) ->
 		   ?debug_msg("Compiled ~w in ~.2f s\n", [MFA,(T2-T1)/1000])),
       {MFA, Code};
     {rtl, LinearRtl} ->
-      {MFA, LinearRtl}
+      {MFA, LinearRtl};
+    {llvm_binary, Binary} ->
+      {MFA, Binary}
   catch
     error:Error ->
       ?when_option(verbose, Opts, ?debug_untagged_msg("\n", [])),
@@ -899,7 +876,8 @@ maybe_load(Mod, Bin, WholeModule, Opts) ->
       do_load(Mod, Bin, WholeModule)
   end.
 
-do_load(Mod, Bin, WholeModule) ->
+do_load(Mod, Bin, BeamBinOrPath) when is_binary(BeamBinOrPath);
+				      is_list(BeamBinOrPath) ->
   HostArch = get(hipe_host_arch),
   TargetArch = get(hipe_target_arch),
   %% Make sure we can do the load.
@@ -907,47 +885,46 @@ do_load(Mod, Bin, WholeModule) ->
     ?EXIT({host_and_target_arch_differ, HostArch, TargetArch});
     true -> ok
   end,
-  case WholeModule of 
+  case code:is_sticky(Mod) of
+    true ->
+      %% We unpack and repack the Beam binary as a workaround to
+      %% ensure that it is not compressed.
+      {ok, _, Chunks} = beam_lib:all_chunks(BeamBinOrPath),
+      {ok, Beam} = beam_lib:build_module(Chunks),
+      %% Don't purge or register sticky mods; just load native.
+      code:load_native_sticky(Mod, Bin, Beam);
     false ->
-      %% In this case, the emulated code for the module must be loaded.
-      {module, Mod} = code:ensure_loaded(Mod),
-      code:load_native_partial(Mod, Bin);
-    BeamBinOrPath when is_binary(BeamBinOrPath) orelse is_list(BeamBinOrPath) ->
-      case code:is_sticky(Mod) of
-	true ->
-	  %% We unpack and repack the Beam binary as a workaround to
-	  %% ensure that it is not compressed.
-	  {ok, _, Chunks} = beam_lib:all_chunks(WholeModule),
-	  {ok, Beam} = beam_lib:build_module(Chunks),
-	  %% Don't purge or register sticky mods; just load native.
-	  code:load_native_sticky(Mod, Bin, Beam);
-	false ->
-	  %% Normal loading of a whole module
-	  Architecture = erlang:system_info(hipe_architecture),
-	  ChunkName = hipe_unified_loader:chunk_name(Architecture),
-	  {ok, _, Chunks0} = beam_lib:all_chunks(WholeModule),
-	  Chunks = [{ChunkName, Bin}|lists:keydelete(ChunkName, 1, Chunks0)],
-	  {ok, BeamPlusNative} = beam_lib:build_module(Chunks),
-	  code:load_binary(Mod, code:which(Mod), BeamPlusNative)
-      end
+      %% Normal loading of a whole module
+      Architecture = erlang:system_info(hipe_architecture),
+      ChunkName = hipe_unified_loader:chunk_name(Architecture),
+      {ok, _, Chunks0} = beam_lib:all_chunks(BeamBinOrPath),
+      Chunks = [{ChunkName, Bin}|lists:keydelete(ChunkName, 1, Chunks0)],
+      {ok, BeamPlusNative} = beam_lib:build_module(Chunks),
+      code:load_binary(Mod, code:which(Mod), BeamPlusNative)
   end.
 
 assemble(CompiledCode, Closures, Exports, Options) ->
-  case get(hipe_target_arch) of
-    ultrasparc ->
-      hipe_sparc_assemble:assemble(CompiledCode, Closures, Exports, Options);
-    powerpc ->
-      hipe_ppc_assemble:assemble(CompiledCode, Closures, Exports, Options);
-    ppc64 ->
-      hipe_ppc_assemble:assemble(CompiledCode, Closures, Exports, Options);
-    arm ->
-      hipe_arm_assemble:assemble(CompiledCode, Closures, Exports, Options);
-    x86 ->
-      hipe_x86_assemble:assemble(CompiledCode, Closures, Exports, Options);
-    amd64 ->
-      hipe_amd64_assemble:assemble(CompiledCode, Closures, Exports, Options);
-    Arch ->
-      ?EXIT({executing_on_an_unsupported_architecture, Arch})
+  case proplists:get_bool(to_llvm, Options) of
+    false ->
+      case get(hipe_target_arch) of
+        ultrasparc ->
+          hipe_sparc_assemble:assemble(CompiledCode, Closures, Exports, Options);
+        powerpc ->
+          hipe_ppc_assemble:assemble(CompiledCode, Closures, Exports, Options);
+        ppc64 ->
+          hipe_ppc_assemble:assemble(CompiledCode, Closures, Exports, Options);
+        arm ->
+          hipe_arm_assemble:assemble(CompiledCode, Closures, Exports, Options);
+        x86 ->
+          hipe_x86_assemble:assemble(CompiledCode, Closures, Exports, Options);
+        amd64 ->
+          hipe_amd64_assemble:assemble(CompiledCode, Closures, Exports, Options);
+        Arch ->
+          ?EXIT({executing_on_an_unsupported_architecture, Arch})
+      end;
+    true ->
+      %% Merge already compiled code (per MFA) to a single binary.
+      hipe_llvm_merge:finalize(CompiledCode, Closures, Exports)
   end.
 
 %% --------------------------------------------------------------------
@@ -1179,7 +1156,7 @@ option_text(debug) ->
 option_text(icode_range) ->
   "Performs integer range analysis on the Icode level";
 option_text(icode_ssa_check) ->
-  "Checks whether Icode is on SSA form or not\n";
+  "Checks whether Icode is on SSA form or not";
 option_text(icode_ssa_copy_prop) ->
   "Performs copy propagation on Icode SSA";
 option_text(icode_ssa_const_prop) ->
@@ -1187,14 +1164,14 @@ option_text(icode_ssa_const_prop) ->
 option_text(icode_ssa_struct_reuse) ->
   "Factors out common tuple and list constructions on Icode SSA";
 option_text(icode_type) ->
-  "Performs type analysis on the Icode level" ++
+  "Performs type analysis on the Icode level\n" ++
   "and then simplifies the code based on the results of this analysis";
 option_text(load) ->
   "Automatically load the produced native code into memory";
 option_text(peephole) ->
   "Enables peephole optimizations";
 option_text(pmatch) ->
-  "Enables pattern matching compilation when compiling from Core; " ++
+  "Enables pattern matching compilation when compiling from Core;\n" ++
   "has no effect when compiling from BEAM bytecode";
 option_text(pp_asm) ->
   "Displays assembly listing with addresses and bytecode\n" ++
@@ -1241,11 +1218,11 @@ option_text(timeout) ->
   "    The limit must be a non-negative integer or the atom 'infinity'.\n" ++
   "    The current default limit is 15 minutes (900000 ms).";
 option_text(use_indexing) ->
-  "Use indexing for multiple-choice branch selection.";
+  "Use indexing for multiple-choice branch selection";
 option_text(use_callgraph) ->
-  "Compile the functions in a module according to a reversed topological " ++
-  "sorted order to gain more information when using a persistent lookup " ++
-  "table for storing intra-modular type information.";
+  "Compile the functions in a module according to a reversed topological\n" ++
+  "sorted order to gain more information when using a persistent lookup\n" ++
+  "table for storing intra-modular type information";
 option_text(verbose) ->
   "Output information about what is being done";
 option_text(Opt) when is_atom(Opt) ->
@@ -1373,6 +1350,11 @@ opt_keys() ->
      timeregalloc,
      timers,
      to_rtl,
+     to_llvm, % Use the LLVM backend for compilation.
+     llvm_save_temps, % Save the LLVM intermediate files in the current
+                      % directory; useful for debugging.
+     llvm_llc, % Specify llc optimization-level: o1, o2, o3, undefined.
+     llvm_opt, % Specify opt optimization-level: o1, o2, o3, undefined.
      use_indexing,
      use_inline_atom_search,
      use_callgraph,
@@ -1511,10 +1493,18 @@ opt_expansions() ->
   [{o1, o1_opts()},
    {o2, o2_opts()},
    {o3, o3_opts()},
+   {to_llvm, llvm_opts(o3)},
+   {{to_llvm, o0}, llvm_opts(o0)},
+   {{to_llvm, o1}, llvm_opts(o1)},
+   {{to_llvm, o2}, llvm_opts(o2)},
+   {{to_llvm, o3}, llvm_opts(o3)},
    {x87, [x87, inline_fp]},
    {inline_fp, case get(hipe_target_arch) of %% XXX: Temporary until x86
 		 x86 -> [x87, inline_fp];    %%       has sse2
 		 _ -> [inline_fp] end}].
+
+llvm_opts(O) ->
+  [to_llvm, {llvm_opt, O}, {llvm_llc, O}].
 
 %% This expands "basic" options, which may be tested early and cannot be
 %% in conflict with options found in the source code.
@@ -1557,6 +1547,24 @@ check_options(Opts) ->
     L ->
       ?WARNING_MSG("Unknown options: ~p.\n", [L]),
       ok
+  end.
+
+-spec llvm_support_available() -> boolean().
+
+llvm_support_available() ->
+  get_llvm_version() >= 3.4.
+
+get_llvm_version() ->
+  OptStr = os:cmd("opt -version"),
+  SubStr = "LLVM version ", N = length(SubStr),
+  case string:str(OptStr, SubStr) of
+     0 -> % No opt available
+       0.0;
+     S ->
+       case string:to_float(string:sub_string(OptStr, S + N)) of
+         {error, _} -> 0.0; %XXX: Assumes no revision numbers in versioning
+         {Float, _} -> Float
+       end
   end.
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%

@@ -272,7 +272,7 @@ PACKAGE_STRING=
 PACKAGE_BUGREPORT=
 
 ac_subdirs_all="$ac_subdirs_all lib erts"
-ac_subst_vars='SHELL PATH_SEPARATOR PACKAGE_NAME PACKAGE_TARNAME PACKAGE_VERSION PACKAGE_STRING PACKAGE_BUGREPORT exec_prefix prefix program_transform_name bindir sbindir libexecdir datadir sysconfdir sharedstatedir localstatedir libdir includedir oldincludedir infodir mandir build_alias host_alias target_alias DEFS ECHO_C ECHO_N ECHO_T LIBS ERL_TOP CC CFLAGS STATIC_CFLAGS CFLAG_RUNTIME_LIBRARY_PATH CPP CPPFLAGS CXX CXXFLAGS LD LDFLAGS DED_LD DED_LDFLAGS DED_LD_FLAG_RUNTIME_LIBRARY_PATH LFS_CFLAGS LFS_LDFLAGS LFS_LIBS RANLIB AR GETCONF erl_xcomp_sysroot erl_xcomp_isysroot erl_xcomp_bigendian erl_xcomp_linux_clock_gettime_correction erl_xcomp_linux_nptl erl_xcomp_linux_usable_sigusrx erl_xcomp_linux_usable_sigaltstack erl_xcomp_poll erl_xcomp_kqueue erl_xcomp_putenv_copy erl_xcomp_reliable_fpe erl_xcomp_getaddrinfo erl_xcomp_gethrvtime_procfs_ioctl erl_xcomp_clock_gettime_cpu_time erl_xcomp_after_morecore_hook erl_xcomp_dlsym_brk_wrappers build build_cpu build_vendor build_os host host_cpu host_vendor host_os TARGET CROSS_COMPILING BOOTSTRAP_ONLY ac_ct_CC EXEEXT OBJEXT ac_ct_CXX ac_ct_LD MAKE_PROG INSTALL_PROGRAM INSTALL_SCRIPT INSTALL_DATA LN_S ac_ct_RANLIB ERTS_VSN OTP_REL subdirs LIBOBJS LTLIBOBJS'
+ac_subst_vars='SHELL PATH_SEPARATOR PACKAGE_NAME PACKAGE_TARNAME PACKAGE_VERSION PACKAGE_STRING PACKAGE_BUGREPORT exec_prefix prefix program_transform_name bindir sbindir libexecdir datadir sysconfdir sharedstatedir localstatedir libdir includedir oldincludedir infodir mandir build_alias host_alias target_alias DEFS ECHO_C ECHO_N ECHO_T LIBS ERL_TOP CC CFLAGS STATIC_CFLAGS CFLAG_RUNTIME_LIBRARY_PATH CPP CPPFLAGS CXX CXXFLAGS LD LDFLAGS DED_LD DED_LDFLAGS DED_LD_FLAG_RUNTIME_LIBRARY_PATH LFS_CFLAGS LFS_LDFLAGS LFS_LIBS RANLIB AR GETCONF erl_xcomp_sysroot erl_xcomp_isysroot erl_xcomp_bigendian erl_xcomp_double_middle_endian erl_xcomp_linux_clock_gettime_correction erl_xcomp_linux_nptl erl_xcomp_linux_usable_sigusrx erl_xcomp_linux_usable_sigaltstack erl_xcomp_poll erl_xcomp_kqueue erl_xcomp_putenv_copy erl_xcomp_reliable_fpe erl_xcomp_getaddrinfo erl_xcomp_gethrvtime_procfs_ioctl erl_xcomp_clock_gettime_cpu_time erl_xcomp_after_morecore_hook erl_xcomp_dlsym_brk_wrappers erl_xcomp_ose_ldflags_pass1 erl_xcomp_ose_ldflags_pass2 erl_xcomp_ose_OSEROOT erl_xcomp_ose_STRIP erl_xcomp_ose_LM_POST_LINK erl_xcomp_ose_LM_SET_CONF erl_xcomp_ose_LM_ELF_SIZE erl_xcomp_ose_LM_LCF erl_xcomp_ose_BEAM_LM_CONF erl_xcomp_ose_EPMD_LM_CONF erl_xcomp_ose_RUN_ERL_LM_CONF erl_xcomp_ose_CONFD erl_xcomp_ose_CRT0_LM build build_cpu build_vendor build_os host host_cpu host_vendor host_os TARGET CROSS_COMPILING BOOTSTRAP_ONLY ac_ct_CC EXEEXT OBJEXT ac_ct_CXX ac_ct_LD MAKE_PROG INSTALL_PROGRAM INSTALL_SCRIPT INSTALL_DATA LN_S ac_ct_RANLIB ERTS_VSN OTP_REL OTP_VSN DEFAULT_VERBOSITY NATIVE_LIBS_ENABLED subdirs LIBOBJS LTLIBOBJS'
 ac_subst_files=''
 
 # Initialize some variables set by options.
@@ -809,6 +809,10 @@ ac_env_erl_xcomp_bigendian_set=${erl_xcomp_bigendian+set}
 ac_env_erl_xcomp_bigendian_value=$erl_xcomp_bigendian
 ac_cv_env_erl_xcomp_bigendian_set=${erl_xcomp_bigendian+set}
 ac_cv_env_erl_xcomp_bigendian_value=$erl_xcomp_bigendian
+ac_env_erl_xcomp_double_middle_endian_set=${erl_xcomp_double_middle_endian+set}
+ac_env_erl_xcomp_double_middle_endian_value=$erl_xcomp_double_middle_endian
+ac_cv_env_erl_xcomp_double_middle_endian_set=${erl_xcomp_double_middle_endian+set}
+ac_cv_env_erl_xcomp_double_middle_endian_value=$erl_xcomp_double_middle_endian
 ac_env_erl_xcomp_linux_clock_gettime_correction_set=${erl_xcomp_linux_clock_gettime_correction+set}
 ac_env_erl_xcomp_linux_clock_gettime_correction_value=$erl_xcomp_linux_clock_gettime_correction
 ac_cv_env_erl_xcomp_linux_clock_gettime_correction_set=${erl_xcomp_linux_clock_gettime_correction+set}
@@ -861,6 +865,58 @@ ac_env_erl_xcomp_dlsym_brk_wrappers_set=${erl_xcomp_dlsym_brk_wrappers+set}
 ac_env_erl_xcomp_dlsym_brk_wrappers_value=$erl_xcomp_dlsym_brk_wrappers
 ac_cv_env_erl_xcomp_dlsym_brk_wrappers_set=${erl_xcomp_dlsym_brk_wrappers+set}
 ac_cv_env_erl_xcomp_dlsym_brk_wrappers_value=$erl_xcomp_dlsym_brk_wrappers
+ac_env_erl_xcomp_ose_ldflags_pass1_set=${erl_xcomp_ose_ldflags_pass1+set}
+ac_env_erl_xcomp_ose_ldflags_pass1_value=$erl_xcomp_ose_ldflags_pass1
+ac_cv_env_erl_xcomp_ose_ldflags_pass1_set=${erl_xcomp_ose_ldflags_pass1+set}
+ac_cv_env_erl_xcomp_ose_ldflags_pass1_value=$erl_xcomp_ose_ldflags_pass1
+ac_env_erl_xcomp_ose_ldflags_pass2_set=${erl_xcomp_ose_ldflags_pass2+set}
+ac_env_erl_xcomp_ose_ldflags_pass2_value=$erl_xcomp_ose_ldflags_pass2
+ac_cv_env_erl_xcomp_ose_ldflags_pass2_set=${erl_xcomp_ose_ldflags_pass2+set}
+ac_cv_env_erl_xcomp_ose_ldflags_pass2_value=$erl_xcomp_ose_ldflags_pass2
+ac_env_erl_xcomp_ose_OSEROOT_set=${erl_xcomp_ose_OSEROOT+set}
+ac_env_erl_xcomp_ose_OSEROOT_value=$erl_xcomp_ose_OSEROOT
+ac_cv_env_erl_xcomp_ose_OSEROOT_set=${erl_xcomp_ose_OSEROOT+set}
+ac_cv_env_erl_xcomp_ose_OSEROOT_value=$erl_xcomp_ose_OSEROOT
+ac_env_erl_xcomp_ose_STRIP_set=${erl_xcomp_ose_STRIP+set}
+ac_env_erl_xcomp_ose_STRIP_value=$erl_xcomp_ose_STRIP
+ac_cv_env_erl_xcomp_ose_STRIP_set=${erl_xcomp_ose_STRIP+set}
+ac_cv_env_erl_xcomp_ose_STRIP_value=$erl_xcomp_ose_STRIP
+ac_env_erl_xcomp_ose_LM_POST_LINK_set=${erl_xcomp_ose_LM_POST_LINK+set}
+ac_env_erl_xcomp_ose_LM_POST_LINK_value=$erl_xcomp_ose_LM_POST_LINK
+ac_cv_env_erl_xcomp_ose_LM_POST_LINK_set=${erl_xcomp_ose_LM_POST_LINK+set}
+ac_cv_env_erl_xcomp_ose_LM_POST_LINK_value=$erl_xcomp_ose_LM_POST_LINK
+ac_env_erl_xcomp_ose_LM_SET_CONF_set=${erl_xcomp_ose_LM_SET_CONF+set}
+ac_env_erl_xcomp_ose_LM_SET_CONF_value=$erl_xcomp_ose_LM_SET_CONF
+ac_cv_env_erl_xcomp_ose_LM_SET_CONF_set=${erl_xcomp_ose_LM_SET_CONF+set}
+ac_cv_env_erl_xcomp_ose_LM_SET_CONF_value=$erl_xcomp_ose_LM_SET_CONF
+ac_env_erl_xcomp_ose_LM_ELF_SIZE_set=${erl_xcomp_ose_LM_ELF_SIZE+set}
+ac_env_erl_xcomp_ose_LM_ELF_SIZE_value=$erl_xcomp_ose_LM_ELF_SIZE
+ac_cv_env_erl_xcomp_ose_LM_ELF_SIZE_set=${erl_xcomp_ose_LM_ELF_SIZE+set}
+ac_cv_env_erl_xcomp_ose_LM_ELF_SIZE_value=$erl_xcomp_ose_LM_ELF_SIZE
+ac_env_erl_xcomp_ose_LM_LCF_set=${erl_xcomp_ose_LM_LCF+set}
+ac_env_erl_xcomp_ose_LM_LCF_value=$erl_xcomp_ose_LM_LCF
+ac_cv_env_erl_xcomp_ose_LM_LCF_set=${erl_xcomp_ose_LM_LCF+set}
+ac_cv_env_erl_xcomp_ose_LM_LCF_value=$erl_xcomp_ose_LM_LCF
+ac_env_erl_xcomp_ose_BEAM_LM_CONF_set=${erl_xcomp_ose_BEAM_LM_CONF+set}
+ac_env_erl_xcomp_ose_BEAM_LM_CONF_value=$erl_xcomp_ose_BEAM_LM_CONF
+ac_cv_env_erl_xcomp_ose_BEAM_LM_CONF_set=${erl_xcomp_ose_BEAM_LM_CONF+set}
+ac_cv_env_erl_xcomp_ose_BEAM_LM_CONF_value=$erl_xcomp_ose_BEAM_LM_CONF
+ac_env_erl_xcomp_ose_EPMD_LM_CONF_set=${erl_xcomp_ose_EPMD_LM_CONF+set}
+ac_env_erl_xcomp_ose_EPMD_LM_CONF_value=$erl_xcomp_ose_EPMD_LM_CONF
+ac_cv_env_erl_xcomp_ose_EPMD_LM_CONF_set=${erl_xcomp_ose_EPMD_LM_CONF+set}
+ac_cv_env_erl_xcomp_ose_EPMD_LM_CONF_value=$erl_xcomp_ose_EPMD_LM_CONF
+ac_env_erl_xcomp_ose_RUN_ERL_LM_CONF_set=${erl_xcomp_ose_RUN_ERL_LM_CONF+set}
+ac_env_erl_xcomp_ose_RUN_ERL_LM_CONF_value=$erl_xcomp_ose_RUN_ERL_LM_CONF
+ac_cv_env_erl_xcomp_ose_RUN_ERL_LM_CONF_set=${erl_xcomp_ose_RUN_ERL_LM_CONF+set}
+ac_cv_env_erl_xcomp_ose_RUN_ERL_LM_CONF_value=$erl_xcomp_ose_RUN_ERL_LM_CONF
+ac_env_erl_xcomp_ose_CONFD_set=${erl_xcomp_ose_CONFD+set}
+ac_env_erl_xcomp_ose_CONFD_value=$erl_xcomp_ose_CONFD
+ac_cv_env_erl_xcomp_ose_CONFD_set=${erl_xcomp_ose_CONFD+set}
+ac_cv_env_erl_xcomp_ose_CONFD_value=$erl_xcomp_ose_CONFD
+ac_env_erl_xcomp_ose_CRT0_LM_set=${erl_xcomp_ose_CRT0_LM+set}
+ac_env_erl_xcomp_ose_CRT0_LM_value=$erl_xcomp_ose_CRT0_LM
+ac_cv_env_erl_xcomp_ose_CRT0_LM_set=${erl_xcomp_ose_CRT0_LM+set}
+ac_cv_env_erl_xcomp_ose_CRT0_LM_value=$erl_xcomp_ose_CRT0_LM
 
 #
 # Report the --help message.
@@ -938,8 +994,12 @@ Optional Features:
   --enable-bootstrap-only enable bootstrap only configuration
   --enable-threads        enable async thread support
   --disable-threads       disable async thread support
+  --enable-dirty-schedulers
+                          enable dirty scheduler support
   --enable-halfword-emulator
-                          enable halfword emulator (only for 64bit builds)
+                          enable halfword emulator (only for 64bit builds).
+                          Note: Halfword emulator is marked as deprecated and
+                          scheduled for removal in future major release.
   --enable-smp-support    enable smp support
   --disable-smp-support   disable smp support
   --enable-kernel-poll    enable kernel poll support
@@ -949,21 +1009,25 @@ Optional Features:
   --enable-hipe           enable hipe support
   --disable-hipe          disable hipe support
   --enable-native-libs    compile Erlang libraries to native code
+  --enable-vm-probes      add dynamic trace probes to the Beam VM (only
+                          possible if --with-dynamic-trace is enabled, and
+                          then default)
   --disable-megaco-flex-scanner-lineno
                           disable megaco flex scanner lineno
   --disable-megaco-reentrant-flex-scanner
                           disable reentrant megaco flex scanner
   --disable-dynamic-ssl-lib
                           disable using dynamic openssl libraries
-  --enable-shared-zlib    enable using shared zlib library
+  --enable-builtin-zlib   force use of our own built-in zlib
   --enable-darwin-universal
                           build universal binaries on darwin i386
   --enable-darwin-64bit   build 64bit binaries on darwin
   --enable-m64-build      build 64bit binaries using the -m64 flag to (g)cc
   --enable-m32-build      build 32bit binaries using the -m32 flag to (g)cc
-  --enable-ethread-pre-pentium4-compatibility
-                          enable compatibility with x86 processors before
-                          pentium 4 (back to 486) in the ethread library
+  --enable-sanitizers[=comma-separated list of sanitizers]
+                          Default=address,undefined
+  --enable-silent-rules   less verbose build output (undo: "make V=1")
+  --disable-silent-rules  verbose build output (undo: "make V=0")
 
 Optional Packages:
   --with-PACKAGE[=ARG]    use PACKAGE [ARG=yes]
@@ -971,6 +1035,10 @@ Optional Packages:
   --with-termcap          use termcap (default)
   --without-termcap       do not use any termcap libraries
                           (ncurses,curses,termcap,termlib)
+  --with-dynamic-trace={dtrace|systemtap}
+                          specify use of dynamic trace framework, dtrace or
+                          systemtap
+  --without-dynamic-trace don't enable any dynamic tracing (default)
   --with-javac=JAVAC      specify Java compiler to use
   --with-javac            use a Java compiler if found (default)
   --without-javac         don't use any Java compiler
@@ -1019,6 +1087,9 @@ Some influential environment variables:
               compiling)
   erl_xcomp_bigendian
               big endian system: yes|no (only used when cross compiling)
+  erl_xcomp_double_middle_endian
+              double-middle-endian system: yes|no (only used when cross
+              compiling)
   erl_xcomp_linux_clock_gettime_correction
               clock_gettime() can be used for time correction: yes|no (only
               used when cross compiling)
@@ -1056,6 +1127,42 @@ Some influential environment variables:
   erl_xcomp_dlsym_brk_wrappers
               dlsym(RTLD_NEXT, _) brk wrappers can track malloc()s core memory
               usage: yes|no (only used when cross compiling)
+  erl_xcomp_ose_ldflags_pass1
+              Linker flags for the OSE module (pass 1) (only used when cross
+              compiling for OSE)
+  erl_xcomp_ose_ldflags_pass2
+              Linker flags for the OSE module (pass 2) (only used when cross
+              compiling for OSE)
+  erl_xcomp_ose_OSEROOT
+              OSE installation root directory (only used when cross compiling
+              for OSE)
+  erl_xcomp_ose_STRIP
+              Strip utility shipped with the OSE distribution(only used when
+              cross compiling for OSE)
+  erl_xcomp_ose_LM_POST_LINK
+              OSE postlink tool (only used when cross compiling for OSE)
+  erl_xcomp_ose_LM_SET_CONF
+              Sets the configuration for an OSE load module (only used when
+              cross compiling for OSE)
+  erl_xcomp_ose_LM_ELF_SIZE
+              Prints the section size information for an OSE load module (only
+              used when cross compiling for OSE)
+  erl_xcomp_ose_LM_LCF
+              OSE load module linker configuration file (only used when cross
+              compiling for OSE)
+  erl_xcomp_ose_BEAM_LM_CONF
+              BEAM OSE load module default configuration file (only used when
+              cross compiling for OSE)
+  erl_xcomp_ose_EPMD_LM_CONF
+              EPMD OSE load module default configuration file (only used when
+              cross compiling for OSE)
+  erl_xcomp_ose_RUN_ERL_LM_CONF
+              run_erl_lm OSE load module default configuration file (only used
+              when cross compiling for OSE)
+  erl_xcomp_ose_CONFD
+              OSE confd source file
+  erl_xcomp_ose_CRT0_LM
+              OSE crt0 lm source file
 
 Use these variables to override the choices made by `configure' or to help
 it to find libraries and programs with nonstandard names/locations.
@@ -1476,6 +1583,21 @@ ac_cpp='$CPP $CPPFLAGS'
 ac_compile='$CC -c $CFLAGS $CPPFLAGS conftest.$ac_ext >&5'
 ac_link='$CC -o conftest$ac_exeext $CFLAGS $CPPFLAGS $LDFLAGS conftest.$ac_ext $LIBS >&5'
 ac_compiler_gnu=$ac_cv_c_compiler_gnu
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
@@ -3307,7 +3429,7 @@ fi
 
 
 #
-# Get erts version and otp release from erts/vsn.mk
+# Get erts version from erts/vsn.mk
 #
 echo "$as_me:$LINENO: checking ERTS version" >&5
 echo $ECHO_N "checking ERTS version... $ECHO_C" >&6
@@ -3316,16 +3438,32 @@ echo "$as_me:$LINENO: result: $ERTS_VSN" >&5
 echo "${ECHO_T}$ERTS_VSN" >&6
 
 
+#
+# Get OTP release and OTP version from $ERL_TOP/OTP_VERSION
+#
 echo "$as_me:$LINENO: checking OTP release" >&5
 echo $ECHO_N "checking OTP release... $ECHO_C" >&6
-OTP_REL=`sed -n "s/^SYSTEM_VSN[	 ]*=[	 ]*\(.*\)/\1/p" < $ERL_TOP/erts/vsn.mk`
+OTP_REL=`cat $ERL_TOP/OTP_VERSION | sed "s|\([0-9]*\).*|\1|"`
 echo "$as_me:$LINENO: result: $OTP_REL" >&5
 echo "${ECHO_T}$OTP_REL" >&6
+
+
+echo "$as_me:$LINENO: checking OTP version" >&5
+echo $ECHO_N "checking OTP version... $ECHO_C" >&6
+OTP_VSN=`cat $ERL_TOP/OTP_VERSION`
+echo "$as_me:$LINENO: result: $OTP_VSN" >&5
+echo "${ECHO_T}$OTP_VSN" >&6
 
 
 # Check whether --enable-threads or --disable-threads was given.
 if test "${enable_threads+set}" = set; then
   enableval="$enable_threads"
+
+fi;
+
+# Check whether --enable-dirty-schedulers or --disable-dirty-schedulers was given.
+if test "${enable_dirty_schedulers+set}" = set; then
+  enableval="$enable_dirty_schedulers"
 
 fi;
 
@@ -3373,6 +3511,17 @@ if test "${enable_native_libs+set}" = set; then
 fi;
 
 
+# Check whether --with-dynamic-trace or --without-dynamic-trace was given.
+if test "${with_dynamic_trace+set}" = set; then
+  withval="$with_dynamic_trace"
+
+fi;
+# Check whether --enable-vm-probes or --disable-vm-probes was given.
+if test "${enable_vm_probes+set}" = set; then
+  enableval="$enable_vm_probes"
+
+fi;
+
 # Check whether --with-javac or --without-javac was given.
 if test "${with_javac+set}" = set; then
   withval="$with_javac"
@@ -3404,9 +3553,9 @@ if test "${enable_dynamic_ssl_lib+set}" = set; then
 
 fi;
 
-# Check whether --enable-shared-zlib or --disable-shared-zlib was given.
-if test "${enable_shared_zlib+set}" = set; then
-  enableval="$enable_shared_zlib"
+# Check whether --enable-builtin-zlib or --disable-builtin-zlib was given.
+if test "${enable_builtin_zlib+set}" = set; then
+  enableval="$enable_builtin_zlib"
 
 fi;
 
@@ -3467,12 +3616,6 @@ else
   enable_m32_build=no
 fi;
 
-# Check whether --enable-ethread-pre-pentium4-compatibility or --disable-ethread-pre-pentium4-compatibility was given.
-if test "${enable_ethread_pre_pentium4_compatibility+set}" = set; then
-  enableval="$enable_ethread_pre_pentium4_compatibility"
-
-fi;
-
 
 # Check whether --with-libatomic_ops or --without-libatomic_ops was given.
 if test "${with_libatomic_ops+set}" = set; then
@@ -3520,6 +3663,25 @@ elif test X"$TMPSYS" '=' X"Darwin-i386"; then
 	export LDFLAGS
 fi
 
+
+# Check whether --enable-sanitizers or --disable-sanitizers was given.
+if test "${enable_sanitizers+set}" = set; then
+  enableval="$enable_sanitizers"
+
+fi;
+
+# Check whether --enable-silent-rules or --disable-silent-rules was given.
+if test "${enable_silent_rules+set}" = set; then
+  enableval="$enable_silent_rules"
+
+fi;
+
+DEFAULT_VERBOSITY=0
+if test X${enable_silent_rules} = Xno; then
+  DEFAULT_VERBOSITY=1
+fi
+
+
 if test X${enable_m64_build} = Xyes; then
 	enable_hipe=no
 	CFLAGS="-m64 $CFLAGS"
@@ -3535,13 +3697,28 @@ if test X${enable_m32_build} = Xyes; then
 	export LDFLAGS
 fi
 
+NATIVE_LIBS_ENABLED=
+if test X${enable_native_libs} = Xyes -a X${enable_hipe} != Xno; then
+  NATIVE_LIBS_ENABLED=yes
+fi
+
+
+
+rm -f $ERL_TOP/lib/SKIP-APPLICATIONS
+for app in `cd lib && ls -d *`; do
+    var=`eval echo \\$with_$app`
+    if test X${var} == Xno; then
+       echo "$app" >> $ERL_TOP/lib/SKIP-APPLICATIONS
+     fi
+done
+
 export ERL_TOP
 
 
 subdirs="$subdirs lib erts"
 
 
-          ac_config_files="$ac_config_files Makefile"
+                    ac_config_files="$ac_config_files Makefile make/output.mk"
 
           ac_config_files="$ac_config_files make/emd2exml"
 
@@ -4098,6 +4275,7 @@ do
   case "$ac_config_target" in
   # Handling of arguments.
   "Makefile" ) CONFIG_FILES="$CONFIG_FILES Makefile" ;;
+  "make/output.mk" ) CONFIG_FILES="$CONFIG_FILES make/output.mk" ;;
   "make/emd2exml" ) CONFIG_FILES="$CONFIG_FILES make/emd2exml" ;;
   *) { { echo "$as_me:$LINENO: error: invalid argument: $ac_config_target" >&5
 echo "$as_me: error: invalid argument: $ac_config_target" >&2;}
@@ -4205,6 +4383,7 @@ s,@GETCONF@,$GETCONF,;t t
 s,@erl_xcomp_sysroot@,$erl_xcomp_sysroot,;t t
 s,@erl_xcomp_isysroot@,$erl_xcomp_isysroot,;t t
 s,@erl_xcomp_bigendian@,$erl_xcomp_bigendian,;t t
+s,@erl_xcomp_double_middle_endian@,$erl_xcomp_double_middle_endian,;t t
 s,@erl_xcomp_linux_clock_gettime_correction@,$erl_xcomp_linux_clock_gettime_correction,;t t
 s,@erl_xcomp_linux_nptl@,$erl_xcomp_linux_nptl,;t t
 s,@erl_xcomp_linux_usable_sigusrx@,$erl_xcomp_linux_usable_sigusrx,;t t
@@ -4218,6 +4397,19 @@ s,@erl_xcomp_gethrvtime_procfs_ioctl@,$erl_xcomp_gethrvtime_procfs_ioctl,;t t
 s,@erl_xcomp_clock_gettime_cpu_time@,$erl_xcomp_clock_gettime_cpu_time,;t t
 s,@erl_xcomp_after_morecore_hook@,$erl_xcomp_after_morecore_hook,;t t
 s,@erl_xcomp_dlsym_brk_wrappers@,$erl_xcomp_dlsym_brk_wrappers,;t t
+s,@erl_xcomp_ose_ldflags_pass1@,$erl_xcomp_ose_ldflags_pass1,;t t
+s,@erl_xcomp_ose_ldflags_pass2@,$erl_xcomp_ose_ldflags_pass2,;t t
+s,@erl_xcomp_ose_OSEROOT@,$erl_xcomp_ose_OSEROOT,;t t
+s,@erl_xcomp_ose_STRIP@,$erl_xcomp_ose_STRIP,;t t
+s,@erl_xcomp_ose_LM_POST_LINK@,$erl_xcomp_ose_LM_POST_LINK,;t t
+s,@erl_xcomp_ose_LM_SET_CONF@,$erl_xcomp_ose_LM_SET_CONF,;t t
+s,@erl_xcomp_ose_LM_ELF_SIZE@,$erl_xcomp_ose_LM_ELF_SIZE,;t t
+s,@erl_xcomp_ose_LM_LCF@,$erl_xcomp_ose_LM_LCF,;t t
+s,@erl_xcomp_ose_BEAM_LM_CONF@,$erl_xcomp_ose_BEAM_LM_CONF,;t t
+s,@erl_xcomp_ose_EPMD_LM_CONF@,$erl_xcomp_ose_EPMD_LM_CONF,;t t
+s,@erl_xcomp_ose_RUN_ERL_LM_CONF@,$erl_xcomp_ose_RUN_ERL_LM_CONF,;t t
+s,@erl_xcomp_ose_CONFD@,$erl_xcomp_ose_CONFD,;t t
+s,@erl_xcomp_ose_CRT0_LM@,$erl_xcomp_ose_CRT0_LM,;t t
 s,@build@,$build,;t t
 s,@build_cpu@,$build_cpu,;t t
 s,@build_vendor@,$build_vendor,;t t
@@ -4242,6 +4434,9 @@ s,@LN_S@,$LN_S,;t t
 s,@ac_ct_RANLIB@,$ac_ct_RANLIB,;t t
 s,@ERTS_VSN@,$ERTS_VSN,;t t
 s,@OTP_REL@,$OTP_REL,;t t
+s,@OTP_VSN@,$OTP_VSN,;t t
+s,@DEFAULT_VERBOSITY@,$DEFAULT_VERBOSITY,;t t
+s,@NATIVE_LIBS_ENABLED@,$NATIVE_LIBS_ENABLED,;t t
 s,@subdirs@,$subdirs,;t t
 s,@LIBOBJS@,$LIBOBJS,;t t
 s,@LTLIBOBJS@,$LTLIBOBJS,;t t
@@ -4697,15 +4892,22 @@ fi
 
 pattern="lib/*/SKIP"
 files=`echo $pattern`
-if test "$files" != "$pattern"; then
+if test "$files" != "$pattern" || test -f $ERL_TOP/lib/SKIP-APPLICATIONS; then
   echo '*********************************************************************'
   echo '**********************  APPLICATIONS DISABLED  **********************'
   echo '*********************************************************************'
   echo
-  for skipfile in $files; do
-    app=`dirname $skipfile`; app=`basename $app`
-    printf "%-15s: " $app; cat $skipfile
-  done
+  if test "$files" != "$pattern"; then
+    for skipfile in $files; do
+      app=`dirname $skipfile`; app=`basename $app`
+      printf "%-15s: " $app; cat $skipfile
+    done
+  fi
+  if test -f $ERL_TOP/lib/SKIP-APPLICATIONS; then
+    for skipapp in `cat $ERL_TOP/lib/SKIP-APPLICATIONS`; do
+      printf "%-15s: User gave --without-%s option\n" $skipapp $skipapp
+    done
+  fi
   echo
   echo '*********************************************************************'
 fi
@@ -4716,6 +4918,7 @@ if test "$files" != "$pattern" || test -f erts/CONF_INFO; then
   echo '**********************  APPLICATIONS INFORMATION  *******************'
   echo '*********************************************************************'
   echo
+  test "$files" != "$pattern" || files=""
   test ! -f erts/CONF_INFO || files="$files erts/CONF_INFO"
   for infofile in $files; do
     app=`dirname $infofile`; app=`basename $app`

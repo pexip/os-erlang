@@ -1,10 +1,10 @@
-<?xml version="1.0" encoding="latin1" ?>
+<?xml version="1.0" encoding="utf-8" ?>
 <!DOCTYPE chapter SYSTEM "chapter.dtd">
 
 <chapter>
   <header>
     <copyright>
-      <year>2006</year><year>2011</year>
+      <year>2006</year><year>2013</year>
       <holder>Ericsson AB. All Rights Reserved.</holder>
     </copyright>
     <legalnotice>
@@ -30,6 +30,575 @@
   </header>
   <p>This document describes the changes made to the Dialyzer
     application.</p>
+
+<section><title>Dialyzer 2.7.2</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+	    <p> A bug concerning <c>is_record/2,3</c> has been fixed,
+	    as well as some cases where Dialyzer could crash due to
+	    reaching system limits. </p>
+          <p>
+	    Own Id: OTP-12018</p>
+        </item>
+        <item>
+	    <p> When given the <c>-Wunderspecs</c> flag Dialyzer
+	    sometimes output bogus warnings for parametrized types.
+	    This bug has been fixed. </p>
+          <p>
+	    Own Id: OTP-12111</p>
+        </item>
+        <item>
+	    <p>Dialyzer now fetch the compile options from beam
+	    files, and use them when creating core from the abstract
+	    code. Previously the options were ignored. </p>
+          <p>
+	    Own Id: OTP-12150</p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>Dialyzer 2.7.1</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+	    <p> Fix a bug concerning opaque types. Thanks to Shayan
+	    Pooya for pointing out the bug.</p>
+          <p>
+	    Own Id: OTP-11869</p>
+        </item>
+        <item>
+	    <p> A bug where Dialyzer failed to handle typed records
+	    with fields containing remote types has been fixed.
+	    Thanks to Erik Søe Sørensen for reporting the bug. </p>
+          <p>
+	    Own Id: OTP-11918</p>
+        </item>
+        <item>
+	    <p> Make sure that only literal records are checked
+	    against the types of record definitions. Until now the
+	    elements of tuples have been checked against record field
+	    types if the tag och size of the tuple matches the record
+	    definition, often with surprising results. </p>
+          <p>
+	    Own Id: OTP-11935 Aux Id: seq12590 </p>
+        </item>
+        <item>
+          <p>
+	    A Dialyzer crash involving analysis of Map types has now
+	    been fixed.</p>
+          <p>
+	    Own Id: OTP-11947</p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>Dialyzer 2.7</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+	    <p> Dialyzer will no longer emit warnings when inspecting
+	    or modifying opaque types within the scope of a module.
+	    </p> <p> Hitherto the shape of terms (tuple, list, etc.)
+	    has been used to determine the opaque terms, but now the
+	    contracts are used for decorating types with opaqueness.
+	    </p>
+          <p>
+	    Own Id: OTP-10397</p>
+        </item>
+        <item>
+          <p>
+	    With <c>--Wunmatched_returns</c>, dialyzer will no longer
+	    warn when the value of a list comprehension is ignored,
+	    provided that the each value in the list would be an
+	    atomic value (such as integer or atoms, as opposed to
+	    tuples and lists). Example: ignoring '<c>[io:format(...)
+	    || ...]</c>' will not cause a warning, while ignoring
+	    '<c>[file:close(Fd) || ...]</c>' will.</p>
+          <p>
+	    Own Id: OTP-11626</p>
+        </item>
+        <item>
+          <p>
+	    The man page for dialyzer now contains correct
+	    information regarding -Wno_behaviours. (Thanks to Steve
+	    Vinosky.)</p>
+          <p>
+	    Own Id: OTP-11706</p>
+        </item>
+        <item>
+	    <p> Fix handling of 'on_load' attribute. (Thanks to
+	    Kostis Sagonas.) </p>
+          <p>
+	    Own Id: OTP-11743</p>
+        </item>
+        <item>
+          <p>
+	    Application upgrade (appup) files are corrected for the
+	    following applications: </p>
+          <p>
+	    <c>asn1, common_test, compiler, crypto, debugger,
+	    dialyzer, edoc, eldap, erl_docgen, et, eunit, gs, hipe,
+	    inets, observer, odbc, os_mon, otp_mibs, parsetools,
+	    percept, public_key, reltool, runtime_tools, ssh,
+	    syntax_tools, test_server, tools, typer, webtool, wx,
+	    xmerl</c></p>
+          <p>
+	    A new test utility for testing appup files is added to
+	    test_server. This is now used by most applications in
+	    OTP.</p>
+          <p>
+	    (Thanks to Tobias Schlager)</p>
+          <p>
+	    Own Id: OTP-11744</p>
+        </item>
+        <item>
+	    <p> The generalization of guard constraints has been
+	    modified. </p>
+          <p>
+	    Own Id: OTP-11798 Aux Id: seq12547 </p>
+        </item>
+        <item>
+	    <p> Dialyzer now plays nicely with funs that come as
+	    "external" arguments. (Thanks to Stavros Aronis for
+	    fixing the bug.) </p>
+          <p>
+	    Own Id: OTP-11826</p>
+        </item>
+      </list>
+    </section>
+
+
+    <section><title>Improvements and New Features</title>
+      <list>
+        <item>
+	    <p> The pre-defined types <c>array/0</c>, <c>dict/0</c>,
+	    <c>digraph/0</c>, <c>gb_set/0</c>, <c>gb_tree/0</c>,
+	    <c>queue/0</c>, <c>set/0</c>, and <c>tid/0</c> have been
+	    deprecated. They will be removed in Erlang/OTP 18.0. </p>
+	    <p> Instead the types <c>array:array/0</c>,
+	    <c>dict:dict/0</c>, <c>digraph:graph/0</c>,
+	    <c>gb_set:set/0</c>, <c>gb_tree:tree/0</c>,
+	    <c>queue:queue/0</c>, <c>sets:set/0</c>, and
+	    <c>ets:tid/0</c> can be used. (Note: it has always been
+	    necessary to use <c>ets:tid/0</c>.) </p> <p> It is
+	    allowed in Erlang/OTP 17.0 to locally re-define the types
+	    <c>array/0</c>, <c>dict/0</c>, and so on. </p> <p> New
+	    types <c>array:array/1</c>, <c>dict:dict/2</c>,
+	    <c>gb_sets:set/1</c>, <c>gb_trees:tree/2</c>,
+	    <c>queue:queue/1</c>, and <c>sets:set/1</c> have been
+	    added. </p> <p> A compiler option,
+	    <c>nowarn_deprecated_type</c>, has been introduced. By
+	    including the attribute </p> <c>
+	    -compile(nowarn_deprecated_type).</c> <p> in an Erlang
+	    source file, warnings about deprecated types can be
+	    avoided in Erlang/OTP 17.0. </p> <p> The option can also
+	    be given as a compiler flag: </p> <c> erlc
+	    +nowarn_deprecated_type file.erl</c>
+          <p>
+	    Own Id: OTP-10342</p>
+        </item>
+        <item>
+          <p>
+	    Removed gs based applications and gs based backends. The
+	    <c>observer</c> application replaces the removed
+	    applications.</p>
+          <p>
+	    *** POTENTIAL INCOMPATIBILITY ***</p>
+          <p>
+	    Own Id: OTP-10915</p>
+        </item>
+        <item>
+          <p>
+	    Forbid unsized fields in patterns of binary generators
+	    and simplified v3_core's translation of bit string
+	    generators. (Thanks to Anthony Ramine.)</p>
+          <p>
+	    Own Id: OTP-11186</p>
+        </item>
+        <item>
+          <p>
+	    EEP43: New data type - Maps</p>
+          <p>
+	    With Maps you may for instance: <taglist> <item><c>M0 =
+	    #{ a =&gt; 1, b =&gt; 2}, % create
+	    associations</c></item> <item><c>M1 = M0#{ a := 10 }, %
+	    update values</c></item> <item><c>M2 = M1#{ "hi" =&gt;
+	    "hello"}, % add new associations</c></item> <item><c>#{
+	    "hi" := V1, a := V2, b := V3} = M2. % match keys with
+	    values</c></item> </taglist></p>
+          <p>
+	    For information on how to use Maps please see Map Expressions in the
+		<seealso marker="doc/reference_manual:expressions#map_expressions">
+			Reference Manual</seealso>.</p>
+          <p>
+	    The current implementation is without the following
+	    features: <taglist> <item>No variable keys</item>
+	    <item>No single value access</item> <item>No map
+	    comprehensions</item> </taglist></p>
+          <p>
+	    Note that Maps is <em>experimental</em> during OTP 17.0.</p>
+          <p>
+	    Own Id: OTP-11616</p>
+        </item>
+        <item>
+	    <p> Parameterized opaque types have been introduced. </p>
+          <p>
+	    Own Id: OTP-11625</p>
+        </item>
+        <item>
+          <p>
+	    Some function specs are corrected or moved and some edoc
+	    comments are corrected in order to allow use of edoc.
+	    (Thanks to Pierre Fenoll)</p>
+          <p>
+	    Own Id: OTP-11702</p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>Dialyzer 2.6.1</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+	    <p> A bug that made it impossible to do any analyses from
+	    the GUI has been fixed. </p>
+          <p>
+	    Own Id: OTP-11057 Aux Id: seq12313 </p>
+        </item>
+      </list>
+    </section>
+
+
+    <section><title>Improvements and New Features</title>
+      <list>
+        <item>
+          <p>
+	    Include module, function and arity in Dialyzer's
+	    "overlapping domain" warnings. Thanks to Magnus Henoch.</p>
+          <p>
+	    Own Id: OTP-10918</p>
+        </item>
+        <item>
+          <p>
+	    Improve Dialyzer output for scan errors. Thanks to Magnus
+	    Henoch.</p>
+          <p>
+	    Own Id: OTP-10996</p>
+        </item>
+        <item>
+          <p>
+	    Integrate elliptic curve contribution from Andreas
+	    Schultz </p>
+          <p>
+	    In order to be able to support elliptic curve cipher
+	    suites in SSL/TLS, additions to handle elliptic curve
+	    infrastructure has been added to public_key and crypto.</p>
+          <p>
+	    This also has resulted in a rewrite of the crypto API to
+	    gain consistency and remove unnecessary overhead. All OTP
+	    applications using crypto has been updated to use the new
+	    API.</p>
+          <p>
+	    Impact: Elliptic curve cryptography (ECC) offers
+	    equivalent security with smaller key sizes than other
+	    public key algorithms. Smaller key sizes result in
+	    savings for power, memory, bandwidth, and computational
+	    cost that make ECC especially attractive for constrained
+	    environments.</p>
+          <p>
+	    Own Id: OTP-11009</p>
+        </item>
+        <item>
+          <p>
+	    Bitstring type inference and duplicate module error
+	    message fixes. Thanks to Stavros Aronis.</p>
+          <p>
+	    Own Id: OTP-11027</p>
+        </item>
+        <item>
+	    <p>Erlang source files with non-ASCII characters are now
+	    encoded in UTF-8 (instead of latin1).</p>
+          <p>
+	    Own Id: OTP-11041 Aux Id: OTP-10907 </p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>Dialyzer 2.6</title>
+
+    <section><title>Improvements and New Features</title>
+      <list>
+        <item>
+	    <p> Miscellaneous updates due to Unicode support. </p>
+          <p>
+	    Own Id: OTP-10820</p>
+        </item>
+        <item>
+          <p>
+	    User defined types with same name and different arity and
+	    documentation inconsistencies. Thanks Stavros Aronis.</p>
+          <p>
+	    Own Id: OTP-10861</p>
+        </item>
+        <item>
+          <p>
+	    Native code compilation changes. Thanks to Kostis
+	    Sagonas.</p>
+          <p>
+	    Own Id: OTP-10865</p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>Dialyzer 2.5.4</title>
+
+    <section><title>Improvements and New Features</title>
+      <list>
+        <item>
+	    <p> Support for Unicode has been implemented. </p>
+          <p>
+	    Own Id: OTP-10302</p>
+        </item>
+        <item>
+	    <p> Dialyzer no longer outputs warnings for unused
+	    anonymous functions ("funs"). Warnings are still output
+	    for unused functions. </p>
+          <p>
+	    Own Id: OTP-10433</p>
+        </item>
+        <item>
+	    <p>Where necessary a comment stating encoding has been
+	    added to Erlang files. The comment is meant to be removed
+	    in Erlang/OTP R17B when UTF-8 becomes the default
+	    encoding. </p>
+          <p>
+	    Own Id: OTP-10630</p>
+        </item>
+        <item>
+	    <p> Some examples overflowing the width of PDF pages have
+	    been corrected. </p>
+          <p>
+	    Own Id: OTP-10665</p>
+        </item>
+        <item>
+          <p>
+	    Fix precision of record creation violation warnings.
+	    Thanks to Stavros Aronis</p>
+          <p>
+	    Own Id: OTP-10681</p>
+        </item>
+        <item>
+          <p>
+	    Report spec discrepancy on mismatching lists. Thanks to
+	    Stavros Aronis.</p>
+          <p>
+	    Own Id: OTP-10740</p>
+        </item>
+        <item>
+          <p>
+	    Properly support functions with arbitrary arity in type
+	    specs. Thanks to Stavros Aronis.</p>
+          <p>
+	    Own Id: OTP-10772</p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>Dialyzer 2.5.3</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+	    <p>Fix a crash in race condition detection</p> <p>Remove
+	    old untested experimental extension</p> <p>Respect
+	    {plt_check,false} option when using dialyzer:run/1</p>
+	    <p>Fix handling of tuple set remote types appearing in
+	    tuple sets</p>
+          <p>
+	    Own Id: OTP-10464</p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>Dialyzer 2.5.2</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+	    <p> Correct handling of type names in contracts. Fix
+	    crash related to contract checking. Do not rewrite
+	    unchanged PLT. </p>
+          <p>
+	    Own Id: OTP-10083</p>
+        </item>
+        <item>
+          <p>
+	    Stop a forgotten server process</p>
+          <p>
+	    Dialyzer forgot to stop a server process before finishing
+	    its analysis. This is a concurrency error detected by
+	    Concuerror. Changes to fix warnings identified by running
+	    dialyzer -Wunmatched_returns. Thanks to Kostis Sagonas.</p>
+          <p>
+	    Own Id: OTP-10231</p>
+        </item>
+      </list>
+    </section>
+
+
+    <section><title>Improvements and New Features</title>
+      <list>
+        <item>
+	    <p> Bug fixes and improvements of
+	    <c>dialyzer_typesig</c>. </p>
+          <p>
+	    Own Id: OTP-10082</p>
+        </item>
+        <item>
+          <p>
+	    Add parallel dialyzer support</p>
+          <p>
+	    Own Id: OTP-10103</p>
+        </item>
+        <item>
+	    <p> An alternative implementation of the solver in
+	    <c>dialyzer_typesig</c> has been introduced. It is faster
+	    than the original implementation. </p>
+          <p>
+	    Own Id: OTP-10110</p>
+        </item>
+        <item>
+	    <p> Bugs in <c>erl_types:t_inf()</c> (HiPE) and in
+	    <c>dialyzer_dataflow</c> (Dialyzer) have been fixed. </p>
+          <p>
+	    Own Id: OTP-10191</p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>Dialyzer 2.5.1</title>
+
+    <section><title>Improvements and New Features</title>
+      <list>
+        <item>
+	    <p> Handle <c>nowarn_unused_function</c> the same way as
+	    the compiler does. </p>
+          <p>
+	    Own Id: OTP-9833</p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>Dialyzer 2.5</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+          <p>
+	    Fix false warning about closure application</p>
+          <p>
+	    Whenever a variable that could hold one of two or more
+	    possible closures was used in a particular application,
+	    the application was assumed to fail if ONE of the
+	    closures would fail in this application. This has been
+	    corrected to infer failing application if ALL possible
+	    closures would fail in the particular application.</p>
+          <p>
+	    Change category of 'might also return' warnings</p>
+          <p>
+	    Dialyzer emits warnings like the following "The
+	    specification for _ states that the function might also
+	    return _ but the inferred return is _", which are
+	    actually underspecifications and not wrong type
+	    specifications. This patch makes sure that they are filed
+	    under the appropriate category.</p>
+          <p>
+	    Own Id: OTP-9707</p>
+        </item>
+        <item>
+	    <p>Wrap up behaviours patch for Dialyzer</p> <list>
+	    <item><p>Enable warnings by default, add two options for
+	    suppressing them</p></item> <item><p>Fix warning
+	    formatting and update testsuites.</p></item>
+	    <item><p>Detection of callback-spec
+	    discrepancies</p></item> <item><p>Allow none() as return
+	    value in callbacks</p></item> <item><p>Behaviour callback
+	    discrepancy detection for Dialyzer</p></item>
+	    <item><p>Add lookup function for callbacks</p></item>
+	    <item><p>Store callbacks in codeserver and PLT</p></item>
+	    <item><p>Collect callback definitions during
+	    compilation</p></item> <item><p>Update inets
+	    results</p></item> </list>
+          <p>
+	    Own Id: OTP-9731</p>
+        </item>
+        <item>
+          <p>
+	    <list> <item><p>No warnings for underspecs with remote
+	    types</p></item> <item><p> Fix crash in Typer</p></item>
+	    <item><p>Fix Dialyzer's warning for its own
+	    code</p></item> <item><p>Fix Dialyzer's warnings in
+	    HiPE</p></item> <item><p>Add file/line info in a
+	    particular Dialyzer crash</p></item> <item><p>Update
+	    inets test results</p></item> </list></p>
+          <p>
+	    Own Id: OTP-9758</p>
+        </item>
+        <item>
+          <p>
+	    <list> <item><p>Correct callback spec in application
+	    module</p></item> <item><p>Refine warning about callback
+	    specs with extra ranges</p></item> <item><p>Cleanup
+	    autoimport compiler directives</p></item> <item><p>Fix
+	    Dialyzer's warnings in typer</p></item> <item><p>Fix
+	    Dialyzer's warning for its own code</p></item>
+	    <item><p>Fix bug in Dialyzer's behaviours
+	    analysis</p></item> <item><p>Fix crash in
+	    Dialyzer</p></item> <item><p>Variable substitution was
+	    not generalizing any unknown variables.</p></item>
+	    </list></p>
+          <p>
+	    Own Id: OTP-9776</p>
+        </item>
+      </list>
+    </section>
+
+
+    <section><title>Improvements and New Features</title>
+      <list>
+        <item>
+	    <p> Optimize the joining of maps in
+	    <c>dialyzer_dataflow</c>. </p>
+          <p>
+	    Own Id: OTP-9761</p>
+        </item>
+      </list>
+    </section>
+
+</section>
 
 <section><title>Dialyzer 2.4.4</title>
 

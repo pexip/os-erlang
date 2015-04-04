@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %% 
-%% Copyright Ericsson AB 1996-2011. All Rights Reserved.
+%% Copyright Ericsson AB 1996-2014. All Rights Reserved.
 %% 
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -21,6 +21,8 @@
 %% External exports
 -export([suspend/1, suspend/2, resume/1, resume/2,
 	 get_status/1, get_status/2,
+	 get_state/1, get_state/2,
+	 replace_state/2, replace_state/3,
 	 change_code/4, change_code/5,
 	 log/2, log/3, trace/2, trace/3, statistics/2, statistics/3,
 	 log_to_file/2, log_to_file/3, no_debug/1, no_debug/2,
@@ -32,37 +34,52 @@
 %% Types
 %%-----------------------------------------------------------------
 
+-export_type([dbg_opt/0]).
+
 -type name()         :: pid() | atom() | {'global', atom()}.
 -type system_event() :: {'in', Msg :: _}
                       | {'in', Msg :: _, From :: _}
                       | {'out', Msg :: _, To :: _}
                         | term().
--opaque dbg_opt()    :: list().
+-opaque dbg_opt()    :: {'trace', 'true'}
+                      | {'log',
+                         {N :: non_neg_integer(),
+                          [{Event :: system_event(),
+                            FuncState :: _,
+                            FormFunc :: format_fun()}]}}
+                      | {'statistics', {file:date_time(),
+                                        {'reductions', non_neg_integer()},
+                                        MessagesIn :: non_neg_integer(),
+                                        MessagesOut :: non_neg_integer()}}
+                      | {'log_to_file', file:io_device()}
+                      | {Func :: dbg_fun(), FuncState :: term()}.
 -type dbg_fun()      :: fun((FuncState :: _,
                              Event :: system_event(),
                              ProcState :: _) -> 'done' | (NewFuncState :: _)).
 
+-type format_fun()   :: fun((Device :: io:device() | file:io_device(),
+			     Event :: system_event(),
+			     Extra :: term()) -> any()).
+
 %%-----------------------------------------------------------------
 %% System messages
 %%-----------------------------------------------------------------
--spec suspend(Name) -> Void when
-      Name :: name(),
-      Void :: term().
+-spec suspend(Name) -> 'ok' when
+      Name :: name().
 suspend(Name) -> send_system_msg(Name, suspend).
--spec suspend(Name, Timeout) -> Void when
+
+-spec suspend(Name, Timeout) -> 'ok' when
       Name :: name(),
-      Timeout :: timeout(),
-      Void :: term().
+      Timeout :: timeout().
 suspend(Name, Timeout) -> send_system_msg(Name, suspend, Timeout).
 
--spec resume(Name) -> Void when
-      Name :: name(),
-      Void :: term().
+-spec resume(Name) -> 'ok' when
+      Name :: name().
 resume(Name) -> send_system_msg(Name, resume).
--spec resume(Name, Timeout) -> Void when
+
+-spec resume(Name, Timeout) -> 'ok' when
       Name :: name(),
-      Timeout :: timeout(),
-      Void :: term().
+      Timeout :: timeout().
 resume(Name, Timeout) -> send_system_msg(Name, resume, Timeout).
 
 -spec get_status(Name) -> Status when
@@ -71,9 +88,10 @@ resume(Name, Timeout) -> send_system_msg(Name, resume, Timeout).
       SItem :: (PDict :: [{Key :: term(), Value :: term()}])
              | (SysState :: 'running' | 'suspended')
              | (Parent :: pid())
-             | (Dbg :: dbg_opt())
+             | (Dbg :: [dbg_opt()])
              | (Misc :: term()).
 get_status(Name) -> send_system_msg(Name, get_status).
+
 -spec get_status(Name, Timeout) -> Status when
       Name :: name(),
       Timeout :: timeout(),
@@ -81,9 +99,49 @@ get_status(Name) -> send_system_msg(Name, get_status).
       SItem :: (PDict :: [{Key :: term(), Value :: term()}])
              | (SysState :: 'running' | 'suspended')
              | (Parent :: pid())
-             | (Dbg :: dbg_opt())
+             | (Dbg :: [dbg_opt()])
              | (Misc :: term()).
 get_status(Name, Timeout) -> send_system_msg(Name, get_status, Timeout).
+
+-spec get_state(Name) -> State when
+      Name :: name(),
+      State :: term().
+get_state(Name) ->
+    case send_system_msg(Name, get_state) of
+	{error, Reason} -> error(Reason);
+	State -> State
+    end.
+
+-spec get_state(Name, Timeout) -> State when
+      Name :: name(),
+      Timeout :: timeout(),
+      State :: term().
+get_state(Name, Timeout) ->
+    case send_system_msg(Name, get_state, Timeout) of
+	{error, Reason} -> error(Reason);
+	State -> State
+    end.
+
+-spec replace_state(Name, StateFun) -> NewState when
+      Name :: name(),
+      StateFun :: fun((State :: term()) -> NewState :: term()),
+      NewState :: term().
+replace_state(Name, StateFun) ->
+    case send_system_msg(Name, {replace_state, StateFun}) of
+	{error, Reason} -> error(Reason);
+	State -> State
+    end.
+
+-spec replace_state(Name, StateFun, Timeout) -> NewState when
+      Name :: name(),
+      StateFun :: fun((State :: term()) -> NewState :: term()),
+      Timeout :: timeout(),
+      NewState :: term().
+replace_state(Name, StateFun, Timeout) ->
+    case send_system_msg(Name, {replace_state, StateFun}, Timeout) of
+	{error, Reason} -> error(Reason);
+	State -> State
+    end.
 
 -spec change_code(Name, Module, OldVsn, Extra) -> 'ok' | {error, Reason} when
       Name :: name(),
@@ -93,6 +151,7 @@ get_status(Name, Timeout) -> send_system_msg(Name, get_status, Timeout).
       Reason :: term().
 change_code(Name, Mod, Vsn, Extra) ->
     send_system_msg(Name, {change_code, Mod, Vsn, Extra}).
+
 -spec change_code(Name, Module, OldVsn, Extra, Timeout) ->
                          'ok' | {error, Reason} when
       Name :: name(),
@@ -189,35 +248,33 @@ no_debug(Name) -> send_system_msg(Name, {debug, no_debug}).
       Timeout :: timeout().
 no_debug(Name, Timeout) -> send_system_msg(Name, {debug, no_debug}, Timeout).
 
--spec install(Name, FuncSpec) -> Void when
+-spec install(Name, FuncSpec) -> 'ok' when
       Name :: name(),
       FuncSpec :: {Func, FuncState},
       Func :: dbg_fun(),
-      FuncState :: term(),
-      Void :: term().
+      FuncState :: term().
 install(Name, {Func, FuncState}) ->
     send_system_msg(Name, {debug, {install, {Func, FuncState}}}).
--spec install(Name, FuncSpec, Timeout) -> Void when
+
+-spec install(Name, FuncSpec, Timeout) -> 'ok' when
       Name :: name(),
       FuncSpec :: {Func, FuncState},
       Func :: dbg_fun(),
       FuncState :: term(),
-      Timeout :: timeout(),
-      Void :: term().
+      Timeout :: timeout().
 install(Name, {Func, FuncState}, Timeout) ->
     send_system_msg(Name, {debug, {install, {Func, FuncState}}}, Timeout).
 
--spec remove(Name, Func) -> Void when
+-spec remove(Name, Func) -> 'ok' when
       Name :: name(),
-      Func :: dbg_fun(),
-      Void :: term().
+      Func :: dbg_fun().
 remove(Name, Func) ->
     send_system_msg(Name, {debug, {remove, Func}}).
--spec remove(Name, Func, Timeout) -> Void when
+
+-spec remove(Name, Func, Timeout) -> 'ok' when
       Name :: name(),
       Func :: dbg_fun(),
-      Timeout :: timeout(),
-      Void :: term().
+      Timeout :: timeout().
 remove(Name, Func, Timeout) ->
     send_system_msg(Name, {debug, {remove, Func}}, Timeout).
 
@@ -243,18 +300,13 @@ mfa(Name, {change_code, Mod, Vsn, Extra}) ->
     {sys, change_code, [Name, Mod, Vsn, Extra]};
 mfa(Name, Atom) ->
     {sys, Atom, [Name]}.
+
 mfa(Name, Req, Timeout) ->
     {M, F, A} = mfa(Name, Req),
     {M, F, A ++ [Timeout]}.
 
 %%-----------------------------------------------------------------
 %% Func: handle_system_msg/6
-%% Args: Msg    ::= term()
-%%       From   ::= {pid(),Ref} but don't count on that
-%%       Parent ::= pid()
-%%       Module ::= atom()
-%%       Debug  ::= [debug_opts()]
-%%       Misc   ::= term()
 %% Purpose: Used by a process module that wishes to take care of
 %%          system messages.  The process receives a {system, From,
 %%          Msg} message, and passes the Msg to this function.
@@ -266,14 +318,14 @@ mfa(Name, Req, Timeout) ->
 %%          The Module must export system_continue/3, system_terminate/4
 %%          and format_status/2 for status information.
 %%-----------------------------------------------------------------
--spec handle_system_msg(Msg, From, Parent, Module, Debug, Misc) -> Void when
+-spec handle_system_msg(Msg, From, Parent, Module, Debug, Misc) ->
+                               no_return() when
       Msg :: term(),
       From :: {pid(), Tag :: _},
       Parent :: pid(),
       Module :: module(),
       Debug :: [dbg_opt()],
-      Misc :: term(),
-      Void :: term().
+      Misc :: term().
 handle_system_msg(Msg, From, Parent, Module, Debug, Misc) ->
     handle_system_msg(running, Msg, From, Parent, Module, Debug, Misc, false).
 
@@ -283,26 +335,22 @@ handle_system_msg(Msg, From, Parent, Mod, Debug, Misc, Hib) ->
 handle_system_msg(SysState, Msg, From, Parent, Mod, Debug, Misc, Hib) ->
     case do_cmd(SysState, Msg, Parent, Mod, Debug, Misc) of
 	{suspended, Reply, NDebug, NMisc} ->
-	    gen:reply(From, Reply),
+	    _ = gen:reply(From, Reply),
 	    suspend_loop(suspended, Parent, Mod, NDebug, NMisc, Hib);
 	{running, Reply, NDebug, NMisc} ->
-	    gen:reply(From, Reply),
+	    _ = gen:reply(From, Reply),
             Mod:system_continue(Parent, NDebug, NMisc)
     end.
 
 %%-----------------------------------------------------------------
 %% Func: handle_debug/4
-%% Args: Debug ::= [debug_opts()]
-%%       Func  ::= {M,F} | fun()  arity 3
-%%       State ::= term()
-%%       Event ::= {in, Msg} | {in, Msg, From} | {out, Msg, To} | term()
 %% Purpose: Called by a process that wishes to debug an event.
 %%          Func is a formatting function, called as Func(Device, Event).
 %% Returns: [debug_opts()]
 %%-----------------------------------------------------------------
 -spec handle_debug(Debug, FormFunc, Extra, Event) -> [dbg_opt()] when
       Debug :: [dbg_opt()],
-      FormFunc :: dbg_fun(),
+      FormFunc :: format_fun(),
       Extra :: term(),
       Event :: system_event().
 handle_debug([{trace, true} | T], FormFunc, State, Event) ->
@@ -360,6 +408,11 @@ do_cmd(_, suspend, _Parent, _Mod, Debug, Misc) ->
     {suspended, ok, Debug, Misc};
 do_cmd(_, resume, _Parent, _Mod, Debug, Misc) ->
     {running, ok, Debug, Misc};
+do_cmd(SysState, get_state, _Parent, Mod, Debug, Misc) ->
+    {SysState, do_get_state(Mod, Misc), Debug, Misc};
+do_cmd(SysState, {replace_state, StateFun},  _Parent, Mod, Debug, Misc) ->
+    {Res, NMisc} = do_replace_state(StateFun, Mod, Misc),
+    {SysState, Res, Debug, NMisc};
 do_cmd(SysState, get_status, Parent, Mod, Debug, Misc) ->
     Res = get_status(SysState, Parent, Mod, Debug, Misc),
     {SysState, Res, Debug, Misc};
@@ -372,6 +425,40 @@ do_cmd(suspended, {change_code, Module, Vsn, Extra}, _Parent,
     {suspended, Res, Debug, NMisc};
 do_cmd(SysState, Other, _Parent, _Mod, Debug, Misc) ->
     {SysState, {error, {unknown_system_msg, Other}}, Debug, Misc}.
+
+do_get_state(Mod, Misc) ->
+    case erlang:function_exported(Mod, system_get_state, 1) of
+	true ->
+	    try
+		{ok, State} = Mod:system_get_state(Misc),
+		State
+	    catch
+		Cl:Exc ->
+		    {error, {callback_failed,{Mod,system_get_state},{Cl,Exc}}}
+	    end;
+	false ->
+	    Misc
+    end.
+
+do_replace_state(StateFun, Mod, Misc) ->
+    case erlang:function_exported(Mod, system_replace_state, 2) of
+	true ->
+	    try
+		{ok, State, NMisc} = Mod:system_replace_state(StateFun, Misc),
+		{State, NMisc}
+	    catch
+		Cl:Exc ->
+		    {{error, {callback_failed,{Mod,system_replace_state},{Cl,Exc}}}, Misc}
+	    end;
+	false ->
+	    try
+		NMisc = StateFun(Misc),
+		{NMisc, NMisc}
+	    catch
+		Cl:Exc ->
+		    {{error, {callback_failed,StateFun,{Cl,Exc}}}, Misc}
+	    end
+    end.
 
 get_status(SysState, Parent, Mod, Debug, Misc) ->
     PDict = get(),
@@ -451,6 +538,7 @@ print_event(Dev, {Event, State, FormFunc}) ->
     FormFunc(Dev, Event, State).
 
 init_stat() -> {erlang:localtime(), process_info(self(), reductions), 0, 0}.
+
 get_stat({Time, {reductions, Reds}, In, Out}) ->
     {reductions, Reds2} = process_info(self(), reductions),
     [{start_time, Time}, {current_time, erlang:localtime()},
@@ -490,9 +578,8 @@ get_debug2(Item, Debug, Default) ->
 	_ -> Default
     end.
 
--spec print_log(Debug) -> Void when
-      Debug :: [dbg_opt()],
-      Void :: term().
+-spec print_log(Debug) -> 'ok' when
+      Debug :: [dbg_opt()].
 print_log(Debug) ->
     {_N, Logs} = get_debug(log, Debug, {0, []}),
     lists:foreach(fun print_event/1,
@@ -509,8 +596,6 @@ close_log_file(Debug) ->
 
 %%-----------------------------------------------------------------
 %% Func: debug_options/1
-%% Args: [trace|log|{log,N}|statistics|{log_to_file, FileName}|
-%%        {install, {Func, FuncState}}]
 %% Purpose: Initiate a debug structure.  Called by a process that
 %%          wishes to initiate the debug structure without the
 %%          system messages.
@@ -519,7 +604,11 @@ close_log_file(Debug) ->
 
 -spec debug_options(Options) -> [dbg_opt()] when
       Options :: [Opt],
-      Opt :: 'trace' | 'log' | 'statistics' | {'log_to_file', FileName}
+      Opt :: 'trace'
+           | 'log'
+           | {'log', pos_integer()}
+           | 'statistics'
+           | {'log_to_file', FileName}
            | {'install', FuncSpec},
       FileName :: file:name(),
       FuncSpec :: {Func, FuncState},
@@ -527,6 +616,7 @@ close_log_file(Debug) ->
       FuncState :: term().
 debug_options(Options) ->
     debug_options(Options, []).
+
 debug_options([trace | T], Debug) ->
     debug_options(T, install_debug(trace, true, Debug));
 debug_options([log | T], Debug) ->

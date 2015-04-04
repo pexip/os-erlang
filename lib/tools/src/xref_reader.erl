@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2000-2010. All Rights Reserved.
+%% Copyright Ericsson AB 2000-2013. All Rights Reserved.
 %%
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -80,12 +80,6 @@ form({attribute, Line, xref, Calls}, S) -> % experimental
     attr(Calls, Line, M, Fun, L, X, B, S);
 form({attribute, _Line, _Attr, _Val}, S) ->
     S;
-form({function, 0, 'MNEMOSYNE RULE', 1, _Clauses}, S) ->
-    S;
-form({function, 0, 'MNEMOSYNE QUERY', 2, _Clauses}, S) ->
-    S;
-form({function, 0, 'MNEMOSYNE RECFUNDEF', 1, _Clauses}, S) ->
-    S;
 form({function, 0, module_info, 0, _Clauses}, S) ->
     S;
 form({function, 0, module_info, 1, _Clauses}, S) ->
@@ -158,20 +152,30 @@ expr({'try',_Line,Es,Scs,Ccs,As}, S) ->
     S2 = clauses(Scs, S1),
     S3 = clauses(Ccs, S2),
     expr(As, S3);
-expr({call, Line,
-      {remote, _, {atom,_,erlang}, {atom,_,make_fun}},
-      [{atom,_,Mod}, {atom,_,Fun}, {integer,_,Arity}]}, S) ->
-    %% Added in R10B-6. M:F/A.
-    expr({'fun', Line, {function, Mod, Fun, Arity}}, S);
-expr({'fun', Line, {function, Mod, Name, Arity}}, S) ->
-    %% Added in R10B-6. M:F/A.
+expr({'fun', Line, {function, {atom,_,Mod},
+		    {atom,_,Name},
+		    {integer,_,Arity}}}, S) ->
+    %% New format in R15. M:F/A (literals).
     As = lists:duplicate(Arity, {atom, Line, foo}),
     external_call(Mod, Name, As, Line, false, S);
+expr({'fun', Line, {function, Mod, Name, {integer,_,Arity}}}, S) ->
+    %% New format in R15. M:F/A (one or more variables).
+    As = lists:duplicate(Arity, {atom, Line, foo}),
+    external_call(erlang, apply, [Mod, Name, list2term(As)], Line, true, S);
+expr({'fun', Line, {function, Mod, Name, _Arity}}, S) ->
+    %% New format in R15. M:F/A (one or more variables).
+    As = {var, Line, '_'},
+    external_call(erlang, apply, [Mod, Name, As], Line, true, S);
 expr({'fun', Line, {function, Name, Arity}, _Extra}, S) ->
     %% Added in R8.
     handle_call(local, S#xrefr.module, Name, Arity, Line, S);
 expr({'fun', _Line, {clauses, Cs}, _Extra}, S) ->
     clauses(Cs, S);
+expr({named_fun, _Line, '_', Cs, _Extra}, S) ->
+    clauses(Cs, S);
+expr({named_fun, _Line, Name, Cs, _Extra}, S) ->
+    S1 = S#xrefr{funvars = [Name | S#xrefr.funvars]},
+    clauses(Cs, S1);
 expr({call, Line, {atom, _, Name}, As}, S) ->
     S1 = handle_call(local, S#xrefr.module, Name, length(As), Line, S),
     expr(As, S1);
@@ -187,6 +191,9 @@ expr({match, _Line, {var,_,Var}, {'fun', _, {clauses, Cs}, _Extra}}, S) ->
     %% that are passed around by the "expansion" of list comprehension.
     S1 = S#xrefr{funvars = [Var | S#xrefr.funvars]},
     clauses(Cs, S1);
+expr({match, _Line, {var,_,Var}, {named_fun, _, _, _, _} = Fun}, S) ->
+    S1 = S#xrefr{funvars = [Var | S#xrefr.funvars]},
+    expr(Fun, S1);
 expr({match, _Line, {var,_,Var}, E}, S) ->
     %% Used for resolving code like
     %%     Args = [A,B], apply(m, f, Args)
@@ -286,10 +293,12 @@ check_funarg(W, ArgsList, Line, S) ->
     expr(ArgsList, S1).
 
 funarg({'fun', _, _Clauses, _Extra}, _S) -> true;
-funarg({var, _, Var}, S) -> member(Var, S#xrefr.funvars);
-funarg({call,_,{remote,_,{atom,_,erlang},{atom,_,make_fun}},_MFA}, _S) ->
-    %% R10B-6. M:F/A.
+funarg({'fun', _, {function,_,_,_}}, _S) ->
+    %% New abstract format for fun M:F/A in R15.
     true;
+funarg({named_fun, _, _, _, _}, _S) ->
+    true;
+funarg({var, _, Var}, S) -> member(Var, S#xrefr.funvars);
 funarg(_, _S) -> false.
 
 fun_args(apply2, [FunArg, Args]) -> {FunArg, Args};
@@ -326,9 +335,6 @@ handle_call(Locality, Module, Name, Arity, Line, S) ->
 	    handle_call(Locality, To, Line, S, false)
     end.
 
-handle_call(_Locality, {_, 'MNEMOSYNE RULE',1}, _Line, S, _) -> S;
-handle_call(_Locality, {_, 'MNEMOSYNE QUERY', 2}, _Line, S, _) -> S;
-handle_call(_Locality, {_, 'MNEMOSYNE RECFUNDEF',1}, _Line, S, _) -> S;
 handle_call(Locality, To0, Line, S, IsUnres) ->
     From = S#xrefr.function,
     To = adjust_arity(S, To0),

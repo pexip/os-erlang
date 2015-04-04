@@ -1,10 +1,10 @@
-<?xml version="1.0" encoding="latin1" ?>
+<?xml version="1.0" encoding="utf-8" ?>
 <!DOCTYPE part SYSTEM "part.dtd">
 
 <part xmlns:xi="http://www.w3.org/2001/XInclude">
   <header>
     <copyright>
-      <year>2000</year><year>2010</year>
+      <year>2000</year><year>2014</year>
       <holder>Ericsson AB. All Rights Reserved.</holder>
     </copyright>
     <legalnotice>
@@ -32,9 +32,7 @@
     <p>How to install Erlang/OTP on UNIX or Windows.</p>
   </description>
   <xi:include href="install-binary.xml"/>
-  <xi:include href="verification.xml"/>
   <xi:include href="INSTALL.xml"/>
   <xi:include href="INSTALL-CROSS.xml"/>
   <xi:include href="INSTALL-WIN32.xml"/>
 </part>
-

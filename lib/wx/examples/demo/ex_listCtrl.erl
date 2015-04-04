@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2009-2011. All Rights Reserved.
+%% Copyright Ericsson AB 2009-2013. All Rights Reserved.
 %%
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -23,7 +23,7 @@
 -behaviour(wx_object).
 
 -export([start/1, init/1, terminate/2,  code_change/3,
-	 handle_info/2, handle_call/3, handle_event/2]).
+	 handle_info/2, handle_call/3, handle_cast/2, handle_event/2]).
 
 -record(state,
 	{
@@ -58,8 +58,8 @@ do_init(Config) ->
     IL = wxImageList:new(16,16),
     wxImageList:add(IL, wxArtProvider:getBitmap("wxART_COPY", [{size, {16,16}}])),
     wxImageList:add(IL, wxArtProvider:getBitmap("wxART_MISSING_IMAGE", [{size, {16,16}}])),
-    wxImageList:add(IL, wxArtProvider:getBitmap("wxART_TICK_MARK", [{size, {16,16}}])),
-    wxImageList:add(IL, wxArtProvider:getBitmap("wxART_CROSS_MARK", [{size, {16,16}}])),
+    wxImageList:add(IL, wxArtProvider:getBitmap("wxART_QUESTION", [{size, {16,16}}])),
+    wxImageList:add(IL, wxArtProvider:getBitmap("wxART_WARNING", [{size, {16,16}}])),
     wxListCtrl:assignImageList(ListCtrl2, IL, ?wxIMAGE_LIST_SMALL),
     Fun =
 	fun(Item) ->
@@ -143,9 +143,18 @@ handle_info(Msg, State) ->
     demo:format(State#state.config, "Got Info ~p\n",[Msg]),
     {noreply,State}.
 
+handle_call(shutdown, _From, State=#state{parent=Panel}) ->
+    wxPanel:destroy(Panel),
+    {stop, normal, ok, State};
+
 handle_call(Msg, _From, State) ->
     demo:format(State#state.config,"Got Call ~p\n",[Msg]),
     {reply,ok,State}.
+
+handle_cast(Msg, State) ->
+    io:format("Got cast ~p~n",[Msg]),
+    {noreply,State}.
+
 
 code_change(_, _, State) ->
     {stop, ignore, State}.

@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2008-2010. All Rights Reserved.
+%% Copyright Ericsson AB 2008-2013. All Rights Reserved.
 %%
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -17,7 +17,7 @@
 %% %CopyrightEnd%
 %% This file is generated DO NOT EDIT
 
-%% @doc See external documentation: <a href="http://www.wxwidgets.org/manuals/stable/wx_wxgbsizeritem.html">wxGBSizerItem</a>.
+%% @doc See external documentation: <a href="http://www.wxwidgets.org/manuals/2.8.12/wx_wxgbsizeritem.html">wxGBSizerItem</a>.
 %% <p>This class is derived (and can use functions) from:
 %% <br />{@link wxSizerItem}
 %% </p>
@@ -37,10 +37,12 @@
   setMinSize/2,setMinSize/3,setProportion/2,setRatio/2,setRatio/3,setSizer/2,
   setSpacer/2,setSpacer/3,setWindow/2,show/2]).
 
+-export_type([wxGBSizerItem/0]).
 %% @hidden
 parent_class(wxSizerItem) -> true;
 parent_class(_Class) -> erlang:error({badtype, ?MODULE}).
 
+-type wxGBSizerItem() :: wx:wx_object().
  %% From wxSizerItem
 %% @hidden
 show(This,Show) -> wxSizerItem:show(This,Show).

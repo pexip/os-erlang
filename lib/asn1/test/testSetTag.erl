@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 1997-2010. All Rights Reserved.
+%% Copyright Ericsson AB 1997-2012. All Rights Reserved.
 %%
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -18,8 +18,6 @@
 %%
 %%
 -module(testSetTag).
-
--export([compile/3]).
 -export([main/1]).
 
 -include_lib("test_server/include/test_server.hrl").
@@ -35,80 +33,26 @@
 -record('Imp',{os, bool}).
 -record('Exp',{os, bool}).
 
-
-compile(Config,Rules,Options) ->
-
-    ?line DataDir = ?config(data_dir,Config),
-    ?line OutDir = ?config(priv_dir,Config),
-    ?line true = code:add_patha(?config(priv_dir,Config)),
-    ?line ok = asn1ct:compile(DataDir ++ "SetTag",[Rules,{outdir,OutDir}]++Options).
-
-
-
 main(_Rules) ->
-    
-    
-    ?line {ok,Bytes11} = 
-	asn1_wrapper:encode('SetTag','SetTag',#'SetTag'{nt = #'NT'{bool = true, os = "kalle"},
-						  imp = #'Imp'{bool = true, os = "kalle"},
-						  exp = #'Exp'{bool = true, os = "kalle"}}),
-    ?line {ok,{'SetTag',{'NT',"kalle",true},{'Imp',"kalle",true},{'Exp',"kalle",true}}} = 
-	asn1_wrapper:decode('SetTag','SetTag',lists:flatten(Bytes11)),
-    
-    
-    ?line {ok,Bytes12} = 
-	asn1_wrapper:encode('SetTag','SetTagImp',#'SetTagImp'{nt = #'NT'{bool = true, os = "kalle"},
-							imp = #'Imp'{bool = true, os = "kalle"},
-							exp = #'Exp'{bool = true, os = "kalle"}}),
-    ?line {ok,{'SetTagImp',{'NT',"kalle",true},{'Imp',"kalle",true},{'Exp',"kalle",true}}} = 
-	asn1_wrapper:decode('SetTag','SetTagImp',lists:flatten(Bytes12)),
-    
-    
-    ?line {ok,Bytes13} = 
-	asn1_wrapper:encode('SetTag','SetTagExp',#'SetTagExp'{nt = #'NT'{bool = true, os = "kalle"},
-							imp = #'Imp'{bool = true, os = "kalle"},
-							exp = #'Exp'{bool = true, os = "kalle"}}),
-    ?line {ok,{'SetTagExp',{'NT',"kalle",true},{'Imp',"kalle",true},{'Exp',"kalle",true}}} = 
-	asn1_wrapper:decode('SetTag','SetTagExp',lists:flatten(Bytes13)),
-    
-    
-    
-    
-    
-    ?line {ok,Bytes21} = 
-	asn1_wrapper:encode('SetTag','SetTagX',
-		      #'SetTagX'{xnt = #'XSetNT'{bool = true, os = "kalle"},
-				 ximp = #'XSetImp'{bool = true, os = "kalle"},
-				 xexp = #'XSetExp'{bool = true, os = "kalle"}}),
-    ?line {ok,{'SetTagX',{'XSetNT',"kalle",true},
-	       {'XSetImp',"kalle",true},
-	       {'XSetExp',"kalle",true}}} = 
-	asn1_wrapper:decode('SetTag','SetTagX',lists:flatten(Bytes21)),
-    
-    
-    ?line {ok,Bytes22} = 
-	asn1_wrapper:encode('SetTag','SetTagImpX',
-		      #'SetTagImpX'{xnt = #'XSetNT'{bool = true, os = "kalle"},
-				    ximp = #'XSetImp'{bool = true, os = "kalle"},
-				    xexp = #'XSetExp'{bool = true, os = "kalle"}}),
-    ?line {ok,{'SetTagImpX',{'XSetNT',"kalle",true},
-	       {'XSetImp',"kalle",true},
-	       {'XSetExp',"kalle",true}}} = 
-	asn1_wrapper:decode('SetTag','SetTagImpX',lists:flatten(Bytes22)),
-    
-    
-    ?line {ok,Bytes23} = 
-	asn1_wrapper:encode('SetTag','SetTagExpX',
-		      #'SetTagExpX'{xnt = #'XSetNT'{bool = true, os = "kalle"},
-				    ximp = #'XSetImp'{bool = true, os = "kalle"},
-				    xexp = #'XSetExp'{bool = true, os = "kalle"}}),
-    ?line {ok,{'SetTagExpX',{'XSetNT',"kalle",true},
-	       {'XSetImp',"kalle",true},
-	       {'XSetExp',"kalle",true}}} = 
-	asn1_wrapper:decode('SetTag','SetTagExpX',lists:flatten(Bytes23)),
-    
-    
-    
-    
-    
+    roundtrip('SetTag', #'SetTag'{nt=#'NT'{os = <<"kalle">>,bool=true},
+				  imp=#'Imp'{os = <<"kalle">>,bool=true},
+				  exp=#'Exp'{os = <<"kalle">>,bool=true}}),
+    roundtrip('SetTagImp', #'SetTagImp'{nt=#'NT'{os = <<"kalle">>,bool=true},
+					imp=#'Imp'{os = <<"kalle">>,bool=true},
+					exp=#'Exp'{os = <<"kalle">>,bool=true}}),
+    roundtrip('SetTagExp', #'SetTagExp'{nt=#'NT'{os = <<"kalle">>,bool=true},
+					imp=#'Imp'{os = <<"kalle">>,bool=true},
+					exp=#'Exp'{os = <<"kalle">>,bool=true}}),
+    roundtrip('SetTagX', #'SetTagX'{xnt=#'XSetNT'{os = <<"kalle">>,bool=true},
+				    ximp=#'XSetImp'{os = <<"kalle">>,bool=true},
+				    xexp=#'XSetExp'{os = <<"kalle">>,bool=true}}),
+    roundtrip('SetTagImpX', #'SetTagImpX'{xnt=#'XSetNT'{os = <<"kalle">>,bool=true},
+					  ximp=#'XSetImp'{os = <<"kalle">>,bool=true},
+					  xexp=#'XSetExp'{os = <<"kalle">>,bool=true}}),
+    roundtrip('SetTagExpX', #'SetTagExpX'{xnt=#'XSetNT'{os = <<"kalle">>,bool=true},
+					  ximp=#'XSetImp'{os = <<"kalle">>,bool=true},
+					  xexp=#'XSetExp'{os = <<"kalle">>,bool=true}}),
     ok.
+
+roundtrip(T, V) ->
+    asn1_test_lib:roundtrip('SetTag', T, V).

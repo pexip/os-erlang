@@ -1,7 +1,7 @@
 /*
  * %CopyrightBegin%
  *
- * Copyright Ericsson AB 2008-2010. All Rights Reserved.
+ * Copyright Ericsson AB 2008-2012. All Rights Reserved.
  *
  * The contents of this file are subject to the Erlang Public License,
  * Version 1.1, (the "License"); you may not use this file except in
@@ -35,6 +35,10 @@
  * 	| | | - collisions (including trylock busy)
  * 	| | | - timer (time spent in waiting for lock)
  * 	| | | - n_timer (collisions excluding trylock busy)
+ * 	| | | - histogram
+ * 	| | | | - # 0 = log2(lock wait_time ns)
+ * 	| | | | - ...
+ * 	| | | | - # n = log2(lock wait_time ns)
  *
  * 	Each instance of a lock is the unique lock, i.e. set and id in that set.
  * 	For each lock there is a set of statistics with where and what impact
@@ -61,9 +65,24 @@
 #define ERTS_LOCK_COUNT_H__
 
 #ifdef  ERTS_ENABLE_LOCK_COUNT
+#ifndef ERTS_ENABLE_LOCK_POSITION
+/* Enable in order for _x variants of mtx functions to be used. */
+#define ERTS_ENABLE_LOCK_POSITION 1
+#endif
+
 #include "ethread.h"
 
-#define ERTS_LCNT_MAX_LOCK_LOCATIONS (10)
+#define ERTS_LCNT_MAX_LOCK_LOCATIONS  (10)
+
+/* histogram */
+#define ERTS_LCNT_HISTOGRAM_MAX_NS    (((unsigned long)1LL << 28) - 1)
+#if 0 || defined(HAVE_GETHRTIME)
+#define ERTS_LCNT_HISTOGRAM_SLOT_SIZE (30)
+#define ERTS_LCNT_HISTOGRAM_RSHIFT    (0)
+#else
+#define ERTS_LCNT_HISTOGRAM_SLOT_SIZE (20)
+#define ERTS_LCNT_HISTOGRAM_RSHIFT    (10)
+#endif
 
 #define ERTS_LCNT_LT_SPINLOCK   (((Uint16) 1) << 0)
 #define ERTS_LCNT_LT_RWSPINLOCK (((Uint16) 1) << 1)
@@ -89,6 +108,7 @@
 #define ERTS_LCNT_OPT_LOCATION  (((Uint16) 1) << 1)
 #define ERTS_LCNT_OPT_PROCLOCK  (((Uint16) 1) << 2)
 #define ERTS_LCNT_OPT_COPYSAVE  (((Uint16) 1) << 3)
+#define ERTS_LCNT_OPT_PORTLOCK  (((Uint16) 1) << 4)
 
 typedef struct {
     unsigned long s;
@@ -96,6 +116,10 @@ typedef struct {
 } erts_lcnt_time_t;
     
 extern erts_lcnt_time_t timer_start;
+
+typedef struct {
+   Uint32 ns[ERTS_LCNT_HISTOGRAM_SLOT_SIZE]; /* log2 array of nano seconds occurences */
+} erts_lcnt_hist_t;
 
 typedef struct erts_lcnt_lock_stats_s {
     /* "tries" and "colls" needs to be atomic since
@@ -111,6 +135,7 @@ typedef struct erts_lcnt_lock_stats_s {
     
     unsigned long timer_n;    /* #times waited for lock */
     erts_lcnt_time_t timer;   /* total wait time for lock */
+    erts_lcnt_hist_t hist;
 } erts_lcnt_lock_stats_t;
 
 /* rw locks uses both states, other locks only uses w_state */
@@ -200,6 +225,8 @@ Uint16 erts_lcnt_clear_rt_opt(Uint16 opt);
 void   erts_lcnt_clear_counters(void);
 char  *erts_lcnt_lock_type(Uint16 type);
 erts_lcnt_data_t *erts_lcnt_get_data(void);
+
+#define ERTS_LCNT_LOCK_TYPE(lockp)	((lockp)->flag & ERTS_LCNT_LT_ALL)
 
 #endif /* ifdef  ERTS_ENABLE_LOCK_COUNT  */
 #endif /* ifndef ERTS_LOCK_COUNT_H__     */

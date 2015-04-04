@@ -1,7 +1,7 @@
 # 
 # %CopyrightBegin%
 #
-# Copyright Ericsson AB 2006-2010. All Rights Reserved.
+# Copyright Ericsson AB 2006-2013. All Rights Reserved.
 #
 # The contents of this file are subject to the Erlang Public License,
 # Version 1.1, (the "License"); you may not use this file except in
@@ -23,6 +23,10 @@
 #
 #
 #
+# Install programs etc
+s|@INSTALL@|/usr/bin/install -c|
+
+# other
 s|@host@|vxworks_ppc32|
 s|@system_type@|vxworks_ppc32|
 s|@ARCH@|ppc32|

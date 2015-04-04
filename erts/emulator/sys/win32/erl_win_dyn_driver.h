@@ -1,7 +1,7 @@
 /*
  * %CopyrightBegin%
  * 
- * Copyright Ericsson AB 2003-2011. All Rights Reserved.
+ * Copyright Ericsson AB 2003-2013. All Rights Reserved.
  * 
  * The contents of this file are subject to the Erlang Public License,
  * Version 1.1, (the "License"); you may not use this file except in
@@ -37,36 +37,38 @@ WDD_TYPEDEF(int, driver_failure_posix,(ErlDrvPort, int));
 WDD_TYPEDEF(int, driver_failure,(ErlDrvPort, int));
 WDD_TYPEDEF(int, driver_exit, (ErlDrvPort, int));
 WDD_TYPEDEF(int, driver_failure_eof, (ErlDrvPort));
+WDD_TYPEDEF(void, erl_drv_busy_msgq_limits, (ErlDrvPort, ErlDrvSizeT *, ErlDrvSizeT *));
 WDD_TYPEDEF(int, driver_select, (ErlDrvPort, ErlDrvEvent, int, int));
 WDD_TYPEDEF(int, driver_event, (ErlDrvPort, ErlDrvEvent,ErlDrvEventData));
-WDD_TYPEDEF(int, driver_output, (ErlDrvPort, char *, int));
-WDD_TYPEDEF(int, driver_output2, (ErlDrvPort, char *, int,char *, int));
-WDD_TYPEDEF(int, driver_output_binary, (ErlDrvPort, char *, int,ErlDrvBinary*, int, int));
-WDD_TYPEDEF(int, driver_outputv, (ErlDrvPort, char*, int, ErlIOVec *,int));
-WDD_TYPEDEF(int, driver_vec_to_buf, (ErlIOVec *, char *, int));
+WDD_TYPEDEF(int, driver_output, (ErlDrvPort, char *, ErlDrvSizeT));
+WDD_TYPEDEF(int, driver_output2, (ErlDrvPort, char *, ErlDrvSizeT ,char *, ErlDrvSizeT));
+WDD_TYPEDEF(int, driver_output_binary, (ErlDrvPort, char *, ErlDrvSizeT, ErlDrvBinary*, ErlDrvSizeT, ErlDrvSizeT));
+WDD_TYPEDEF(int, driver_outputv, (ErlDrvPort, char*, ErlDrvSizeT, ErlIOVec *, ErlDrvSizeT));
+WDD_TYPEDEF(ErlDrvSizeT, driver_vec_to_buf, (ErlIOVec *, char *, ErlDrvSizeT));
 WDD_TYPEDEF(int, driver_set_timer, (ErlDrvPort, unsigned long));
 WDD_TYPEDEF(int, driver_cancel_timer, (ErlDrvPort));
 WDD_TYPEDEF(int, driver_read_timer, (ErlDrvPort, unsigned long *));
+WDD_TYPEDEF(int, erl_drv_consume_timeslice, (ErlDrvPort, int));
 WDD_TYPEDEF(char *, erl_errno_id, (int));
 WDD_TYPEDEF(void, set_busy_port, (ErlDrvPort, int));
 WDD_TYPEDEF(void, set_port_control_flags, (ErlDrvPort, int));
 WDD_TYPEDEF(int, get_port_flags, (ErlDrvPort));
-WDD_TYPEDEF(ErlDrvBinary *, driver_alloc_binary, (int));
-WDD_TYPEDEF(ErlDrvBinary *, driver_realloc_binary, (ErlDrvBinary *, int));
+WDD_TYPEDEF(ErlDrvBinary *, driver_alloc_binary, (ErlDrvSizeT));
+WDD_TYPEDEF(ErlDrvBinary *, driver_realloc_binary, (ErlDrvBinary *, ErlDrvSizeT));
 WDD_TYPEDEF(void, driver_free_binary, (ErlDrvBinary *));
-WDD_TYPEDEF(void *, driver_alloc, (size_t));
-WDD_TYPEDEF(void *, driver_realloc, (void *, size_t));
+WDD_TYPEDEF(void *, driver_alloc, (ErlDrvSizeT));
+WDD_TYPEDEF(void *, driver_realloc, (void *, ErlDrvSizeT));
 WDD_TYPEDEF(void, driver_free, (void *));
-WDD_TYPEDEF(int, driver_enq, (ErlDrvPort, char*, int));
-WDD_TYPEDEF(int, driver_pushq, (ErlDrvPort, char*, int));
-WDD_TYPEDEF(int, driver_deq, (ErlDrvPort, int));
-WDD_TYPEDEF(int, driver_sizeq, (ErlDrvPort));
-WDD_TYPEDEF(int, driver_enq_bin, (ErlDrvPort, ErlDrvBinary *, int,int));
-WDD_TYPEDEF(int, driver_pushq_bin, (ErlDrvPort, ErlDrvBinary *, int,int));
-WDD_TYPEDEF(int, driver_peekqv, (ErlDrvPort, ErlIOVec *));
+WDD_TYPEDEF(int, driver_enq, (ErlDrvPort, char*, ErlDrvSizeT));
+WDD_TYPEDEF(int, driver_pushq, (ErlDrvPort, char*, ErlDrvSizeT));
+WDD_TYPEDEF(ErlDrvSizeT, driver_deq, (ErlDrvPort, ErlDrvSizeT));
+WDD_TYPEDEF(ErlDrvSizeT, driver_sizeq, (ErlDrvPort));
+WDD_TYPEDEF(int, driver_enq_bin, (ErlDrvPort, ErlDrvBinary *, ErlDrvSizeT, ErlDrvSizeT));
+WDD_TYPEDEF(int, driver_pushq_bin, (ErlDrvPort, ErlDrvBinary *, ErlDrvSizeT, ErlDrvSizeT));
+WDD_TYPEDEF(ErlDrvSizeT, driver_peekqv, (ErlDrvPort, ErlIOVec *));
 WDD_TYPEDEF(SysIOVec *, driver_peekq, (ErlDrvPort, int *));
-WDD_TYPEDEF(int, driver_enqv, (ErlDrvPort, ErlIOVec *, int));
-WDD_TYPEDEF(int, driver_pushqv, (ErlDrvPort, ErlIOVec *, int));
+WDD_TYPEDEF(int, driver_enqv, (ErlDrvPort, ErlIOVec *, ErlDrvSizeT));
+WDD_TYPEDEF(int, driver_pushqv, (ErlDrvPort, ErlIOVec *, ErlDrvSizeT));
 WDD_TYPEDEF(void, add_driver_entry, (ErlDrvEntry *));
 WDD_TYPEDEF(int, remove_driver_entry, (ErlDrvEntry *));
 WDD_TYPEDEF(ErlDrvTermData, driver_mk_atom, (char*));
@@ -74,19 +76,21 @@ WDD_TYPEDEF(ErlDrvTermData, driver_mk_port,(ErlDrvPort));
 WDD_TYPEDEF(ErlDrvTermData, driver_connected,(ErlDrvPort));
 WDD_TYPEDEF(ErlDrvTermData, driver_caller,(ErlDrvPort));
 WDD_TYPEDEF(ErlDrvTermData, driver_mk_term_nil,(void));
+WDD_TYPEDEF(int, erl_drv_output_term, (ErlDrvTermData, ErlDrvTermData*, int));
 WDD_TYPEDEF(int, driver_output_term, (ErlDrvPort, ErlDrvTermData*, int));
+WDD_TYPEDEF(int, erl_drv_send_term, (ErlDrvTermData, ErlDrvTermData, ErlDrvTermData*, int));
 WDD_TYPEDEF(int, driver_send_term, (ErlDrvPort, ErlDrvTermData, ErlDrvTermData*, int));
+WDD_TYPEDEF(unsigned int, driver_async_port_key, (ErlDrvPort));
 WDD_TYPEDEF(long, driver_async, (ErlDrvPort,unsigned int*,void (*)(void*),void*,void (*)(void*)));
-WDD_TYPEDEF(int, driver_async_cancel, (unsigned int));
 WDD_TYPEDEF(int, driver_lock_driver, (ErlDrvPort));
 WDD_TYPEDEF(void *, driver_dl_open, (char *));
 WDD_TYPEDEF(void *, driver_dl_sym, (void *, char *));
 WDD_TYPEDEF(int, driver_dl_close, (void *));
 WDD_TYPEDEF(char *, driver_dl_error, (void));
-WDD_TYPEDEF(unsigned long, erts_alc_test, (unsigned long,
-					   unsigned long,
-					   unsigned long,
-					   unsigned long));
+WDD_TYPEDEF(ErlDrvUInt, erts_alc_test, (ErlDrvUInt,
+					ErlDrvUInt,
+					ErlDrvUInt,
+					ErlDrvUInt));
 WDD_TYPEDEF(ErlDrvSInt, driver_binary_get_refc, (ErlDrvBinary *dbp));
 WDD_TYPEDEF(ErlDrvSInt, driver_binary_inc_refc, (ErlDrvBinary *dbp));
 WDD_TYPEDEF(ErlDrvSInt, driver_binary_dec_refc, (ErlDrvBinary *dbp));
@@ -150,6 +154,7 @@ typedef struct {
     WDD_FTYPE(driver_failure) *driver_failure;
     WDD_FTYPE(driver_exit) *driver_exit;
     WDD_FTYPE(driver_failure_eof) *driver_failure_eof;
+    WDD_FTYPE(erl_drv_busy_msgq_limits) *erl_drv_busy_msgq_limits;
     WDD_FTYPE(driver_select) *driver_select;
     WDD_FTYPE(driver_event) *driver_event;
     WDD_FTYPE(driver_output) *driver_output;
@@ -160,6 +165,7 @@ typedef struct {
     WDD_FTYPE(driver_set_timer) *driver_set_timer;
     WDD_FTYPE(driver_cancel_timer) *driver_cancel_timer;
     WDD_FTYPE(driver_read_timer) *driver_read_timer;
+    WDD_FTYPE(erl_drv_consume_timeslice) *erl_drv_consume_timeslice;
     WDD_FTYPE(erl_errno_id) *erl_errno_id;
     WDD_FTYPE(set_busy_port)* set_busy_port;
     WDD_FTYPE(set_port_control_flags) *set_port_control_flags;
@@ -187,10 +193,12 @@ typedef struct {
     WDD_FTYPE(driver_connected) *driver_connected;
     WDD_FTYPE(driver_caller) *driver_caller;
     WDD_FTYPE(driver_mk_term_nil) *driver_mk_term_nil;
+    WDD_FTYPE(erl_drv_output_term) *erl_drv_output_term;
     WDD_FTYPE(driver_output_term) *driver_output_term;
+    WDD_FTYPE(erl_drv_send_term) *erl_drv_send_term;
     WDD_FTYPE(driver_send_term) *driver_send_term;
+    WDD_FTYPE(driver_async_port_key) *driver_async_port_key;
     WDD_FTYPE(driver_async) *driver_async;
-    WDD_FTYPE(driver_async_cancel) *driver_async_cancel;
     WDD_FTYPE(driver_lock_driver) *driver_lock_driver;
     WDD_FTYPE(driver_dl_open) *driver_dl_open;
     WDD_FTYPE(driver_dl_sym) *driver_dl_sym;
@@ -257,6 +265,7 @@ extern TWinDynDriverCallbacks WinDynDriverCallbacks;
 #define driver_failure (WinDynDriverCallbacks.driver_failure)
 #define driver_exit (WinDynDriverCallbacks.driver_exit)
 #define driver_failure_eof (WinDynDriverCallbacks.driver_failure_eof)
+#define erl_drv_busy_msgq_limits (WinDynDriverCallbacks.erl_drv_busy_msgq_limits)
 #define driver_select (WinDynDriverCallbacks.driver_select)
 #define driver_event (WinDynDriverCallbacks.driver_event)
 #define driver_output (WinDynDriverCallbacks.driver_output)
@@ -267,6 +276,7 @@ extern TWinDynDriverCallbacks WinDynDriverCallbacks;
 #define driver_set_timer (WinDynDriverCallbacks.driver_set_timer)
 #define driver_cancel_timer (WinDynDriverCallbacks.driver_cancel_timer)
 #define driver_read_timer (WinDynDriverCallbacks.driver_read_timer)
+#define erl_drv_consume_timeslice (WinDynDriverCallbacks.erl_drv_consume_timeslice)
 #define erl_errno_id (WinDynDriverCallbacks.erl_errno_id)
 #define set_busy_port (WinDynDriverCallbacks.set_busy_port)
 #define set_port_control_flags (WinDynDriverCallbacks.set_port_control_flags)
@@ -294,10 +304,12 @@ extern TWinDynDriverCallbacks WinDynDriverCallbacks;
 #define driver_connected (WinDynDriverCallbacks.driver_connected)
 #define driver_caller (WinDynDriverCallbacks.driver_caller)
 #define driver_mk_term_nil (WinDynDriverCallbacks.driver_mk_term_nil)
+#define erl_drv_output_term (WinDynDriverCallbacks.erl_drv_output_term)
 #define driver_output_term (WinDynDriverCallbacks.driver_output_term)
+#define erl_drv_send_term (WinDynDriverCallbacks.erl_drv_send_term)
 #define driver_send_term (WinDynDriverCallbacks.driver_send_term)
+#define driver_async_port_key (WinDynDriverCallbacks.driver_async_port_key)
 #define driver_async (WinDynDriverCallbacks.driver_async)
-#define driver_async_cancel (WinDynDriverCallbacks.driver_async_cancel)
 #define driver_lock_driver (WinDynDriverCallbacks.driver_lock_driver)
 #define driver_dl_open (WinDynDriverCallbacks.driver_dl_open)
 #define driver_dl_sym (WinDynDriverCallbacks.driver_dl_sym)
@@ -388,6 +400,7 @@ do {				                        \
 ((W).driver_failure) = driver_failure;			\
 ((W).driver_exit) = driver_exit;			\
 ((W).driver_failure_eof) = driver_failure_eof;		\
+((W).erl_drv_busy_msgq_limits) = erl_drv_busy_msgq_limits;\
 ((W).driver_select) = driver_select;			\
 ((W).driver_event) = driver_event;			\
 ((W).driver_output) = driver_output;			\
@@ -398,6 +411,7 @@ do {				                        \
 ((W).driver_set_timer) = driver_set_timer;		\
 ((W).driver_cancel_timer) = driver_cancel_timer;	\
 ((W).driver_read_timer) = driver_read_timer;		\
+((W).erl_drv_consume_timeslice) = erl_drv_consume_timeslice;\
 ((W).erl_errno_id) = erl_errno_id;			\
 ((W).set_busy_port) = set_busy_port;			\
 ((W).set_port_control_flags) = set_port_control_flags;	\
@@ -425,10 +439,12 @@ do {				                        \
 ((W).driver_connected) = driver_connected;		\
 ((W).driver_caller) = driver_caller;			\
 ((W).driver_mk_term_nil) = driver_mk_term_nil;		\
+((W).erl_drv_output_term) = erl_drv_output_term;	\
 ((W).driver_output_term) = driver_output_term;		\
+((W).erl_drv_send_term) = erl_drv_send_term;		\
 ((W).driver_send_term) = driver_send_term;		\
+((W).driver_async_port_key) = driver_async_port_key;	\
 ((W).driver_async) = driver_async;			\
-((W).driver_async_cancel) = driver_async_cancel;	\
 ((W).driver_lock_driver) = driver_lock_driver;	       	\
 ((W).driver_dl_open) =  driver_dl_open;			\
 ((W).driver_dl_sym) =  driver_dl_sym;			\

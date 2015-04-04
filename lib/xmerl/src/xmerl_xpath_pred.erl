@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %% 
-%% Copyright Ericsson AB 2003-2009. All Rights Reserved.
+%% Copyright Ericsson AB 2003-2011. All Rights Reserved.
 %% 
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -337,6 +337,9 @@ local_name1([#xmlNode{type=element,node=El}|_]) ->
 local_name1([#xmlNode{type=attribute,node=Att}|_]) ->
     #xmlAttribute{name=Name,nsinfo=NSI} = Att,
     local_name2(Name,NSI);
+local_name1([#xmlNode{type=namespace,node=N}|_]) ->
+    #xmlNsNode{prefix=Prefix} = N,
+    ?string(Prefix);
 local_name1([#xmlElement{name = Name, nsinfo = NSI}|_]) ->
     local_name2(Name,NSI).
 local_name2(Name, NSI) ->
@@ -431,6 +434,9 @@ string_value(N=#xmlObj{}) ->
 string_value(A=#xmlNode{type=attribute}) ->
     #xmlAttribute{value=AttVal}=A#xmlNode.node,
     ?string(AttVal);
+string_value(N=#xmlNode{type=namespace}) ->
+    #xmlNsNode{uri=URI}=N#xmlNode.node,
+    ?string(atom_to_list(URI));
 string_value(El=#xmlNode{type=element}) ->
     #xmlElement{content=C} = El#xmlNode.node,
     TextValue = fun(#xmlText{value=T},_Fun) -> T;
@@ -441,6 +447,9 @@ string_value(El=#xmlNode{type=element}) ->
     ?string(lists:flatten(lists:map(TextDecendants,C)));
 string_value(T=#xmlNode{type=text}) ->
     #xmlText{value=Txt} = T#xmlNode.node,
+    ?string(Txt);
+string_value(T=#xmlNode{type=comment}) ->
+    #xmlComment{value=Txt} = T#xmlNode.node,
     ?string(Txt);
 string_value(infinity) -> ?string("Infinity");
 string_value(neg_infinity) -> ?string("-Infinity");

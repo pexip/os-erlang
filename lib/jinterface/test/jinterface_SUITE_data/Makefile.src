@@ -46,7 +46,9 @@ JAVA_FILES = \
 	MboxPing.java \
 	MboxSendReceive.java \
 	MboxLinkUnlink.java \
-	NodeStatusHandler.java
+	NodeStatusHandler.java \
+	Maps.java \
+	FunEquals.java
 
 CLASS_FILES = $(JAVA_FILES:.java=.class)
 

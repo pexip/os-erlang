@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 1998-2011. All Rights Reserved.
+%% Copyright Ericsson AB 1998-2014. All Rights Reserved.
 %%
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -21,17 +21,21 @@
 %%% Purpose: Test server support functions.
 %%%-------------------------------------------------------------------
 -module(test_server_sup).
--export([timetrap/2, timetrap/3, timetrap_cancel/1, capture_get/1, messages_get/1,
+-export([timetrap/2, timetrap/3, timetrap/4,
+	 timetrap_cancel/1, capture_get/1, messages_get/1,
 	 timecall/3, call_crash/5, app_test/2, check_new_crash_dumps/0,
 	 cleanup_crash_dumps/0, crash_dump_dir/0, tar_crash_dumps/0,
 	 get_username/0, get_os_family/0, 
 	 hostatom/0, hostatom/1, hoststr/0, hoststr/1,
 	 framework_call/2,framework_call/3,framework_call/4,
-	 format_loc/1, package_str/1, package_atom/1,
-	 call_trace/1]).
+	 format_loc/1,
+	 util_start/0, util_stop/0, unique_name/0,
+	 call_trace/1,
+	 appup_test/1]).
 -include("test_server_internal.hrl").
 -define(crash_dump_tar,"crash_dumps.tar.gz").
 -define(src_listing_ext, ".src.html").
+-record(util_state, {starter, latest_name}).
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %% timetrap(Timeout,Scale,Pid) -> Handle
@@ -44,37 +48,43 @@
 %% delays during the test (e.g. if cover is running).
 
 timetrap(Timeout0, Pid) ->
-    timetrap(Timeout0, true, Pid).
+    timetrap(Timeout0, Timeout0, true, Pid).
 
 timetrap(Timeout0, Scale, Pid) ->
+    timetrap(Timeout0, Timeout0, Scale, Pid).
+
+timetrap(Timeout0, ReportTVal, Scale, Pid) ->
     process_flag(priority, max),
     Timeout = if not Scale -> Timeout0;
 		 true -> test_server:timetrap_scale_factor() * Timeout0
 	      end,
+    TruncTO = trunc(Timeout),
     receive
-    after trunc(Timeout) ->
-	    Line = test_server:get_loc(Pid),
-	    Mon = erlang:monitor(process, Pid),
-	    Trap = 
-		case get(test_server_init_or_end_conf) of
-		    undefined ->
-			{timetrap_timeout,trunc(Timeout),Line};
-		    InitOrEnd ->
-			{timetrap_timeout,trunc(Timeout),Line,InitOrEnd}
-		end,
-	    exit(Pid,Trap),
-	    receive
-		{'DOWN', Mon, process, Pid, _} ->
+    after TruncTO ->
+	    case is_process_alive(Pid) of
+		true ->
+		    TimeToReport = if Timeout0 == ReportTVal -> TruncTO;
+				      true -> ReportTVal end,
+		    MFLs = test_server:get_loc(Pid),
+		    Mon = erlang:monitor(process, Pid),
+		    Trap = {timetrap_timeout,TimeToReport,MFLs},
+		    exit(Pid, Trap),
+		    receive
+			{'DOWN', Mon, process, Pid, _} ->
+			    ok
+		    after 10000 ->
+			    %% Pid is probably trapping exits, hit it harder...
+			    catch error_logger:warning_msg(
+				    "Testcase process ~w not "
+				    "responding to timetrap "
+				    "timeout:~n"
+				    "  ~p.~n"
+				    "Killing testcase...~n",
+				    [Pid, Trap]),
+			    exit(Pid, kill)
+		    end;
+		false ->
 		    ok
-	    after 10000 ->
-		    %% Pid is probably trapping exits, hit it harder...
-		    catch error_logger:warning_msg("Testcase process ~p not "
-						   "responding to timetrap "
-						   "timeout:~n"
-						   "  ~p.~n"
-						   "Killing testcase...~n",
-						   [Pid, Trap]),
-		    exit(Pid, kill)
 	    end
     end.
 
@@ -87,8 +97,12 @@ timetrap_cancel(Handle) ->
     unlink(Handle),
     MonRef = erlang:monitor(process, Handle),
     exit(Handle, kill),
-    receive {'DOWN',MonRef,_,_,_} -> ok after 2000 -> ok end.
-
+    receive {'DOWN',MonRef,_,_,_} -> ok
+    after
+	2000 ->
+	    erlang:demonitor(MonRef, [flush]),
+	    ok
+    end.
 
 capture_get(Msgs) ->
     receive
@@ -98,7 +112,6 @@ capture_get(Msgs) ->
 	    lists:reverse(Msgs)
     end.
 
-
 messages_get(Msgs) ->
     receive
 	Msg ->
@@ -106,7 +119,6 @@ messages_get(Msgs) ->
     after 0 ->
 	    lists:reverse(Msgs)
     end.
-
 
 timecall(M, F, A) ->
     Befor = erlang:now(),
@@ -254,6 +266,249 @@ app_check_export_all([Mod|Mods]) ->
 	    end
     end.
 
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%% appup_test/1
+%%
+%% Checks one applications .appup file for obvious errors.
+%% Checks..
+%% * .. syntax
+%% * .. that version in app file matches appup file version
+%% * .. validity of appup instructions
+%%
+%% For library application this function checks that the proper
+%% 'restart_application' upgrade and downgrade clauses exist.
+appup_test(Application) ->
+    case is_app(Application) of
+        {ok, AppFile} ->
+            case is_appup(Application, proplists:get_value(vsn, AppFile)) of
+                {ok, Up, Down} ->
+                    StartMod = proplists:get_value(mod, AppFile),
+                    Modules = proplists:get_value(modules, AppFile),
+                    do_appup_tests(StartMod, Application, Up, Down, Modules);
+                Error ->
+                    test_server:fail(Error)
+            end;
+        Error ->
+            test_server:fail(Error)
+    end.
+
+is_appup(Application, Version) ->
+    AppupFile = atom_to_list(Application) ++ ".appup",
+    AppupPath = filename:join([code:lib_dir(Application), "ebin", AppupFile]),
+    case file:consult(AppupPath) of
+        {ok, [{Version, Up, Down}]} when is_list(Up), is_list(Down) ->
+            {ok, Up, Down};
+        _ ->
+            test_server:format(
+              minor,
+              "Application upgrade (.appup) file not found, "
+              "or it has very bad syntax.~n"),
+            {error, appup_not_readable}
+    end.
+
+do_appup_tests(undefined, Application, Up, Down, _Modules) ->
+    %% library application
+    case Up of
+        [{<<".*">>, [{restart_application, Application}]}] ->
+            case Down of
+                [{<<".*">>, [{restart_application, Application}]}] ->
+                    ok;
+                _ ->
+                    test_server:format(
+                      minor,
+                      "Library application needs restart_application "
+                      "downgrade instruction.~n"),
+                    {error, library_downgrade_instruction_malformed}
+            end;
+        _ ->
+            test_server:format(
+              minor,
+              "Library application needs restart_application "
+              "upgrade instruction.~n"),
+            {error, library_upgrade_instruction_malformed}
+    end;
+do_appup_tests(_, _Application, Up, Down, Modules) ->
+    %% normal application
+    case check_appup_clauses_plausible(Up, up, Modules) of
+        ok ->
+            case check_appup_clauses_plausible(Down, down, Modules) of
+                ok ->
+                    test_server:format(minor, "OK~n");
+                Error ->
+                    test_server:format(minor, "ERROR ~p~n", [Error]),
+                    test_server:fail(Error)
+            end;
+        Error ->
+            test_server:format(minor, "ERROR ~p~n", [Error]),
+            test_server:fail(Error)
+    end.
+    
+check_appup_clauses_plausible([], _Direction, _Modules) ->
+    ok;
+check_appup_clauses_plausible([{Re, Instrs} | Rest], Direction, Modules)
+  when is_binary(Re) ->
+    case re:compile(Re) of
+        {ok, _} ->
+            case check_appup_instructions(Instrs, Direction, Modules) of
+                ok ->
+                    check_appup_clauses_plausible(Rest, Direction, Modules);
+                Error ->
+                    Error
+            end;
+        {error, Error} ->
+            {error, {version_regex_malformed, Re, Error}}
+    end;
+check_appup_clauses_plausible([{V, Instrs} | Rest], Direction, Modules)
+  when is_list(V) ->
+    case check_appup_instructions(Instrs, Direction, Modules) of
+        ok ->
+            check_appup_clauses_plausible(Rest, Direction, Modules);
+        Error ->
+            Error
+    end;
+check_appup_clauses_plausible(Clause, _Direction, _Modules) ->
+    {error, {clause_malformed, Clause}}.
+
+check_appup_instructions(Instrs, Direction, Modules) ->
+    case check_instructions(Direction, Instrs, Instrs, [], [], Modules) of
+        {_Good, []} ->
+            ok;
+        {_, Bad} ->
+            {error, {bad_instructions, Bad}}
+    end.
+
+check_instructions(_, [], _, Good, Bad, _) ->
+    {lists:reverse(Good), lists:reverse(Bad)};
+check_instructions(UpDown, [Instr | Rest], All, Good, Bad, Modules) ->
+    case catch check_instruction(UpDown, Instr, All, Modules) of
+        ok ->
+            check_instructions(UpDown, Rest, All, [Instr | Good], Bad, Modules);
+        {error, Reason} ->
+            NewBad = [{Instr, Reason} | Bad],
+            check_instructions(UpDown, Rest, All, Good, NewBad, Modules)
+    end.
+
+check_instruction(up, {add_module, Module}, _, Modules) ->
+    %% A new module is added
+    check_module(Module, Modules);
+check_instruction(down, {add_module, Module}, _, Modules) ->
+    %% An old module is re-added
+    case (catch check_module(Module, Modules)) of
+        {error, {unknown_module, Module, Modules}} -> ok;
+        ok -> throw({error, {existing_readded_module, Module}})
+    end;
+check_instruction(_, {load_module, Module}, _, Modules) ->
+    check_module(Module, Modules);
+check_instruction(_, {load_module, Module, DepMods}, _, Modules) ->
+    check_module(Module, Modules),
+    check_depend(DepMods);
+check_instruction(_, {load_module, Module, Pre, Post, DepMods}, _, Modules) ->
+    check_module(Module, Modules),
+    check_depend(DepMods),
+    check_purge(Pre),
+    check_purge(Post);
+check_instruction(up, {delete_module, Module}, _, Modules) ->
+    case (catch check_module(Module, Modules)) of
+        {error, {unknown_module, Module, Modules}} ->
+            ok;
+        ok ->
+            throw({error,{existing_module_deleted, Module}})
+    end;
+check_instruction(down, {delete_module, Module}, _, Modules) ->
+    check_module(Module, Modules);
+check_instruction(_, {update, Module}, _, Modules) ->
+    check_module(Module, Modules);
+check_instruction(_, {update, Module, supervisor}, _, Modules) ->
+    check_module(Module, Modules);
+check_instruction(_, {update, Module, DepMods}, _, Modules)
+  when is_list(DepMods) ->
+    check_module(Module, Modules);
+check_instruction(_, {update, Module, Change}, _, Modules) ->
+    check_module(Module, Modules),
+    check_change(Change);
+check_instruction(_, {update, Module, Change, DepMods}, _, Modules) ->
+    check_module(Module, Modules),
+    check_change(Change),
+    check_depend(DepMods);
+check_instruction(_, {update, Module, Change, Pre, Post, DepMods}, _, Modules) ->
+    check_module(Module, Modules),
+    check_change(Change),
+    check_purge(Pre),
+    check_purge(Post),
+    check_depend(DepMods);
+check_instruction(_,
+                  {update, Module, Timeout, Change, Pre, Post, DepMods},
+                  _,
+                  Modules) ->
+    check_module(Module, Modules),
+    check_timeout(Timeout),
+    check_change(Change),
+    check_purge(Pre),
+    check_purge(Post),
+    check_depend(DepMods);
+check_instruction(_,
+                  {update, Module, ModType, Timeout, Change, Pre, Post, DepMods},
+                  _,
+                  Modules) ->
+    check_module(Module, Modules),
+    check_mod_type(ModType),
+    check_timeout(Timeout),
+    check_change(Change),
+    check_purge(Pre),
+    check_purge(Post),
+    check_depend(DepMods);
+check_instruction(_, {restart_application, Application}, _, _) ->
+    check_application(Application);
+check_instruction(_, {remove_application, Application}, _, _) ->
+    check_application(Application);
+check_instruction(_, {add_application, Application}, _, _) ->
+    check_application(Application);
+check_instruction(_, {add_application, Application, Type}, _, _) ->
+    check_application(Application),
+    check_restart_type(Type);
+check_instruction(_, Instr, _, _) ->
+    throw({error, {low_level_or_invalid_instruction, Instr}}).
+
+check_module(Module, Modules) ->
+    case {is_atom(Module), lists:member(Module, Modules)} of
+        {true, true}  -> ok;
+        {true, false} -> throw({error, {unknown_module, Module}});
+        {false, _}    -> throw({error, {bad_module, Module}})
+    end.
+
+check_application(App) ->
+    case is_atom(App) of
+        true  -> ok;
+        false -> throw({error, {bad_application, App}})
+    end.
+
+check_depend(Dep) when is_list(Dep) -> ok;
+check_depend(Dep)                   -> throw({error, {bad_depend, Dep}}).
+
+check_restart_type(permanent) -> ok;
+check_restart_type(transient) -> ok;
+check_restart_type(temporary) -> ok;
+check_restart_type(load)      -> ok;
+check_restart_type(none)      -> ok;
+check_restart_type(Type)      -> throw({error, {bad_restart_type, Type}}).
+
+check_timeout(T) when is_integer(T), T > 0 -> ok;
+check_timeout(default)                     -> ok;
+check_timeout(infinity)                    -> ok;
+check_timeout(T)                           -> throw({error, {bad_timeout, T}}).
+
+check_mod_type(static)  -> ok;
+check_mod_type(dynamic) -> ok;
+check_mod_type(Type)    -> throw({error, {bad_mod_type, Type}}).
+
+check_purge(soft_purge)   -> ok;
+check_purge(brutal_purge) -> ok;
+check_purge(Purge)        -> throw({error, {bad_purge, Purge}}).
+
+check_change(soft)          -> ok;
+check_change({advanced, _}) -> ok;
+check_change(Change)        -> throw({error, {bad_change, Change}}).
+
 %% Given two sorted lists, L1 and L2, returns {NotInL2, NotInL1},
 %% NotInL2 is the elements of L1 which don't occurr in L2,
 %% NotInL1 is the elements of L2 which don't ocurr in L1.
@@ -303,7 +558,7 @@ check_dict(Dict, Reason) ->
 	[] ->
 	    1;                         % All ok.
 	List ->
-	    io:format("** ~s (~s) ->~n~p~n",[Reason, Dict, List]),
+	    io:format("** ~ts (~ts) ->~n~p~n",[Reason, Dict, List]),
 	    0
     end.
 
@@ -312,7 +567,7 @@ check_dict_tolerant(Dict, Reason, Mode) ->
 	[] ->
 	    1;                         % All ok.
 	List ->
-	    io:format("** ~s (~s) ->~n~p~n",[Reason, Dict, List]),
+	    io:format("** ~ts (~ts) ->~n~p~n",[Reason, Dict, List]),
 	    case Mode of
 		pedantic ->
 		    0;
@@ -368,7 +623,7 @@ check_new_crash_dumps() ->
 	    ok;
 	Num ->
 	    test_server_ctrl:format(minor,
-				    "Found ~p crash dumps:~n", [Num]),
+				    "Found ~w crash dumps:~n", [Num]),
 	    append_files_to_logfile(Dumps),
 	    delete_files(Dumps)
     end.
@@ -376,7 +631,7 @@ check_new_crash_dumps() ->
 append_files_to_logfile([]) -> ok;
 append_files_to_logfile([File|Files]) ->
     NodeName=from($., File),
-    test_server_ctrl:format(minor, "Crash dump from node ~p:~n",[NodeName]),
+    test_server_ctrl:format(minor, "Crash dump from node ~tp:~n",[NodeName]),
     Fd=get(test_server_minor_fd),
     case file:read_file(File) of
 	{ok, Bin} ->
@@ -391,19 +646,19 @@ append_files_to_logfile([File|Files]) ->
 			      "to this file: ~p~n", [file:format_error(Error)])
 	    end;
 	_Error ->
-	    io:format(Fd, "Failed to read: ~s\n", [File])
+	    io:format(Fd, "Failed to read: ~ts\n", [File])
     end,
     append_files_to_logfile(Files).
 
 delete_files([]) -> ok;
 delete_files([File|Files]) ->
-    io:format("Deleting file: ~s~n", [File]),
+    io:format("Deleting file: ~ts~n", [File]),
     case file:delete(File) of
 	{error, _} ->
 	    case file:rename(File, File++".old") of
 		{error, Error} ->
 		    io:format("Could neither delete nor rename file "
-			      "~s: ~s.~n", [File, Error]);
+			      "~ts: ~ts.~n", [File, Error]);
 		_ ->
 		    ok
 	    end;
@@ -458,10 +713,8 @@ getenv_any([]) -> "".
 %%
 %% Returns the OS family
 get_os_family() ->
-    case os:type() of
-	{OsFamily,_OsName} -> OsFamily;
-	OsFamily -> OsFamily
-    end.
+    {OsFamily,_OsName} = os:type(),
+    OsFamily.
 
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -505,8 +758,18 @@ framework_call(Callback,Func,Args,DefaultReturn) ->
     end,
     case erlang:function_exported(Mod,Func,length(Args)) of
 	true ->
-	    put(test_server_loc, {Mod,Func,framework}),
 	    EH = fun(Reason) -> exit({fw_error,{Mod,Func,Reason}}) end,
+	    SetTcState = case Func of
+			     end_tc -> true;
+			     init_tc -> true;
+			     _ -> false
+			 end,
+	    case SetTcState of
+		true ->
+		    test_server:set_tc_state({framework,Mod,Func});
+		false ->
+		    ok
+	    end,
 	    try apply(Mod,Func,Args) of
 		Result ->
 		    Result
@@ -536,42 +799,26 @@ format_loc([{Mod,Func,Line}|Rest]) ->
 format_loc([{Mod,LineOrFunc}]) ->
     format_loc({Mod,LineOrFunc});
 format_loc({Mod,Func}) when is_atom(Func) -> 
-    io_lib:format("{~s,~w}",[package_str(Mod),Func]);
-format_loc({Mod,Line}) when is_integer(Line) -> 
-    %% ?line macro is used
-    ModStr = package_str(Mod),
-    case {lists:member(no_src, get(test_server_logopts)),
-	  lists:reverse(ModStr)} of
-	{false,[$E,$T,$I,$U,$S,$_|_]}  ->
-	    io_lib:format("{~s,<a href=\"~s~s#~w\">~w</a>}",
-			  [ModStr,downcase(ModStr),?src_listing_ext,
-			   round_to_10(Line),Line]);
-	_ ->
-	    io_lib:format("{~s,~w}",[ModStr,Line])
-    end;
+    io_lib:format("{~w,~w}",[Mod,Func]);
 format_loc(Loc) ->
-    io_lib:format("~p",[Loc]).    
+    io_lib:format("~p",[Loc]).
 
 format_loc1([{Mod,Func,Line}]) ->
     ["              ",format_loc1({Mod,Func,Line}),"]"];
 format_loc1([{Mod,Func,Line}|Rest]) ->
     ["              ",format_loc1({Mod,Func,Line}),",\n"|format_loc1(Rest)];
 format_loc1({Mod,Func,Line}) ->
-    ModStr = package_str(Mod),
+    ModStr = atom_to_list(Mod),
     case {lists:member(no_src, get(test_server_logopts)),
 	  lists:reverse(ModStr)} of
 	{false,[$E,$T,$I,$U,$S,$_|_]}  ->
-	    io_lib:format("{~s,~w,<a href=\"~s~s#~w\">~w</a>}",
-			  [ModStr,Func,downcase(ModStr),?src_listing_ext,
-			   round_to_10(Line),Line]);
+	    io_lib:format("{~w,~w,<a href=\"~ts~ts#~w\">~w</a>}",
+			  [Mod,Func,
+			   test_server_ctrl:uri_encode(downcase(ModStr)),
+			   ?src_listing_ext,Line,Line]);
 	_ ->
-	    io_lib:format("{~s,~w,~w}",[ModStr,Func,Line])
+	    io_lib:format("{~w,~w,~w}",[Mod,Func,Line])
     end.
-
-round_to_10(N) when (N rem 10) == 0 ->
-    N;
-round_to_10(N) ->
-    trunc(N/10)*10.
 
 downcase(S) -> downcase(S, []).
 downcase([Uc|Rest], Result) when $A =< Uc, Uc =< $Z ->
@@ -581,21 +828,68 @@ downcase([C|Rest], Result) ->
 downcase([], Result) ->
     lists:reverse(Result).
 
-package_str(Mod) when is_atom(Mod) ->
-    atom_to_list(Mod);
-package_str(Mod) when is_list(Mod), is_atom(hd(Mod)) ->
-    %% convert [s1,s2] -> "s1.s2"
-    [_|M] = lists:flatten(["."++atom_to_list(S) || S <- Mod]),
-    M;
-package_str(Mod) when is_list(Mod) ->
-    Mod.
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%% util_start() -> ok
+%%
+%% Start local utility process
+util_start() ->
+    Starter = self(),
+    case whereis(?MODULE) of
+	undefined ->	
+	    spawn_link(fun() ->
+			       register(?MODULE, self()),
+			       util_loop(#util_state{starter=Starter})
+		       end);
+	_Pid ->
+	    ok
+    end.
 
-package_atom(Mod) when is_atom(Mod) ->
-    Mod;
-package_atom(Mod) when is_list(Mod), is_atom(hd(Mod)) ->
-    list_to_atom(package_str(Mod));
-package_atom(Mod) when is_list(Mod) ->
-    list_to_atom(Mod).
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%% util_stop() -> ok
+%%
+%% Stop local utility process
+util_stop() ->
+    try (?MODULE ! {self(),stop}) of
+	_ ->
+	    receive {?MODULE,stopped} -> ok
+	    after 5000 -> exit(whereis(?MODULE), kill)
+	    end
+    catch
+	_:_ ->
+	    ok
+    end.
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%% unique_name() -> string()
+%%
+unique_name() ->
+    ?MODULE ! {self(),unique_name},
+    receive {?MODULE,Name} -> Name
+    after 5000 -> exit({?MODULE,no_util_process})
+    end.
+	    
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%% util_loop(State) -> ok
+%%
+util_loop(State) ->		       
+    receive
+	{From,unique_name} ->
+	    {_,S,Us} = now(),
+	    Ms = trunc(Us/1000),
+	    Name = lists:flatten(io_lib:format("~w.~w", [S,Ms])),
+	    if Name == State#util_state.latest_name ->
+		    timer:sleep(1),
+		    self() ! {From,unique_name},
+		    util_loop(State);
+	       true ->
+		    From ! {?MODULE,Name},
+		    util_loop(State#util_state{latest_name = Name})
+	    end;
+	{From,stop} ->
+	    catch unlink(State#util_state.starter),
+	    From ! {?MODULE,stopped},
+	    ok
+    end.
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %% call_trace(TraceSpecFile) -> ok

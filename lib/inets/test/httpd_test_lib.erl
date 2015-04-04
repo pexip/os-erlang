@@ -1,8 +1,8 @@
 %%
 %% %CopyrightBegin%
-%%
-%% Copyright Ericsson AB 2001-2011. All Rights Reserved.
-%%
+%% 
+%% Copyright Ericsson AB 2001-2014. All Rights Reserved.
+%% 
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
 %% compliance with the License. You should have received a copy of the
@@ -79,30 +79,22 @@
 %%--------------------------------------------------------------------
 %% API
 %%------------------------------------------------------------------
+
 verify_request(SocketType, Host, Port, Node, RequestStr, Options) ->
     verify_request(SocketType, Host, Port, Node, RequestStr, Options, 30000).
+
 verify_request(SocketType, Host, Port, TranspOpts, Node, RequestStr, Options) 
   when is_list(TranspOpts) ->
     verify_request(SocketType, Host, Port, TranspOpts, Node, RequestStr, Options, 30000);
+
 verify_request(SocketType, Host, Port, Node, RequestStr, Options, TimeOut) 
   when (is_integer(TimeOut) orelse (TimeOut =:= infinity)) ->
     verify_request(SocketType, Host, Port, [], Node, RequestStr, Options, TimeOut).
+
 verify_request(SocketType, Host, Port, TranspOpts, Node, RequestStr, Options, TimeOut) ->
-    tsp("verify_request -> entry with"
-	"~n   SocketType: ~p"
-	"~n   Host:       ~p"
-	"~n   Port:       ~p"
-	"~n   TranspOpts: ~p"
-	"~n   Node:       ~p"
-	"~n   Options:    ~p"
-	"~n   TimeOut:    ~p", 
-	[SocketType, Host, Port, TranspOpts, Node, Options, TimeOut]),
-    case (catch inets_test_lib:connect_bin(SocketType, Host, Port, TranspOpts)) of
+    try inets_test_lib:connect_bin(SocketType, Host, Port, TranspOpts) of
 	{ok, Socket} ->
-	    tsp("verify_request -> connected - now send message"),
-	    SendRes = inets_test_lib:send(SocketType, Socket, RequestStr),
-	    tsp("verify_request -> send result: "
-		"~n   ~p", [SendRes]),
+	    ok = inets_test_lib:send(SocketType, Socket, RequestStr),
 	    State = case inets_regexp:match(RequestStr, "printenv") of
 			nomatch ->
 			    #state{};
@@ -113,25 +105,24 @@ verify_request(SocketType, Host, Port, TranspOpts, Node, RequestStr, Options, Ti
 	    case request(State#state{request = RequestStr, 
 				     socket  = Socket}, TimeOut) of
 		{error, Reason} ->
-		    tsp("request failed: "
-			"~n   Reason: ~p", [Reason]),
 		    {error, Reason};
 		NewState ->
-		    tsp("validate reply: "
-			"~n   NewState: ~p", [NewState]),
 		    ValidateResult = 
 			validate(RequestStr, NewState, Options, Node, Port),
-		    tsp("validation result: "
-			"~n   ~p", [ValidateResult]),
 		    inets_test_lib:close(SocketType, Socket),
 		    ValidateResult
 	    end;
 
 	ConnectError ->
-	    tsp("verify_request -> connect failed: "
-		"~n   ~p"
-		"~n", [ConnectError]),
-	    tsf({connect_failure, ConnectError})
+	    ct:fail({connect_error, ConnectError, 
+		     [SocketType, Host, Port, TranspOpts]})
+    catch
+	T:E ->
+	    ct:fail({connect_failure, 
+		     [{type,       T}, 
+		      {error,      E}, 
+		      {stacktrace, erlang:get_stacktrace()}, 
+		      {args,       [SocketType, Host, Port, TranspOpts]}]}) 
     end.
 
 request(#state{mfa = {Module, Function, Args}, 
@@ -140,7 +131,6 @@ request(#state{mfa = {Module, Function, Args},
     HeadRequest = lists:sublist(RequestStr, 1, 4),
     receive 
 	{tcp, Socket, Data} ->
-	    print(tcp, Data, State),
 	    case Module:Function([Data | Args]) of
 		{ok, Parsed} ->
 		    handle_http_msg(Parsed, State); 
@@ -150,14 +140,12 @@ request(#state{mfa = {Module, Function, Args},
 		    request(State#state{mfa = NewMFA}, TimeOut)
 	    end;
 	{tcp_closed, Socket} when Function =:= whole_body ->
-	    print(tcp, "closed", State),
 	    State#state{body = hd(Args)}; 
 	{tcp_closed, Socket} ->
-	    test_server:fail(connection_closed);
+	    exit({test_failed, connection_closed});
 	{tcp_error, Socket, Reason} ->
-	    test_server:fail({tcp_error, Reason});    
+	    ct:fail({tcp_error, Reason});    
 	{ssl, Socket, Data} ->
-	    print(ssl, Data, State),
 	    case Module:Function([Data | Args]) of
 		{ok, Parsed} ->
 		    handle_http_msg(Parsed, State); 
@@ -167,14 +155,15 @@ request(#state{mfa = {Module, Function, Args},
 		    request(State#state{mfa = NewMFA}, TimeOut)
 	    end;
 	{ssl_closed, Socket}  when Function =:= whole_body ->
-	    print(ssl, "closed", State),
 	    State#state{body = hd(Args)};
 	{ssl_closed, Socket} ->
-	    test_server:fail(connection_closed);
+	    exit({test_failed, connection_closed});
 	{ssl_error, Socket, Reason} ->
-	    test_server:fail({ssl_error, Reason})
+	    ct:fail({ssl_error, Reason})
     after TimeOut ->
-	    test_server:fail(connection_timed_out)    
+	    ct:pal("~p ~w[~w]request -> timeout"
+		   "~n", [self(), ?MODULE, ?LINE]),
+	    ct:fail(connection_timed_out)    
     end.
 
 handle_http_msg({Version, StatusCode, ReasonPharse, Headers, Body}, 
@@ -230,18 +219,14 @@ handle_http_body(Body, State = #state{headers = Headers,
 			     request(State#state{mfa = MFA}, 5000) 
 		     end;
 		 false ->
-		     test_server:fail(body_too_big)
+		     ct:fail(body_too_big)
 	     end
      end.
 
 validate(RequestStr, #state{status_line = {Version, StatusCode, _},
-		headers = Headers, 
-		body = Body}, Options, N, P) ->
+			    headers     = Headers, 
+			    body        = Body}, Options, N, P) ->
     
-    %% tsp("validate -> entry with"
-    %% 	"~n   StatusCode: ~p"
-    %% 	"~n   Headers:    ~p"
-    %% 	"~n   Body:       ~p", [StatusCode, Headers, Body]),
     check_version(Version, Options),
     case lists:keysearch(statuscode, 1, Options) of
 	{value, _} ->
@@ -255,7 +240,7 @@ validate(RequestStr, #state{status_line = {Version, StatusCode, _},
 	       list_to_integer(Headers#http_response_h.'content-length'),
 	       Body).
 
-%%--------------------------------------------------------------------
+%--------------------------------------------------------------------
 %% Internal functions
 %%------------------------------------------------------------------
 check_version(Version, Options) ->
@@ -263,21 +248,20 @@ check_version(Version, Options) ->
 	{value, {version, Version}} ->
 	    	   ok;
 	{value, {version, Ver}} ->
-	    test_server:fail({wrong_version, [{got, Version},
-						     {expected, Ver}]});
+	    ct:fail({wrong_version, [{got, Version},
+				     {expected, Ver}]});
 	_ ->
-	   case Version of
-	       "HTTP/1.1" ->
-		   ok;
+	    case Version of
+		"HTTP/1.1" ->
+		    ok;
 	       _ ->
-		   test_server:fail({wrong_version, [{got, Version},
-						     {expected, "HTTP/1.1"}]})
-	   end
+		    ct:fail({wrong_version, [{got,      Version}, 
+					     {expected, "HTTP/1.1"}]})
+	    end
     end.
 
 check_status_code(StatusCode, [], Options) ->
-    test_server:fail({wrong_status_code, [{got, StatusCode}, 
-					  {expected, Options}]});
+    ct:fail({wrong_status_code, [{got, StatusCode}, {expected, Options}]});
 check_status_code(StatusCode, Current = [_ | Rest], Options) ->
     case lists:keysearch(statuscode, 1, Current) of
 	{value, {statuscode, StatusCode}} ->
@@ -285,8 +269,7 @@ check_status_code(StatusCode, Current = [_ | Rest], Options) ->
 	{value, {statuscode, _OtherStatus}} ->
 	    check_status_code(StatusCode, Rest, Options);
 	false ->
-	    test_server:fail({wrong_status_code, [{got, StatusCode}, 
-				       {expected, Options}]})
+	    ct:fail({wrong_status_code, [{got, StatusCode}, {expected, Options}]})
     end.
 
 do_validate(_, [], _, _) ->
@@ -299,9 +282,9 @@ do_validate(Header, [{header, HeaderField}|Rest], N, P) ->
 	{value, {LowerHeaderField, _Value}} ->
 	    ok;
 	false ->
-	    test_server:fail({missing_header_field, LowerHeaderField, Header});
+	    ct:fail({missing_header_field, LowerHeaderField, Header});
 	_ ->
-	    test_server:fail({missing_header_field, LowerHeaderField, Header})
+	    ct:fail({missing_header_field, LowerHeaderField, Header})
     end,
     do_validate(Header, Rest, N, P);
 do_validate(Header, [{header, HeaderField, Value}|Rest],N,P) ->
@@ -310,19 +293,15 @@ do_validate(Header, [{header, HeaderField, Value}|Rest],N,P) ->
 	{value, {LowerHeaderField, Value}} ->
 	    ok;
 	false ->
-	    test_server:fail({wrong_header_field_value, LowerHeaderField, 
-			      Header});
+	    ct:fail({wrong_header_field_value, LowerHeaderField, Header});
 	_ ->
-	    test_server:fail({wrong_header_field_value, LowerHeaderField, 
-			      Header})
+	    ct:fail({wrong_header_field_value, LowerHeaderField, Header})
     end,
     do_validate(Header, Rest, N, P);
-do_validate(Header,[{no_last_modified,HeaderField}|Rest],N,P) ->
-%    io:format("Header: ~p~nHeaderField: ~p~n",[Header,HeaderField]),
+do_validate(Header,[{no_header, HeaderField}|Rest],N,P) ->
     case lists:keysearch(HeaderField,1,Header) of
 	{value,_} ->
-	    test_server:fail({wrong_header_field_value, HeaderField, 
-			      Header});
+	    ct:fail({wrong_header_field_value, HeaderField, Header});
 	_ ->
 	    ok
     end,
@@ -331,7 +310,6 @@ do_validate(Header, [_Unknown | Rest], N, P) ->
     do_validate(Header, Rest, N, P).
 
 is_expect(RequestStr) ->
-   
     case inets_regexp:match(RequestStr, "xpect:100-continue") of
 	{match, _, _}->
 	    true;
@@ -340,15 +318,15 @@ is_expect(RequestStr) ->
     end.
 
 %% OTP-5775, content-length
-check_body("GET /cgi-bin/erl/httpd_example:get_bin HTTP/1.0\r\n\r\n", 200, "text/html", Length, _Body) when Length /= 274->
-    test_server:fail(content_length_error);
+check_body("GET /cgi-bin/erl/httpd_example:get_bin HTTP/1.0\r\n\r\n", 200, "text/html", Length, _Body) when (Length =/= 274) ->
+    ct:fail(content_length_error);
 check_body("GET /cgi-bin/cgi_echo HTTP/1.0\r\n\r\n", 200, "text/plain", 
 	   _, Body) ->
     case size(Body) of
 	100 ->
 	    ok;
 	_ ->
-	    test_server:fail(content_length_error)
+	    ct:fail(content_length_error)
     end;
 
 check_body(RequestStr, 200, "text/html", _, Body) ->
@@ -363,16 +341,3 @@ check_body(RequestStr, 200, "text/html", _, Body) ->
 check_body(_, _, _, _,_) ->
     ok.
 
-print(Proto, Data, #state{print = true}) ->
-    test_server:format("Received ~p: ~p~n", [Proto, Data]);
-print(_, _,  #state{print = false}) ->
-    ok.
-
-
-tsp(F) ->
-    inets_test_lib:tsp(F).
-tsp(F, A) ->
-    inets_test_lib:tsp(F, A).
-
-tsf(Reason) ->
-    inets_test_lib:tsf(Reason).

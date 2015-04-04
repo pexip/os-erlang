@@ -1,7 +1,7 @@
 #
 # %CopyrightBegin%
 #
-# Copyright Ericsson AB 1996-2010. All Rights Reserved.
+# Copyright Ericsson AB 1996-2014. All Rights Reserved.
 #
 # The contents of this file are subject to the Erlang Public License,
 # Version 1.1, (the "License"); you may not use this file except in
@@ -30,7 +30,7 @@ APPLICATION=otp-system-documentation
 # ----------------------------------------------------
 # Release directory specification
 # ----------------------------------------------------
-RELSYSDIR = $(RELEASE_PATH)/doc/installation_guide
+RELSYSDIR = "$(RELEASE_PATH)/doc/installation_guide"
 REDIRECT_HTML_RELSYSDIR = $(RELSYSDIR)/source
 
 # ----------------------------------------------------
@@ -85,7 +85,7 @@ DVIPS_FLAGS +=
 # Targets
 # ----------------------------------------------------
 
-%.xml: $(ERL_TOP)/%.md $(ERL_TOP)/make/emd2exml
+%.xml: $(ERL_TOP)/HOWTO/%.md $(ERL_TOP)/make/emd2exml
 	$(ERL_TOP)/make/emd2exml $< $@
 
 $(REDIRECT_HTML_DIR)/%.html: Makefile

@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %% 
-%% Copyright Ericsson AB 1996-2011. All Rights Reserved.
+%% Copyright Ericsson AB 1996-2014. All Rights Reserved.
 %% 
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -54,6 +54,7 @@
 %% {sync_nodes, Id, Nodes}
 %% {apply, {M, F, A}}
 %% restart_new_emulator
+%% restart_emulator
 %%-----------------------------------------------------------------
 
 %% High-level instructions that contain dependencies
@@ -144,7 +145,10 @@ translate_merged_script(Mode, Script, Appls, PreAppls) ->
     {Before2, After2} = translate_dependent_instrs(Mode, Before1, After1, 
 						  Appls),
     Before3 = merge_load_object_code(Before2),
-    NewScript = Before3 ++ [point_of_no_return | After2],
+
+    {Before4,After4} = sort_emulator_restart(Mode,Before3,After2),
+    NewScript = Before4 ++ [point_of_no_return | After4],
+
     check_syntax(NewScript),
     {ok, NewScript}.
 
@@ -322,8 +326,7 @@ translate_application_instrs(Script, Appls, PreAppls) ->
 	  fun({add_application, Appl, Type}) ->
 		  case lists:keysearch(Appl, #application.name, Appls) of
 		      {value, Application} ->
-			  Mods =
-			      remove_vsn(Application#application.modules),
+			  Mods = Application#application.modules,
 			  ApplyL = case Type of
 			      none -> [];
 			      load -> [{apply, {application, load, [Appl]}}];
@@ -345,9 +348,11 @@ translate_application_instrs(Script, Appls, PreAppls) ->
 		  end,
 		  case lists:keysearch(Appl, #application.name, PreAppls) of
 		      {value, RemApplication} ->
-			  Mods = remove_vsn(RemApplication#application.modules),
+			  Mods = RemApplication#application.modules,
+
 			  [{apply, {application, stop, [Appl]}}] ++
-			      [{remove, {M, brutal_purge, brutal_purge}} || M <- Mods] ++
+			      [{remove, {M, brutal_purge, brutal_purge}}
+			       || M <- Mods] ++
 			      [{purge, Mods},
 			       {apply, {application, unload, [Appl]}}];
 		      false ->
@@ -356,20 +361,26 @@ translate_application_instrs(Script, Appls, PreAppls) ->
 	     ({restart_application, Appl}) ->
 		  case lists:keysearch(Appl, #application.name, PreAppls) of
 		      {value, PreApplication} ->
-			  PreMods =
-			      remove_vsn(PreApplication#application.modules),
-
+			  PreMods = PreApplication#application.modules,
 			  case lists:keysearch(Appl, #application.name, Appls) of
 			      {value, PostApplication} ->
-				  PostMods =
-				      remove_vsn(PostApplication#application.modules),
-				  
+				  PostMods = PostApplication#application.modules,
+				  Type = PostApplication#application.type,
+				  Apply =
+				      case Type of
+					  none -> [];
+					  load -> [{apply, {application, load,
+							    [Appl]}}];
+					  _ -> [{apply, {application, start,
+							 [Appl, Type]}}]
+				      end,
+
 				  [{apply, {application, stop, [Appl]}}] ++
-				      [{remove, {M, brutal_purge, brutal_purge}} || M <- PreMods] ++
+				      [{remove, {M, brutal_purge, brutal_purge}}
+				       || M <- PreMods] ++
 				      [{purge, PreMods}] ++
 				      [{add_module, M, []} || M <- PostMods] ++
-				      [{apply, {application, start,
-						[Appl, permanent]}}];
+				      Apply;
 			      false ->
 				  throw({error, {no_such_application, Appl}})
 			  end;
@@ -380,11 +391,6 @@ translate_application_instrs(Script, Appls, PreAppls) ->
 	     (X) -> X
 	  end, Script),
     lists:flatten(L).
-
-remove_vsn(Mods) ->
-    lists:map(fun({Mod, _Vsn}) -> Mod;
-		 (Mod) -> Mod
-	      end, Mods).
 
 %%-----------------------------------------------------------------
 %% Translates add_module into load_module (high-level transformation)
@@ -650,15 +656,9 @@ translate_dep_to_low(Mode, Instructions, Appls) ->
     end.
 
 get_lib(Mod, [#application{name = Name, vsn = Vsn, modules = Modules} | T]) ->
-    %% Module = {Mod, Vsn} | Mod
-    case lists:keysearch(Mod, 1, Modules) of
-	{value, _} ->
-	    {Name, Vsn};
-	false ->
-	    case lists:member(Mod, Modules) of
-		true -> {Name, Vsn};
-		false ->   get_lib(Mod, T)
-	    end
+    case lists:member(Mod, Modules) of
+	true -> {Name, Vsn};
+	false ->   get_lib(Mod, T)
     end;
 get_lib(Mod, []) ->
     throw({error, {no_such_module, Mod}}).
@@ -697,6 +697,39 @@ mlo([{load_object_code, {Lib, LibVsn, Mods}} | T]) ->
     %% io:format("OCode0 = ~p, OCode1 = ~p~n", [OCode0, OCode1]),
     [{load_object_code, {Lib, LibVsn, OCode1}} | mlo(Other)];
 mlo([]) -> [].
+
+%%-----------------------------------------------------------------
+%% RESTART EMULATOR
+%% -----------------------------------------------------------------
+%% -----------------------------------------------------------------
+%% Check if there are any 'restart_new_emulator' instructions (i.e. if
+%% the emulator or core application version is changed). If so, this
+%% must be done first for upgrade and last for downgrade.
+%% Check if there are any 'restart_emulator' instructions, if so
+%% remove all and place one the end.
+%% -----------------------------------------------------------------
+sort_emulator_restart(Mode,Before,After) ->
+    {Before1,After1} =
+	case filter_out(restart_new_emulator, After) of
+	    After ->
+		{Before,After};
+	    A1 when Mode==up ->
+		{[restart_new_emulator|Before],A1};
+	    A1 when Mode==dn ->
+		{Before,A1++[restart_emulator]}
+	end,
+    After2 =
+	case filter_out(restart_emulator, After1) of
+	    After1 ->
+		After1;
+	    A2 ->
+		A2++[restart_emulator]
+	end,
+    {Before1,After2}.
+
+
+filter_out(What,List) ->
+    lists:filter(fun(X) when X=:=What -> false; (_) -> true end, List).
 
 %%-----------------------------------------------------------------
 %% SYNTAX CHECK
@@ -817,6 +850,7 @@ check_op({apply, {M, F, A}}) ->
     check_func(F),
     check_args(A);
 check_op(restart_new_emulator) -> ok;
+check_op(restart_emulator) -> ok;
 check_op(X) -> throw({error, {bad_instruction, X}}).
 
 check_mod(Mod) when is_atom(Mod) -> ok;
@@ -878,7 +912,7 @@ format_error({bad_op_before_point_of_no_return, Instruction}) ->
     io_lib:format("Bad instruction ~p~nbefore point_of_no_return~n",
 		  [Instruction]);
 format_error({no_object_code, Mod}) ->
-    io_lib:format("No load_object_code found for module: ~p~n", [Mod]);
+    io_lib:format("No load_object_code found for module: ~w~n", [Mod]);
 format_error({suspended_not_resumed, Mods}) ->
     io_lib:format("Suspended but not resumed: ~p~n", [Mods]);
 format_error({resumed_not_suspended, Mods}) ->
@@ -890,19 +924,19 @@ format_error({start_not_stop, Mods}) ->
 format_error({stop_not_start, Mods}) ->
     io_lib:format("Stopped but not started: ~p~n", [Mods]);
 format_error({no_such_application, App}) ->
-    io_lib:format("Started undefined application: ~p~n", [App]);
+    io_lib:format("Started undefined application: ~w~n", [App]);
 format_error({removed_application_present, App}) ->
-    io_lib:format("Removed application present: ~p~n", [App]);
+    io_lib:format("Removed application present: ~w~n", [App]);
 format_error(dup_mnesia_backup) ->
     io_lib:format("Duplicate mnesia_backup~n", []);
 format_error(bad_mnesia_backup) ->
     io_lib:format("mnesia_backup in bad position~n", []);
 format_error({conflicting_versions, Lib, V1, V2}) ->
-    io_lib:format("Conflicting versions for ~p, ~p and ~p~n", [Lib, V1, V2]);
+    io_lib:format("Conflicting versions for ~w, ~ts and ~ts~n", [Lib, V1, V2]);
 format_error({no_appl_vsn, Appl}) ->
-    io_lib:format("No version specified for application: ~p~n", [Appl]);
+    io_lib:format("No version specified for application: ~w~n", [Appl]);
 format_error({no_such_module, Mod}) ->
-    io_lib:format("No such module: ~p~n", [Mod]);
+    io_lib:format("No such module: ~w~n", [Mod]);
 format_error(too_many_point_of_no_return) ->
     io_lib:format("Too many point_of_no_return~n", []);
 

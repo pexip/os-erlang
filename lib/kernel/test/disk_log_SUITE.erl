@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 1997-2011. All Rights Reserved.
+%% Copyright Ericsson AB 1997-2013. All Rights Reserved.
 %%
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -90,7 +90,7 @@
 
          evil/1,
 
-         otp_6278/1]).
+         otp_6278/1, otp_10131/1]).
 
 -export([head_fun/1, hf/0, lserv/1, 
 	 measure/0, init_m/1, xx/0, head_exit/0, slow_header/1]).
@@ -124,12 +124,7 @@
 	[halt_int, wrap_int, halt_ext, wrap_ext, read_mode, head,
 	 notif, new_idx_vsn, reopen, block, unblock, open, close,
 	 error, chunk, truncate, many_users, info, change_size,
-	 change_attribute, distribution, evil, otp_6278]).
-
-%% The following two lists should be mutually exclusive. To skip a case
-%% on VxWorks altogether, use the kernel.spec.vxworks file instead.
-%% PLEASE don't skip out of laziness, the goal is to make every
-%% testcase runnable on VxWorks.
+	 change_attribute, distribution, evil, otp_6278, otp_10131]).
 
 %% These test cases should be skipped if the VxWorks card is 
 %% configured without NFS cache.
@@ -153,7 +148,7 @@ all() ->
      {group, open}, {group, close}, {group, error}, chunk,
      truncate, many_users, {group, info},
      {group, change_size}, change_attribute,
-     {group, distribution}, evil, otp_6278].
+     {group, distribution}, evil, otp_6278, otp_10131].
 
 groups() -> 
     [{halt_int, [], [halt_int_inf, {group, halt_int_sz}]},
@@ -1831,11 +1826,16 @@ block_queue2(Conf) when is_list(Conf) ->
     %% Asynchronous stuff is ignored.
     ?line ok = disk_log:balog_terms(n, [<<"foo">>,<<"bar">>]),
     ?line ok = disk_log:balog_terms(n, [<<"more">>,<<"terms">>]),
+    Parent = self(),
     ?line Fun = 
-        fun() -> {error,disk_log_stopped} = disk_log:sync(n)
+        fun() ->
+                {error,no_such_log} = disk_log:sync(n),
+                receive {disk_log, _, {error, disk_log_stopped}} -> ok end,
+                Parent ! disk_log_stopped_ok
         end,
     ?line spawn(Fun),
     ?line ok = sync_do(Pid, close),
+    ?line receive disk_log_stopped_ok -> ok end,
     ?line sync_do(Pid, terminate),
     ?line {ok,<<>>} = file:read_file(File ++ ".1"),
     ?line del(File, No),    
@@ -2708,7 +2708,7 @@ error_log(Conf) when is_list(Conf) ->
     % reopen (rename) fails, the log is terminated, ./File.2/ exists
     ?line {ok, n} = disk_log:open([{name, n}, {file, File}, {type, halt},
 				   {format, external},{size, 100000}]),
-    ?line {error, eisdir} = disk_log:reopen(n, LDir),
+    ?line {error, {file_error, _, eisdir}} = disk_log:reopen(n, LDir),
     ?line true = (P0 == pps()),
     ?line file:delete(File),
 
@@ -2719,7 +2719,7 @@ error_log(Conf) when is_list(Conf) ->
     ?line {ok, n} = disk_log:open([{name, n}, {file, File2}, {type, wrap},
 				   {format, external},{size, {100, No}}]),
     ?line ok = disk_log:blog_terms(n, [B,B,B]),
-    ?line {error, eisdir} = disk_log:reopen(n, File),
+    ?line {error, {file_error, _, eisdir}} = disk_log:reopen(n, File),
     ?line {error, no_such_log} = disk_log:close(n),
     ?line del(File2, No),
     ?line del(File, No),
@@ -3205,7 +3205,7 @@ many_users(Conf) when is_list(Conf) ->
     ?line true = lists:duplicate(NoClients, {error, {full,"log.LOG"}}) == C2,
     ?line true = length(T2) > 0,
     ?line {C3, T3} = many(Fun2, NoClients, N, wrap, internal, 
-			  {300*NoClients,20}, Dir),
+			  {300*NoClients,200}, Dir),
     ?line true = lists:duplicate(NoClients, ok) == C3,
     ?line true = length(T3) == N*NoClients,
     ok.
@@ -4910,6 +4910,22 @@ otp_6278(Conf) when is_list(Conf) ->
     end,
     ?line error_logger:delete_report_handler(?MODULE).
 
+otp_10131(suite) -> [];
+otp_10131(doc) -> ["OTP-10131. head_func type."];
+otp_10131(Conf) when is_list(Conf) ->
+    Dir = ?privdir(Conf),
+    Log = otp_10131,
+    File = filename:join(Dir, lists:concat([Log, ".LOG"])),
+    HeadFunc = {?MODULE, head_fun, [{ok,"head"}]},
+    {ok, Log} = disk_log:open([{name,Log},{file,File},
+                               {head_func, HeadFunc}]),
+    HeadFunc = info(Log, head, undef),
+    HeadFunc2 = {?MODULE, head_fun, [{ok,"head2"}]},
+    ok = disk_log:change_header(Log, {head_func, HeadFunc2}),
+    HeadFunc2 = info(Log, head, undef),
+    ok = disk_log:close(Log),
+    ok.
+
 mark(FileName, What) ->
     {ok,Fd} = file:open(FileName, [raw, binary, read, write]),
     {ok,_} = file:position(Fd, 4),
@@ -5105,33 +5121,8 @@ stop_node(Node) ->
 %% If the board is configured without NFS, the port program will fail to load
 %% and this will return 0, which may or may not be the wrong thing to do.
 
-check_nfs(Config) ->
-    case (catch check_cache(Config)) of
-	N when is_integer(N) ->
-	    N;
-	_ ->
-	    0
-    end.
-
-check_cache(Config) ->
-    ?line Check = filename:join(?datadir(Config), "nfs_check"),
-    ?line P = open_port({spawn, Check}, [{line,100}, eof]),
-    ?line Size = receive
-		     {P,{data,{eol,S}}} ->
-			 list_to_integer(S)
-		 after 1000 ->
-			 erlang:display(got_timeout),
-			 exit(timeout)
-		 end,
-    ?line receive
-	      {P, eof} ->
-		  ok
-	  end,
-    ?line P ! {self(), close},
-    ?line receive
-	      {P, closed} -> ok
-	  end,
-    Size.
+check_nfs(_Config) ->
+    0.
 
 skip_expand([]) ->
     [];
@@ -5154,13 +5145,8 @@ skip_list(Config) ->
 	    skip_expand(?SKIP_LARGE_CACHE)
     end.
 
-should_skip(Test,Config) ->
-    case os:type() of
-	vxworks ->
-	    lists:member(Test, skip_list(Config));
-	_ ->
-	    false
-    end.
+should_skip(_Test,_Config) ->
+    false.
 
 %%-----------------------------------------------------------------
 %% The error_logger handler used.

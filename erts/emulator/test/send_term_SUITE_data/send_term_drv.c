@@ -24,7 +24,7 @@
 static ErlDrvPort erlang_port;
 static ErlDrvData send_term_drv_start(ErlDrvPort port, char *command);
 static void send_term_drv_stop(ErlDrvData drv_data);
-static void send_term_drv_run(ErlDrvData drv_data, char *buf, int len);
+static void send_term_drv_run(ErlDrvData drv_data, char *buf, ErlDrvSizeT len);
 
 
 static int make_ext_term_list(ErlDrvTermData *td, int bad);
@@ -39,6 +39,22 @@ static ErlDrvEntry send_term_drv_entry = {
     NULL,
     NULL,
     "send_term_drv",
+    NULL,
+    NULL, /* handle */
+    NULL, /* control */
+    NULL, /* timeout */
+    NULL, /* outputv */
+    NULL, /* ready_async */
+    NULL,
+    NULL,
+    NULL,
+    ERL_DRV_EXTENDED_MARKER,
+    ERL_DRV_EXTENDED_MAJOR_VERSION,
+    ERL_DRV_EXTENDED_MINOR_VERSION,
+    0,
+    NULL,
+    NULL,
+    NULL,
 };
 
 DRIVER_INIT(send_term_drv)
@@ -64,7 +80,7 @@ static void send_term_drv_stop(ErlDrvData drv_data)
 static void output_term(ErlDrvTermData* msg, int len);
 static void fail_term(ErlDrvTermData* msg, int len, int line);
 
-static void send_term_drv_run(ErlDrvData port, char *buf, int count)
+static void send_term_drv_run(ErlDrvData port, char *buf, ErlDrvSizeT count)
 {
     char buf7[1024];
     ErlDrvTermData spec[1024];
@@ -88,7 +104,7 @@ static void send_term_drv_run(ErlDrvData port, char *buf, int count)
 	    double f = 3.1416;
 
 	    msg[0] = ERL_DRV_ATOM;
-	    msg[1] = driver_mk_atom("blurf"),
+	    msg[1] = driver_mk_atom("blurf");
 	    msg[2] = ERL_DRV_INT;
 	    msg[3] = (ErlDrvTermData) 42;
 	    msg[4] = ERL_DRV_NIL;
@@ -110,9 +126,11 @@ static void send_term_drv_run(ErlDrvData port, char *buf, int count)
 	    msg[20] = (ErlDrvTermData) &f;
 	    msg[21] = ERL_DRV_PID;
 	    msg[22] = driver_connected(erlang_port);
-	    msg[23] = ERL_DRV_TUPLE;
-	    msg[24] = (ErlDrvTermData) 7;
-	    msg += 25;
+	    msg[23] = ERL_DRV_MAP;
+	    msg[24] = (ErlDrvTermData) 0;
+	    msg[25] = ERL_DRV_TUPLE;
+	    msg[26] = (ErlDrvTermData) 8;
+	    msg += 27;
 	}
 	break;
 
@@ -465,6 +483,52 @@ static void send_term_drv_run(ErlDrvData port, char *buf, int count)
 	break;
     }
 
+    case 40: {
+	msg[0] = ERL_DRV_MAP;
+	msg[1] = (ErlDrvTermData) 0;
+	msg += 2;
+	break;
+    }
+
+    case 41:    /* Most term types inside a map */
+    case 42: {
+	double f = 3.1416;
+
+	if (buf[i] == 41) {
+	    *msg++ = ERL_DRV_ATOM;
+	    *msg++ = driver_mk_atom("blurf");
+	}
+	*msg++ = ERL_DRV_INT;
+	*msg++ = (ErlDrvTermData)42;
+	*msg++ = ERL_DRV_NIL;
+	*msg++ = ERL_DRV_INT;
+	*msg++ = (ErlDrvTermData)-42;
+	*msg++ = ERL_DRV_TUPLE;
+	*msg++ = (ErlDrvTermData)0;
+	*msg++ = ERL_DRV_PORT;
+	*msg++ = driver_mk_port(erlang_port);
+	*msg++ = ERL_DRV_STRING_CONS;
+	*msg++ = (ErlDrvTermData)"abc";
+	*msg++ = (ErlDrvTermData)3;
+	*msg++ = ERL_DRV_LIST;
+	*msg++ = (ErlDrvTermData)3;
+	*msg++ = ERL_DRV_STRING;
+	*msg++ = (ErlDrvTermData)"kalle";
+	*msg++ = (ErlDrvTermData)5;
+	*msg++ = ERL_DRV_FLOAT;
+	*msg++ = (ErlDrvTermData)&f;
+	*msg++ = ERL_DRV_PID;
+	*msg++ = driver_connected(erlang_port);
+	*msg++ = ERL_DRV_MAP;
+	*msg++ = (ErlDrvTermData)0;
+	if (buf[i] == 42) {
+	    *msg++ = ERL_DRV_ATOM;
+	    *msg++ = driver_mk_atom("blurf");
+	}
+	*msg++ = ERL_DRV_MAP;
+	*msg++ = (ErlDrvTermData)4;
+	break;
+    }
 
     case 127:			/* Error cases */
 	{
@@ -646,9 +710,25 @@ static void send_term_drv_run(ErlDrvData port, char *buf, int count)
 		FAIL_TERM(msg, 2);
 	    }
 
+	    msg[0] = ERL_DRV_MAP;
+	    msg[1] = (ErlDrvTermData) 0;
+	    FAIL_TERM(msg, 1);
+
+	    /* map with duplicate key */
+	    msg[0] = ERL_DRV_ATOM;
+	    msg[1] = driver_mk_atom("key");
+	    msg[2] = ERL_DRV_NIL;
+	    msg[3] = ERL_DRV_ATOM;
+	    msg[4] = driver_mk_atom("key");
+	    msg[5] = ERL_DRV_INT;
+	    msg[6] = (ErlDrvTermData) -4711;
+	    msg[7] = ERL_DRV_MAP;
+	    msg[8] = 2;
+	    FAIL_TERM(msg, 9);
+
 	    /* Signal end of test case */
 	    msg[0] = ERL_DRV_NIL;
-	    driver_output_term(erlang_port, msg, 1);
+	    erl_drv_output_term(driver_mk_port(erlang_port), msg, 1);
 	    return;
 	}
 	break;
@@ -671,14 +751,14 @@ static void send_term_drv_run(ErlDrvData port, char *buf, int count)
 
 static void output_term(ErlDrvTermData* msg, int len)
 {
-    if (driver_output_term(erlang_port, msg, len) <= 0) {
-	driver_failure_atom(erlang_port, "driver_output_term_failed");
+    if (erl_drv_output_term(driver_mk_port(erlang_port), msg, len) <= 0) {
+	driver_failure_atom(erlang_port, "erl_drv_output_term_failed");
     }
 }
 
 static void fail_term(ErlDrvTermData* msg, int len, int line)
 {
-    int status = driver_output_term(erlang_port, msg, len);
+    int status = erl_drv_output_term(driver_mk_port(erlang_port), msg, len);
 
     if (status == 1) {
 	char buf[1024];

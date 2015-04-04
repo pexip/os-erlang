@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2005-2010. All Rights Reserved.
+%% Copyright Ericsson AB 2005-2013. All Rights Reserved.
 %%
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -19,7 +19,7 @@
 %%
 -module(testNBAPsystem).
 
--export([compile/3,test/2,cell_setup_req_msg/0]).
+-export([compile/2,test/2]).
 
 -include_lib("test_server/include/test_server.hrl").
 
@@ -78,19 +78,16 @@ powerRaiseLimit, dLPowerAveragingWindowSize, 'iE-Extensions' = asn1_NOVALUE}).
 	  id, criticality, extensionValue}).
 
 
-compile(Config,Rules,Opt) ->
-
-    ?line DataDir = ?config(data_dir,Config),
-    ?line OutDir = ?config(priv_dir,Config),
-    ?line true = code:add_patha(?config(priv_dir,Config)),
-    ?line DataDir2 = filename:join([DataDir,nbapsystem]),
-
-    ?line ok = asn1ct:compile(filename:join([DataDir2,"NBAP-CommonDataTypes.asn"]),[Rules,{outdir,OutDir}]++Opt),
-    ?line ok = asn1ct:compile(filename:join([DataDir2,"NBAP-IEs.asn"]),[Rules,{outdir,OutDir}]++Opt),
-    ?line ok = asn1ct:compile(filename:join([DataDir2,"NBAP-PDU-Contents.asn"]),[Rules,{outdir,OutDir}]++Opt),
-    ?line ok = asn1ct:compile(filename:join([DataDir2,"NBAP-PDU-Discriptions.asn"]),[Rules,{outdir,OutDir}]++Opt),
-    ?line ok = asn1ct:compile(filename:join([DataDir2,"NBAP-Constants.asn"]),[Rules,{outdir,OutDir}]++Opt),
-    ?line ok = asn1ct:compile(filename:join([DataDir2,"NBAP-Containers.asn"]),[Rules,{outdir,OutDir}]++Opt).
+compile(Config, Options) ->
+    Fs = [filename:join("nbapsystem", M) ||
+	     M <- ["NBAP-CommonDataTypes.asn",
+		   "NBAP-IEs.asn",
+		   "NBAP-PDU-Contents.asn",
+		   "NBAP-PDU-Discriptions.asn",
+		   "NBAP-Constants.asn",
+		   "NBAP-Containers.asn"]],
+    asn1_test_lib:compile_all(Fs, Config, Options),
+    ok.
 
 
 test(_Erule,Config) ->
@@ -100,23 +97,16 @@ test(_Erule,Config) ->
 
 ticket_5812(Config) ->
     ?line Msg = v_5812(),
-    ?line {ok,B2} = asn1_wrapper:encode('NBAP-PDU-Discriptions',
-				  'NBAP-PDU',
-				  Msg),
+    {ok,B2} = 'NBAP-PDU-Discriptions':encode('NBAP-PDU', Msg),
     V = <<0,28,74,0,3,48,0,0,1,0,123,64,41,0,0,0,126,64,35,95,208,2,89,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,145,0,1,205,0,0,0,0,2,98,64,1,128>>,
     ?line ok = compare(V,B2),
-    ?line {ok,Msg2} = asn1_wrapper:decode('NBAP-PDU-Discriptions',
-				  'NBAP-PDU',B2),
+    {ok,Msg2} = 'NBAP-PDU-Discriptions':decode('NBAP-PDU', B2),
     ?line ok = check_record_names(Msg2,Config).
 
 enc_audit_req_msg() ->
     Msg = {initiatingMessage, audit_req_msg()},
-    ?line {ok,B}=asn1_wrapper:encode('NBAP-PDU-Discriptions',
-				     'NBAP-PDU',
-				     Msg),
-    ?line {ok,_Msg}=asn1_wrapper:decode('NBAP-PDU-Discriptions',
-				     'NBAP-PDU',
-				     B),
+    {ok,B} = 'NBAP-PDU-Discriptions':encode('NBAP-PDU', Msg),
+    {ok,_Msg} = 'NBAP-PDU-Discriptions':decode('NBAP-PDU', B),
     ?line {initiatingMessage,
 	   #'InitiatingMessage'{value=#'AuditRequest'{protocolIEs=[{_,114,ignore,_}],
 						      protocolExtensions = asn1_NOVALUE}}} = _Msg,
@@ -125,12 +115,8 @@ enc_audit_req_msg() ->
     
 cell_setup_req_msg_test() ->
     Msg = {initiatingMessage, cell_setup_req_msg()},
-    ?line {ok,B}=asn1_wrapper:encode('NBAP-PDU-Discriptions',
-				     'NBAP-PDU',
-				     Msg),
-    ?line {ok,_Msg}=asn1_wrapper:decode('NBAP-PDU-Discriptions',
-				     'NBAP-PDU',
-				     B),
+    {ok,B} = 'NBAP-PDU-Discriptions':encode('NBAP-PDU', Msg),
+    {ok,_Msg} = 'NBAP-PDU-Discriptions':decode('NBAP-PDU', B),
     io:format("Msg: ~P~n~n_Msg: ~P~n",[Msg,15,_Msg,15]),
     ok.
     
@@ -146,8 +132,7 @@ audit_req() ->
 	   protocolIEs = 
 	   [#'ProtocolIE-Field'{id=114,
 				criticality=ignore, 
-				value={'Start-Of-Audit-Sequence-Indicator',
-				       'start-of-audit-sequence' } 
+				value='start-of-audit-sequence'
 			       }
 	   ]  
 	  }.
@@ -291,13 +276,7 @@ protocolIEs_051107() ->
           criticality = ignore,
           extensionValue = 'hsdpa-non-capable'}.
 
-
-
-
-
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-
-compare(V,V) ->  
+compare(V,V) ->
     ok;
 compare(V,L) when is_list(L) ->
     compare(V,list_to_binary(L));
@@ -306,52 +285,7 @@ compare(_,_) ->
 
 check_record_names(Msg,Config) ->
     DataDir = ?config(data_dir,Config),
-    OutDir = ?config(priv_dir,Config),
-    io:format("check_record_names: compiling ~p~ninclude directory: ~p~n",
-	      [filename:join([DataDir,"test_records"]),OutDir]),
-    ?line {ok,test_records} = compile:file(filename:join([DataDir,"test_records"]),
-			    [{i,OutDir}]),
-    io:format("check_record_names: calling test_records:'check_record_names_OTP-5812'/1~n",[]),
-    ?line ok = test_records:'check_record_names_OTP-5812'(Msg).
-    
-% check_record_names({initiatingMessage,
-% 		    #'InitiatingMessage'{procedureID = ProcedureID,
-% 					 criticality = _Criticality,
-% 					 messageDiscriminator = _MessageDisc,
-% 					 transactionID = _TransactionID,
-% 					 value = Value}}) ->
-    
-%     ?line ok = check_record_ProcedureID(ProcedureID),
-%     ?line ok = check_record_Value(Value).
-
-% check_record_ProcedureID(#'ProcedureID'{}) ->
-%     ok;
-% check_record_ProcedureID(_) -> false.
-
-% check_record_Value(#'ResourceStatusIndication'{protocolIEs = ProtocolIEs}) ->
-%     ?line ok = check_record_ProtocolIEs(ProtocolIEs);
-% check_record_Value(_) -> false.
-
-% check_record_ProtocolIEs(#'ProtocolIE-Field'{value =IndicationType}) ->
-%     ?line ok = check_record_NFResourceStatusInd(IndicationType);
-% check_record_ProtocolIEs(_) -> false.
-
-% check_record_NFResourceStatusInd({'no-Failure',#'No-Failure-ResourceStatusInd'{'local-Cell-InformationList'=[LCI]}}) ->
-%     ?line ok = check_record_LCInfoResourceStatusInd(LCI);
-% check_record_NFResourceStatusInd(_) -> false.
-
-% check_record_LCInfoResourceStatusInd(#'Local-Cell-InformationItem-ResourceStatusInd'{commonChannelsCapacityConsumptionLaw=[CCCCL],dedicatedChannelsCapacityConsumptionLaw=[DCCCL],'iE-Extensions' = [LCIRE]}) ->
-%     ?line ok = check_record_CCCCL(CCCCL),
-%     ?line ok = check_record_DCCCL(DCCCL),
-%     ?line ok = check_record_LCIRE(LCIRE).
-
-% check_record_CCCCL(#'CommonChannelsCapacityConsumptionLaw_SEQOF'{}) -> 
-%     ok;
-% check_record_CCCCL(_) -> false.
-
-% check_record_DCCCL(#'DedicatedChannelsCapacityConsumptionLaw_SEQOF'{}) ->
-%     ok;
-% check_record_DCCCL(_) -> false.
-% check_record_LCIRE(#'ProtocolExtensionField'{}) ->
-%     ok;
-% check_record_LCIRE(_) -> false.
+    CaseDir = ?config(case_dir,Config),
+    {ok, test_records} = compile:file(filename:join([DataDir, "test_records"]),
+                                      [{i, CaseDir}]),
+    ok = test_records:'check_record_names_OTP-5812'(Msg).

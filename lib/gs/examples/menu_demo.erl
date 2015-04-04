@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %% 
-%% Copyright Ericsson AB 1996-2009. All Rights Reserved.
+%% Copyright Ericsson AB 1996-2012. All Rights Reserved.
 %% 
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -19,6 +19,12 @@
 
 %%
 -module(menu_demo).
+-compile([{nowarn_deprecated_function,{gs,config,2}},
+          {nowarn_deprecated_function,{gs,create,3}},
+          {nowarn_deprecated_function,{gs,create,4}},
+          {nowarn_deprecated_function,{gs,read,2}},
+          {nowarn_deprecated_function,{gs,start,0}},
+          {nowarn_deprecated_function,{gs,window,2}}]).
 
 -compile(export_all).
 

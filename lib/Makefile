@@ -1,7 +1,7 @@
 #
 # %CopyrightBegin%
 #
-# Copyright Ericsson AB 1996-2011. All Rights Reserved.
+# Copyright Ericsson AB 1996-2013. All Rights Reserved.
 #
 # The contents of this file are subject to the Erlang Public License,
 # Version 1.1, (the "License"); you may not use this file except in
@@ -19,83 +19,64 @@
 include $(ERL_TOP)/make/target.mk
 include $(ERL_TOP)/make/$(TARGET)/otp.mk
 
-#
-# Macros
-#
-ifeq ($(findstring vxworks,$(TARGET)),vxworks)
-  ERTS_SUB_DIRECTORIES = stdlib sasl kernel compiler
-  OTHER_SUB_DIRECTORIES =	\
-     snmp otp_mibs appmon erl_interface os_mon tools runtime_tools
-  ifdef BUILD_ALL
-    OTHER_SUB_DIRECTORIES += mnesia jinterface ic asn1 debugger \
-	inets mnesia_session diameter orber pman tv observer \
-	cosTransactions cosEvent cosTime cosNotification cosProperty 
-	cosFileTransfer cosEventDomain
-  endif
+
+# These have to be built first
+ERTS_APPLICATIONS = stdlib sasl kernel compiler
+
+# Then these have to be build
+ERLANG_APPLICATIONS = tools test_server common_test runtime_tools \
+			inets parsetools
+
+# These are only build if -a is given to otp_build or make is used directly
+ALL_ERLANG_APPLICATIONS = xmerl edoc erl_docgen snmp otp_mibs erl_interface \
+		  asn1 jinterface \
+	          wx debugger reltool gs \
+	          ic mnesia crypto orber os_mon syntax_tools \
+	          public_key ssl observer odbc diameter \
+	          cosTransactions cosEvent cosTime cosNotification \
+	          cosProperty cosFileTransfer cosEventDomain et megaco webtool \
+		  eunit ssh typer percept eldap dialyzer hipe ose
+
+ifdef BUILD_ALL
+  ERLANG_APPLICATIONS += $(ALL_ERLANG_APPLICATIONS)
+
+# We use whildcard */ to figure out if there are any other applications
+# in here.
+  EXPECTED_APPLICATIONS := $(ERTS_APPLICATIONS) $(ERLANG_APPLICATIONS) \
+	autom4te.cache
+  EXTRA_APPLICATIONS += $(filter-out $(EXPECTED_APPLICATIONS),\
+				$(subst /,,$(wildcard */)))
+endif
+
+ifdef BUILD_STATIC_LIBS
+  SUB_DIRECTORIES = asn1 crypto
 else
-  ifeq ($(findstring ose,$(TARGET)),ose)
-    ERTS_SUB_DIRECTORIES = stdlib sasl kernel compiler erl_interface
-    OTHER_SUB_DIRECTORIES =	\
-      snmp otp_mibs appmon tools
-#    OTHER_SUB_DIRECTORIES =	\
-#      appmon os_mon tools runtime_tools
-    ifdef BUILD_ALL
-      OTHER_SUB_DIRECTORIES += mnesia  \
-        inets pman tv observer
-#      OTHER_SUB_DIRECTORIES += mnesia ic asn1 debugger \
-#        inets orber pman tv observer cosTransactions cosEvent \
-#        cosTime cosNotification cosProperty cosFileTransfer cosEventDomain
-    endif
+  ifdef BOOTSTRAP
+    SUB_DIRECTORIES = \
+      kernel stdlib compiler
   else
-#
-# unix and win32
-# --------------
-#
-    ERTS_SUB_DIRECTORIES = stdlib sasl kernel compiler
-    OTHER_SUB_DIRECTORIES = tools test_server common_test runtime_tools
-    ifdef BUILD_ALL
-      ifeq ($(findstring win32,$(TARGET)),win32) # BUILD_ALL on win32
-        OTHER_SUB_DIRECTORIES += 			\
-          snmp otp_mibs appmon erl_interface asn1 jinterface gs wx inets ic \
-          mnesia crypto orber os_mon parsetools syntax_tools pman \
-          public_key ssl toolbar tv observer debugger reltool odbc \
-          runtime_tools diameter \
-          cosTransactions cosEvent cosTime cosNotification cosProperty \
-          cosFileTransfer cosEventDomain et megaco webtool \
-	  xmerl edoc eunit ssh inviso typer docbuilder erl_docgen common_test percept
-# dialyzer
-        OTHER_SUB_DIRECTORIES += hipe
-      else # BUILD_ALL on unix
-        OTHER_SUB_DIRECTORIES += \
-          snmp otp_mibs appmon erl_interface asn1 jinterface wx debugger reltool gs inets \
-          ic mnesia crypto orber os_mon parsetools syntax_tools \
-          pman public_key ssl toolbar tv observer odbc \
-          runtime_tools diameter \
-          cosTransactions cosEvent cosTime cosNotification \
-          cosProperty cosFileTransfer cosEventDomain et megaco webtool \
-	  xmerl edoc eunit ssh inviso typer docbuilder erl_docgen common_test percept
-# dialyzer
-        OTHER_SUB_DIRECTORIES += hipe $(TSP_APP)
+    ifdef SECONDARY_BOOTSTRAP
+      SUB_DIRECTORIES = hipe parsetools asn1/src
+    else
+      ifdef TERTIARY_BOOTSTRAP
+        SUB_DIRECTORIES = snmp sasl jinterface ic syntax_tools wx
+      else
+        ifdef DOC_BOOTSTRAP
+          SUB_DIRECTORIES = xmerl edoc erl_docgen
+        else # Not bootstrap build
+          SUB_DIRECTORIES = $(ERTS_APPLICATIONS) \
+			    $(ERLANG_APPLICATIONS) \
+			    $(EXTRA_APPLICATIONS)
+        endif
       endif
     endif
   endif
 endif
 
-ifdef BOOTSTRAP
-  SUB_DIRECTORIES = \
-    kernel stdlib compiler
-else
-  ifdef SECONDARY_BOOTSTRAP
-    SUB_DIRECTORIES = hipe parsetools asn1/src
-  else
-    ifdef TERTIARY_BOOTSTRAP
-      SUB_DIRECTORIES = snmp sasl jinterface ic syntax_tools
-    else # Not bootstrap build
-      SUB_DIRECTORIES = $(ERTS_SUB_DIRECTORIES) $(OTHER_SUB_DIRECTORIES)
-    endif
-  endif
-endif
-
+# Any applications listed in SKIP-APPLICATIONS should be skipped
+SKIP_FILE := $(wildcard SKIP-APPLICATIONS)
+SKIP_APPLICATIONS := $(if $(SKIP_FILE),$(shell cat $(SKIP_FILE)))
+SUB_DIRECTORIES := $(filter-out $(SKIP_APPLICATIONS),$(SUB_DIRECTORIES))
 
 # ----------------------------------------------------------------------
 include $(ERL_TOP)/make/otp_subdir.mk

@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2010-2011. All Rights Reserved.
+%% Copyright Ericsson AB 2010-2014. All Rights Reserved.
 %%
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -25,7 +25,11 @@
 -define(DIAMETER_APP_ID_ACCOUNTING, 3).
 -define(DIAMETER_APP_ID_RELAY,      16#FFFFFFFF).
 
-%% Corresponding dictionaries:
+%% Corresponding dictionaries. These macros are deprecated now that
+%% there is an RFC6733 whose dictionaries are not strictly backwards
+%% compatible. The RFC 6733 common and accounting dictionaries are
+%% diameter_gen_base_rfc6733 and diameter_gen_acct_rfc6733
+%% respectively.
 -define(DIAMETER_DICT_COMMON,       diameter_gen_base_rfc3588).
 -define(DIAMETER_DICT_ACCOUNTING,   diameter_gen_base_accounting).
 -define(DIAMETER_DICT_RELAY,        diameter_gen_relay).
@@ -54,8 +58,8 @@
 -record(diameter_header,
         {version,            %%  8-bit unsigned
          length,             %% 24-bit unsigned
-         cmd_code,           %%  8-bit unsigned
-         application_id,     %% 24-bit unsigned
+         cmd_code,           %% 24-bit unsigned
+         application_id,     %% 32-bit unsigned
          hop_by_hop_id,      %% 32-bit unsigned
          end_to_end_id,      %% 32-bit unsigned
          is_request,         %% boolean() R flag
@@ -107,7 +111,22 @@
          transport = sctp,       %% | tcp,
          protocol  = diameter}). %% | radius | 'tacacs+'
 
-%% The diameter service and diameter_apps records are only passed
+%% A diameter_callback record can be specified as an application
+%% module in order to selectively receive callbacks or alter their
+%% form.
+-record(diameter_callback,
+        {peer_up,
+         peer_down,
+         pick_peer,
+         prepare_request,
+         prepare_retransmit,
+         handle_request,
+         handle_answer,
+         handle_error,
+         default,
+         extra = []}).
+
+%% The diameter service and diameter_app records are only passed
 %% through the transport interface when starting a transport process,
 %% although typically a transport implementation will (and probably
 %% should) only be interested host_ip_address.
@@ -124,7 +143,7 @@
          init_state, %% option 'state', initial callback state
          id,         %% 32-bit unsigned application identifier = Dict:id()
          mutable = false, %% boolean(), do traffic callbacks modify state?
-         answer_errors = report}). %% | callback | discard
-                                   %% how to handle containing errors?
+         options = [{answer_errors, discard},         %% | callback | report
+                    {request_errors, answer_3xxx}]}). %% | callback | answer
 
 -endif. %% -ifdef(diameter_hrl).

@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2008-2010. All Rights Reserved.
+%% Copyright Ericsson AB 2008-2013. All Rights Reserved.
 %%
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -17,7 +17,7 @@
 %% %CopyrightEnd%
 %% This file is generated DO NOT EDIT
 
-%% @doc See external documentation: <a href="http://www.wxwidgets.org/manuals/stable/wx_wxdateevent.html">wxDateEvent</a>.
+%% @doc See external documentation: <a href="http://www.wxwidgets.org/manuals/2.8.12/wx_wxdateevent.html">wxDateEvent</a>.
 %% <dl><dt>Use {@link wxEvtHandler:connect/3.} with EventType:</dt>
 %% <dd><em>date_changed</em></dd></dl>
 %% See also the message variant {@link wxEvtHandler:wxDate(). #wxDate{}} event record type.
@@ -40,13 +40,16 @@
   parent_class/1,resumePropagation/2,setInt/2,setString/2,shouldPropagate/1,
   skip/1,skip/2,stopPropagation/1]).
 
+-export_type([wxDateEvent/0]).
 %% @hidden
 parent_class(wxCommandEvent) -> true;
 parent_class(wxEvent) -> true;
 parent_class(_Class) -> erlang:error({badtype, ?MODULE}).
 
-%% @spec (This::wxDateEvent()) -> wx:datetime()
-%% @doc See <a href="http://www.wxwidgets.org/manuals/stable/wx_wxdateevent.html#wxdateeventgetdate">external documentation</a>.
+-type wxDateEvent() :: wx:wx_object().
+%% @doc See <a href="http://www.wxwidgets.org/manuals/2.8.12/wx_wxdateevent.html#wxdateeventgetdate">external documentation</a>.
+-spec getDate(This) -> wx:wx_datetime() when
+	This::wxDateEvent().
 getDate(#wx_ref{type=ThisT,ref=ThisRef}) ->
   ?CLASS(ThisT,wxDateEvent),
   wxe_util:call(?wxDateEvent_GetDate,

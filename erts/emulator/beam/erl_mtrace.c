@@ -1,7 +1,7 @@
 /*
  * %CopyrightBegin%
  *
- * Copyright Ericsson AB 2003-2010. All Rights Reserved.
+ * Copyright Ericsson AB 2003-2013. All Rights Reserved.
  *
  * The contents of this file are subject to the Erlang Public License,
  * Version 1.1, (the "License"); you may not use this file except in
@@ -221,6 +221,8 @@ static byte trace_buffer[TRACE_BUF_SZ];
 static byte *tracep;
 static byte *endp;
 static SysTimeval last_tv;
+
+static ErtsAllocatorWrapper_t mtrace_wrapper;
 
 #if ERTS_MTRACE_SEGMENT_ID >= ERTS_ALC_A_MIN || ERTS_MTRACE_SEGMENT_ID < 0
 #error ERTS_MTRACE_SEGMENT_ID >= ERTS_ALC_A_MIN || ERTS_MTRACE_SEGMENT_ID < 0
@@ -503,12 +505,6 @@ write_trace_header(char *nodename, char *pid, char *hostname)
 	    case ERTS_ALC_A_SYSTEM:
 		PUT_UI16(tracep, ERTS_MTRACE_SEGMENT_ID);
 		break;
-	    case ERTS_ALC_A_FIXED_SIZE:
-		if (erts_allctrs_info[ERTS_FIX_CORE_ALLOCATOR].enabled)
-		    PUT_UI16(tracep, ERTS_FIX_CORE_ALLOCATOR);
-		else
-		    PUT_UI16(tracep, ERTS_ALC_A_SYSTEM);
-		break;
 	    default:
 		PUT_UI16(tracep, ERTS_MTRACE_SEGMENT_ID);
 		break;
@@ -561,6 +557,8 @@ write_trace_header(char *nodename, char *pid, char *hostname)
     return 1;
 }
 
+static void mtrace_pre_lock(void);
+static void mtrace_pre_unlock(void);
 static void *mtrace_alloc(ErtsAlcType_t, void *, Uint);
 static void *mtrace_realloc(ErtsAlcType_t, void *, void *, Uint);
 static void mtrace_free(ErtsAlcType_t, void *, void *);
@@ -617,7 +615,7 @@ void erts_mtrace_init(char *receiver, char *nodename)
 	if (erts_sock_gethostname(hostname, MAXHOSTNAMELEN) != 0)
 	    hostname[0] = '\0';
 	hostname[MAXHOSTNAMELEN-1] = '\0';
-	sys_get_pid(pid);
+	sys_get_pid(pid, sizeof(pid));
 	write_trace_header(nodename ? nodename : "", pid, hostname);
 	erts_mtrace_update_heap_size();
     }
@@ -641,12 +639,16 @@ erts_mtrace_install_wrapper_functions(void)
 	    erts_allctrs[i].free	= mtrace_free;
 	    erts_allctrs[i].extra	= (void *) &real_allctrs[i];
 	}
+	mtrace_wrapper.lock = mtrace_pre_lock;
+	mtrace_wrapper.unlock = mtrace_pre_unlock;
+	erts_allctr_wrapper_prelock_init(&mtrace_wrapper);
     }
 }
 
 void
 erts_mtrace_stop(void)
 {
+    ASSERT(!erts_is_allctr_wrapper_prelocked());
     erts_mtx_lock(&mtrace_op_mutex);
     erts_mtx_lock(&mtrace_buf_mutex);
     if (erts_mtrace_enabled) {
@@ -683,6 +685,7 @@ erts_mtrace_stop(void)
 void
 erts_mtrace_exit(Uint32 exit_value)
 {
+    ASSERT(!erts_is_allctr_wrapper_prelocked());
     erts_mtx_lock(&mtrace_op_mutex);
     erts_mtx_lock(&mtrace_buf_mutex);
     if (erts_mtrace_enabled) {
@@ -941,18 +944,33 @@ write_free_entry(byte tag,
     erts_mtx_unlock(&mtrace_buf_mutex);
 }
 
+static void mtrace_pre_lock(void)
+{
+    erts_mtx_lock(&mtrace_op_mutex);
+}
+
+static void mtrace_pre_unlock(void)
+{
+    erts_mtx_unlock(&mtrace_op_mutex);
+}
+
+
 static void *
 mtrace_alloc(ErtsAlcType_t n, void *extra, Uint size)
 {
     ErtsAllocatorFunctions_t *real_af = (ErtsAllocatorFunctions_t *) extra;
     void *res;
 
-    erts_mtx_lock(&mtrace_op_mutex);
+    if (!erts_is_allctr_wrapper_prelocked()) {
+	erts_mtx_lock(&mtrace_op_mutex);
+    }
 
     res = (*real_af->alloc)(n, real_af->extra, size);
     write_alloc_entry(ERTS_MT_ALLOC_BDY_TAG, res, n, 0, size);
 
-    erts_mtx_unlock(&mtrace_op_mutex);
+    if (!erts_is_allctr_wrapper_prelocked()) {
+	erts_mtx_unlock(&mtrace_op_mutex);
+    }
 
     return res;
 }
@@ -963,12 +981,16 @@ mtrace_realloc(ErtsAlcType_t n, void *extra, void *ptr, Uint size)
     ErtsAllocatorFunctions_t *real_af = (ErtsAllocatorFunctions_t *) extra;
     void *res;
 
-    erts_mtx_lock(&mtrace_op_mutex);
+    if (!erts_is_allctr_wrapper_prelocked()) {
+	erts_mtx_lock(&mtrace_op_mutex);
+    }
 
     res = (*real_af->realloc)(n, real_af->extra, ptr, size);
     write_realloc_entry(ERTS_MT_REALLOC_BDY_TAG, res, n, 0, ptr, size);
 
-    erts_mtx_unlock(&mtrace_op_mutex);
+    if (!erts_is_allctr_wrapper_prelocked()) {
+	erts_mtx_unlock(&mtrace_op_mutex);
+    }
 
     return res;
 
@@ -979,10 +1001,14 @@ mtrace_free(ErtsAlcType_t n, void *extra, void *ptr)
 {
     ErtsAllocatorFunctions_t *real_af = (ErtsAllocatorFunctions_t *) extra;
 
-    erts_mtx_lock(&mtrace_op_mutex);
+    if (!erts_is_allctr_wrapper_prelocked()) {
+	erts_mtx_lock(&mtrace_op_mutex);
+    }
 
     (*real_af->free)(n, real_af->extra, ptr);
-    write_free_entry(ERTS_MT_FREE_BDY_TAG, n, 0, ptr);
+    if (!erts_is_allctr_wrapper_prelocked()) {
+	write_free_entry(ERTS_MT_FREE_BDY_TAG, n, 0, ptr);
+    }
 
     erts_mtx_unlock(&mtrace_op_mutex);
 }

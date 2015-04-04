@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %% 
-%% Copyright Ericsson AB 2008-2011. All Rights Reserved.
+%% Copyright Ericsson AB 2008-2014. All Rights Reserved.
 %% 
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -47,8 +47,8 @@ end_per_testcase(Func,Config) ->
 suite() -> [{ct_hooks,[ts_install_cth]}].
 
 all() -> 
-    [create_window, several_apps, wx_api, wx_misc,
-     data_types].
+    [silent_start, create_window, several_apps, wx_api, wx_misc,
+     data_types, wx_object].
 
 groups() -> 
     [].
@@ -61,6 +61,25 @@ end_per_group(_GroupName, Config) ->
 
   
 %% The test cases
+
+%% test silent start of wx
+silent_start(TestInfo) when is_atom(TestInfo) -> wx_test_lib:tc_info(TestInfo);
+silent_start(_Config) ->
+    ?mr(wx_ref, wx:new([])),
+    wx:destroy(),
+
+    ?mr(wx_ref, wx:new([{silent_start, true}])),
+    wx:destroy(),
+
+    ?mr(wx_ref, wx:new([{silent_start, true}, {debug, verbose}])),
+    wx:destroy(),
+
+    ?mr(wx_ref, wx:new([{silent_start, false}])),
+    wx:destroy(),
+
+    ?mr('EXIT', catch wx:new([{silent_start, foo}])),
+    
+    ok.
 
 %% create and test creating a window
 create_window(TestInfo) when is_atom(TestInfo) -> wx_test_lib:tc_info(TestInfo);
@@ -79,7 +98,23 @@ several_apps(Config) ->
     Pids = [spawn_link(fun() -> several_apps(Parent, N, Config) end) 
 	    || N <- lists:seq(1,4)],
     process_flag(trap_exit,true),
-    ?m_multi_receive([{complete,Pid} || Pid <- Pids]),
+    Wait = fun(Pid,Acc) ->
+		   receive {complete, Pid} -> Acc
+		   after 20000 -> [Pid|Acc]
+		   end
+	   end,
+    Res = lists:foldl(Wait, [], Pids),
+    [Pid ! quit || Pid <- Pids],
+
+    Dbg = fun(Pid) ->
+		  io:format("Stack ~p~n",[erlang:process_info(Pid, current_stacktrace)]),
+		  io:format("Stack ~p~n",[erlang:process_info(Pid)])
+	  end,
+    case Res of
+	[] -> ok;
+	Failed ->
+	    [Dbg(Pid)|| Pid <- Failed]
+    end,
     case wx_test_lib:user_available(Config) of
 	true ->
 	    receive {'EXIT',_,foo} -> ok end;
@@ -98,6 +133,7 @@ several_apps(Parent, N, Config) ->
 	#wx{obj=Frame, event=#wxSize{}} ->
 	    Parent ! {complete, self()}
     end,
+    receive quit -> ok end,
     wx_test_lib:wx_destroy(Frame, Config),
     exit(foo).
 
@@ -109,7 +145,7 @@ wx_api(Config) ->
     ?m(true, wx:is_null(Wx)),
     Null = ?mr(wx_ref, wx:null()),
     ?m(true, wx:is_null(Null)),
-    Frame = ?mt(wxFrame, wxFrame:new(Wx, 1, "WX API: " ++ unicode:characters_to_list("åäöÅÄÖ"))),
+    Frame = ?mt(wxFrame, wxFrame:new(Wx, 1, "WX API: " ++ unicode:characters_to_list("Ã¥Ã¤Ã¶Ã…Ã„Ã–"))),
     ?m(false, wx:is_null(Frame)),
     ?m(wxFrame, wx:getObjectType(Frame)),
     Env = ?mr(wx_env, wx:get_env()),
@@ -195,7 +231,7 @@ create_menus(Frame) ->
 
 %% Test the wx_misc.erl api functionality.
 wx_misc(TestInfo) when is_atom(TestInfo) -> wx_test_lib:tc_info(TestInfo);
-wx_misc(Config) ->    
+wx_misc(_Config) ->
     wx:new([{debug, trace}]),
     put(wx_test_verbose, true),
     ?m(ok, wx_misc:bell()),
@@ -219,21 +255,6 @@ wx_misc(Config) ->
 
     
     %% wx:shutdown()  %% How do you test this?
-
-    case os:type() of 
-	{win32, _} -> %% These hangs when running automatic tests
-	    skip;     %% through ssh on windows. Works otherwise
-	_ -> 
-	    wx_misc:shell([{command,"echo TESTING close the popup shell"}])
-    end,
-
-    case wx_test_lib:user_available(Config) of
-	true ->
-	    wx_misc:shell();
-	false ->
-	    %% Don't want to spawn a shell if no user	   
-	    skip %% is available
-    end,
 
     ?m(false, wx_misc:isBusy()),
     ?m(ok, wx_misc:beginBusyCursor([])),
@@ -288,13 +309,98 @@ data_types(_Config) ->
     ?m({_,_}, wxWindow:getSize(Frame)),
 
     %% DateTime 
-    DateTime = calendar:now_to_datetime(erlang:now()),
+    DateTime = {Date, _Time} = calendar:now_to_datetime(erlang:now()),
     io:format("DateTime ~p ~n",[DateTime]),
     Cal = ?mt(wxCalendarCtrl, wxCalendarCtrl:new(Frame, ?wxID_ANY, [{date,DateTime}])),
-    ?m(DateTime, wxCalendarCtrl:getDate(Cal)),
+    ?m({Date,_}, wxCalendarCtrl:getDate(Cal)),
     ?m(true, is_boolean(wxCalendarCtrl:setDate(Cal,DateTime))),
-    ?m(DateTime, wxCalendarCtrl:getDate(Cal)),
+    ?m({Date,_}, wxCalendarCtrl:getDate(Cal)),
 
     wxClientDC:destroy(CDC),
     %%wx_test_lib:wx_destroy(Frame,Config).
     wx:destroy().
+
+wx_object(TestInfo) when is_atom(TestInfo) -> wx_test_lib:tc_info(TestInfo);
+wx_object(Config) ->
+    wx:new(),
+    Me = self(),
+    Init = fun() ->
+		   Frame = wxFrame:new(wx:null(), ?wxID_ANY, "Test wx_object", [{size, {500, 400}}]),
+		   Sz = wxBoxSizer:new(?wxHORIZONTAL),
+		   Panel = wxPanel:new(Frame),
+		   wxSizer:add(Sz, Panel, [{flag, ?wxEXPAND}, {proportion, 1}]),
+		   wxPanel:connect(Panel, size, [{skip, true}]),
+		   wxPanel:connect(Panel, paint, [callback, {userData, Me}]),
+		   wxWindow:show(Frame),
+		   {Frame, {Frame, Panel}}
+	   end,
+    Frame = ?mt(wxFrame, wx_obj_test:start([{init, Init}])),
+    timer:sleep(500),
+    ?m(ok, check_events(flush())),
+
+    Me = self(),
+    ?m({call, foobar, {Me, _}}, wx_object:call(Frame, foobar)),
+    ?m(ok, wx_object:cast(Frame, foobar2)),
+    ?m([{cast, foobar2}|_], flush()),
+    FramePid = wx_object:get_pid(Frame),
+    io:format("wx_object pid ~p~n",[FramePid]),
+    FramePid ! foo3,
+    ?m([{info, foo3}|_], flush()),
+
+    ?m(ok, wx_object:cast(Frame, fun(_) -> hehe end)),
+    ?m([{cast, hehe}|_], flush()),
+    wxWindow:refresh(Frame),
+    ?m([{sync_event, #wx{event=#wxPaint{}}, _}|_], flush()),
+    ?m(ok, wx_object:cast(Frame, fun(_) -> timer:sleep(200), slept end)),
+    %% The sleep above should not hinder the Paint event below
+    %% Which it did in my buggy handling of the sync_callback
+    wxWindow:refresh(Frame),
+    timer:sleep(500),
+    ?m([{sync_event, #wx{event=#wxPaint{}}, _}, {cast, slept}|_], flush()),
+
+    Monitor = erlang:monitor(process, FramePid),
+    case proplists:get_value(user, Config, false) of
+	false ->
+	    timer:sleep(100),
+	    wxFrame:destroy(Frame);
+	true ->
+	    timer:sleep(500),
+	    ?m(ok, wxFrame:destroy(Frame));
+	_ ->
+	    ?m(ok, wxEvtHandler:connect(Frame, close_window, [{skip,true}])),
+	    wx_test_lib:wait_for_close()
+    end,
+    ?m(ok, receive
+	       {'DOWN', Monitor, _, _, _} ->
+		   ?m([{terminate, wx_deleted}], flush()),
+		   ok
+	   after 1000 ->
+		   Msgs = flush(),
+		   io:format("Error ~p Alive ~p~n",[Msgs, is_process_alive(FramePid)])
+	   end),
+    catch wx:destroy(),
+    ok.
+
+check_events(Msgs) ->
+    check_events(Msgs, 0,0).
+
+check_events([{event, #wx{event=#wxSize{}}}|Rest], Async, Sync) ->
+    check_events(Rest, Async+1, Sync);
+check_events([{sync_event, #wx{event=#wxPaint{}}, Obj}|Rest], Async, Sync) ->
+    ?mt(wxPaintEvent, Obj),
+    check_events(Rest, Async, Sync+1);
+check_events([], Async, Sync) ->
+    case Async > 0 of  %% Test sync explictly
+	true -> ok;
+	false -> {Async, Sync}
+    end.
+
+flush() ->
+    flush([], 1500).
+
+flush(Acc, Wait) ->
+    receive
+	Msg -> flush([Msg|Acc], Wait div 10)
+    after Wait ->
+	    lists:reverse(Acc)
+    end.

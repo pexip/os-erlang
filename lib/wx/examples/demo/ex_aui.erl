@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %% 
-%% Copyright Ericsson AB 2009. All Rights Reserved.
+%% Copyright Ericsson AB 2009-2012. All Rights Reserved.
 %% 
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -25,14 +25,15 @@
 
 %% wx_object callbacks
 -export([init/1, terminate/2,  code_change/3,
-	 handle_info/2, handle_call/3, handle_event/2]).
+	 handle_info/2, handle_call/3, handle_cast/2, handle_event/2]).
 
 -include("../../include/wx.hrl").
 
 -record(state, 
 	{
 	  parent,
-	  config
+	  config,
+	  aui
 	}).
 
 start(Config) ->
@@ -47,12 +48,10 @@ init(Config) ->
 do_init(Config) ->
     Parent = proplists:get_value(parent, Config),  
     Panel = wxPanel:new(Parent, []),
-
     %% Setup sizers
     MainSizer = wxBoxSizer:new(?wxVERTICAL),
 
-    Manager = wxAuiManager:new([{managed_wnd, Panel}
-				]),
+    Manager = wxAuiManager:new([{managed_wnd, Panel}]),
 
     Pane = ?pi:new(),
     ?pi:closeButton(Pane),
@@ -79,8 +78,8 @@ do_init(Config) ->
     wxAuiManager:connect(Manager, aui_pane_button, [{skip,true}]),
     wxAuiManager:connect(Manager, aui_pane_maximize, [{skip,true}]),
     wxAuiManager:update(Manager),
-
-    {Panel, #state{parent=Panel, config=Config}}.
+    process_flag(trap_exit, true),
+    {Panel, #state{parent=Panel, config=Config, aui=Manager}}.
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %% Callbacks handled as normal gen_server callbacks
@@ -88,9 +87,19 @@ handle_info(Msg, State) ->
     demo:format(State#state.config, "Got Info ~p\n", [Msg]),
     {noreply, State}.
 
+handle_call(shutdown, _From, State=#state{parent=Panel, aui=Manager}) ->
+    wxAuiManager:unInit(Manager),
+    wxAuiManager:destroy(Manager),
+    wxPanel:destroy(Panel),
+    {stop, normal, ok, State};
+
 handle_call(Msg, _From, State) ->
     demo:format(State#state.config, "Got Call ~p\n", [Msg]),
     {reply,{error, nyi}, State}.
+
+handle_cast(Msg, State) ->
+    io:format("Got cast ~p~n",[Msg]),
+    {noreply,State}.
 
 %% Async Events are handled in handle_event as in handle_info
 handle_event(#wx{obj = Notebook,
@@ -130,11 +139,10 @@ handle_event(Ev = #wx{}, State) ->
     io:format("~p\n", [Ev]),
     {noreply, State}.
 
-
 code_change(_, _, State) ->
     {stop, ignore, State}.
 
-terminate(_Reason, _State) ->
+terminate(_Reason, _) ->
     ok.
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%

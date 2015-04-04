@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2011. All Rights Reserved.
+%% Copyright Ericsson AB 2011-2014. All Rights Reserved.
 %%
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -16,6 +16,7 @@
 %%
 %% %CopyrightEnd%
 %%
+%module
 -module(target_system).
 -export([create/1, create/2, install/2]).
 
@@ -33,9 +34,9 @@ create(RelFileName,SystoolsOpts) ->
     Dir = filename:dirname(RelFileName),
     PlainRelFileName = filename:join(Dir,"plain"),
     PlainRelFile = PlainRelFileName ++ ".rel",
-    io:fwrite("Reading file: ~p ...~n", [RelFile]),
+    io:fwrite("Reading file: ~tp ...~n", [RelFile]),
     {ok, [RelSpec]} = file:consult(RelFile),
-    io:fwrite("Creating file: ~p from ~p ...~n", 
+    io:fwrite("Creating file: ~tp from ~tp ...~n",
               [PlainRelFile, RelFile]),
     {release,
      {RelName, RelVsn},
@@ -56,41 +57,41 @@ create(RelFileName,SystoolsOpts) ->
     io:fwrite(Fd, "~p.~n", [PlainRelSpec]),
     file:close(Fd),
 
-    io:fwrite("Making \"~s.script\" and \"~s.boot\" files ...~n",
+    io:fwrite("Making \"~ts.script\" and \"~ts.boot\" files ...~n",
 	      [PlainRelFileName,PlainRelFileName]),
     make_script(PlainRelFileName,SystoolsOpts),
 
-    io:fwrite("Making \"~s.script\" and \"~s.boot\" files ...~n", 
+    io:fwrite("Making \"~ts.script\" and \"~ts.boot\" files ...~n",
               [RelFileName, RelFileName]),
     make_script(RelFileName,SystoolsOpts),
 
-    TarFileName = filename:join(Dir,RelFileName ++ ".tar.gz"),
-    io:fwrite("Creating tar file ~p ...~n", [TarFileName]),
+    TarFileName = RelFileName ++ ".tar.gz",
+    io:fwrite("Creating tar file ~tp ...~n", [TarFileName]),
     make_tar(RelFileName,SystoolsOpts),
 
     TmpDir = filename:join(Dir,"tmp"),
-    io:fwrite("Creating directory ~p ...~n",[TmpDir]),
+    io:fwrite("Creating directory ~tp ...~n",[TmpDir]),
     file:make_dir(TmpDir), 
 
-    io:fwrite("Extracting ~p into directory ~p ...~n", [TarFileName,TmpDir]),
+    io:fwrite("Extracting ~tp into directory ~tp ...~n", [TarFileName,TmpDir]),
     extract_tar(TarFileName, TmpDir),
 
     TmpBinDir = filename:join([TmpDir, "bin"]),
     ErtsBinDir = filename:join([TmpDir, "erts-" ++ ErtsVsn, "bin"]),
-    io:fwrite("Deleting \"erl\" and \"start\" in directory ~p ...~n", 
+    io:fwrite("Deleting \"erl\" and \"start\" in directory ~tp ...~n",
               [ErtsBinDir]),
     file:delete(filename:join([ErtsBinDir, "erl"])),
     file:delete(filename:join([ErtsBinDir, "start"])),
 
-    io:fwrite("Creating temporary directory ~p ...~n", [TmpBinDir]),
+    io:fwrite("Creating temporary directory ~tp ...~n", [TmpBinDir]),
     file:make_dir(TmpBinDir),
 
-    io:fwrite("Copying file \"~s.boot\" to ~p ...~n", 
+    io:fwrite("Copying file \"~ts.boot\" to ~tp ...~n",
               [PlainRelFileName, filename:join([TmpBinDir, "start.boot"])]),
     copy_file(PlainRelFileName++".boot",filename:join([TmpBinDir, "start.boot"])),
 
     io:fwrite("Copying files \"epmd\", \"run_erl\" and \"to_erl\" from \n"
-              "~p to ~p ...~n", 
+              "~tp to ~tp ...~n",
               [ErtsBinDir, TmpBinDir]),
     copy_file(filename:join([ErtsBinDir, "epmd"]), 
               filename:join([TmpBinDir, "epmd"]), [preserve]),
@@ -99,12 +100,18 @@ create(RelFileName,SystoolsOpts) ->
     copy_file(filename:join([ErtsBinDir, "to_erl"]), 
               filename:join([TmpBinDir, "to_erl"]), [preserve]),
 
+    %% This is needed if 'start' script created from 'start.src' shall
+    %% be used as it points out this directory as log dir for 'run_erl'
+    TmpLogDir = filename:join([TmpDir, "log"]),
+    io:fwrite("Creating temporary directory ~tp ...~n", [TmpLogDir]),
+    ok = file:make_dir(TmpLogDir),
+
     StartErlDataFile = filename:join([TmpDir, "releases", "start_erl.data"]),
-    io:fwrite("Creating ~p ...~n", [StartErlDataFile]),
+    io:fwrite("Creating ~tp ...~n", [StartErlDataFile]),
     StartErlData = io_lib:fwrite("~s ~s~n", [ErtsVsn, RelVsn]),
     write_file(StartErlDataFile, StartErlData),
     
-    io:fwrite("Recreating tar file ~p from contents in directory ~p ...~n", 
+    io:fwrite("Recreating tar file ~tp from contents in directory ~tp ...~n",
 	      [TarFileName,TmpDir]),
     {ok, Tar} = erl_tar:open(TarFileName, [write, compressed]),
     %% {ok, Cwd} = file:get_cwd(),
@@ -114,30 +121,36 @@ create(RelFileName,SystoolsOpts) ->
     erl_tar:add(Tar, filename:join(TmpDir,ErtsDir), ErtsDir, []),
     erl_tar:add(Tar, filename:join(TmpDir,"releases"), "releases", []),
     erl_tar:add(Tar, filename:join(TmpDir,"lib"), "lib", []),
+    erl_tar:add(Tar, filename:join(TmpDir,"log"), "log", []),
     erl_tar:close(Tar),
     %% file:set_cwd(Cwd),
-    io:fwrite("Removing directory ~p ...~n",[TmpDir]),
+    io:fwrite("Removing directory ~tp ...~n",[TmpDir]),
     remove_dir_tree(TmpDir),
     ok.
 
 
 install(RelFileName, RootDir) ->
     TarFile = RelFileName ++ ".tar.gz", 
-    io:fwrite("Extracting ~p ...~n", [TarFile]),
+    io:fwrite("Extracting ~tp ...~n", [TarFile]),
     extract_tar(TarFile, RootDir),
     StartErlDataFile = filename:join([RootDir, "releases", "start_erl.data"]),
     {ok, StartErlData} = read_txt_file(StartErlDataFile),
     [ErlVsn, _RelVsn| _] = string:tokens(StartErlData, " \n"),
     ErtsBinDir = filename:join([RootDir, "erts-" ++ ErlVsn, "bin"]),
     BinDir = filename:join([RootDir, "bin"]),
-    io:fwrite("Substituting in erl.src, start.src and start_erl.src to\n"
+    io:fwrite("Substituting in erl.src, start.src and start_erl.src to "
               "form erl, start and start_erl ...\n"),
     subst_src_scripts(["erl", "start", "start_erl"], ErtsBinDir, BinDir, 
                       [{"FINAL_ROOTDIR", RootDir}, {"EMU", "beam"}],
                       [preserve]),
+    %%! Workaround for pre OTP 17.0: start.src and start_erl.src did
+    %%! not have correct permissions, so the above 'preserve' option did not help
+    ok = file:change_mode(filename:join(BinDir,"start"),8#0755),
+    ok = file:change_mode(filename:join(BinDir,"start_erl"),8#0755),
+
     io:fwrite("Creating the RELEASES file ...\n"),
-    create_RELEASES(RootDir, 
-                    filename:join([RootDir, "releases", RelFileName])).
+    create_RELEASES(RootDir, filename:join([RootDir, "releases",
+					    filename:basename(RelFileName)])).
 
 %% LOCALS 
 
@@ -234,8 +247,9 @@ copy_file(Src, Dest, Opts) ->
     end.
        
 write_file(FName, Conts) ->
+    Enc = file:native_name_encoding(),
     {ok, Fd} = file:open(FName, [write]),
-    file:write(Fd, Conts),
+    file:write(Fd, unicode:characters_to_binary(Conts,Enc,Enc)),
     file:close(Fd).
 
 read_txt_file(File) ->
@@ -257,3 +271,4 @@ remove_all_files(Dir, Files) ->
                                   file:delete(FilePath)
                           end
                   end, Files).
+%module

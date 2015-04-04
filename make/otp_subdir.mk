@@ -1,7 +1,7 @@
 # 
 # %CopyrightBegin%
 # 
-# Copyright Ericsson AB 1997-2009. All Rights Reserved.
+# Copyright Ericsson AB 1997-2011. All Rights Reserved.
 # 
 # The contents of this file are subject to the Erlang Public License,
 # Version 1.1, (the "License"); you may not use this file except in
@@ -19,18 +19,17 @@
 # Make include file for otp
 
 .PHONY: debug opt release docs release_docs tests release_tests \
-	clean depend valgrind
+	clean depend valgrind static_lib
 
 #
 # Targets that don't affect documentation directories
 #
-opt debug release docs release_docs tests release_tests clean depend valgrind:
+opt debug release docs release_docs tests release_tests clean depend valgrind static_lib:
 	@set -e ;							\
 	app_pwd=`pwd` ;							\
 	if test -f vsn.mk; then						\
 	    echo "=== Entering application" `basename $$app_pwd` ;	\
 	fi ;								\
-	case "$(MAKE)" in *clearmake*) tflag="-T";; *) tflag="";; esac;	\
 	for d in $(SUB_DIRECTORIES); do					\
 	    if test -f $$d/SKIP ; then					\
 		echo "=== Skipping subdir $$d, reason:" ;		\
@@ -40,14 +39,19 @@ opt debug release docs release_docs tests release_tests clean depend valgrind:
 		if test ! -d $$d ; then					\
 		    echo "=== Skipping subdir $$d, it is missing" ;	\
 		else							\
-		    xflag="" ;						\
-		    if test -f $$d/ignore_config_record.inf; then	\
-			xflag=$$tflag ;					\
-		    fi ;						\
-		    (cd $$d && $(MAKE) $$xflag $@) || exit $$? ;	\
+		    (cd $$d && $(MAKE) $@) || exit $$? ;		\
 		fi ;							\
 	    fi ;							\
 	done ;								\
 	if test -f vsn.mk; then						\
+	    if test release = $@ && test ! -f SKIP; then		\
+		app=`basename $$app_pwd` ;				\
+		app_vsn=`echo $$app | sed "y|abcdefghijklmnopqrstuvwxyz|ABCDEFGHIJKLMNOPQRSTUVWXYZ|"` ; \
+		app_vsn=$${app_vsn}_VSN ;				\
+		( $(MAKE) -f "$(ERL_TOP)/make/otp_released_app.mk"	\
+			APP_PWD="$$app_pwd" APP_VSN=$$app_vsn APP=$$app	\
+			TESTROOT="$(TESTROOT)" update)			\
+		|| exit $$?  ;						\
+	    fi	;							\
 	    echo "=== Leaving application" `basename $$app_pwd` ;	\
 	fi

@@ -1,11 +1,11 @@
-<?xml version="1.0" encoding="latin1" ?>
+<?xml version="1.0" encoding="utf-8" ?>
 <!DOCTYPE erlref SYSTEM "erlref.dtd">
 
 <erlref>
   <header>
     <copyright>
       <year>2007</year>
-      <year>2011</year>
+      <year>2013</year>
       <holder>Ericsson AB, All Rights Reserved</holder>
     </copyright>
     <legalnotice>
@@ -73,8 +73,8 @@
         <d>This is the same as returned from <c>os:type/0</c></d>
       </type>
       <desc>
-        <p>This function can be called on controller or target node, and
-          it will always return the OS type of the target node.</p>
+        <p>This function is equivalent to <c>os:type/0</c>. It is kept
+        for backwards compatibility.</p>
       </desc>
     </func>
     <func>
@@ -203,7 +203,7 @@
     <func>
       <name>format(Format) -> ok</name>
       <name>format(Format, Args)</name>
-      <name>format(Pri,Format)</name>
+      <name>format(Pri, Format)</name>
       <name>format(Pri, Format, Args)</name>
       <fsummary></fsummary>
       <type>
@@ -465,9 +465,7 @@ Tries running clock_sanity_check() up to 8 times,and
         <taglist>
           <tag><c>{remote, true}</c></tag>
           <item>Start the node on a remote host. If not specified, the
-           node will be started on the local host (with some
-           exceptions, as for the case of VxWorks, where
-           all nodes are started on a remote host).  Test cases that
+           node will be started on the local host.  Test cases that
            require a remote host will fail with a reasonable comment if
            no remote hosts are available at the time they are run.
           </item>
@@ -529,6 +527,18 @@ Only valid for peer nodes. Note that slave nodes always
            analogy  with  <c>os:getenv/1</c>),  which  removes  the
            environment variable. Only valid for peer nodes. Not
            available on VxWorks.</item>
+	  <tag><c>{start_cover, false}</c></tag>
+	  <item>By default the test server will start cover on all nodes
+	   when the test is run with code coverage analysis. To make
+	   sure cover is not started on a new node, set this option to
+	   <c>false</c>. This can be necessary if the connection to
+	   the node at some point will be broken but the node is
+	   expected to stay alive. The reason is that a remote cover
+	   node can not continue to run without its main node. Another
+	   solution would be to explicitly stop cover on the node
+	   before breaking the connection, but in some situations (if
+	   old code resides in one or more processes) this is not
+	   possible.</item>
         </taglist>
       </desc>
     </func>
@@ -611,6 +621,31 @@ Only valid for peer nodes. Note that slave nodes always
           <item>that all modules in the ebin/ dir is included (If
           <c>Mode==tolerant</c> this only produces a warning, as all
            modules does not have to be included)</item>
+        </list>
+      </desc>
+    </func>
+    <func>
+      <name>appup_test(App) -> ok | test_server:fail()</name>
+      <fsummary>Checks an applications .appup file for obvious errors</fsummary>
+      <type>
+        <v>App = term()</v>
+        <d>The name of the application to test</d>
+      </type>
+      <desc>
+        <p>Checks an applications .appup file for obvious errors.
+          The following is checked:
+          </p>
+        <list type="bulleted">
+          <item>syntax
+          </item>
+          <item>that .app file version and .appup file version match
+          </item>
+          <item>for non-library applications: validity of high-level upgrade
+           instructions, specifying no instructions is explicitly allowed
+           (in this case the application is not upgradeable)</item>
+          <item>for library applications: that there is exactly one wildcard
+           regexp clause restarting the application when upgrading or
+           downgrading from any version</item>
         </list>
       </desc>
     </func>
@@ -736,7 +771,6 @@ Only valid for peer nodes. Note that slave nodes always
           test case or <c>{skip,Comment}</c>. The syntax of a test
           specification is described in the Test Server User's Guide.
           </p>
-        <p><em>Note that the specification clause always is executed on the controller host.</em></p>
         <p>The <em>execution clause</em> (argument <c>Config</c>) is
           only called if the specification clause returns an empty list.
           The execution clause is the real test case. Here you must call

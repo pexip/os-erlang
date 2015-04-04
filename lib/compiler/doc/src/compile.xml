@@ -1,10 +1,10 @@
-<?xml version="1.0" encoding="latin1" ?>
+<?xml version="1.0" encoding="utf-8" ?>
 <!DOCTYPE erlref SYSTEM "erlref.dtd">
 
 <erlref>
   <header>
     <copyright>
-      <year>1996</year><year>2011</year>
+      <year>1996</year><year>2014</year>
       <holder>Ericsson AB. All Rights Reserved.</holder>
     </copyright>
     <legalnotice>
@@ -294,6 +294,12 @@ module.beam: module.erl \
               describing what it is doing.</p>
           </item>
 
+	  <tag><c>{source,FileName}</c></tag>
+          <item>
+            <p>Sets the value of the source, as returned by
+              <c>module_info(compile)</c>.</p>
+          </item>
+
 	  <tag><c>{outdir,Dir}</c></tag>
           <item>
             <p>Sets a new directory for the object code. The current
@@ -310,7 +316,7 @@ module.beam: module.erl \
           <item>
             <p>Add <c>Dir</c> to the list of directories to be searched
               when including a file. When encountering an
-	      <c>-include</c> or <c>-include_dir</c> directive,
+	      <c>-include</c> or <c>-include_lib</c> directive,
 	      the compiler searches for header files in the following
 	      directories:</p>
             <list type="ordered">
@@ -333,7 +339,8 @@ module.beam: module.erl \
           <tag><c>{d,Macro,Value}</c></tag>
           <item>
             <p>Defines a macro <c>Macro</c> to have the value
-	      <c>Value</c>. The default is <c>true</c>).</p>
+            <c>Value</c>. <c>Macro</c> is of type atom, and <c>Value</c> can be any term.
+            The default <c>Value</c> is <c>true</c>.</p>
           </item>
 
 	  <tag><c>{parse_transform,Module}</c></tag>
@@ -343,12 +350,18 @@ module.beam: module.erl \
               parsed code before the code is checked for errors.</p>
           </item>
 
-	  <tag><c>asm</c></tag>
+	  <tag><c>from_asm</c></tag>
           <item>
             <p>The input file is expected to be assembler code (default
 	      file suffix ".S"). Note that the format of assembler files
-              is not documented, and may change between releases - this
-              option is primarily for internal debugging use.</p>
+              is not documented, and may change between releases.</p>
+          </item>
+
+	  <tag><c>from_core</c></tag>
+          <item>
+            <p>The input file is expected to be core code (default
+	      file suffix ".core"). Note that the format of core files
+              is not documented, and may change between releases.</p>
           </item>
 
           <tag><c>no_strict_record_tests</c></tag>
@@ -394,6 +407,19 @@ module.beam: module.erl \
 	  of <c>{F,A}</c>. Example:</p>
 	  <code>-compile({no_auto_import,[error/1]}).</code>
 	  </item>
+
+          <tag><c>no_auto_import</c></tag>
+          <item>
+            <p>Do not auto import any functions from the module <c>erlang</c>.</p>
+          </item>
+
+          <tag><c>no_line_info</c></tag>
+
+          <item>
+            <p>Omit line number information in order to produce a slightly
+	      smaller output file.
+	    </p>
+          </item>
 
         </taglist>
 
@@ -523,6 +549,14 @@ module.beam: module.erl \
 	      <c>nowarn_deprecated_function</c> but only for
 	      the mentioned functions. <c>MFAs</c> is a tuple
               <c>{Module,Name,Arity}</c> or a list of such tuples.</p>
+          </item>
+
+	  <tag><c>nowarn_deprecated_type</c></tag>
+          <item>
+            <p>Turns off warnings for uses of deprecated types. By
+	      default (<c>warn_deprecated_type</c>), warnings are
+	      emitted for every use of a type known by the compiler
+	      to be deprecated.</p>
           </item>
 
 	  <tag><c>warn_obsolete_guard</c></tag>
@@ -801,6 +835,32 @@ pi() -> 3.1416.
   </section>
 
   <section>
+    <title>Inlining of list functions</title>
+    <p>The compiler can also inline a variety of list manipulation functions
+      from the stdlib's lists module.</p>
+
+    <p>This feature must be explicitly enabled with a compiler option or a
+      <c>-compile()</c> attribute in the source module.</p>
+
+    <p>To enable inlining of list functions, use the <c>inline_list_funcs</c>
+    option.</p>
+
+    <p>The following functions are inlined:</p>
+    <list type="bulleted">
+      <item><seealso marker="stdlib:lists#all/2">lists:all/2</seealso></item>
+      <item><seealso marker="stdlib:lists#any/2">lists:any/2</seealso></item>
+      <item><seealso marker="stdlib:lists#foreach/2">lists:foreach/2</seealso></item>
+      <item><seealso marker="stdlib:lists#map/2">lists:map/2</seealso></item>
+      <item><seealso marker="stdlib:lists#flatmap/2">lists:flatmap/2</seealso></item>
+      <item><seealso marker="stdlib:lists#filter/2">lists:filter/2</seealso></item>
+      <item><seealso marker="stdlib:lists#foldl/3">lists:foldl/3</seealso></item>
+      <item><seealso marker="stdlib:lists#foldr/3">lists:foldr/3</seealso></item>
+      <item><seealso marker="stdlib:lists#mapfoldl/3">lists:mapfoldl/3</seealso></item>
+      <item><seealso marker="stdlib:lists#mapfoldr/3">lists:mapfoldr/3</seealso></item>
+    </list>
+  </section>
+
+  <section>
     <title>Parse Transformations</title>
 
     <p>Parse transformations are used when a programmer wants to use
@@ -817,6 +877,10 @@ pi() -> 3.1416.
     <code>
 {ErrorLine, Module, ErrorDescriptor}
     </code>
+
+    <p><c>ErrorLine</c> will be the atom <c>none</c> if the error does
+    not correspond to a specific line (e.g. if the source file does
+    not exist).</p>
 
     <p>A string describing the error is obtained with the following
       call:</p>

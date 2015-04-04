@@ -1,7 +1,6 @@
 ./usr/lib/erlang/.*/java_src/
 ./usr/lib/erlang/erts-.*/bin/.*\.src
 ./usr/lib/erlang/erts-.*/src/
-./usr/lib/erlang/lib/appmon-.*/src/
 ./usr/lib/erlang/lib/asn1-.*/c_src/
 ./usr/lib/erlang/lib/asn1-.*/src/
 ./usr/lib/erlang/lib/compiler-.*/src/
@@ -17,8 +16,10 @@
 ./usr/lib/erlang/lib/debugger-.*/src/
 ./usr/lib/erlang/lib/dialyzer-.*/src/
 ./usr/lib/erlang/lib/diameter-.*/src/
-./usr/lib/erlang/lib/docbuilder-.*/src/
 ./usr/lib/erlang/lib/edoc-.*/src/
+./usr/lib/erlang/lib/eldap-.*/asn1/
+./usr/lib/erlang/lib/eldap-.*/src/
+./usr/lib/erlang/lib/erl_docgen-.*/src/
 ./usr/lib/erlang/lib/erl_interface-.*/src/
 ./usr/lib/erlang/lib/erts-.*/src/
 ./usr/lib/erlang/lib/et-.*/src/
@@ -31,7 +32,6 @@
 ./usr/lib/erlang/lib/hipe-.*/
 ./usr/lib/erlang/lib/ic-.*/c_src/
 ./usr/lib/erlang/lib/ic-.*/src/
-./usr/lib/erlang/lib/inviso-.*/src/
 ./usr/lib/erlang/lib/inets-.*/src/
 ./usr/lib/erlang/lib/kernel-.*/src/
 ./usr/lib/erlang/lib/megaco-.*/src/
@@ -43,11 +43,11 @@
 ./usr/lib/erlang/lib/odbc-.*/src/
 ./usr/lib/erlang/lib/orber-.*/COSS/CosNaming/
 ./usr/lib/erlang/lib/orber-[^/]*/src/
+./usr/lib/erlang/lib/ose-.*/src/
 ./usr/lib/erlang/lib/os_mon-.*/src/
 ./usr/lib/erlang/lib/otp_mibs-.*/src/
 ./usr/lib/erlang/lib/parsetools-.*/src/
 ./usr/lib/erlang/lib/percept-.*/src/
-./usr/lib/erlang/lib/pman-.*/src/
 ./usr/lib/erlang/lib/public_key-.*/asn1/
 ./usr/lib/erlang/lib/public_key-.*/src/
 ./usr/lib/erlang/lib/reltool-.*/src/
@@ -60,10 +60,8 @@
 ./usr/lib/erlang/lib/stdlib-.*/src/
 ./usr/lib/erlang/lib/syntax_tools-.*/src/
 ./usr/lib/erlang/lib/test_server-.*/src/
-./usr/lib/erlang/lib/toolbar-.*/src/
 ./usr/lib/erlang/lib/tools-.*/c_src/
 ./usr/lib/erlang/lib/tools-.*/src/
-./usr/lib/erlang/lib/tv-.*/src/
 ./usr/lib/erlang/lib/typer-.*/src/
 ./usr/lib/erlang/lib/webtool-.*/src/
 ./usr/lib/erlang/lib/wx-.*/src/

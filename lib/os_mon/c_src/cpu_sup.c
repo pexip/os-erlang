@@ -1,7 +1,7 @@
 /*
  * %CopyrightBegin%
  * 
- * Copyright Ericsson AB 1997-2011. All Rights Reserved.
+ * Copyright Ericsson AB 1997-2012. All Rights Reserved.
  * 
  * The contents of this file are subject to the Erlang Public License,
  * Version 1.1, (the "License"); you may not use this file except in
@@ -29,6 +29,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
+#include <string.h>
 
 #if defined(__sun__)
 #include <kstat.h>
@@ -120,7 +121,9 @@ typedef struct {
 
 static void util_measure(unsigned int **result_vec, int *result_sz);
 
+#if defined(__sun__)
 static unsigned int misc_measure(char* name);
+#endif
 static void send(unsigned int data);
 static void sendv(unsigned int data[], int ints);
 static void error(char* err_msg);
@@ -140,7 +143,9 @@ int main(int argc, char** argv) {
   int rc;
   int sz;
   unsigned int *rv;
+#if defined(__linux__)
   unsigned int no_of_cpus = 0;
+#endif
 
 #if defined(__sun__)
   kstat_ctl = kstat_open();
@@ -288,10 +293,10 @@ static unsigned int misc_measure(char* name) {
   if(!entry)
     return -1;
   
-  if(entry->data_type != KSTAT_DATA_ULONG)
+  if(entry->data_type != KSTAT_DATA_UINT32)
     return -1;
 
-  return entry->value.ul;
+  return entry->value.ui32;
 }
 
 
@@ -458,8 +463,18 @@ static void error(char* err_msg) {
    * if we get error here we have trouble,
    * silence unnecessary warnings
    */
-  if(write(FD_ERR, err_msg, strlen(err_msg)));
-  if(write(FD_ERR, "\n", 1));
+  char buffer[256] = "[os_mon] cpu supervisor port (cpu_sup): ";
+  int i = strlen(buffer), j = 0;
+  int n = strlen(err_msg);
+
+  while(i < 253 && j < n) {
+      buffer[i++] = err_msg[j++];
+  }
+  buffer[i++] = '\r';
+  buffer[i++] = '\n';
+
+  /* try to use one write only */
+  if(write(FD_ERR, buffer, i));
   exit(-1);
 }
 

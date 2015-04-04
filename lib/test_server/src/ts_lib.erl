@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 1997-2010. All Rights Reserved.
+%% Copyright Ericsson AB 1997-2013. All Rights Reserved.
 %%
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -24,11 +24,14 @@
 %% Avoid warning for local function error/1 clashing with autoimported BIF.
 -compile({no_auto_import,[error/1]}).
 -export([error/1, var/2, erlang_type/0,
-	 initial_capital/1, interesting_logs/1, 
-	 specs/1, suites/2, last_test/1,
-	 force_write_file/2, force_delete/1,
+	 erlang_type/1,
+	 initial_capital/1,
+	 specs/1, suites/2,
+	 specialized_specs/2,
 	 subst_file/3, subst/2, print_data/1,
-	 maybe_atom_to_list/1, progress/4
+	 make_non_erlang/2,
+	 maybe_atom_to_list/1, progress/4,
+	 b2s/1
 	]).
 
 error(Reason) ->
@@ -73,8 +76,10 @@ progress(Vars, Level, Format, Args) ->
 %% Returns: {Type, Version} where Type is otp|src
 
 erlang_type() ->
+    erlang_type(code:root_dir()).
+erlang_type(RootDir) ->
     {_, Version} = init:script_id(),
-    RelDir = filename:join(code:root_dir(), "releases"), % Only in installed
+    RelDir = filename:join(RootDir, "releases"), % Only in installed
     case filelib:is_file(RelDir) of
 	true -> {otp,Version};			% installed OTP
 	false -> {srctree,Version}		% source code tree
@@ -87,25 +92,27 @@ initial_capital([C|Rest]) when $a =< C, C =< $z ->
 initial_capital(String) ->
     String.
 
-%% Returns a list of the "interesting logs" in a directory,
-%% i.e. those that correspond to spec files.
-
-interesting_logs(Dir) ->
-    Logs = filelib:wildcard(filename:join(Dir, [$*|?logdir_ext])),
-    Interesting =
-	case specs(Dir) of
-	    [] ->
-		Logs;
-	    Specs0 ->
-		Specs = ordsets:from_list(Specs0),
-		[L || L <- Logs, ordsets:is_element(filename_to_atom(L), Specs)]
-	end,
-    sort_tests(Interesting).
+specialized_specs(Dir,PostFix) ->
+    Specs = filelib:wildcard(filename:join([filename:dirname(Dir),
+					    "*_test", "*_"++PostFix++".spec"])),
+    sort_tests([begin
+		    Base = filename:basename(Name),
+		    list_to_atom(string:substr(Base,1,string:rstr(Base,"_")-1))
+		end || Name <- Specs]).
 
 specs(Dir) ->
     Specs = filelib:wildcard(filename:join([filename:dirname(Dir),
-					    "*_test", "*.{dyn,}spec"])), 
-    sort_tests([filename_to_atom(Name) || Name <- Specs]).
+					    "*_test", "*.{dyn,}spec"])),
+    % Filter away all spec which end with {_bench,_smoke}.spec
+    NoBench = fun(SpecName) ->
+		      case lists:reverse(SpecName) of
+			  "ceps.hcneb_"++_ -> false;
+			  "ceps.ekoms_"++_ -> false;
+			  _ -> true
+		      end
+	      end,
+
+    sort_tests([filename_to_atom(Name) || Name <- Specs, NoBench(Name)]).
 
 suites(Dir, Spec) ->
     Glob=filename:join([filename:dirname(Dir), Spec++"_test",
@@ -138,56 +145,16 @@ suite_order(sasl) -> 16;
 suite_order(tools) -> 18;
 suite_order(runtime_tools) -> 19;
 suite_order(parsetools) -> 20;
-suite_order(pman) -> 21;
 suite_order(debugger) -> 22;
-suite_order(toolbar) -> 23;
 suite_order(ic) -> 24;
 suite_order(orber) -> 26;
 suite_order(inets) -> 28;
 suite_order(asn1) -> 30;
 suite_order(os_mon) -> 32;
 suite_order(snmp) -> 38;
-suite_order(mnemosyne) -> 40;
-suite_order(mnesia_session) -> 42;
 suite_order(mnesia) -> 44;
 suite_order(system) -> 999; %% IMPORTANT: system SHOULD always be last!
 suite_order(_) -> 200.
-
-last_test(Dir) ->
-    last_test(filelib:wildcard(filename:join(Dir, "run.[1-2]*")), false).
-
-last_test([Run|Rest], false) ->
-    last_test(Rest, Run);
-last_test([Run|Rest], Latest) when Run > Latest ->
-    last_test(Rest, Run);
-last_test([_|Rest], Latest) ->
-    last_test(Rest, Latest);
-last_test([], Latest) ->
-    Latest.
-
-%% Do the utmost to ensure that the file is written, by deleting or
-%% renaming an old file with the same name.
-
-force_write_file(Name, Contents) ->
-    force_delete(Name),
-    file:write_file(Name, Contents).
-
-force_delete(Name) ->
-    case file:delete(Name) of
-	{error, eacces} ->
-	    force_rename(Name, Name ++ ".old.", 0);
-	Other ->
-	    Other
-    end.
-
-force_rename(From, To, Number) ->
-    Dest = [To|integer_to_list(Number)],
-    case file:read_file_info(Dest) of
-	{ok, _} ->
-	    force_rename(From, To, Number+1);
-	{error, _} ->
-	    file:rename(From, Dest)
-    end.
 
 %% Substitute all occurrences of @var@ in the In file, using
 %% the list of variables in Vars, producing the output file Out.
@@ -196,8 +163,8 @@ force_rename(From, To, Number) ->
 subst_file(In, Out, Vars) ->
     case file:read_file(In) of
 	{ok, Bin} ->
-	    Subst = subst(binary_to_list(Bin), Vars, []),
-	    case file:write_file(Out, Subst) of
+	    Subst = subst(b2s(Bin), Vars, []),
+	    case file:write_file(Out, unicode:characters_to_binary(Subst)) of
 		ok ->
 		    ok;
 		{error, Reason} ->
@@ -333,3 +300,53 @@ maybe_atom_to_list(To_list) when is_list(To_list) ->
 maybe_atom_to_list(To_list) when is_atom(To_list)->
     atom_to_list(To_list).
     
+
+%% Configure and run all the Makefiles in the data dir of the suite
+%% in question
+make_non_erlang(DataDir, Variables) ->
+    %% Make the stuff in all_SUITE_data if it exists
+    AllDir = filename:join(DataDir,"../all_SUITE_data"),
+    case filelib:is_dir(AllDir) of
+	true ->
+	    make_non_erlang_do(AllDir,Variables);
+	false ->
+	    ok
+    end,
+    make_non_erlang_do(DataDir, Variables).
+
+make_non_erlang_do(DataDir, Variables) ->
+    try
+	MakeCommand = proplists:get_value(make_command,Variables),
+
+	FirstMakefile = filename:join(DataDir,"Makefile.first"),
+	case filelib:is_regular(FirstMakefile) of
+	    true ->
+		io:format("Making ~p",[FirstMakefile]),
+		ok = ts_make:make(
+		       MakeCommand, DataDir, filename:basename(FirstMakefile));
+	    false ->
+		ok
+	end,
+
+	MakefileSrc = filename:join(DataDir,"Makefile.src"),
+	MakefileDest = filename:join(DataDir,"Makefile"),
+	case filelib:is_regular(MakefileSrc) of
+	    true ->
+		ok = ts_lib:subst_file(MakefileSrc,MakefileDest,Variables),
+		io:format("Making ~p",[MakefileDest]),
+		ok = ts_make:make([{makefile,"Makefile"},{data_dir,DataDir}
+				   | Variables]);
+	    false ->
+		ok
+	end
+    after
+	timer:sleep(100)  %% maybe unnecessary now when we don't do set_cwd anymore
+    end.
+
+b2s(Bin) ->
+    unicode:characters_to_list(Bin,default_encoding()).
+
+default_encoding() ->
+    try epp:default_encoding()
+    catch error:undef -> latin1
+    end.

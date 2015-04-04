@@ -1,7 +1,7 @@
 #
 # %CopyrightBegin%
 #
-# Copyright Ericsson AB 2008-2010. All Rights Reserved.
+# Copyright Ericsson AB 2008-2014. All Rights Reserved.
 #
 # The contents of this file are subject to the Erlang Public License,
 # Version 1.1, (the "License"); you may not use this file except in
@@ -31,9 +31,12 @@ override TYPE=opt
 endif
 
 SO_EXT    = @SO_EXT@
+OBJC_CC=@OBJC_CC@
+OBJC_CFLAGS=@OBJC_CFLAGS@
 
-GENERAL     = wxe_driver wxe_ps_init wxe_impl wxePrintout wxe_return wxe_gl
-GENERAL_H   = wxe_driver.h wxe_impl.h wxe_return.h
+GENERAL     = wxe_driver wxe_ps_init wxe_main wxe_impl wxe_helpers wxe_callback_impl wxe_return wxe_gl
+GENERAL_H   = wxe_callback_impl.h  wxe_driver.h  wxe_events.h  wxe_gl.h \
+	wxe_helpers.h  wxe_impl.h  wxe_memory.h  wxe_return.h
 
 GENERATED_F = wxe_funcs wxe_events wxe_init
 GENERATED_H = gen/wxe_macros.h 
@@ -43,19 +46,11 @@ GL_H = egl_impl.h gen/glu_finit.h gen/gl_finit.h gen/gl_fdefs.h
 HAVE_OPENGL = true
 OPENGL_F = gl_funcs egl_impl
 
-ifneq ($(INSIDE_ERLSRC),true)
-
-ERL_DIR = @ERLANG_ROOT_DIR@
-ERL_INCS = -I$(ERL_DIR)/usr/include
-
-else
-
 include $(ERL_TOP)/make/target.mk
+include $(ERL_TOP)/make/output.mk
 include $(ERL_TOP)/make/$(TARGET)/otp_ded.mk
 
 ERL_INCS= $(DED_INCLUDES)
-
-endif
 
 SYS_TYPE    = @WXERL_SYS_TYPE@
 
@@ -78,16 +73,15 @@ WX_OBJECTS  = $(GENERAL_O) $(GENERATED_O) $(RC_FILE)
 
 OBJECTS = $(WX_OBJECTS) $(GL_OBJECTS)
 
-TARGET_APIS = wxe_driver erl_gl
-TARGET_DIR = ../priv
+TARGET_DIR = ../priv/$(SYS_TYPE)
 
 # -O2 -funroll-loops  -ffast-math -fomit-frame-pointer 
 
 COMMON_CFLAGS = @DEFS@ $(ERL_INCS) 
 
 CC		= @CC@
-CPP		= @CXX@
-LD		= $(CPP)
+CXX		= @CXX@
+LD		= $(CXX)
 LDFLAGS		= @LDFLAGS@
 RESCOMP		= @WX_RESCOMP@
 
@@ -115,8 +109,9 @@ endif
 
 GL_LIBS         = @GL_LIBS@
 
-CC_O		= $(CC) -c $(CFLAGS) $(WX_CFLAGS) $(COMMON_CFLAGS)
-CPP_O		= $(CPP) -c $(CXX_FLAGS) $(WX_CXX_FLAGS)  $(COMMON_CFLAGS) 
+CC_O		= $(V_CC) -c $(CFLAGS) $(WX_CFLAGS) $(COMMON_CFLAGS)
+OBJC_CC_O	= $(OBJC_CC) -c $(CFLAGS) $(OBJC_CFLAGS) $(WX_CFLAGS) $(COMMON_CFLAGS)
+CXX_O		= $(V_CXX) -c $(CXX_FLAGS) $(WX_CXX_FLAGS)  $(COMMON_CFLAGS)
 
 # Targets
 
@@ -127,7 +122,7 @@ debug:
 
 clean:  
 	rm -f $(OBJECTS) 
-	rm -f ../priv/$(TARGET_DIR)/$(TARGET_API)$(SO_EXT)
+	rm -f $(TARGET_DIR)/*$(SO_EXT)
 	rm -f *~ erl_crash.dump
 
 complete_clean: 
@@ -145,46 +140,47 @@ $(GL_OBJECTS): $(GL_H)
 $(WX_OBJECTS): $(GENERATED_H) $(GENERAL_H) 
 
 $(SYS_TYPE)/%.o: %.cpp 
-	mkdir -p $(SYS_TYPE)
-	$(CPP_O) $< -o $@
+	$(V_at)mkdir -p $(SYS_TYPE)
+	$(CXX_O) $< -o $@
 
 $(SYS_TYPE)/%.o: %.c 
-	mkdir -p $(SYS_TYPE)
+	$(V_at)mkdir -p $(SYS_TYPE)
 	$(CC_O) $< -o $@
 
+$(SYS_TYPE)/wxe_ps_init.o: wxe_ps_init.c 
+	$(V_at)mkdir -p $(SYS_TYPE)
+	$(cc_verbose)$(OBJC_CC_O) $< -o $@
+
 $(SYS_TYPE)/%.o: gen/%.cpp 
-	mkdir -p $(SYS_TYPE)
-	$(CPP_O) $< -o $@
+	$(V_at)mkdir -p $(SYS_TYPE)
+	$(CXX_O) $< -o $@
 
 $(SYS_TYPE)/%.o: gen/%.c 
-	mkdir -p $(SYS_TYPE)
+	$(V_at)mkdir -p $(SYS_TYPE)
 	$(CC_O) $< -o $@
 
 $(SYS_TYPE)/wxe_win32.$(RC_FILE_EXT): wxe_win32.rc
-	mkdir -p $(SYS_TYPE)
+	$(V_at)mkdir -p $(SYS_TYPE)
 	$(RESCOMP) -o $@ $< 
 
 $(TARGET_DIR)/wxe_driver$(SO_EXT): $(WX_OBJECTS)
-	mkdir -p $(TARGET_DIR)
-	$(LD) $(LDFLAGS) $(WX_OBJECTS) $(WX_LIBS) -o $@
+	$(V_at)mkdir -p $(TARGET_DIR)
+	$(V_LD) $(LDFLAGS) $(WX_OBJECTS) $(WX_LIBS) -o $@
 
 $(TARGET_DIR)/erl_gl$(SO_EXT): $(GL_OBJECTS)
-	mkdir -p $(TARGET_DIR)
-	$(CC) $(LDFLAGS) $(GL_OBJECTS) $(GL_LIBS) -o $@
+	$(V_at)mkdir -p $(TARGET_DIR)
+	$(V_CC) $(LDFLAGS) $(GL_OBJECTS) $(GL_LIBS) -o $@
 
 
 # ----------------------------------------------------
 # Release Target
 # ----------------------------------------------------
-ifeq ($(INSIDE_ERLSRC),true)
 include $(ERL_TOP)/make/otp_release_targets.mk
 release_spec: opt
-	$(INSTALL_DIR) $(RELSYSDIR)/priv
-	$(INSTALL_DATA) ../priv/erlang-logo32.png $(RELSYSDIR)/priv/
-	$(INSTALL_DATA) ../priv/erlang-logo64.png $(RELSYSDIR)/priv/
-	$(INSTALL_PROGRAM) $(TARGET_DIR)/wxe_driver$(SO_EXT) $(RELSYSDIR)/priv/
-	$(INSTALL_PROGRAM) $(TARGET_DIR)/erl_gl$(SO_EXT) $(RELSYSDIR)/priv/
+	$(INSTALL_DIR) "$(RELSYSDIR)/priv"
+	$(INSTALL_DATA) ../priv/erlang-logo32.png "$(RELSYSDIR)/priv/"
+	$(INSTALL_DATA) ../priv/erlang-logo64.png "$(RELSYSDIR)/priv/"
+	$(INSTALL_PROGRAM) $(TARGET_DIR)/wxe_driver$(SO_EXT) "$(RELSYSDIR)/priv/"
+	$(INSTALL_PROGRAM) $(TARGET_DIR)/erl_gl$(SO_EXT) "$(RELSYSDIR)/priv/"
 
 release_docs_spec:
-
-endif

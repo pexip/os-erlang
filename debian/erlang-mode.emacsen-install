@@ -31,20 +31,17 @@ if test -x /usr/sbin/install-info-altdir; then
 fi
 
 install -m 755 -d ${ELCDIR}
-cd ${ELDIR}
-if [ ${FLAVOR} = emacs21 -o ${FLAVORTEST} = xemacs ]; then
-    FILES=`echo *.el | sed s/erlang-flymake.el//`
-else
-    FILES=`echo *.el`
-fi
-cp ${FILES} ${ELCDIR}
 cd ${ELCDIR}
+ln -sf ${ELDIR}/*.el .
+if [ ${FLAVOR} = emacs21 -o ${FLAVORTEST} = xemacs ]; then
+    rm -f erlang-flymake.el
+fi
 
+FILES=`echo *.el`
 cat << EOF > path.el
 (setq load-path (cons "." load-path) byte-compile-warnings nil)
 EOF
 ${FLAVOR} ${FLAGS} ${FILES}
-rm -f *.el path.el
+rm -f path.el
 
 exit 0
-

@@ -14,10 +14,8 @@
 %% Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307
 %% USA
 %%
-%% $Id$
-%%
 %% @copyright 2001-2006 Richard Carlsson
-%% @author Richard Carlsson <richardc@it.uu.se>
+%% @author Richard Carlsson <carlsson.richard@gmail.com>
 %% @end
 %% =====================================================================
 
@@ -186,8 +184,27 @@ quick_parse_file(File, Options) ->
     parse_file(File, fun quick_parse/3, Options ++ [no_fail]).
 
 parse_file(File, Parser, Options) ->
+    case do_parse_file(utf8, File, Parser, Options) of
+        {ok, Forms}=Ret ->
+            case find_invalid_unicode(Forms) of
+                none ->
+                    Ret;
+                invalid_unicode ->
+                    case epp:read_encoding(File) of
+                        utf8 ->
+                            Ret;
+                        _ ->
+                            do_parse_file(latin1, File, Parser, Options)
+                    end
+            end;
+        Else ->
+            Else
+    end.
+
+do_parse_file(DefEncoding, File, Parser, Options) ->
     case file:open(File, [read]) of
         {ok, Dev} ->
+            _ = epp:set_encoding(Dev, DefEncoding),
             try Parser(Dev, 1, Options)
             after ok = file:close(Dev)
 	    end;
@@ -195,6 +212,14 @@ parse_file(File, Parser, Options) ->
             Error
     end.
 
+find_invalid_unicode([H|T]) ->
+    case H of
+	{error, {_Line, file_io_server, invalid_unicode}} ->
+	    invalid_unicode;
+	_Other ->
+	    find_invalid_unicode(T)
+    end;
+find_invalid_unicode([]) -> none.
 
 %% =====================================================================
 %% @spec parse(IODevice) -> {ok, Forms} | {error, errorinfo()}
@@ -421,6 +446,7 @@ parse_form(Dev, L0, Parser, Options) ->
                     {ok, F, L1}
             end;
         {error, _IoErr, _L1} = Err -> Err;
+        {error, _Reason} -> {eof, L0}; % This is probably encoding problem
         {eof, _L1} = Eof -> Eof
     end.
 
