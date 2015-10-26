@@ -9,7 +9,8 @@ Build-Depends: debhelper (>= 8.0.0), autoconf (>= 2.50), openssl, libssl-dev, m4
  libncurses5-dev, autotools-dev, unixodbc-dev, bison, flex, ed,
  libwxgtk3.0-dev, dctrl-tools, xsltproc,
  libgl1-mesa-dev | libgl-dev, libglu1-mesa-dev | libglu-dev,
- libsctp-dev [linux-any], libsystemd-dev [linux-any], dh-systemd
+ libsctp-dev [linux-any]
+#, libsystemd-dev [linux-any], dh-systemd
 Build-Depends-Indep: fop, default-jdk | sun-java6-jdk
 Build-Conflicts: autoconf2.13, libwxgtk2.4-dev, libwxgtk2.6-dev, libwxgtk2.8-dev
 Homepage: http://www.erlang.org/
