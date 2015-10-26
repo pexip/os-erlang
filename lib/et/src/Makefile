@@ -1,7 +1,7 @@
 #
 # %CopyrightBegin%
 #
-# Copyright Ericsson AB 2000-2010. All Rights Reserved.
+# Copyright Ericsson AB 2000-2013. All Rights Reserved.
 #
 # The contents of this file are subject to the Erlang Public License,
 # Version 1.1, (the "License"); you may not use this file except in
@@ -92,10 +92,10 @@ docs:
 # ----------------------------------------------------
 
 $(APP_TARGET): $(APP_SRC) ../vsn.mk
-	sed -e 's;%VSN%;$(VSN);' $< > $@
+	$(vsn_verbose)sed -e 's;%VSN%;$(VSN);' $< > $@
 
 $(APPUP_TARGET): $(APPUP_SRC) ../vsn.mk
-	sed -e 's;%VSN%;$(VSN);' $< > $@
+	$(vsn_verbose)sed -e 's;%VSN%;$(VSN);' $< > $@
 
 # ----------------------------------------------------
 # Release Target
@@ -104,14 +104,14 @@ $(APPUP_TARGET): $(APPUP_SRC) ../vsn.mk
 include $(ERL_TOP)/make/otp_release_targets.mk
 
 release_spec: opt
-	$(INSTALL_DIR)  $(RELSYSDIR)/ebin
-	$(INSTALL_DATA) $(TARGET_FILES) $(RELSYSDIR)/ebin
-	$(INSTALL_DATA) $(APP_TARGET) $(APPUP_TARGET) $(RELSYSDIR)/ebin
-	$(INSTALL_DIR)  $(RELSYSDIR)/src
-	$(INSTALL_DATA) $(ERL_FILES) $(RELSYSDIR)/src
-	$(INSTALL_DATA) $(INTERNAL_HRL_FILES) $(RELSYSDIR)/src
-	$(INSTALL_DIR)  $(RELSYSDIR)/include
-	$(INSTALL_DATA) $(HRL_FILES) $(RELSYSDIR)/include
+	$(INSTALL_DIR)  "$(RELSYSDIR)/ebin"
+	$(INSTALL_DATA) $(TARGET_FILES) "$(RELSYSDIR)/ebin"
+	$(INSTALL_DATA) $(APP_TARGET) $(APPUP_TARGET) "$(RELSYSDIR)/ebin"
+	$(INSTALL_DIR)  "$(RELSYSDIR)/src"
+	$(INSTALL_DATA) $(ERL_FILES) "$(RELSYSDIR)/src"
+	$(INSTALL_DATA) $(INTERNAL_HRL_FILES) "$(RELSYSDIR)/src"
+	$(INSTALL_DIR)  "$(RELSYSDIR)/include"
+	$(INSTALL_DATA) $(HRL_FILES) "$(RELSYSDIR)/include"
 
 
 release_docs_spec:
@@ -127,14 +127,11 @@ $(EBIN)/et_selector.$(EMULATOR): et_selector.erl ../include/et.hrl
 
 $(EBIN)/et_contents_viewer.$(EMULATOR): et_contents_viewer.erl ../include/et.hrl et_internal.hrl
 
-$(EBIN)/et_gs_contents_viewer.$(EMULATOR): et_gs_contents_viewer.erl ../include/et.hrl et_internal.hrl
 $(EBIN)/et_wx_contents_viewer.$(EMULATOR): et_wx_contents_viewer.erl ../include/et.hrl et_internal.hrl
 
 $(EBIN)/et_collector.$(EMULATOR): et_collector.erl ../include/et.hrl et_internal.hrl
 
 $(EBIN)/et_viewer.$(EMULATOR): et_viewer.erl ../include/et.hrl et_internal.hrl
-
-$(EBIN)/et_gs_viewer.$(EMULATOR): et_gs_viewer.erl ../include/et.hrl et_internal.hrl
 
 $(EBIN)/et_wx_viewer.$(EMULATOR): et_wx_viewer.erl ../include/et.hrl et_internal.hrl
 

@@ -20,7 +20,11 @@
 
 -export([all/0, suite/0,groups/0,init_per_suite/1, end_per_suite/1, 
 	 init_per_group/2,end_per_group/2,
-	 test1/1,overwritten_fun/1,otp_7202/1,bif_fun/1]).
+	 test1/1,overwritten_fun/1,otp_7202/1,bif_fun/1,
+	 external/1,eep37/1,badarity/1]).
+
+%% Internal export.
+-export([call_me/1]).
 
 -include_lib("test_server/include/test_server.hrl").
 
@@ -28,7 +32,7 @@ suite() -> [{ct_hooks,[ts_install_cth]}].
 
 all() -> 
     test_lib:recompile(?MODULE),
-    [test1, overwritten_fun, otp_7202, bif_fun].
+    [test1,overwritten_fun,otp_7202,bif_fun,external,eep37,badarity].
 
 groups() -> 
     [].
@@ -44,7 +48,6 @@ init_per_group(_GroupName, Config) ->
 
 end_per_group(_GroupName, Config) ->
     Config.
-
 
 %%% The help functions below are copied from emulator:bs_construct_SUITE.
 
@@ -152,4 +155,60 @@ bif_fun(Config) when is_list(Config) ->
     ?line F = fun abs/1,
     ?line 5 = F(-5),
     ok.
+
+-define(APPLY(M, F, A), (fun(Fun) -> {ok,{a,b}} = Fun({a,b}) end)(fun M:F/A)).
+-define(APPLY2(M, F, A),
+	(fun(Map) ->
+		 Id = fun(I) -> I end,
+		 List = [x,y],
+		 List = Map(Id, List),
+		 {type,external} = erlang:fun_info(Map, type)
+	 end)(fun M:F/A)).
     
+external(Config) when is_list(Config) ->
+    Mod = id(?MODULE),
+    Func = id(call_me),
+    Arity = id(1),
+
+    ?APPLY(?MODULE, call_me, 1),
+    ?APPLY(?MODULE, call_me, Arity),
+    ?APPLY(?MODULE, Func, 1),
+    ?APPLY(?MODULE, Func, Arity),
+    ?APPLY(Mod, call_me, 1),
+    ?APPLY(Mod, call_me, Arity),
+    ?APPLY(Mod, Func, 1),
+    ?APPLY(Mod, Func, Arity),
+
+    ListsMod = id(lists),
+    ListsMap = id(map),
+    ListsArity = id(2),
+
+    ?APPLY2(lists, map, 2),
+    ?APPLY2(lists, map, ListsArity),
+    ?APPLY2(lists, ListsMap, 2),
+    ?APPLY2(lists, ListsMap, ListsArity),
+    ?APPLY2(ListsMod, map, 2),
+    ?APPLY2(ListsMod, map, ListsArity),
+    ?APPLY2(ListsMod, ListsMap, 2),
+    ?APPLY2(ListsMod, ListsMap, ListsArity),
+
+    ok.
+
+call_me(I) ->
+    {ok,I}.
+
+eep37(Config) when is_list(Config) ->
+    F = fun Fact(N) when N > 0 -> N * Fact(N - 1); Fact(0) -> 1 end,
+    Add = fun _(N) -> N + 1 end,
+    UnusedName = fun BlackAdder(N) -> N + 42 end,
+    720 = F(6),
+    10 = Add(9),
+    50 = UnusedName(8),
+    ok.
+
+badarity(Config) when is_list(Config) ->
+    {'EXIT',{{badarity,{_,[]}},_}} = (catch (fun badarity/1)()),
+    ok.
+
+id(I) ->
+    I.

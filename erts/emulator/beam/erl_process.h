@@ -1,7 +1,7 @@
 /*
  * %CopyrightBegin%
  *
- * Copyright Ericsson AB 1996-2011. All Rights Reserved.
+ * Copyright Ericsson AB 1996-2014. All Rights Reserved.
  *
  * The contents of this file are subject to the Erlang Public License,
  * Version 1.1, (the "License"); you may not use this file except in
@@ -42,6 +42,9 @@ typedef struct process Process;
 #include "erl_process_lock.h" /* Only pull out important types... */
 #undef ERTS_PROCESS_LOCK_ONLY_PROC_LOCK_TYPE__
 
+#define ERL_PORT_GET_PORT_TYPE_ONLY__
+#include "erl_port.h"
+#undef ERL_PORT_GET_PORT_TYPE_ONLY__
 #include "erl_vm.h"
 #include "erl_smp.h"
 #include "erl_message.h"
@@ -53,17 +56,30 @@ typedef struct process Process;
 #include "erl_time.h"
 #include "erl_atom_table.h"
 #include "external.h"
+#include "erl_mseg.h"
+#include "erl_async.h"
 
 #ifdef HIPE
 #include "hipe_process.h"
 #endif
 
+#undef ERL_THR_PROGRESS_TSD_TYPE_ONLY
+#define ERL_THR_PROGRESS_TSD_TYPE_ONLY
+#include "erl_thr_progress.h"
+#undef ERL_THR_PROGRESS_TSD_TYPE_ONLY
+
 struct ErtsNodesMonitor_;
-struct port;
+
+#define ERTS_HAVE_SCHED_UTIL_BALANCING_SUPPORT_OPT	0
+#define ERTS_HAVE_SCHED_UTIL_BALANCING_SUPPORT		0
 
 #define ERTS_MAX_NO_OF_SCHEDULERS 1024
+#ifdef ERTS_DIRTY_SCHEDULERS
+#define ERTS_MAX_NO_OF_DIRTY_CPU_SCHEDULERS ERTS_MAX_NO_OF_SCHEDULERS
+#define ERTS_MAX_NO_OF_DIRTY_IO_SCHEDULERS ERTS_MAX_NO_OF_SCHEDULERS
+#endif
 
-#define ERTS_DEFAULT_MAX_PROCESSES (1 << 15)
+#define ERTS_DEFAULT_MAX_PROCESSES (1 << 18)
 
 #define ERTS_HEAP_ALLOC(Type, Size)					\
      erts_alloc((Type), (Size))
@@ -88,7 +104,13 @@ struct saved_calls {
 };
 
 extern Export exp_send, exp_receive, exp_timeout;
+extern int erts_sched_compact_load;
+extern int erts_sched_balance_util;
 extern Uint erts_no_schedulers;
+#ifdef ERTS_DIRTY_SCHEDULERS
+extern Uint erts_no_dirty_cpu_schedulers;
+extern Uint erts_no_dirty_io_schedulers;
+#endif
 extern Uint erts_no_run_queues;
 extern int erts_sched_thread_suggested_stack_size;
 #define ERTS_SCHED_THREAD_MIN_STACK_SIZE 4	/* Kilo words */
@@ -104,28 +126,29 @@ extern int erts_sched_thread_suggested_stack_size;
 #define PRIORITY_NORMAL       2
 #define PRIORITY_LOW          3
 #define ERTS_NO_PROC_PRIO_LEVELS      4
+#define ERTS_NO_PROC_PRIO_QUEUES      3
 
 #define ERTS_PORT_PRIO_LEVEL ERTS_NO_PROC_PRIO_LEVELS
+#define ERTS_NO_PRIO_LEVELS (ERTS_NO_PROC_PRIO_LEVELS + 1)
 
 #define ERTS_RUNQ_FLGS_PROCS_QMASK \
   ((((Uint32) 1) << ERTS_NO_PROC_PRIO_LEVELS) - 1)
 
-#define ERTS_NO_PRIO_LEVELS (ERTS_NO_PROC_PRIO_LEVELS + 1)
-#define ERTS_RUNQ_FLGS_MIGRATE_QMASK \
+#define ERTS_RUNQ_FLGS_QMASK \
   ((((Uint32) 1) << ERTS_NO_PRIO_LEVELS) - 1)
 
 #define ERTS_RUNQ_FLGS_EMIGRATE_SHFT \
-  ERTS_NO_PROC_PRIO_LEVELS
+  ERTS_NO_PRIO_LEVELS
 #define ERTS_RUNQ_FLGS_IMMIGRATE_SHFT \
   (ERTS_RUNQ_FLGS_EMIGRATE_SHFT + ERTS_NO_PRIO_LEVELS)
 #define ERTS_RUNQ_FLGS_EVACUATE_SHFT \
   (ERTS_RUNQ_FLGS_IMMIGRATE_SHFT + ERTS_NO_PRIO_LEVELS)
 #define ERTS_RUNQ_FLGS_EMIGRATE_QMASK \
-  (ERTS_RUNQ_FLGS_MIGRATE_QMASK << ERTS_RUNQ_FLGS_EMIGRATE_SHFT)
+  (ERTS_RUNQ_FLGS_QMASK << ERTS_RUNQ_FLGS_EMIGRATE_SHFT)
 #define ERTS_RUNQ_FLGS_IMMIGRATE_QMASK \
-  (ERTS_RUNQ_FLGS_MIGRATE_QMASK << ERTS_RUNQ_FLGS_IMMIGRATE_SHFT)
+  (ERTS_RUNQ_FLGS_QMASK << ERTS_RUNQ_FLGS_IMMIGRATE_SHFT)
 #define ERTS_RUNQ_FLGS_EVACUATE_QMASK \
-  (ERTS_RUNQ_FLGS_MIGRATE_QMASK << ERTS_RUNQ_FLGS_EVACUATE_SHFT)
+  (ERTS_RUNQ_FLGS_QMASK << ERTS_RUNQ_FLGS_EVACUATE_SHFT)
 
 #define ERTS_RUNQ_FLG_BASE2 \
   (ERTS_RUNQ_FLGS_EVACUATE_SHFT + ERTS_NO_PRIO_LEVELS)
@@ -136,20 +159,22 @@ extern int erts_sched_thread_suggested_stack_size;
   (((Uint32) 1) << (ERTS_RUNQ_FLG_BASE2 + 1))
 #define ERTS_RUNQ_FLG_SUSPENDED \
   (((Uint32) 1) << (ERTS_RUNQ_FLG_BASE2 + 2))
-#define ERTS_RUNQ_FLG_SHARED_RUNQ \
-  (((Uint32) 1) << (ERTS_RUNQ_FLG_BASE2 + 3))
 #define ERTS_RUNQ_FLG_CHK_CPU_BIND \
-  (((Uint32) 1) << (ERTS_RUNQ_FLG_BASE2 + 4))
+  (((Uint32) 1) << (ERTS_RUNQ_FLG_BASE2 + 3))
 #define ERTS_RUNQ_FLG_INACTIVE \
+  (((Uint32) 1) << (ERTS_RUNQ_FLG_BASE2 + 4))
+#define ERTS_RUNQ_FLG_NONEMPTY \
   (((Uint32) 1) << (ERTS_RUNQ_FLG_BASE2 + 5))
+#define ERTS_RUNQ_FLG_PROTECTED \
+  (((Uint32) 1) << (ERTS_RUNQ_FLG_BASE2 + 6))
 
 #define ERTS_RUNQ_FLGS_MIGRATION_QMASKS	\
   (ERTS_RUNQ_FLGS_EMIGRATE_QMASK	\
    | ERTS_RUNQ_FLGS_IMMIGRATE_QMASK	\
    | ERTS_RUNQ_FLGS_EVACUATE_QMASK)
+
 #define ERTS_RUNQ_FLGS_MIGRATION_INFO \
-  (ERTS_RUNQ_FLGS_MIGRATION_QMASKS \
-   | ERTS_RUNQ_FLG_INACTIVE \
+  (ERTS_RUNQ_FLG_INACTIVE \
    | ERTS_RUNQ_FLG_OUT_OF_WORK \
    | ERTS_RUNQ_FLG_HALFTIME_OUT_OF_WORK)
 
@@ -180,34 +205,28 @@ extern int erts_sched_thread_suggested_stack_size;
 #define ERTS_UNSET_RUNQ_FLG_EVACUATE(FLGS, PRIO) \
   ((FLGS) &= ~ERTS_RUNQ_FLG_EVACUATE((PRIO)))
 
-#define ERTS_RUNQ_IFLG_SUSPENDED		(((erts_aint32_t) 1) << 0)
-#define ERTS_RUNQ_IFLG_NONEMPTY			(((erts_aint32_t) 1) << 1)
-
-
-#ifdef DEBUG
-#  if defined(ARCH_64) && !HALFWORD_HEAP
-#    define ERTS_DBG_SET_INVALID_RUNQP(RQP, N) \
-       (*((char **) &(RQP)) = (char *) (0xdeadbeefdead0003 | ((N) << 4)))
-#  define ERTS_DBG_VERIFY_VALID_RUNQP(RQP) \
-do { \
-    ASSERT((RQP) != NULL); \
-    ASSERT(((((Uint) (RQP)) & ((Uint) 0x3))) == ((Uint) 0)); \
-    ASSERT((((Uint) (RQP)) & ~((Uint) 0xffff)) != ((Uint) 0xdeadbeefdead0000));\
-} while (0)
-#  else
-#    define ERTS_DBG_SET_INVALID_RUNQP(RQP, N) \
-       (*((char **) &(RQP)) = (char *) (0xdead0003 | ((N) << 4)))
-#  define ERTS_DBG_VERIFY_VALID_RUNQP(RQP) \
-do { \
-    ASSERT((RQP) != NULL); \
-    ASSERT(((((UWord) (RQP)) & ((UWord) 1))) == ((UWord) 0)); \
-    ASSERT((((UWord) (RQP)) & ~((UWord) 0xffff)) != ((UWord) 0xdead0000)); \
-} while (0)
-#  endif
-#else
-#  define ERTS_DBG_SET_INVALID_RUNQP(RQP, N)
-#  define ERTS_DBG_VERIFY_VALID_RUNQP(RQP)
-#endif
+#define ERTS_RUNQ_FLGS_INIT(RQ, INIT)					\
+    erts_smp_atomic32_init_nob(&(RQ)->flags, (erts_aint32_t) (INIT))
+#define ERTS_RUNQ_FLGS_SET(RQ, FLGS)					\
+    ((Uint32) erts_smp_atomic32_read_bor_relb(&(RQ)->flags,		\
+					      (erts_aint32_t) (FLGS)))
+#define ERTS_RUNQ_FLGS_BSET(RQ, MSK, FLGS)				\
+    ((Uint32) erts_smp_atomic32_read_bset_relb(&(RQ)->flags,		\
+					       (erts_aint32_t) (MSK),	\
+					       (erts_aint32_t) (FLGS)))
+#define ERTS_RUNQ_FLGS_UNSET(RQ, FLGS)					\
+    ((Uint32) erts_smp_atomic32_read_band_relb(&(RQ)->flags,		\
+					       (erts_aint32_t) ~(FLGS)))
+#define ERTS_RUNQ_FLGS_GET(RQ)						\
+    ((Uint32) erts_smp_atomic32_read_acqb(&(RQ)->flags))
+#define ERTS_RUNQ_FLGS_GET_NOB(RQ)					\
+    ((Uint32) erts_smp_atomic32_read_nob(&(RQ)->flags))
+#define ERTS_RUNQ_FLGS_GET_MB(RQ)					\
+    ((Uint32) erts_smp_atomic32_read_mb(&(RQ)->flags))
+#define ERTS_RUNQ_FLGS_READ_BSET(RQ, MSK, FLGS)		  		\
+    ((Uint32) erts_smp_atomic32_read_bset_relb(&(RQ)->flags, 		\
+					       (erts_aint32_t) (MSK),	\
+					       (erts_aint32_t) (FLGS)))
 
 typedef enum {
     ERTS_SCHDLR_SSPND_DONE_MSCHED_BLOCKED,
@@ -242,30 +261,43 @@ typedef enum {
   | ERTS_SSI_FLG_WAITING				\
   | ERTS_SSI_FLG_SUSPENDED)
 
-#define ERTS_SCHED_NEED_BLOCKABLE_AUX_WORK
+/*
+ * Keep ERTS_SSI_AUX_WORK flags in expected frequency order relative
+ * eachother. Most frequent - lowest bit number.
+ */
 
-#define ERTS_SSI_AUX_WORK_CHECK_CHILDREN	(((erts_aint32_t) 1) << 0)
-#define ERTS_SSI_AUX_WORK_MISC			(((erts_aint32_t) 1) << 1)
-
-#define ERTS_SSI_BLOCKABLE_AUX_WORK_MASK \
-  (ERTS_SSI_AUX_WORK_CHECK_CHILDREN \
-   | ERTS_SSI_AUX_WORK_MISC)
-#define ERTS_SSI_NONBLOCKABLE_AUX_WORK_MASK \
-  (0)
+#define ERTS_SSI_AUX_WORK_DELAYED_AW_WAKEUP	(((erts_aint32_t) 1) << 0)
+#define ERTS_SSI_AUX_WORK_DD			(((erts_aint32_t) 1) << 1)
+#define ERTS_SSI_AUX_WORK_DD_THR_PRGR		(((erts_aint32_t) 1) << 2)
+#define ERTS_SSI_AUX_WORK_FIX_ALLOC_DEALLOC	(((erts_aint32_t) 1) << 3)
+#define ERTS_SSI_AUX_WORK_FIX_ALLOC_LOWER_LIM	(((erts_aint32_t) 1) << 4)
+#define ERTS_SSI_AUX_WORK_THR_PRGR_LATER_OP	(((erts_aint32_t) 1) << 5)
+#define ERTS_SSI_AUX_WORK_ASYNC_READY		(((erts_aint32_t) 1) << 6)
+#define ERTS_SSI_AUX_WORK_ASYNC_READY_CLEAN	(((erts_aint32_t) 1) << 7)
+#define ERTS_SSI_AUX_WORK_MISC_THR_PRGR		(((erts_aint32_t) 1) << 8)
+#define ERTS_SSI_AUX_WORK_MISC			(((erts_aint32_t) 1) << 9)
+#define ERTS_SSI_AUX_WORK_CHECK_CHILDREN	(((erts_aint32_t) 1) << 10)
+#define ERTS_SSI_AUX_WORK_SET_TMO		(((erts_aint32_t) 1) << 11)
+#define ERTS_SSI_AUX_WORK_MSEG_CACHE_CHECK	(((erts_aint32_t) 1) << 12)
+#define ERTS_SSI_AUX_WORK_REAP_PORTS		(((erts_aint32_t) 1) << 13)
 
 typedef struct ErtsSchedulerSleepInfo_ ErtsSchedulerSleepInfo;
 
+#ifdef ERTS_DIRTY_SCHEDULERS
 typedef struct {
     erts_smp_spinlock_t lock;
     ErtsSchedulerSleepInfo *list;
 } ErtsSchedulerSleepList;
+#endif
 
 struct ErtsSchedulerSleepInfo_ {
+#ifdef ERTS_SMP
     ErtsSchedulerSleepInfo *next;
     ErtsSchedulerSleepInfo *prev;
     erts_smp_atomic32_t flags;
     erts_tse_t *event;
-    erts_smp_atomic32_t aux_work;
+#endif
+    erts_atomic32_t aux_work;
 };
 
 /* times to reschedule low prio process before running */
@@ -280,8 +312,9 @@ struct ErtsSchedulerSleepInfo_ {
 typedef struct ErtsProcList_ ErtsProcList;
 struct ErtsProcList_ {
     Eterm pid;
-    SysTimeval started;
+    Uint64 started_interval;
     ErtsProcList* next;
+    ErtsProcList* prev;
 };
 
 typedef struct ErtsMiscOpList_ ErtsMiscOpList;
@@ -301,44 +334,95 @@ typedef struct ErtsSchedulerData_ ErtsSchedulerData;
 typedef struct ErtsRunQueue_ ErtsRunQueue;
 
 typedef struct {
-    int len;
-    int max_len;
+    erts_smp_atomic32_t len;
+    erts_aint32_t max_len;
     int reds;
+} ErtsRunQueueInfo;
+
+
+#ifdef HAVE_GETHRTIME
+#  undef ERTS_HAVE_SCHED_UTIL_BALANCING_SUPPORT_OPT
+#  define ERTS_HAVE_SCHED_UTIL_BALANCING_SUPPORT_OPT 1
+#endif
+
+#ifdef ERTS_SMP
+
+#undef ERTS_HAVE_SCHED_UTIL_BALANCING_SUPPORT
+#define ERTS_HAVE_SCHED_UTIL_BALANCING_SUPPORT ERTS_HAVE_SCHED_UTIL_BALANCING_SUPPORT_OPT
+
+#ifdef ARCH_64
+typedef erts_atomic_t ErtsAtomicSchedTime;
+#elif defined(ARCH_32)
+typedef erts_dw_atomic_t ErtsAtomicSchedTime;
+#else
+# error :-/
+#endif
+
+#if ERTS_HAVE_SCHED_UTIL_BALANCING_SUPPORT
+typedef struct {
+    ErtsAtomicSchedTime last;
+    struct {
+	Uint64 short_interval;
+	Uint64 long_interval;
+    } worktime;
+    int is_working;
+} ErtsRunQueueSchedUtil;
+#endif
+
+typedef struct {
+#if ERTS_HAVE_SCHED_UTIL_BALANCING_SUPPORT
+    int sched_util;
+#endif
+    Uint32 flags;
+    ErtsRunQueue *misc_evac_runq;
     struct {
 	struct {
 	    int this;
 	    int other;
 	} limit;
 	ErtsRunQueue *runq;
-    } migrate;
-} ErtsRunQueueInfo;
+	Uint32 flags;
+    } prio[ERTS_NO_PRIO_LEVELS];
+} ErtsMigrationPath;
+
+typedef struct ErtsMigrationPaths_ ErtsMigrationPaths;
+
+struct ErtsMigrationPaths_ {
+    void *block;
+    ErtsMigrationPaths *next;
+    ErtsThrPrgrVal thr_prgr;
+    ErtsMigrationPath mpath[1];
+};
+
+#endif /* ERTS_SMP */
 
 struct ErtsRunQueue_ {
     int ix;
-    erts_smp_atomic32_t info_flags;
 
     erts_smp_mtx_t mtx;
     erts_smp_cnd_t cnd;
 
+#ifdef ERTS_DIRTY_SCHEDULERS
 #ifdef ERTS_SMP
     ErtsSchedulerSleepList sleepers;
+#endif
 #endif
 
     ErtsSchedulerData *scheduler;
     int waiting; /* < 0 in sys schedule; > 0 on cnd variable */
     int woken;
-    Uint32 flags;
+    erts_smp_atomic32_t flags;
     int check_balance_reds;
     int full_reds_history_sum;
     int full_reds_history[ERTS_FULL_REDS_HISTORY_SIZE];
     int out_of_work_count;
-    int max_len;
-    int len;
+    erts_aint32_t max_len;
+    erts_aint32_t len;
     int wakeup_other;
     int wakeup_other_reds;
+    int halt_in_progress;
 
     struct {
-	int len;
 	ErtsProcList *pending_exiters;
 	Uint context_switches;
 	Uint reductions;
@@ -353,15 +437,22 @@ struct ErtsRunQueue_ {
     struct {
 	ErtsMiscOpList *start;
 	ErtsMiscOpList *end;
-	ErtsRunQueue *evac_runq;
+	erts_smp_atomic_t evac_runq;
     } misc;
 
     struct {
 	ErtsRunQueueInfo info;
-	struct port *start;
-	struct port *end;
+	Port *start;
+	Port *end;
     } ports;
+#if ERTS_HAVE_SCHED_UTIL_BALANCING_SUPPORT
+    ErtsRunQueueSchedUtil sched_util;
+#endif
 };
+
+#ifdef ERTS_SMP
+extern long erts_runq_supervision_interval;
+#endif
 
 typedef union {
     ErtsRunQueue runq;
@@ -369,12 +460,11 @@ typedef union {
 } ErtsAlignedRunQueue;
 
 extern ErtsAlignedRunQueue *erts_aligned_run_queues;
-extern ErtsRunQueue *erts_common_run_queue;
 
 #define ERTS_PROC_REDUCTIONS_EXECUTED(RQ, PRIO, REDS, AREDS)	\
 do {								\
     (RQ)->procs.reductions += (AREDS);				\
-    (RQ)->procs.prio_info[p->prio].reds += (REDS);		\
+    (RQ)->procs.prio_info[(PRIO)].reds += (REDS);		\
     (RQ)->check_balance_reds -= (REDS);				\
     (RQ)->wakeup_other_reds += (AREDS);				\
 } while (0)
@@ -386,47 +476,129 @@ do {								\
     (RQ)->wakeup_other_reds += (REDS);				\
 } while (0)
 
-struct ErtsSchedulerData_ {
+typedef struct {
+    int need; /* "+sbu true" or scheduler_wall_time enabled */
+    int enabled;
+    Uint64 start;
+    struct {
+	Uint64 total;
+	Uint64 start;
+	int currently;
+    } working;
+} ErtsSchedWallTime;
 
+typedef struct {
+  Uint64 reclaimed;
+  Uint64 garbage_cols;
+} ErtsGCInfo;
+
+typedef struct {
+    int sched;
+    erts_aint32_t aux_work;
+} ErtsDelayedAuxWorkWakeupJob;
+
+typedef struct {
+    int sched_id;
+    ErtsSchedulerData *esdp;
+    ErtsSchedulerSleepInfo *ssi;
 #ifdef ERTS_SMP
+    ErtsThrPrgrVal current_thr_prgr;
+    ErtsThrPrgrVal latest_wakeup;
+#endif
+    struct {
+	int ix;
+#ifdef ERTS_SMP
+	ErtsThrPrgrVal thr_prgr;
+#endif
+    } misc;
+#ifdef ERTS_SMP
+    struct {
+	ErtsThrPrgrVal thr_prgr;
+	void (*completed_callback)(void *);
+	void (*completed_arg)(void *);
+    } dd;
+    struct {
+	ErtsThrPrgrVal thr_prgr;
+	UWord size;
+	ErtsThrPrgrLaterOp *first;
+	ErtsThrPrgrLaterOp *last;
+    } later_op;
+#endif
+#ifdef ERTS_USE_ASYNC_READY_Q
+    struct {
+#ifdef ERTS_SMP
+	int need_thr_prgr;
+	ErtsThrPrgrVal thr_prgr;
+#endif
+	void *queue;
+    } async_ready;
+#endif
+#ifdef ERTS_SMP
+    struct {
+	Uint64 next;
+	int *sched2jix;
+	int jix;
+	ErtsDelayedAuxWorkWakeupJob *job;
+    } delayed_wakeup;
+#endif
+} ErtsAuxWorkData;
+
+#ifdef ERTS_DIRTY_SCHEDULERS
+typedef enum {
+    ERTS_DIRTY_CPU_SCHEDULER,
+    ERTS_DIRTY_IO_SCHEDULER
+} ErtsDirtySchedulerType;
+
+typedef union {
+    struct {
+	ErtsDirtySchedulerType type: 1;
+	unsigned num: 31;
+    } s;
+    Uint no;
+} ErtsDirtySchedId;
+#endif
+
+struct ErtsSchedulerData_ {
     /*
      * Keep X registers first (so we get as many low
      * numbered registers as possible in the same cache
      * line).
      */
-#if !HALFWORD_HEAP
-    Eterm save_reg[ERTS_X_REGS_ALLOCATED]; /* X registers */
-#else
-    Eterm *save_reg;
-#endif
-    FloatDef freg[MAX_REG];	/* Floating point registers. */
+    Eterm* x_reg_array;		/* X registers */
+    FloatDef* f_reg_array;	/* Floating point registers. */
+
+#ifdef ERTS_SMP
     ethr_tid tid;		/* Thread id */
     struct erl_bits_state erl_bits_state; /* erl_bits.c state */
     void *match_pseudo_process; /* erl_db_util.c:db_prog_match() */
-    ErtsSchedulerSleepInfo *ssi;
     Process *free_process;
+    ErtsThrPrgrData thr_progress_data;
 #endif
 #if !HEAP_ON_C_STACK
     Eterm tmp_heap[TMP_HEAP_SIZE];
     int num_tmp_heap_used;
     Eterm beam_emu_tmp_heap[BEAM_EMU_TMP_HEAP_SIZE];
-    Eterm cmp_tmp_heap[CMP_TMP_HEAP_SIZE];
     Eterm erl_arith_tmp_heap[ERL_ARITH_TMP_HEAP_SIZE];
 #endif
-
+    ErtsSchedulerSleepInfo *ssi;
     Process *current_process;
-    Uint no;			/* Scheduler number */
-    struct port *current_port;
+    Uint no;			/* Scheduler number for normal schedulers */
+#ifdef ERTS_DIRTY_SCHEDULERS
+    ErtsDirtySchedId dirty_no;  /* Scheduler number for dirty schedulers */
+#endif
+    Port *current_port;
     ErtsRunQueue *run_queue;
     int virtual_reds;
     int cpu_id;			/* >= 0 when bound */
-
+    ErtsAuxWorkData aux_work_data;
     ErtsAtomCacheMap atom_cache_map;
 
-#ifdef ERTS_SMP
-    /* NOTE: These fields are modified under held mutexes by other threads */
-    erts_smp_atomic32_t chk_cpu_bind; /* Only used when common run queue */
-#endif
+    ErtsSchedAllocData alloc_data;
+
+    Uint64 reductions;
+    ErtsSchedWallTime sched_wall_time;
+    ErtsGCInfo gc_info;
+    ErtsPortTaskHandle nosuspend_port_task_handle;
 
 #ifdef ERTS_DO_VERIFY_UNUSED_TEMP_ALLOC
     erts_alloc_verify_func_t verify_unused_temp_alloc;
@@ -440,10 +612,115 @@ typedef union {
 } ErtsAlignedSchedulerData;
 
 extern ErtsAlignedSchedulerData *erts_aligned_scheduler_data;
+#ifdef ERTS_DIRTY_SCHEDULERS
+extern ErtsAlignedSchedulerData *erts_aligned_dirty_cpu_scheduler_data;
+extern ErtsAlignedSchedulerData *erts_aligned_dirty_io_scheduler_data;
+#endif
 
 #ifndef ERTS_SMP
 extern ErtsSchedulerData *erts_scheduler_data;
 #endif
+
+#ifdef ERTS_SCHED_FAIR
+#define ERTS_SCHED_FAIR_YIELD() ETHR_YIELD()
+#else
+#define ERTS_SCHED_FAIR 0
+#define ERTS_SCHED_FAIR_YIELD()
+#endif
+
+#if defined(ERTS_SMP) && defined(ERTS_ENABLE_LOCK_CHECK)
+int erts_smp_lc_runq_is_locked(ErtsRunQueue *);
+#endif
+
+#ifdef ERTS_INCLUDE_SCHEDULER_INTERNALS
+
+#ifdef ERTS_SMP
+void erts_empty_runq(ErtsRunQueue *rq);
+void erts_non_empty_runq(ErtsRunQueue *rq);
+#endif
+
+
+/*
+ * Run queue locked during modifications. We use atomic ops since
+ * other threads peek at values without run queue lock.
+ */
+
+ERTS_GLB_INLINE void erts_smp_inc_runq_len(ErtsRunQueue *rq, ErtsRunQueueInfo *rqi, int prio);
+ERTS_GLB_INLINE void erts_smp_dec_runq_len(ErtsRunQueue *rq, ErtsRunQueueInfo *rqi, int prio);
+ERTS_GLB_INLINE void erts_smp_reset_max_len(ErtsRunQueue *rq, ErtsRunQueueInfo *rqi);
+
+#if ERTS_GLB_INLINE_INCL_FUNC_DEF
+
+ERTS_GLB_INLINE void
+erts_smp_inc_runq_len(ErtsRunQueue *rq, ErtsRunQueueInfo *rqi, int prio)
+{
+    erts_aint32_t len;
+
+    ERTS_SMP_LC_ASSERT(erts_smp_lc_runq_is_locked(rq));
+
+    len = erts_smp_atomic32_read_nob(&rqi->len);
+    ASSERT(len >= 0);
+    if (len == 0) {
+	ASSERT((erts_smp_atomic32_read_nob(&rq->flags)
+		& ((erts_aint32_t) (1 << prio))) == 0);
+	erts_smp_atomic32_read_bor_nob(&rq->flags,
+				       (erts_aint32_t) (1 << prio));
+    }
+    len++;
+    if (rqi->max_len < len)
+	rqi->max_len = len;
+
+    erts_smp_atomic32_set_relb(&rqi->len, len);
+
+#ifdef ERTS_SMP
+    if (rq->len == 0)
+	erts_non_empty_runq(rq);
+#endif
+    rq->len++;
+    if (rq->max_len < rq->len)
+	rq->max_len = len;
+    ASSERT(rq->len > 0);
+}
+
+ERTS_GLB_INLINE void
+erts_smp_dec_runq_len(ErtsRunQueue *rq, ErtsRunQueueInfo *rqi, int prio)
+{
+    erts_aint32_t len;
+
+    ERTS_SMP_LC_ASSERT(erts_smp_lc_runq_is_locked(rq));
+
+    len = erts_smp_atomic32_read_nob(&rqi->len);
+    len--;
+    ASSERT(len >= 0);
+    if (len == 0) {
+	ASSERT((erts_smp_atomic32_read_nob(&rq->flags)
+		& ((erts_aint32_t) (1 << prio))));
+	erts_smp_atomic32_read_band_nob(&rq->flags,
+					~((erts_aint32_t) (1 << prio)));
+    }
+    erts_smp_atomic32_set_relb(&rqi->len, len);
+
+    rq->len--;
+    ASSERT(rq->len >= 0);
+}
+
+ERTS_GLB_INLINE void
+erts_smp_reset_max_len(ErtsRunQueue *rq, ErtsRunQueueInfo *rqi)
+{
+    erts_aint32_t len;
+
+    ERTS_SMP_LC_ASSERT(erts_smp_lc_runq_is_locked(rq));
+
+    len = erts_smp_atomic32_read_nob(&rqi->len);
+    ASSERT(rqi->max_len >= len);
+    rqi->max_len = len;
+}
+
+#endif /* ERTS_GLB_INLINE_INCL_FUNC_DEF */
+
+#define RUNQ_READ_LEN(X) erts_smp_atomic32_read_nob((X))
+
+#endif /* ERTS_INCLUDE_SCHEDULER_INTERNALS */
 
 /*
  * Process Specific Data.
@@ -456,8 +733,10 @@ extern ErtsSchedulerData *erts_scheduler_data;
 #define ERTS_PSD_SCHED_ID			2
 #define ERTS_PSD_DIST_ENTRY			3
 #define ERTS_PSD_CALL_TIME_BP			4
+#define ERTS_PSD_DELAYED_GC_TASK_QS		5
+#define ERTS_PSD_NIF_TRAP_EXPORT		6
 
-#define ERTS_PSD_SIZE				5
+#define ERTS_PSD_SIZE				7
 
 typedef struct {
     void *data[ERTS_PSD_SIZE];
@@ -480,6 +759,12 @@ typedef struct {
 
 #define ERTS_PSD_CALL_TIME_BP_GET_LOCKS ERTS_PROC_LOCK_MAIN
 #define ERTS_PSD_CALL_TIME_BP_SET_LOCKS ERTS_PROC_LOCK_MAIN
+
+#define ERTS_PSD_DELAYED_GC_TASK_QS_GET_LOCKS ERTS_PROC_LOCK_MAIN
+#define ERTS_PSD_DELAYED_GC_TASK_QS_SET_LOCKS ERTS_PROC_LOCK_MAIN
+
+#define ERTS_PSD_NIF_TRAP_EXPORT_GET_LOCKS ERTS_PROC_LOCK_MAIN
+#define ERTS_PSD_NIF_TRAP_EXPORT_SET_LOCKS ERTS_PROC_LOCK_MAIN
 
 typedef struct {
     ErtsProcLocks get_locks;
@@ -513,6 +798,9 @@ typedef struct {
     ErlHeapFragment *bp;
 } ErtsPendExit;
 
+typedef struct ErtsProcSysTask_ ErtsProcSysTask;
+typedef struct ErtsProcSysTaskQs_ ErtsProcSysTaskQs;
+
 #ifdef ERTS_SMP
 
 typedef struct ErtsPendingSuspend_ ErtsPendingSuspend;
@@ -527,6 +815,7 @@ struct ErtsPendingSuspend_ {
 };
 
 #endif
+
 
 /* Defines to ease the change of memory architecture */
 #  define HEAP_START(p)     (p)->heap
@@ -557,6 +846,8 @@ struct ErtsPendingSuspend_ {
 #  define BIN_OLD_VHEAP(p)    (p)->bin_old_vheap
 
 struct process {
+    ErtsPTabElementCommon common; /* *Need* to be first in struct */
+
     /* All fields in the PCB that differs between different heap
      * architectures, have been moved to the end of this struct to
      * make sure that as few offsets as possible differ. Different
@@ -572,7 +863,7 @@ struct process {
     Uint min_heap_size;         /* Minimum size of heap (in words). */
     Uint min_vheap_size;        /* Minimum size of virtual heap (in words). */
 
-#if !defined(NO_FPE_SIGNALS)
+#if !defined(NO_FPE_SIGNALS) || defined(HIPE)
     volatile unsigned long fp_exception;
 #endif
 
@@ -599,17 +890,9 @@ struct process {
 				 * Number of reductions left to execute.
 				 * Only valid for the current process.
 				 */
-    Uint32 status;		/* process STATE */
-    Uint32 gcstatus;		/* process gc STATE */
-    Uint32 rstatus;		/* process resume STATE */
     Uint32 rcount;		/* suspend count */
-    Eterm id;			/* The pid of this process */
-    int  prio;			/* Priority of process */
-    int  skipped;		/* Times a low prio process has been rescheduled */
+    int  schedule_count;	/* Times left to reschedule a low prio process */
     Uint reds;			/* No of reductions for this process  */
-    Eterm tracer_proc;		/* If proc is traced, this is the tracer
-				   (can NOT be boxed) */
-    Uint trace_flags;		/* Trace flags (used to be in flags) */
     Eterm group_leader;		/* Pid in charge
 				   (can be boxed) */
     Uint flags;			/* Trap exit, etc (no trace flags anymore) */
@@ -618,11 +901,6 @@ struct process {
     Eterm ftrace;		/* Latest exception stack trace dump */
 
     Process *next;		/* Pointer to next process in run queue */
-    Process *prev;		/* Pointer to prev process in run queue */
-
-    struct reg_proc *reg;	/* NULL iff not registered */
-    ErtsLink *nlinks;
-    ErtsMonitor *monitors;      /* The process monitors, both ends */
 
     struct ErtsNodesMonitor_ *nodes_monitors;
 
@@ -632,7 +910,10 @@ struct process {
 
     ErlMessageQueue msg;	/* Message queue */
 
-    ErtsBifTimer *bif_timers;	/* Bif timers aiming at this process */
+    union {
+	ErtsBifTimer *bif_timers;	/* Bif timers aiming at this process */
+	void *terminate;
+    } u;
 
     ProcDict  *dictionary;       /* Process dictionary, may be NULL */
 
@@ -640,6 +921,10 @@ struct process {
     Uint seq_trace_lastcnt;
     Eterm seq_trace_token;	/* Sequential trace token (tuple size 5 see below) */
 
+#ifdef USE_VM_PROBES
+    Eterm dt_utag;              /* Place to store the dynamc trace user tag */
+    Uint dt_utag_flags;         /* flag field for the dt_utag */
+#endif       
     BeamInstr initial[3];	/* Initial module(0), function(1), arity(2), often used instead
 				   of pointer to funcinfo instruction, hence the BeamInstr datatype */
     BeamInstr* current;		/* Current Erlang function, part of the funcinfo:
@@ -652,8 +937,7 @@ struct process {
      * Information mainly for post-mortem use (erl crash dump).
      */
     Eterm parent;		/* Pid of process that created this process. */
-    SysTimeval started;		/* Time when started. */
-
+    erts_approx_time_t approx_started; /* Time when started. */
 
     /* This is the place, where all fields that differs between memory
      * architectures, have gone to.
@@ -675,49 +959,21 @@ struct process {
     Uint64 bin_old_vheap_sz;	/* Virtual old heap block size for binaries */
     Uint64 bin_old_vheap;	/* Virtual old heap size for binaries */
 
-    union {
-#ifdef ERTS_SMP
-	ErtsSmpPTimer *ptimer;
-#else
-	ErlTimer tm;		/* Timer entry */
-#endif
-	void *exit_data;	/* Misc data referred during termination */
-    } u;
+    ErtsProcSysTaskQs *sys_task_qs;
 
-    ErtsRunQueue *bound_runq;
+    erts_smp_atomic32_t state;  /* Process state flags (see ERTS_PSFLG_*) */
 
 #ifdef ERTS_SMP
+    ErlMessageInQueue msg_inq;
+    ErtsPendExit pending_exit;
     erts_proc_lock_t lock;
     ErtsSchedulerData *scheduler_data;
-    int is_exiting;
-    Uint32 runq_flags;
-    Uint32 status_flags;
-    ErlMessageInQueue msg_inq;
     Eterm suspendee;
     ErtsPendingSuspend *pending_suspenders;
-    ErtsPendExit pending_exit;
-    ErtsRunQueue *run_queue;
+    erts_smp_atomic_t run_queue;
 #ifdef HIPE
     struct hipe_process_state_smp hipe_smp;
 #endif
-#endif
-
-#ifdef HYBRID
-    Eterm *rrma;                /* Remembered roots to Message Area */
-    Eterm **rrsrc;              /* The source of the root */
-    Uint nrr;                   /* Number of remembered roots */
-    Uint rrsz;                  /* Size of root array */
-#endif
-
-#ifdef HYBRID
-    Uint active;                /* Active since last major collection? */
-    Uint active_index;          /* Index in the active process array */
-#endif
- 
-#ifdef INCREMENTAL
-    Process *active_next; /* Active processes to scan for roots */
-    Process *active_prev; /* in collection of the message area  */
-    Eterm *scan_top;
 #endif
 
 #ifdef CHECK_FOR_HOLES
@@ -738,6 +994,8 @@ struct process {
     Eterm* space_verified_from; /* we rely on available heap space (TestHeap) */
 #endif
 };
+
+extern const Process erts_invalid_process;
 
 #ifdef CHECK_FOR_HOLES
 # define INIT_HOLE_CHECK(p)			\
@@ -767,6 +1025,78 @@ void erts_check_for_holes(Process* p);
 #endif
 
 #define SEQ_TRACE_TOKEN(p)  ((p)->seq_trace_token)
+
+#if ERTS_NO_PROC_PRIO_LEVELS > 4
+#  error "Need to increase ERTS_PSFLG_PRIO_SHIFT"
+#endif
+
+#define ERTS_PSFLGS_PRIO_BITS 2
+#define ERTS_PSFLGS_PRIO_MASK \
+    ((((erts_aint32_t) 1) << ERTS_PSFLGS_PRIO_BITS) - 1)
+
+#define ERTS_PSFLGS_ACT_PRIO_OFFSET (0*ERTS_PSFLGS_PRIO_BITS)
+#define ERTS_PSFLGS_USR_PRIO_OFFSET (1*ERTS_PSFLGS_PRIO_BITS)
+#define ERTS_PSFLGS_PRQ_PRIO_OFFSET (2*ERTS_PSFLGS_PRIO_BITS)
+#define ERTS_PSFLGS_ZERO_BIT_OFFSET (3*ERTS_PSFLGS_PRIO_BITS)
+
+#define ERTS_PSFLGS_QMASK_BITS 4
+#define ERTS_PSFLGS_QMASK \
+    ((((erts_aint32_t) 1) << ERTS_PSFLGS_QMASK_BITS) - 1)
+#define ERTS_PSFLGS_IN_PRQ_MASK_OFFSET \
+    ERTS_PSFLGS_ZERO_BIT_OFFSET
+
+#define ERTS_PSFLG_BIT(N) \
+    (((erts_aint32_t) 1) << (ERTS_PSFLGS_ZERO_BIT_OFFSET + (N)))
+
+/*
+ * ACT_PRIO -> Active prio, i.e., currently active prio. This
+ *             prio may be higher than user prio.
+ * USR_PRIO -> User prio. i.e., prio the user has set.
+ * PRQ_PRIO -> Prio queue prio, i.e., prio queue currently
+ *             enqueued in. 
+ */
+#define ERTS_PSFLGS_ACT_PRIO_MASK \
+    (ERTS_PSFLGS_PRIO_MASK << ERTS_PSFLGS_ACT_PRIO_OFFSET)
+#define ERTS_PSFLGS_USR_PRIO_MASK \
+    (ERTS_PSFLGS_PRIO_MASK << ERTS_PSFLGS_USR_PRIO_OFFSET)
+#define ERTS_PSFLGS_PRQ_PRIO_MASK \
+    (ERTS_PSFLGS_PRIO_MASK << ERTS_PSFLGS_PRQ_PRIO_OFFSET)
+#define ERTS_PSFLG_IN_PRQ_MAX 		ERTS_PSFLG_BIT(0)
+#define ERTS_PSFLG_IN_PRQ_HIGH		ERTS_PSFLG_BIT(1)
+#define ERTS_PSFLG_IN_PRQ_NORMAL	ERTS_PSFLG_BIT(2)
+#define ERTS_PSFLG_IN_PRQ_LOW 		ERTS_PSFLG_BIT(3)
+#define ERTS_PSFLG_FREE			ERTS_PSFLG_BIT(4)
+#define ERTS_PSFLG_EXITING		ERTS_PSFLG_BIT(5)
+#define ERTS_PSFLG_PENDING_EXIT		ERTS_PSFLG_BIT(6)
+#define ERTS_PSFLG_ACTIVE		ERTS_PSFLG_BIT(7)
+#define ERTS_PSFLG_IN_RUNQ		ERTS_PSFLG_BIT(8)
+#define ERTS_PSFLG_RUNNING		ERTS_PSFLG_BIT(9)
+#define ERTS_PSFLG_SUSPENDED		ERTS_PSFLG_BIT(10)
+#define ERTS_PSFLG_GC			ERTS_PSFLG_BIT(11)
+#define ERTS_PSFLG_BOUND		ERTS_PSFLG_BIT(12)
+#define ERTS_PSFLG_TRAP_EXIT		ERTS_PSFLG_BIT(13)
+#define ERTS_PSFLG_ACTIVE_SYS		ERTS_PSFLG_BIT(14)
+#define ERTS_PSFLG_RUNNING_SYS		ERTS_PSFLG_BIT(15)
+#define ERTS_PSFLG_PROXY		ERTS_PSFLG_BIT(16)
+#define ERTS_PSFLG_DELAYED_SYS		ERTS_PSFLG_BIT(17)
+#ifdef ERTS_DIRTY_SCHEDULERS
+#define ERTS_PSFLG_DIRTY_CPU_PROC	ERTS_PSFLG_BIT(18)
+#define ERTS_PSFLG_DIRTY_IO_PROC	ERTS_PSFLG_BIT(19)
+#define ERTS_PSFLG_DIRTY_CPU_PROC_IN_Q	ERTS_PSFLG_BIT(20)
+#define ERTS_PSFLG_DIRTY_IO_PROC_IN_Q	ERTS_PSFLG_BIT(21)
+#endif
+
+#define ERTS_PSFLGS_IN_PRQ_MASK 	(ERTS_PSFLG_IN_PRQ_MAX		\
+					 | ERTS_PSFLG_IN_PRQ_HIGH	\
+					 | ERTS_PSFLG_IN_PRQ_NORMAL	\
+					 | ERTS_PSFLG_IN_PRQ_LOW)
+
+#define ERTS_PSFLGS_GET_ACT_PRIO(PSFLGS) \
+    (((PSFLGS) >> ERTS_PSFLGS_ACT_PRIO_OFFSET) & ERTS_PSFLGS_PRIO_MASK)
+#define ERTS_PSFLGS_GET_USR_PRIO(PSFLGS) \
+    (((PSFLGS) >> ERTS_PSFLGS_USR_PRIO_OFFSET) & ERTS_PSFLGS_PRIO_MASK)
+#define ERTS_PSFLGS_GET_PRQ_PRIO(PSFLGS) \
+    (((PSFLGS) >> ERTS_PSFLGS_USR_PRIO_OFFSET) & ERTS_PSFLGS_PRIO_MASK)
 
 /* The sequential tracing token is a tuple of size 5:
  *
@@ -840,13 +1170,6 @@ Eterm* erts_heap_alloc(Process* p, Uint need, Uint xtra);
 Eterm* erts_set_hole_marker(Eterm* ptr, Uint sz);
 #endif
 
-extern Process** process_tab;
-#ifdef HYBRID
-extern Uint erts_num_active_procs;
-extern Process** erts_active_procs;
-#endif
-extern Uint erts_max_processes;
-extern Uint erts_process_tab_index_mask;
 extern Uint erts_default_process_flags;
 extern erts_smp_rwmtx_t erts_cpu_bind_rwmtx;
 /* If any of the erts_system_monitor_* variables are set (enabled),
@@ -855,6 +1178,7 @@ extern erts_smp_rwmtx_t erts_cpu_bind_rwmtx;
 */
 extern Eterm erts_system_monitor;
 extern Uint erts_system_monitor_long_gc;
+extern Uint erts_system_monitor_long_schedule;
 extern Uint erts_system_monitor_large_heap;
 struct erts_system_monitor_flags_t {
 	 unsigned int busy_port : 1;
@@ -875,16 +1199,8 @@ struct erts_system_profile_flags_t {
 };
 extern struct erts_system_profile_flags_t erts_system_profile_flags;
 
-#define INVALID_PID(p, pid)	((p) == NULL				\
-				 || (p)->id != (pid)			\
-				 || (p)->status == P_EXITING)
- 
-#define IS_TRACED(p)             ( (p)->tracer_proc != NIL )
-#define ARE_TRACE_FLAGS_ON(p,tf) ( ((p)->trace_flags & (tf|F_SENSITIVE)) == (tf) )
-#define IS_TRACED_FL(p,tf)       ( IS_TRACED(p) && ARE_TRACE_FLAGS_ON(p,tf) )
-
 /* process flags */
-#define F_TRAPEXIT           (1 <<  0)
+#define F_HIBERNATE_SCHED    (1 <<  0) /* Schedule out after hibernate op */
 #define F_INSLPQUEUE         (1 <<  1) /* Set if in timer queue */
 #define F_TIMO               (1 <<  2) /* Set if timeout */
 #define F_HEAP_GROW          (1 <<  3)
@@ -895,7 +1211,7 @@ extern struct erts_system_profile_flags_t erts_system_profile_flags;
 #define F_HAVE_BLCKD_MSCHED  (1 <<  8) /* Process has blocked multi-scheduling */
 #define F_P2PNR_RESCHED      (1 <<  9) /* Process has been rescheduled via erts_pid2proc_not_running() */
 #define F_FORCE_GC           (1 << 10) /* Force gc at process in-scheduling */
-#define F_HIBERNATE_SCHED    (1 << 11) /* Schedule out after hibernate op */
+#define F_DISABLE_GC         (1 << 11) /* Disable GC */
 
 /* process trace_flags */
 #define F_SENSITIVE          (1 << 0)
@@ -955,65 +1271,16 @@ extern struct erts_system_profile_flags_t erts_system_profile_flags;
 #define SEQ_TRACE_PRINT    (1 << 2)
 #define SEQ_TRACE_TIMESTAMP (1 << 3)
 
-#ifdef ERTS_SMP
-/* Status flags ... */
-#define ERTS_PROC_SFLG_PENDADD2SCHEDQ	(((Uint32) 1) << 0)	/* Pending
-								   add to
-								   schedule q */
-#define ERTS_PROC_SFLG_INRUNQ		(((Uint32) 1) << 1)	/* Process is
-								   in run q */
-#define ERTS_PROC_SFLG_TRAPEXIT		(((Uint32) 1) << 2)	/* Process is
-								   trapping
-								   exit */
-#define ERTS_PROC_SFLG_RUNNING		(((Uint32) 1) << 3)	/* Process is
-								   running */
-/* Scheduler flags in process struct... */
-#define ERTS_PROC_RUNQ_FLG_RUNNING	(((Uint32) 1) << 0)	/* Process is
-								   running */
-
-#endif
-
-
-#ifdef ERTS_SMP
-#define ERTS_PROC_IS_TRAPPING_EXITS(P)					\
-  (ERTS_SMP_LC_ASSERT(erts_proc_lc_my_proc_locks((P))			\
-		      & ERTS_PROC_LOCK_STATUS),				\
-   (P)->status_flags & ERTS_PROC_SFLG_TRAPEXIT)
-
-#define ERTS_PROC_SET_TRAP_EXIT(P)					\
-  (ERTS_SMP_LC_ASSERT(((ERTS_PROC_LOCK_MAIN|ERTS_PROC_LOCK_STATUS)	\
-		       & erts_proc_lc_my_proc_locks((P)))		\
-		      == (ERTS_PROC_LOCK_MAIN|ERTS_PROC_LOCK_STATUS)),	\
-   (P)->status_flags |= ERTS_PROC_SFLG_TRAPEXIT,			\
-   (P)->flags |= F_TRAPEXIT,						\
-   1)
-
-#define ERTS_PROC_UNSET_TRAP_EXIT(P)					\
-  (ERTS_SMP_LC_ASSERT(((ERTS_PROC_LOCK_MAIN|ERTS_PROC_LOCK_STATUS)	\
-		       & erts_proc_lc_my_proc_locks((P)))		\
-		      == (ERTS_PROC_LOCK_MAIN|ERTS_PROC_LOCK_STATUS)),	\
-   (P)->status_flags &= ~ERTS_PROC_SFLG_TRAPEXIT,			\
-   (P)->flags &= ~F_TRAPEXIT,						\
-   0)
-#else
-#define ERTS_PROC_IS_TRAPPING_EXITS(P) ((P)->flags & F_TRAPEXIT)
-#define ERTS_PROC_SET_TRAP_EXIT(P) ((P)->flags |= F_TRAPEXIT, 1)
-#define ERTS_PROC_UNSET_TRAP_EXIT(P) ((P)->flags &= ~F_TRAPEXIT, 0)
+#ifdef USE_VM_PROBES
+#define DT_UTAG_PERMANENT (1 << 0)
+#define DT_UTAG_SPREADING (1 << 1)
+#define DT_UTAG(P) ((P)->dt_utag)
+#define DT_UTAG_FLAGS(P)  ((P)->dt_utag_flags) 
 #endif
 
 /* Option flags to erts_send_exit_signal() */
 #define ERTS_XSIG_FLG_IGN_KILL		(((Uint32) 1) << 0)
 #define ERTS_XSIG_FLG_NO_IGN_NORMAL	(((Uint32) 1) << 1)
-
-
-/* Process status values */
-#define P_FREE      0
-#define P_RUNABLE   1
-#define P_WAITING   2
-#define P_RUNNING   3
-#define P_EXITING   4
-#define P_GARBING   5
-#define P_SUSPENDED 6
 
 #define CANCEL_TIMER(p) \
     do { \
@@ -1023,51 +1290,310 @@ extern struct erts_system_profile_flags_t erts_system_profile_flags;
 	    (p)->flags &= ~F_TIMO; \
     } while (0)
 
+#if defined(ERTS_DIRTY_SCHEDULERS) && defined(ERTS_SMP)
+#define ERTS_NUM_DIRTY_RUNQS 2
+#else
+#define ERTS_NUM_DIRTY_RUNQS 0
+#endif
+
 #define ERTS_RUNQ_IX(IX)						\
-  (ASSERT_EXPR(0 <= (IX) && (IX) < erts_no_run_queues),			\
+  (ASSERT(0 <= (IX) && (IX) < erts_no_run_queues),			\
    &erts_aligned_run_queues[(IX)].runq)
+#ifdef ERTS_DIRTY_SCHEDULERS
+#define ERTS_RUNQ_IX_IS_DIRTY(IX)					\
+  (-(ERTS_NUM_DIRTY_RUNQS) <= (IX) && (IX) < 0)
+#define ERTS_DIRTY_RUNQ_IX(IX)						\
+  (ASSERT(ERTS_RUNQ_IX_IS_DIRTY(IX)),					\
+   &erts_aligned_run_queues[(IX)].runq)
+#define ERTS_DIRTY_CPU_RUNQ (&erts_aligned_run_queues[-1].runq)
+#define ERTS_DIRTY_IO_RUNQ  (&erts_aligned_run_queues[-2].runq)
+#define ERTS_RUNQ_IS_DIRTY_CPU_RUNQ(RQ) ((RQ)->ix == -1)
+#define ERTS_RUNQ_IS_DIRTY_IO_RUNQ(RQ) ((RQ)->ix == -2)
+#else
+#define ERTS_RUNQ_IX_IS_DIRTY(IX) 0
+#endif
 #define ERTS_SCHEDULER_IX(IX)						\
-  (ASSERT_EXPR(0 <= (IX) && (IX) < erts_no_schedulers),			\
+  (ASSERT(0 <= (IX) && (IX) < erts_no_schedulers),			\
    &erts_aligned_scheduler_data[(IX)].esd)
+#ifdef ERTS_DIRTY_SCHEDULERS
+#define ERTS_DIRTY_CPU_SCHEDULER_IX(IX)					\
+  (ASSERT(0 <= (IX) && (IX) < erts_no_dirty_cpu_schedulers),		\
+   &erts_aligned_dirty_cpu_scheduler_data[(IX)].esd)
+#define ERTS_DIRTY_IO_SCHEDULER_IX(IX)					\
+  (ASSERT(0 <= (IX) && (IX) < erts_no_dirty_io_schedulers),		\
+   &erts_aligned_dirty_io_scheduler_data[(IX)].esd)
+#define ERTS_DIRTY_SCHEDULER_NO(ESDP)					\
+  ((ESDP)->dirty_no.s.num)
+#define ERTS_DIRTY_SCHEDULER_TYPE(ESDP)					\
+  ((ESDP)->dirty_no.s.type)
+#ifdef ERTS_SMP
+#define ERTS_SCHEDULER_IS_DIRTY(ESDP)					\
+  ((ESDP)->dirty_no.s.num != 0)
+#define ERTS_SCHEDULER_IS_DIRTY_CPU(ESDP)				\
+    ((ESDP)->dirty_no.s.type == 0)
+#define ERTS_SCHEDULER_IS_DIRTY_IO(ESDP)				\
+    ((ESDP)->dirty_no.s.type == 1)
+#else
+#define ERTS_SCHEDULER_IS_DIRTY(ESDP) 0
+#define ERTS_SCHEDULER_IS_DIRTY_CPU(ESDP) 0
+#define ERTS_SCHEDULER_IS_DIRTY_IO(ESDP) 0
+#endif
+#else
+#define ERTS_RUNQ_IX_IS_DIRTY(IX) 0
+#define ERTS_SCHEDULER_IS_DIRTY(ESDP) 0
+#define ERTS_SCHEDULER_IS_DIRTY_CPU(ESDP) 0
+#define ERTS_SCHEDULER_IS_DIRTY_IO(ESDP) 0
+#endif
 
 void erts_pre_init_process(void);
 void erts_late_init_process(void);
-void erts_early_init_scheduling(void);
-void erts_init_scheduling(int, int, int);
+void erts_early_init_scheduling(int);
+void erts_init_scheduling(int, int
+#ifdef ERTS_DIRTY_SCHEDULERS
+			  , int, int, int
+#endif
+			  );
+
+int erts_set_gc_state(Process *c_p, int enable);
+Eterm erts_sched_wall_time_request(Process *c_p, int set, int enable);
+Eterm erts_gc_info_request(Process *c_p);
+Uint64 erts_get_proc_interval(void);
+Uint64 erts_ensure_later_proc_interval(Uint64);
+Uint64 erts_step_proc_interval(void);
+
+int erts_setup_nif_gc(Process* proc, Eterm** objv, int* nobj); /* see erl_nif.c */
+void erts_destroy_nif_export(void *); /* see erl_nif.c */
 
 ErtsProcList *erts_proclist_create(Process *);
 void erts_proclist_destroy(ErtsProcList *);
-int erts_proclist_same(ErtsProcList *, Process *);
 
-int erts_sched_set_wakeup_limit(char *str);
+ERTS_GLB_INLINE int erts_proclist_same(ErtsProcList *, Process *);
+ERTS_GLB_INLINE void erts_proclist_store_first(ErtsProcList **, ErtsProcList *);
+ERTS_GLB_INLINE void erts_proclist_store_last(ErtsProcList **, ErtsProcList *);
+ERTS_GLB_INLINE ErtsProcList *erts_proclist_peek_first(ErtsProcList *);
+ERTS_GLB_INLINE ErtsProcList *erts_proclist_peek_last(ErtsProcList *);
+ERTS_GLB_INLINE ErtsProcList *erts_proclist_peek_next(ErtsProcList *, ErtsProcList *);
+ERTS_GLB_INLINE ErtsProcList *erts_proclist_peek_prev(ErtsProcList *, ErtsProcList *);
+ERTS_GLB_INLINE ErtsProcList *erts_proclist_fetch_first(ErtsProcList **);
+ERTS_GLB_INLINE ErtsProcList *erts_proclist_fetch_last(ErtsProcList **);
+ERTS_GLB_INLINE int erts_proclist_fetch(ErtsProcList **, ErtsProcList **);
+ERTS_GLB_INLINE void erts_proclist_remove(ErtsProcList **, ErtsProcList *);
+ERTS_GLB_INLINE int erts_proclist_is_empty(ErtsProcList *);
+ERTS_GLB_INLINE int erts_proclist_is_first(ErtsProcList *, ErtsProcList *);
+ERTS_GLB_INLINE int erts_proclist_is_last(ErtsProcList *, ErtsProcList *);
 
+#if ERTS_GLB_INLINE_INCL_FUNC_DEF
+
+ERTS_GLB_INLINE int
+erts_proclist_same(ErtsProcList *plp, Process *p)
+{
+    return (plp->pid == p->common.id
+	    && (plp->started_interval
+		== p->common.u.alive.started_interval));
+}
+
+ERTS_GLB_INLINE void erts_proclist_store_first(ErtsProcList **list,
+					       ErtsProcList *element)
+{
+    if (!*list)
+	element->next = element->prev = element;
+    else {
+	element->prev = (*list)->prev;
+	element->next = *list;
+	element->prev->next = element;
+	element->next->prev = element;
+    }
+    *list = element;
+}
+
+ERTS_GLB_INLINE void erts_proclist_store_last(ErtsProcList **list,
+					      ErtsProcList *element)
+{
+    if (!*list) {
+	element->next = element->prev = element;
+	*list = element;
+    }
+    else {
+	element->prev = (*list)->prev;
+	element->next = *list;
+	element->prev->next = element;
+	element->next->prev = element;
+    }
+}
+
+ERTS_GLB_INLINE ErtsProcList *erts_proclist_peek_first(ErtsProcList *list)
+{
+    return list;
+}
+
+ERTS_GLB_INLINE ErtsProcList *erts_proclist_peek_last(ErtsProcList *list)
+{
+    if (!list)
+	return NULL;
+    else
+	return list->prev;
+}
+
+ERTS_GLB_INLINE ErtsProcList *erts_proclist_peek_next(ErtsProcList *list,
+						      ErtsProcList *element)
+{
+    ErtsProcList *next;
+    ASSERT(list && element);
+    next = element->next;
+    return list == next ? NULL : next;
+}
+
+ERTS_GLB_INLINE ErtsProcList *erts_proclist_peek_prev(ErtsProcList *list,
+						      ErtsProcList *element)
+{
+    ErtsProcList *prev;
+    ASSERT(list && element);
+    prev = element->prev;
+    return list == element ? NULL : prev;
+}
+
+ERTS_GLB_INLINE ErtsProcList *erts_proclist_fetch_first(ErtsProcList **list)
+{
+    if (!*list)
+	return NULL;
+    else {
+	ErtsProcList *res = *list;
+	if (res == *list)
+	    *list = NULL;
+	else
+	    *list = res->next;
+	res->next->prev = res->prev;
+	res->prev->next = res->next;
+	return res;
+    }
+}
+
+ERTS_GLB_INLINE ErtsProcList *erts_proclist_fetch_last(ErtsProcList **list)
+{
+    if (!*list)
+	return NULL;
+    else {
+	ErtsProcList *res = (*list)->prev;
+	if (res == *list)
+	    *list = NULL;
+	res->next->prev = res->prev;
+	res->prev->next = res->next;
+	return res;
+    }
+}
+
+ERTS_GLB_INLINE int erts_proclist_fetch(ErtsProcList **list_first,
+					ErtsProcList **list_last)
+{
+    if (!*list_first) {
+	if (list_last)
+	    *list_last = NULL;
+	return 0;
+    }
+    else {
+	if (list_last)
+	    *list_last = (*list_first)->prev;
+	(*list_first)->prev->next = NULL;
+	(*list_first)->prev = NULL;
+	return !0;
+    }
+}
+
+ERTS_GLB_INLINE void erts_proclist_remove(ErtsProcList **list,
+					  ErtsProcList *element)
+{
+    ASSERT(list && *list);
+    if (*list == element) {
+	*list = element->next;
+	if (*list == element)
+	    *list = NULL;
+    }
+    element->next->prev = element->prev;
+    element->prev->next = element->next;
+}
+
+ERTS_GLB_INLINE int erts_proclist_is_empty(ErtsProcList *list)
+{
+    return list == NULL;
+}
+
+ERTS_GLB_INLINE int erts_proclist_is_first(ErtsProcList *list,
+					   ErtsProcList *element)
+{
+    ASSERT(list && element);
+    return list == element;
+}
+
+ERTS_GLB_INLINE int erts_proclist_is_last(ErtsProcList *list,
+					  ErtsProcList *element)
+{
+    ASSERT(list && element);
+    return list->prev == element;
+}
+
+#endif
+
+int erts_sched_set_wakeup_other_thresold(char *str);
+int erts_sched_set_wakeup_other_type(char *str);
+int erts_sched_set_busy_wait_threshold(char *str);
+int erts_sched_set_wake_cleanup_threshold(char *);
+
+void erts_schedule_thr_prgr_later_op(void (*)(void *),
+				     void *,
+				     ErtsThrPrgrLaterOp *);
+void erts_schedule_thr_prgr_later_cleanup_op(void (*)(void *),
+					     void *,
+					     ErtsThrPrgrLaterOp *,
+					     UWord);
+
+#if defined(ERTS_SMP) && defined(ERTS_ENABLE_LOCK_CHECK)
+int erts_dbg_check_halloc_lock(Process *p);
+#endif
 #ifdef DEBUG
 void erts_dbg_multi_scheduling_return_trap(Process *, Eterm);
 #endif
 int erts_get_max_no_executing_schedulers(void);
-#ifdef ERTS_SMP
+#if defined(ERTS_SMP) || defined(ERTS_DIRTY_SCHEDULERS)
 ErtsSchedSuspendResult
-erts_schedulers_state(Uint *, Uint *, Uint *, int);
+erts_schedulers_state(Uint *, Uint *, Uint *, Uint *, Uint *, Uint *, int);
+#endif
+#ifdef ERTS_SMP
 ErtsSchedSuspendResult
 erts_set_schedulers_online(Process *p,
 			   ErtsProcLocks plocks,
 			   Sint new_no,
-			   Sint *old_no);
+			   Sint *old_no
+#ifdef ERTS_DIRTY_SCHEDULERS
+			   , int dirty_only
+#endif
+			   );
 ErtsSchedSuspendResult
 erts_block_multi_scheduling(Process *, ErtsProcLocks, int, int);
 int erts_is_multi_scheduling_blocked(void);
 Eterm erts_multi_scheduling_blockers(Process *);
 void erts_start_schedulers(void);
+void erts_alloc_notify_delayed_dealloc(int);
+void erts_alloc_ensure_handle_delayed_dealloc_call(int);
 void erts_smp_notify_check_children_needed(void);
-void
-erts_smp_schedule_misc_aux_work(int ignore_self,
-				int max_sched,
-				void (*func)(void *),
-				void *arg);
 #endif
+#if ERTS_USE_ASYNC_READY_Q
+void erts_notify_check_async_ready_queue(void *);
+#endif
+#ifdef ERTS_SMP
+void erts_notify_code_ix_activation(Process* p, ErtsThrPrgrVal later);
+void erts_notify_finish_breakpointing(Process* p);
+#endif
+void erts_schedule_misc_aux_work(int sched_id,
+				 void (*func)(void *),
+				 void *arg);
+void erts_schedule_multi_misc_aux_work(int ignore_self,
+				       int max_sched,
+				       void (*func)(void *),
+				       void *arg);
+erts_aint32_t erts_set_aux_work_timeout(int, erts_aint32_t, int);
 void erts_sched_notify_check_cpu_bind(void);
 Uint erts_active_schedulers(void);
-void erts_init_process(int);
+void erts_init_process(int, int, int);
 Eterm erts_process_status(Process *, ErtsProcLocks, Process *, Eterm);
 Uint erts_run_queues_len(Uint *);
 void erts_add_to_runq(Process *);
@@ -1077,14 +1603,6 @@ Eterm erts_get_schedulers_binds(Process *c_p);
 Eterm erts_set_cpu_topology(Process *c_p, Eterm term);
 Eterm erts_bind_schedulers(Process *c_p, Eterm how);
 ErtsRunQueue *erts_schedid2runq(Uint);
-#ifdef ERTS_SMP
-ErtsMigrateResult erts_proc_migrate(Process *,
-				    ErtsProcLocks *,
-				    ErtsRunQueue *,
-				    int *,
-				    ErtsRunQueue *,
-				    int *);
-#endif
 Process *schedule(Process*, int);
 void erts_schedule_misc_op(void (*)(void *), void *);
 Eterm erl_create_process(Process*, Eterm, Eterm, Eterm, ErlSpawnOpts*);
@@ -1094,7 +1612,6 @@ void set_timer(Process*, Uint);
 void cancel_timer(Process*);
 /* Begin System profile */
 Uint erts_runnable_process_count(void);
-Uint erts_process_count(void);
 /* End System profile */
 void erts_init_empty_process(Process *p);
 void erts_cleanup_empty_process(Process* p);
@@ -1118,7 +1635,7 @@ Eterm erts_sched_stat_term(Process *p, int total);
 
 void erts_free_proc(Process *);
 
-void erts_suspend(Process*, ErtsProcLocks, struct port*);
+void erts_suspend(Process*, ErtsProcLocks, Port*);
 void erts_resume(Process*, ErtsProcLocks);
 int erts_resume_processes(ErtsProcList *);
 
@@ -1133,8 +1650,7 @@ int erts_send_exit_signal(Process *,
 #ifdef ERTS_SMP
 void erts_handle_pending_exit(Process *, ErtsProcLocks);
 #define ERTS_PROC_PENDING_EXIT(P) \
-  (ERTS_SMP_LC_ASSERT(erts_proc_lc_my_proc_locks((P)) & ERTS_PROC_LOCK_STATUS),\
-   (P)->pending_exit.reason != THE_NON_VALUE)
+    (ERTS_PSFLG_PENDING_EXIT & erts_smp_atomic32_read_acqb(&(P)->state))
 #else
 #define ERTS_PROC_PENDING_EXIT(P) 0
 #endif
@@ -1144,10 +1660,10 @@ void erts_deep_process_dump(int, void *);
 Eterm erts_get_reader_groups_map(Process *c_p);
 Eterm erts_debug_reader_groups_map(Process *c_p, int groups);
 
-Sint erts_test_next_pid(int, Uint);
-Eterm erts_debug_processes(Process *c_p);
-Eterm erts_debug_processes_bif_info(Process *c_p);
 Uint erts_debug_nbalance(void);
+int erts_debug_wait_deallocations(Process *c_p);
+
+Uint erts_process_memory(Process *c_p);
 
 #ifdef ERTS_SMP
 #  define ERTS_GET_SCHEDULER_DATA_FROM_PROC(PROC) ((PROC)->scheduler_data)
@@ -1163,7 +1679,7 @@ do {										\
     ErtsSchedulerData *esdp__ = ((P)						\
 				 ? ERTS_PROC_GET_SCHDATA((Process *) (P))	\
 				 : erts_get_scheduler_data());			\
-    if (esdp__)									\
+    if (esdp__ && !ERTS_SCHEDULER_IS_DIRTY(esdp__))				\
 	esdp__->verify_unused_temp_alloc(					\
 	    esdp__->verify_unused_temp_alloc_data);				\
 } while (0)
@@ -1185,13 +1701,26 @@ ErtsSchedulerData *erts_get_scheduler_data(void)
 #endif
 #endif
 
+void erts_schedule_process(Process *, erts_aint32_t, ErtsProcLocks);
+
+ERTS_GLB_INLINE void erts_proc_notify_new_message(Process *p, ErtsProcLocks locks);
+#if ERTS_GLB_INLINE_INCL_FUNC_DEF
+ERTS_GLB_INLINE void
+erts_proc_notify_new_message(Process *p, ErtsProcLocks locks)
+{
+    /* No barrier needed, due to msg lock */
+    erts_aint32_t state = erts_smp_atomic32_read_nob(&p->state);
+    if (!(state & ERTS_PSFLG_ACTIVE))
+	erts_schedule_process(p, state, locks);
+}
+#endif
+
 #if defined(ERTS_SMP) && defined(ERTS_ENABLE_LOCK_CHECK)
 
 #define ERTS_PROCESS_LOCK_ONLY_LOCK_CHECK_PROTO__
 #include "erl_process_lock.h"
 #undef ERTS_PROCESS_LOCK_ONLY_LOCK_CHECK_PROTO__
 
-int erts_smp_lc_runq_is_locked(ErtsRunQueue *);
 #define ERTS_SMP_LC_CHK_RUNQ_LOCK(RQ, L)				\
 do {									\
     if ((L))								\
@@ -1218,16 +1747,11 @@ erts_psd_get(Process *p, int ix)
 #if defined(ERTS_SMP) && defined(ERTS_ENABLE_LOCK_CHECK)
     ErtsProcLocks locks = erts_proc_lc_my_proc_locks(p);
     if (ERTS_LC_PSD_ANY_LOCK == erts_psd_required_locks[ix].get_locks)
-	ERTS_SMP_LC_ASSERT(locks
-			   || erts_is_system_blocked(0)
-			   || (ERTS_IS_CRASH_DUMPING
-			       && erts_is_system_blocked(ERTS_BS_FLG_ALLOW_GC)));
+	ERTS_SMP_LC_ASSERT(locks || erts_thr_progress_is_blocking());
     else {
 	locks &= erts_psd_required_locks[ix].get_locks;
 	ERTS_SMP_LC_ASSERT(erts_psd_required_locks[ix].get_locks == locks
-			   || erts_is_system_blocked(0)
-			   || (ERTS_IS_CRASH_DUMPING
-			       && erts_is_system_blocked(ERTS_BS_FLG_ALLOW_GC)));
+			   || erts_thr_progress_is_blocking());
     }
 #endif
     ASSERT(0 <= ix && ix < ERTS_PSD_SIZE);
@@ -1244,16 +1768,11 @@ erts_psd_set(Process *p, ErtsProcLocks plocks, int ix, void *data)
 #if defined(ERTS_SMP) && defined(ERTS_ENABLE_LOCK_CHECK)
     ErtsProcLocks locks = erts_proc_lc_my_proc_locks(p);
     if (ERTS_LC_PSD_ANY_LOCK == erts_psd_required_locks[ix].set_locks)
-	ERTS_SMP_LC_ASSERT(locks
-			   || erts_is_system_blocked(0)
-			   || (ERTS_IS_CRASH_DUMPING
-			       && erts_is_system_blocked(ERTS_BS_FLG_ALLOW_GC)));
+	ERTS_SMP_LC_ASSERT(locks || erts_thr_progress_is_blocking());
     else {
 	locks &= erts_psd_required_locks[ix].set_locks;
 	ERTS_SMP_LC_ASSERT(erts_psd_required_locks[ix].set_locks == locks
-			   || erts_is_system_blocked(0)
-			   || (ERTS_IS_CRASH_DUMPING
-			       && erts_is_system_blocked(ERTS_BS_FLG_ALLOW_GC)));
+			   || erts_thr_progress_is_blocking());
     }
 #endif
     ASSERT(0 <= ix && ix < ERTS_PSD_SIZE);
@@ -1289,6 +1808,16 @@ erts_psd_set(Process *p, ErtsProcLocks plocks, int ix, void *data)
   ((process_breakpoint_time_t *) erts_psd_get((P), ERTS_PSD_CALL_TIME_BP))
 #define ERTS_PROC_SET_CALL_TIME(P, L, PBT) \
   ((process_breakpoint_time_t *) erts_psd_set((P), (L), ERTS_PSD_CALL_TIME_BP, (void *) (PBT)))
+
+#define ERTS_PROC_GET_DELAYED_GC_TASK_QS(P) \
+    ((ErtsProcSysTaskQs *) erts_psd_get((P), ERTS_PSD_DELAYED_GC_TASK_QS))
+#define ERTS_PROC_SET_DELAYED_GC_TASK_QS(P, L, PBT) \
+    ((ErtsProcSysTaskQs *) erts_psd_set((P), (L), ERTS_PSD_DELAYED_GC_TASK_QS, (void *) (PBT)))
+
+#define ERTS_PROC_GET_NIF_TRAP_EXPORT(P) \
+    erts_psd_get((P), ERTS_PSD_NIF_TRAP_EXPORT)
+#define ERTS_PROC_SET_NIF_TRAP_EXPORT(P, L, NTE) \
+    erts_psd_set((P), (L), ERTS_PSD_NIF_TRAP_EXPORT, (void *) (NTE))
 
 
 ERTS_GLB_INLINE Eterm erts_proc_get_error_handler(Process *p);
@@ -1327,13 +1856,112 @@ erts_proc_set_error_handler(Process *p, ErtsProcLocks plocks, Eterm handler)
 
 #endif
 
-#ifdef ERTS_SMP
-ErtsRunQueue *erts_prepare_emigrate(ErtsRunQueue *c_rq,
-				    ErtsRunQueueInfo *c_rqi,
-				    int prio);
+#ifdef ERTS_INCLUDE_SCHEDULER_INTERNALS
 
+#ifdef ERTS_SMP
+
+#include "erl_thr_progress.h"
+
+extern erts_atomic_t erts_migration_paths;
+
+#if ERTS_HAVE_SCHED_UTIL_BALANCING_SUPPORT
+int erts_get_sched_util(ErtsRunQueue *rq,
+			int initially_locked,
+			int short_interval);
+#endif
+
+
+ERTS_GLB_INLINE ErtsMigrationPaths *erts_get_migration_paths_managed(void);
+ERTS_GLB_INLINE ErtsMigrationPaths *erts_get_migration_paths(void);
 ERTS_GLB_INLINE ErtsRunQueue *erts_check_emigration_need(ErtsRunQueue *c_rq,
 							 int prio);
+#if ERTS_GLB_INLINE_INCL_FUNC_DEF
+
+ERTS_GLB_INLINE ErtsMigrationPaths *
+erts_get_migration_paths_managed(void)
+{
+    return (ErtsMigrationPaths *) erts_atomic_read_ddrb(&erts_migration_paths);
+}
+
+ERTS_GLB_INLINE ErtsMigrationPaths *
+erts_get_migration_paths(void)
+{
+    if (erts_thr_progress_is_managed_thread())
+	return erts_get_migration_paths_managed();
+    else
+	return NULL;
+}
+
+ERTS_GLB_INLINE ErtsRunQueue *
+erts_check_emigration_need(ErtsRunQueue *c_rq, int prio)
+{
+    ErtsMigrationPaths *mps = erts_get_migration_paths();
+    ErtsMigrationPath *mp;
+    Uint32 flags;
+
+    if (!mps)
+	return NULL;
+
+    mp = &mps->mpath[c_rq->ix];
+    flags = mp->flags;
+
+    if (ERTS_CHK_RUNQ_FLG_EMIGRATE(flags, prio)) {
+	int len;
+
+	if (ERTS_CHK_RUNQ_FLG_EVACUATE(flags, prio)) {
+	    /* force emigration */
+	    return mp->prio[prio].runq;
+	}
+
+	if (flags & ERTS_RUNQ_FLG_INACTIVE) {
+	    /*
+	     * Run queue was inactive at last balance. Verify that
+	     * it still is before forcing emigration.
+	     */
+	    if (ERTS_RUNQ_FLGS_GET(c_rq) & ERTS_RUNQ_FLG_INACTIVE)
+		return mp->prio[prio].runq;
+	}
+
+#if ERTS_HAVE_SCHED_UTIL_BALANCING_SUPPORT
+	if (mp->sched_util) {
+	    ErtsRunQueue *rq = mp->prio[prio].runq;
+	    /* No migration if other is non-empty */
+	    if (!(ERTS_RUNQ_FLGS_GET(rq) & ERTS_RUNQ_FLG_NONEMPTY)
+		&& erts_get_sched_util(rq, 0, 1) < mp->prio[prio].limit.other
+		&& erts_get_sched_util(c_rq, 0, 1) > mp->prio[prio].limit.this) {
+		return rq;
+	    }
+	}
+	else
+#endif
+	{
+
+	    if (prio == ERTS_PORT_PRIO_LEVEL)
+		len = RUNQ_READ_LEN(&c_rq->ports.info.len);
+	    else
+		len = RUNQ_READ_LEN(&c_rq->procs.prio_info[prio].len);
+
+	    if (len > mp->prio[prio].limit.this) {
+		ErtsRunQueue *n_rq = mp->prio[prio].runq;
+		if (n_rq) {
+		    if (prio == ERTS_PORT_PRIO_LEVEL)
+			len = RUNQ_READ_LEN(&n_rq->ports.info.len);
+		    else
+			len = RUNQ_READ_LEN(&n_rq->procs.prio_info[prio].len);
+
+		    if (len < mp->prio[prio].limit.other)
+			return n_rq;
+		}
+	    }
+	}
+    }
+    return NULL;
+}
+
+#endif
+
+#endif
+
 #endif
 
 ERTS_GLB_INLINE int erts_is_scheduler_bound(ErtsSchedulerData *esdp);
@@ -1342,38 +1970,19 @@ ERTS_GLB_INLINE Eterm erts_get_current_pid(void);
 ERTS_GLB_INLINE Uint erts_get_scheduler_id(void);
 ERTS_GLB_INLINE ErtsRunQueue *erts_get_runq_proc(Process *p);
 ERTS_GLB_INLINE ErtsRunQueue *erts_get_runq_current(ErtsSchedulerData *esdp);
+#ifndef ERTS_ENABLE_LOCK_COUNT
 ERTS_GLB_INLINE void erts_smp_runq_lock(ErtsRunQueue *rq);
+#endif
 ERTS_GLB_INLINE int erts_smp_runq_trylock(ErtsRunQueue *rq);
 ERTS_GLB_INLINE void erts_smp_runq_unlock(ErtsRunQueue *rq);
+#ifndef ERTS_ENABLE_LOCK_COUNT
 ERTS_GLB_INLINE void erts_smp_xrunq_lock(ErtsRunQueue *rq, ErtsRunQueue *xrq);
+#endif
 ERTS_GLB_INLINE void erts_smp_xrunq_unlock(ErtsRunQueue *rq, ErtsRunQueue *xrq);
 ERTS_GLB_INLINE void erts_smp_runqs_lock(ErtsRunQueue *rq1, ErtsRunQueue *rq2);
 ERTS_GLB_INLINE void erts_smp_runqs_unlock(ErtsRunQueue *rq1, ErtsRunQueue *rq2);
 
 #if ERTS_GLB_INLINE_INCL_FUNC_DEF
-
-#ifdef ERTS_SMP
-ERTS_GLB_INLINE ErtsRunQueue *
-erts_check_emigration_need(ErtsRunQueue *c_rq, int prio)
-{
-    ErtsRunQueueInfo *c_rqi;
-
-    if (!ERTS_CHK_RUNQ_FLG_EMIGRATE(c_rq->flags, prio))
-	return NULL;
-
-    if (prio == ERTS_PORT_PRIO_LEVEL)
-	c_rqi = &c_rq->ports.info;
-    else
-	c_rqi = &c_rq->procs.prio_info[prio];
-
-    if (!ERTS_CHK_RUNQ_FLG_EVACUATE(c_rq->flags, prio)
-	&& !(c_rq->flags & ERTS_RUNQ_FLG_INACTIVE)
-	&& c_rqi->len <= c_rqi->migrate.limit.this)
-	return NULL;
-
-    return erts_prepare_emigrate(c_rq, c_rqi, prio);
-}
-#endif
 
 ERTS_GLB_INLINE
 int erts_is_scheduler_bound(ErtsSchedulerData *esdp)
@@ -1395,7 +2004,7 @@ ERTS_GLB_INLINE
 Eterm erts_get_current_pid(void)
 {
     Process *proc = erts_get_current_process();
-    return proc ? proc->id : THE_NON_VALUE;
+    return proc ? proc->common.id : THE_NON_VALUE;
 }
 
 ERTS_GLB_INLINE
@@ -1403,7 +2012,12 @@ Uint erts_get_scheduler_id(void)
 {
 #ifdef ERTS_SMP
     ErtsSchedulerData *esdp = erts_get_scheduler_data();
-    return esdp ? esdp->no : (Uint) 0;
+#ifdef ERTS_DIRTY_SCHEDULERS
+    if (esdp && ERTS_SCHEDULER_IS_DIRTY(esdp))
+	return 0;
+    else
+#endif
+	return esdp ? esdp->no : (Uint) 0;
 #else
     return erts_get_scheduler_data() ? (Uint) 1 : (Uint) 0;
 #endif
@@ -1412,13 +2026,11 @@ Uint erts_get_scheduler_id(void)
 ERTS_GLB_INLINE ErtsRunQueue *
 erts_get_runq_proc(Process *p)
 {
-    ERTS_SMP_LC_ASSERT(ERTS_PROC_LOCK_STATUS & erts_proc_lc_my_proc_locks(p));
 #ifdef ERTS_SMP
-    ASSERT(p->run_queue);
-    return p->run_queue;
+    ASSERT(ERTS_AINT_NULL != erts_atomic_read_nob(&p->run_queue));
+    return (ErtsRunQueue *) erts_atomic_read_nob(&p->run_queue);
 #else
-    ASSERT(erts_common_run_queue);
-    return erts_common_run_queue;
+    return ERTS_RUNQ_IX(0);
 #endif
 }
 
@@ -1431,8 +2043,7 @@ erts_get_runq_current(ErtsSchedulerData *esdp)
 	esdp = erts_get_scheduler_data();
     return esdp->run_queue;
 #else
-    ASSERT(erts_common_run_queue);
-    return erts_common_run_queue;
+    return ERTS_RUNQ_IX(0);
 #endif
 }
 
@@ -1443,6 +2054,12 @@ erts_smp_runq_lock(ErtsRunQueue *rq)
     erts_smp_mtx_lock(&rq->mtx);
 #endif
 }
+
+#ifdef ERTS_ENABLE_LOCK_COUNT
+
+#define erts_smp_runq_lock(rq)	erts_smp_mtx_lock_x(&(rq)->mtx, __FILE__, __LINE__)
+
+#endif
 
 ERTS_GLB_INLINE int
 erts_smp_runq_trylock(ErtsRunQueue *rq)
@@ -1462,6 +2079,31 @@ erts_smp_runq_unlock(ErtsRunQueue *rq)
 #endif
 }
 
+#ifdef ERTS_ENABLE_LOCK_COUNT
+
+#define erts_smp_xrunq_lock(rq, xrq)	erts_smp_xrunq_lock_x((rq), (xrq), __FILE__, __LINE__)
+
+ERTS_GLB_INLINE void
+erts_smp_xrunq_lock_x(ErtsRunQueue *rq, ErtsRunQueue *xrq, char* file, int line)
+{
+#ifdef ERTS_SMP
+    ERTS_SMP_LC_ASSERT(erts_smp_lc_mtx_is_locked(&rq->mtx));
+    if (xrq != rq) {
+	if (erts_smp_mtx_trylock(&xrq->mtx) == EBUSY) {
+	    if (rq < xrq)
+		erts_smp_mtx_lock_x(&xrq->mtx, file, line);
+	    else {
+		erts_smp_mtx_unlock(&rq->mtx);
+		erts_smp_mtx_lock_x(&xrq->mtx, file, line);
+		erts_smp_mtx_lock_x(&rq->mtx, file, line);
+	    }
+	}
+    }
+#endif
+}
+
+#else
+
 ERTS_GLB_INLINE void
 erts_smp_xrunq_lock(ErtsRunQueue *rq, ErtsRunQueue *xrq)
 {
@@ -1480,6 +2122,8 @@ erts_smp_xrunq_lock(ErtsRunQueue *rq, ErtsRunQueue *xrq)
     }
 #endif
 }
+
+#endif
 
 ERTS_GLB_INLINE void
 erts_smp_xrunq_unlock(ErtsRunQueue *rq, ErtsRunQueue *xrq)
@@ -1553,24 +2197,12 @@ extern int erts_disable_proc_not_running_opt;
 
 #ifdef DEBUG
 #define ERTS_SMP_ASSERT_IS_NOT_EXITING(P) \
-  do { ASSERT(!(P)->is_exiting); } while (0)
+    do { ASSERT(!ERTS_PROC_IS_EXITING((P))); } while (0)
 #else
 #define ERTS_SMP_ASSERT_IS_NOT_EXITING(P)
 #endif
 
-/* NOTE: At least one process lock has to be held on P! */
-#ifdef ERTS_ENABLE_LOCK_CHECK
-#define ERTS_PROC_IS_EXITING(P) \
-  (ERTS_SMP_LC_ASSERT(erts_proc_lc_my_proc_locks((P)) != 0 \
-		      || erts_lc_pix_lock_is_locked(ERTS_PID2PIXLOCK((P)->id))),\
-   (P)->is_exiting)
-#else
-#define ERTS_PROC_IS_EXITING(P) ((P)->is_exiting)
-#endif
-
 #else /* !ERTS_SMP */
-
-#define ERTS_PROC_IS_EXITING(P) ((P)->status == P_EXITING)
 
 #define ERTS_SMP_ASSERT_IS_NOT_EXITING(P)
 
@@ -1579,11 +2211,15 @@ extern int erts_disable_proc_not_running_opt;
 
 #endif
 
+#define ERTS_PROC_IS_EXITING(P) \
+    (ERTS_PSFLG_EXITING & erts_smp_atomic32_read_acqb(&(P)->state))
+
+
 /* Minimum NUMBER of processes for a small system to start */
-#ifdef ERTS_SMP
+#define ERTS_MIN_PROCESSES		1024
+#if defined(ERTS_SMP) && ERTS_MIN_PROCESSES < ERTS_NO_OF_PIX_LOCKS
+#undef ERTS_MIN_PROCESSES
 #define ERTS_MIN_PROCESSES		ERTS_NO_OF_PIX_LOCKS
-#else
-#define ERTS_MIN_PROCESSES		16
 #endif
 
 void erts_smp_notify_inc_runq(ErtsRunQueue *runq);
@@ -1599,14 +2235,13 @@ erts_sched_poke(ErtsSchedulerSleepInfo *ssi)
 {
     erts_aint32_t flags;
     ERTS_THR_MEMORY_BARRIER;
-    flags = erts_smp_atomic32_read(&ssi->flags);
-    ASSERT(!(flags & ERTS_SSI_FLG_SLEEPING)
-	   || (flags & ERTS_SSI_FLG_WAITING));
+    flags = erts_smp_atomic32_read_nob(&ssi->flags);
     if (flags & ERTS_SSI_FLG_SLEEPING) {
-	flags = erts_smp_atomic32_band(&ssi->flags, ~ERTS_SSI_FLGS_SLEEP);
+	flags = erts_smp_atomic32_read_band_nob(&ssi->flags, ~ERTS_SSI_FLGS_SLEEP);
 	erts_sched_finish_poke(ssi, flags);
     }
 }
+
 
 #endif /* #if ERTS_GLB_INLINE_INCL_FUNC_DEF */
 
@@ -1619,4 +2254,6 @@ erts_sched_poke(ErtsSchedulerSleepInfo *ssi)
 #endif
 
 
-
+void erl_halt(int code);
+extern erts_smp_atomic32_t erts_halt_progress;
+extern int erts_halt_code;

@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %% 
-%% Copyright Ericsson AB 1998-2010. All Rights Reserved.
+%% Copyright Ericsson AB 1998-2013. All Rights Reserved.
 %% 
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -19,8 +19,6 @@
 -module(dbg_debugged).
 
 %% External exports
-%% Avoid warning for local function demonitor/1 clashing with autoimported BIF.
--compile({no_auto_import,[demonitor/1]}).
 -export([eval/3]).
 
 %%====================================================================
@@ -47,7 +45,7 @@ msg_loop(Meta, Mref, SaveStacktrace) ->
 
 	%% Evaluated function has returned a value
 	{sys, Meta, {ready, Val}} ->
-	    demonitor(Mref),
+	    erlang:demonitor(Mref, [flush]),
 
 	    %% Restore original stacktrace and return the value
 	    try erlang:raise(throw, stack, SaveStacktrace)
@@ -63,7 +61,7 @@ msg_loop(Meta, Mref, SaveStacktrace) ->
 
 	%% Evaluated function raised an (uncaught) exception
 	{sys, Meta, {exception,{Class,Reason,Stacktrace}}} ->
-	    demonitor(Mref),
+	    erlang:demonitor(Mref, [flush]),
 
 	    %% ...raise the same exception
 	    erlang:error(erlang:raise(Class, Reason, Stacktrace), 
@@ -76,8 +74,8 @@ msg_loop(Meta, Mref, SaveStacktrace) ->
 	    msg_loop(Meta, Mref, SaveStacktrace);
 
 	%% Meta needs something evaluated within context of real process
-	{sys, Meta, {command, Command, Stacktrace}} ->
-	    Reply = handle_command(Command, Stacktrace),
+	{sys, Meta, {command,Command}} ->
+	    Reply = handle_command(Command),
 	    Meta ! {sys, self(), Reply},
 	    msg_loop(Meta, Mref, SaveStacktrace);
 
@@ -93,28 +91,22 @@ msg_loop(Meta, Mref, SaveStacktrace) ->
 	    end
     end.
 
-handle_command(Command, Stacktrace) ->
-    try reply(Command)
+handle_command(Command) ->
+    try
+	reply(Command)
     catch Class:Reason ->
-	    Stacktrace2 = stacktrace_f(erlang:get_stacktrace()),
-	    {exception, {Class,Reason,Stacktrace2++Stacktrace}}
+	    Stacktrace = stacktrace_f(erlang:get_stacktrace()),
+	    {exception,{Class,Reason,Stacktrace}}
     end.
 
 reply({apply,M,F,As}) ->
     {value, erlang:apply(M,F,As)};
 reply({eval,Expr,Bs}) ->
-    erl_eval:expr(Expr, Bs). % {value, Value, Bs2}
-
-%% Demonitor and delete message from inbox
-%%
-demonitor(Mref) ->
-    erlang:demonitor(Mref),
-    receive {'DOWN',Mref,_,_,_} -> ok
-    after 0 -> ok
-    end.
+    %% Bindings is an orddict (sort them)
+    erl_eval:expr(Expr, lists:sort(Bs)). % {value, Value, Bs2}
 
 %% Fix stacktrace - keep all above call to this module.
 %%
 stacktrace_f([]) -> [];
-stacktrace_f([{?MODULE,_,_}|_]) -> [];
+stacktrace_f([{?MODULE,_,_,_}|_]) -> [];
 stacktrace_f([F|S]) -> [F|stacktrace_f(S)].

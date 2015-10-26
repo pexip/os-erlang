@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %% 
-%% Copyright Ericsson AB 1997-2011. All Rights Reserved.
+%% Copyright Ericsson AB 1997-2013. All Rights Reserved.
 %% 
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -26,7 +26,7 @@
 -include("inet_int.hrl").
 
 -type option() ::
-        {active,          true | false | once} |
+        {active,          true | false | once | -32768..32767} |
         {add_membership,  {inet:ip_address(), inet:ip_address()}} |
         {broadcast,       boolean()} |
         {buffer,          non_neg_integer()} |
@@ -34,6 +34,8 @@
         {dontroute,       boolean()} |
         {drop_membership, {inet:ip_address(), inet:ip_address()}} |
         {header,          non_neg_integer()} |
+        {high_msgq_watermark, pos_integer()} |
+        {low_msgq_watermark, pos_integer()} |
         {mode,            list | binary} | list | binary |
         {multicast_if,    inet:ip_address()} |
         {multicast_loop,  boolean()} |
@@ -47,7 +49,8 @@
         {recbuf,          non_neg_integer()} |
         {reuseaddr,       boolean()} |
         {sndbuf,          non_neg_integer()} |
-        {tos,             non_neg_integer()}.
+        {tos,             non_neg_integer()} |
+	{ipv6_v6only,     boolean()}.
 -type option_name() ::
         active |
         broadcast |
@@ -55,6 +58,8 @@
         deliver |
         dontroute |
         header |
+        high_msgq_watermark |
+        low_msgq_watermark |
         mode |
         multicast_if |
         multicast_loop |
@@ -69,7 +74,8 @@
         recbuf |
         reuseaddr |
         sndbuf |
-        tos.
+        tos |
+	ipv6_v6only.
 -type socket() :: port().
 
 -export_type([option/0, option_name/0]).
@@ -185,9 +191,10 @@ connect(S, Address, Port) when is_port(S) ->
 	    Error
     end.
 
--spec controlling_process(Socket, Pid) -> ok when
+-spec controlling_process(Socket, Pid) -> ok | {error, Reason} when
       Socket :: socket(),
-      Pid :: pid().
+      Pid :: pid(),
+      Reason :: closed | not_owner | inet:posix().
 
 controlling_process(S, NewOwner) ->
     inet:udp_controlling_process(S, NewOwner).

@@ -1,10 +1,10 @@
-<?xml version="1.0" encoding="latin1" ?>
+<?xml version="1.0" encoding="utf-8" ?>
 <!DOCTYPE chapter SYSTEM "chapter.dtd">
 
 <chapter>
   <header>
     <copyright>
-      <year>2002</year><year>2011</year>
+      <year>2002</year><year>2013</year>
       <holder>Ericsson AB. All Rights Reserved.</holder>
     </copyright>
     <legalnotice>
@@ -35,6 +35,143 @@
   (ET)</c>. Each release of <c>Event Tracer (ET) </c> thus constitutes
   one section in this document. The title of each section is the
   version number of <c>Event Tracer (ET)</c>.</p>
+
+<section><title>ET 1.5</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+          <p>
+	    Application upgrade (appup) files are corrected for the
+	    following applications: </p>
+          <p>
+	    <c>asn1, common_test, compiler, crypto, debugger,
+	    dialyzer, edoc, eldap, erl_docgen, et, eunit, gs, hipe,
+	    inets, observer, odbc, os_mon, otp_mibs, parsetools,
+	    percept, public_key, reltool, runtime_tools, ssh,
+	    syntax_tools, test_server, tools, typer, webtool, wx,
+	    xmerl</c></p>
+          <p>
+	    A new test utility for testing appup files is added to
+	    test_server. This is now used by most applications in
+	    OTP.</p>
+          <p>
+	    (Thanks to Tobias Schlager)</p>
+          <p>
+	    Own Id: OTP-11744</p>
+        </item>
+      </list>
+    </section>
+
+
+    <section><title>Improvements and New Features</title>
+      <list>
+        <item>
+          <p>
+	    Removed gs based applications and gs based backends. The
+	    <c>observer</c> application replaces the removed
+	    applications.</p>
+          <p>
+	    *** POTENTIAL INCOMPATIBILITY ***</p>
+          <p>
+	    Own Id: OTP-10915</p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>ET 1.4.4.5</title>
+
+    <section><title>Improvements and New Features</title>
+      <list>
+        <item>
+          <p>
+	    The encoding of the <c>notes.xml</c> file has been
+	    changed from latin1 to utf-8 to avoid future merge
+	    problems.</p>
+          <p>
+	    Own Id: OTP-11310</p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>ET 1.4.4.4</title>
+
+    <section><title>Improvements and New Features</title>
+      <list>
+        <item>
+          <p>
+	    Use erlang:demonitor(Ref, [flush]) where applicable.
+	    Thanks to Loïc Hoguin.</p>
+          <p>
+	    Own Id: OTP-11039</p>
+        </item>
+        <item>
+          <p>
+	    Rename and document lists:zf/2 as lists:filtermap/2.
+	    Thanks to Anthony Ramine.</p>
+          <p>
+	    Own Id: OTP-11078</p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>ET 1.4.4.3</title>
+
+    <section><title>Improvements and New Features</title>
+      <list>
+        <item>
+	    <p>Where necessary a comment stating encoding has been
+	    added to Erlang files. The comment is meant to be removed
+	    in Erlang/OTP R17B when UTF-8 becomes the default
+	    encoding. </p>
+          <p>
+	    Own Id: OTP-10630</p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>ET 1.4.4.2</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+          <p>
+	    Fix typo in ET doc (Thanks to Ricardo Catalinas Jiménez)</p>
+          <p>
+	    Own Id: OTP-10119</p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>ET 1.4.4.1</title>
+
+    <section><title>Improvements and New Features</title>
+      <list>
+        <item>
+	    <p>The GS applications is now deprecated and will be
+	    removed in the R16 release. The following GS-based
+	    applications have been superseded by the Observer
+	    application and will removed in R16: Appmon, Pman,
+	    Tv.</p>
+          <p>
+	    *** POTENTIAL INCOMPATIBILITY ***</p>
+          <p>
+	    Own Id: OTP-9907</p>
+        </item>
+      </list>
+    </section>
+
+</section>
 
 <section><title>ET 1.4.4</title>
 

@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2006-2011. All Rights Reserved.
+%% Copyright Ericsson AB 2006-2013. All Rights Reserved.
 %%
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -40,15 +40,17 @@
 	 init_per_testcase/2, end_per_testcase/2]).
 
 -export([ func/1, call/1, recs/1, try_catch/1, if_then/1,
-	  receive_after/1, bits/1, head_tail/1, package/1,
+	  receive_after/1, bits/1, head_tail/1,
 	  cond1/1, block/1, case1/1, ops/1, messages/1,
 	  old_mnemosyne_syntax/1,
-	  import_export/1, misc_attrs/1,
+	  import_export/1, misc_attrs/1, dialyzer_attrs/1,
 	  hook/1,
 	  neg_indent/1,
+	  maps_syntax/1,
 
 	  otp_6321/1, otp_6911/1, otp_6914/1, otp_8150/1, otp_8238/1,
-	  otp_8473/1, otp_8522/1, otp_8567/1, otp_8664/1, otp_9147/1]).
+	  otp_8473/1, otp_8522/1, otp_8567/1, otp_8664/1, otp_9147/1,
+          otp_10302/1, otp_10820/1, otp_11100/1]).
 
 %% Internal export.
 -export([ehook/6]).
@@ -74,12 +76,14 @@ all() ->
 groups() -> 
     [{expr, [],
       [func, call, recs, try_catch, if_then, receive_after,
-       bits, head_tail, package, cond1, block, case1, ops,
-       messages, old_mnemosyne_syntax]},
-     {attributes, [], [misc_attrs, import_export]},
+       bits, head_tail, cond1, block, case1, ops,
+       messages, old_mnemosyne_syntax, maps_syntax
+    ]},
+     {attributes, [], [misc_attrs, import_export, dialyzer_attrs]},
      {tickets, [],
       [otp_6321, otp_6911, otp_6914, otp_8150, otp_8238,
-       otp_8473, otp_8522, otp_8567, otp_8664, otp_9147]}].
+       otp_8473, otp_8522, otp_8567, otp_8664, otp_9147,
+       otp_10302, otp_10820, otp_11100]}].
 
 init_per_suite(Config) ->
     Config.
@@ -116,7 +120,6 @@ func(Config) when is_list(Config) ->
           {func_3,
            <<"t() -> fun t/0.">>},
           {func_4,
-           %% Has already been expanded away in sys_pre_expand.
            <<"t() -> fun modul:foo/3.">>},
           {func_5, % 'when' is moved down one line
            <<"tkjlksjflksdjflsdjlk()
@@ -126,6 +129,28 @@ func(Config) when is_list(Config) ->
           {func_6,
            <<"t() ->
                   (fun() ->
+                           true
+                   end)().">>},
+	  {func_7,
+           <<"t(M, F, A) -> fun M:F/A.">>},
+          {func_8,
+           <<"-record(r1, {a,b}).
+              -record(r3, {a = fun Id(_) -> #r1{} end(1), b}).
+
+              t() ->
+                  fun Id(A) when record(A#r3.a, r1) -> 7 end(#r3{}).
+             ">>},
+          {func_9,
+           <<"-record(r1, {a,b}).
+              -record(r3, {a = fun Id(_) -> #r1{} end(1), b}).
+
+              t() ->
+                  fsdfsdfjsdfjkljf:sdlfjdsfjlf(
+                      fun Id(sdfsd) -> {sdkjsdf,sdfjsdkljfsdl,sdfkjdklf} end).
+             ">>},
+          {func_10,
+           <<"t() ->
+                  (fun True() ->
                            true
                    end)().">>}
           ],
@@ -155,6 +180,7 @@ recs(Config) when is_list(Config) ->
               -record(r1, {a,b}).
               -record(r2, {a = #r1{},b,c=length([1,2,3])}).
               -record(r3, {a = fun(_) -> #r1{} end(1), b}).
+              -record(r4, {a = fun R1(_) -> #r1{} end(1), b}).
 
               t() ->
                   foo = fun(A) when A#r1.a > A#r1.b -> foo end(#r1{b = 2}),
@@ -437,9 +463,6 @@ bits(Config) when is_list(Config) ->
     ?line ok = pp_expr(<<"<<{a,b}/binary>>">>),
     ?line ok = pp_expr(<<"<<{foo:bar(),b}/binary>>">>),
     ?line ok = pp_expr(<<"<<(foo:bar()):(foo:bar())/binary>>">>),
-    ?line ok = pp_expr(<<"<<(foo.bar)/binary>>">>),
-    ?line ok = pp_expr(<<"<<(foo.bar):all/binary>>">>),
-    ?line ok = pp_expr(<<"<<(foo.bar):(foo.bar)/binary>>">>),
     ok.
 
 head_tail(suite) ->
@@ -457,17 +480,6 @@ head_tail(Config) when is_list(Config) ->
            <<"t() ->
                [foo:bar(lkjljlskdfj, klsdajflds, sdafkljsdlfkjdas, kjlsdadjl),
                bar:foo(kljlkjsdf, lkjsdlfj, [kljsfj, sdfdsfsad])].">>}
-          ],
-    ?line compile(Config, Ts),
-    ok.
-
-package(suite) ->
-    [];
-package(Config) when is_list(Config) ->
-    Ts = [{package_1,
-           <<"t() -> a.b:foo().">>},
-          {package_2,
-           <<"t() -> .lists:sort([]).">>}
           ],
     ?line compile(Config, Ts),
     ok.
@@ -549,29 +561,9 @@ messages(Config) when is_list(Config) ->
     ?line true = "\n" =:= lists:flatten(erl_pp:form({eof,0})),
     ok.
 
-old_mnemosyne_syntax(suite) ->
-    [];
 old_mnemosyne_syntax(Config) when is_list(Config) ->
-    %% Since we have kept the 'query' syntax and ':-' token,
+    %% Since we have kept the ':-' token,
     %% better test that we can pretty print it.
-    Q = {'query',6,
-         {lc,6,
-          {var,6,'X'},
-          [{generate,6,
-            {var,6,'X'},
-            {call,6,{atom,6,table},[{atom,6,tab}]}},
-           {match,7,
-            {record_field,7,{var,7,'X'},{atom,7,foo}},
-            {atom,7,bar}}]}},
-    ?line "query\n"
-          "    [ \n" % extra space...
-          "     X ||\n"
-          "         X <- table(tab),\n"
-          "         X.foo = bar\n"
-          "    ]\n"
-          "end" =
-        lists:flatten(erl_pp:expr(Q)),
-
     R = {rule,12,sales,2,
          [{clause,12,
            [{var,12,'E'},{atom,12,employee}],
@@ -613,13 +605,11 @@ misc_attrs(suite) ->
     [];
 misc_attrs(Config) when is_list(Config) ->
     ?line ok = pp_forms(<<"-module(m). ">>),
-    ?line ok = pp_forms(<<"-module(m.p, [A,B]). ">>),
     ?line ok = pp_forms(<<"-module(m, [Aafjlksfjdlsjflsdfjlsdjflkdsfjlk,"
                           "Blsjfdlslfjsdf]). ">>),
     ?line ok = pp_forms(<<"-export([]). ">>),
     ?line ok = pp_forms(<<"-export([foo/2, bar/0]). ">>),
     ?line ok = pp_forms(<<"-export([bar/0]). ">>),
-    ?line ok = pp_forms(<<"-import(.lists). ">>),
     ?line ok = pp_forms(<<"-import(lists, []). ">>),
     ?line ok = pp_forms(<<"-import(lists, [map/2]). ">>),
     ?line ok = pp_forms(<<"-import(lists, [map/2, foreach/2]). ">>),
@@ -630,11 +620,24 @@ misc_attrs(Config) when is_list(Config) ->
 
     ok.
 
+dialyzer_attrs(suite) ->
+    [];
+dialyzer_attrs(Config) when is_list(Config) ->
+    ok = pp_forms(<<"-type foo() :: #bar{}. ">>),
+    ok = pp_forms(<<"-opaque foo() :: {bar, fun((X, [42,...]) -> X)}. ">>),
+    ok = pp_forms(<<"-spec foo(bar(), qux()) -> [T | baz(T)]. ">>),
+    ok = pp_forms(<<"-callback foo(<<_:32,_:_*4>>, T) -> T. ">>),
+    ok.
+
 hook(suite) ->
     [];
 hook(Config) when is_list(Config) ->
+    F = fun(H) -> H end,
+    do_hook(F).
+
+do_hook(HookFun) ->
     Lc = parse_expr(binary_to_list(<<"[X || X <- [1,2,3]].">>)),
-    H = fun hook/4,
+    H = HookFun(fun hook/4),
     Expr = {call,0,{atom,0,fff},[{foo,Lc},{foo,Lc},{foo,Lc}]},
     EChars = lists:flatten(erl_pp:expr(Expr, 0, H)),
     Call = {call,0,{atom,0,foo},[Lc]},
@@ -691,7 +694,7 @@ hook(Config) when is_list(Config) ->
     GChars2 = erl_pp:guard(G2),
     ?line true = GChars =:= lists:flatten(GChars2),
 
-    EH = {?MODULE, ehook, [foo,bar]},
+    EH = HookFun({?MODULE, ehook, [foo,bar]}),
     XEChars = erl_pp:expr(Expr, -1, EH),
     ?line true = remove_indentation(EChars) =:= lists:flatten(XEChars),
     XEChars2 = erl_pp:expr(Expr, EH),
@@ -761,6 +764,7 @@ neg_indent(Config) when is_list(Config) ->
     ?line ok = pp_expr(<<"{[a,b,c],[d,e|f]}">>),
     ?line ok = pp_expr(<<"f(a,b,c)">>),
     ?line ok = pp_expr(<<"fun() when a,b;c,d -> a end">>),
+    ?line ok = pp_expr(<<"fun A() when a,b;c,d -> a end">>),
     ?line ok = pp_expr(<<"<<34:32,17:32>>">>),
     ?line ok = pp_expr(<<"if a,b,c -> d; e,f,g -> h,i end">>),
     ?line ok = pp_expr(<<"if a -> d; c -> d end">>),
@@ -783,6 +787,9 @@ neg_indent(Config) when is_list(Config) ->
     Fun2 = {'fun',2,{clauses,[{clause,2,[],[],[{atom,3,true}]}]},
             {0,108059557,'-t/0-fun-0-'}},
     ?line "fun() -> true end" = flat_expr(Fun2),
+    Fun3 = {named_fun,3,'True',[{clause,3,[],[],[{atom,3,true}]}],
+            {0,424242424,'-t/0-True-0-'}},
+    ?line "fun True() -> true end" = flat_expr(Fun3),
 
     ok.
 
@@ -970,6 +977,35 @@ count_atom(L, A) when is_list(L) ->
 count_atom(_, _) ->
     0.
 
+maps_syntax(doc) -> "Maps syntax";
+maps_syntax(suite) -> [];
+maps_syntax(Config) when is_list(Config) ->
+    Ts = [{map_fun_1,
+            <<"t() ->\n"
+              "    M0 = #{ 1 => hi, hi => 42, 1.0 => {hi,world}},\n"
+              "    M1 = M0#{ 1 := hello, new_val => 1337 },\n"
+              "    map_fun_2:val(M1).\n">>},
+          {map_fun_2,
+            <<"val(#{ 1 := V1, hi := V2, new_val := V3}) -> {V1,V2,V3}.\n">>}],
+    compile(Config, Ts),
+
+    ok = pp_expr(<<"#{}">>),
+    ok = pp_expr(<<"#{ a => 1, <<\"hi\">> => \"world\", 33 => 1.0 }">>),
+    ok = pp_expr(<<"#{ a := V1, <<\"hi\">> := V2 } = M">>),
+    ok = pp_expr(<<"M#{ a => V1, <<\"hi\">> := V2 }">>),
+    F = <<"-module(maps_type_syntax).\n"
+          "-compile(export_all).\n"
+          "-type t1() :: map().\n"
+          "-type t2() :: #{ atom() => integer(), atom() => float() }.\n"
+          "-spec f1(t1()) -> 'true'.\n"
+          "f1(M) when is_map(M) -> true.\n"
+          "-spec f2(t2()) -> integer().\n"
+          "f2(#{a := V1,b := V2}) -> V1 + V2.\n"
+          "\n">>,
+    ok = pp_forms(F),
+    ok.
+
+
 otp_8567(doc) ->
     "OTP_8567. Avoid duplicated 'undefined' in record field types.";
 otp_8567(suite) -> [];
@@ -1067,6 +1103,110 @@ otp_9147(Config) when is_list(Config) ->
                      string:tokens(binary_to_list(Bin), "\n")),
     ok.
 
+otp_10302(doc) ->
+    "OTP-10302. Unicode characters scanner/parser.";
+otp_10302(suite) -> [];
+otp_10302(Config) when is_list(Config) ->
+    Ts = [{uni_1,
+           <<"t() -> <<(<<\"abc\\x{aaa}\">>):3/binary>>.">>}
+          ],
+    compile(Config, Ts),
+    ok = pp_expr(<<"$\\x{aaa}">>),
+    ok = pp_expr(<<"\"1\\x{aaa}\"">>),
+    ok = pp_expr(<<"<<<<\"hej\">>/binary>>">>),
+    ok = pp_expr(<<"<< <<\"1\\x{aaa}\">>/binary>>">>),
+
+    U = [{encoding,unicode}],
+
+    do_hook(fun(H) -> [{hook,H}] end),
+    do_hook(fun(H) -> [{hook,H}]++U end),
+
+    ok = pp_expr(<<"$\\x{aaa}">>, [{hook,fun hook/4}]),
+
+    Opts = [{hook, fun unicode_hook/4},{encoding,unicode}],
+    Lc = parse_expr("[X || X <- [\"\x{400}\",\"\xFF\"]]."),
+    Expr = {call,0,{atom,0,fff},[{foo,{foo,Lc}},{foo,{foo,Lc}}]},
+    EChars = lists:flatten(erl_pp:expr(Expr, 0, Opts)),
+    Call = {call,0,{atom,0,foo},[{call,0,{atom,0,foo},[Lc]}]},
+    Expr2 = {call,0,{atom,0,fff},[Call,Call]},
+    EChars2 = erl_pp:exprs([Expr2], U),
+    EChars = lists:flatten(EChars2),
+    [$\x{400},$\x{400}] = [C || C <- EChars, C > 255],
+
+    ok = pp_forms(<<"function() -> {\"\x{400}\",$\x{400}}. "/utf8>>, U),
+    ok = pp_forms("function() -> {\"\x{400}\",$\x{400}}. ", []),
+    ok.
+
+unicode_hook({foo,E}, I, P, H) ->
+    erl_pp:expr({call,0,{atom,0,foo},[E]}, I, P, H).
+
+otp_10820(doc) ->
+    "OTP-10820. Unicode filenames.";
+otp_10820(suite) -> [];
+otp_10820(Config) when is_list(Config) ->
+    C1 = <<"%% coding: utf-8\n -module(any).">>,
+    ok = do_otp_10820(Config, C1, "+pc latin1"),
+    ok = do_otp_10820(Config, C1, "+pc unicode"),
+    C2 = <<"%% coding: latin-1\n -module(any).">>,
+    ok = do_otp_10820(Config, C2, "+pc latin1"),
+    ok = do_otp_10820(Config, C2, "+pc unicode").
+
+do_otp_10820(Config, C, PC) ->
+    {ok,Node} = start_node(erl_pp_helper, "+fnu " ++ PC),
+    L = [915,953,959,973,957,953,954,959,957,964],
+    FileName = filename(L++".erl", Config),
+    ok = rpc:call(Node, file, write_file, [FileName, C]),
+    {ok, _, []} =  rpc:call(Node, compile, file,
+                            [FileName, [return,'P',{outdir,?privdir}]]),
+    PFileName = filename(L++".P", Config),
+    {ok, Bin} = rpc:call(Node, file, read_file, [PFileName]),
+    true = test_server:stop_node(Node),
+    true = file_attr_is_string(binary_to_list(Bin)),
+    ok.
+
+file_attr_is_string("-file(\"" ++ _) -> true;
+file_attr_is_string([_ | L]) ->
+    file_attr_is_string(L).
+
+otp_11100(doc) ->
+    "OTP-11100. Fix printing of invalid forms.";
+otp_11100(suite) -> [];
+otp_11100(Config) when is_list(Config) ->
+    %% There are a few places where the added code ("options(none)")
+    %% doesn't make a difference (pp:bit_elem_type/1 is an example).
+
+    %% Cannot trigger the use of the hook function with export/import.
+    "-export([{fy,a}/b]).\n" =
+        pf({attribute,1,export,[{{fy,a},b}]}),
+    "-type foo() :: integer(INVALID-FORM:{foo,bar}:).\n" =
+        pf({attribute,1,type,{foo,{type,1,integer,[{foo,bar}]},[]}}),
+    pf({attribute,1,type,
+        {a,{type,1,range,[{integer,1,1},{foo,bar}]},[]}}),
+    "-type foo(INVALID-FORM:{foo,bar}:) :: A.\n" =
+        pf({attribute,1,type,{foo,{var,1,'A'},[{foo,bar}]}}),
+    "-type foo() :: (INVALID-FORM:{foo,bar}: :: []).\n" =
+        pf({attribute,1,type,
+            {foo,{paren_type,1,
+                  [{ann_type,1,[{foo,bar},{type,1,nil,[]}]}]},
+             []}}),
+    "-type foo() :: <<_:INVALID-FORM:{foo,bar}:>>.\n" =
+        pf({attribute,1,type,
+            {foo,{type,1,binary,[{foo,bar},{integer,1,0}]},[]}}),
+    "-type foo() :: <<_:10, _:_*INVALID-FORM:{foo,bar}:>>.\n" =
+        pf({attribute,1,type,
+            {foo,{type,1,binary,[{integer,1,10},{foo,bar}]},[]}}),
+    "-type foo() :: #r{INVALID-FORM:{foo,bar}: :: integer()}.\n" =
+        pf({attribute,1,type,
+            {foo,{type,1,record,
+                  [{atom,1,r},
+                   {type,1,field_type,
+                    [{foo,bar},{type,1,integer,[]}]}]},
+             []}}),
+    ok.
+
+pf(Form) ->
+    lists:flatten(erl_pp:form(Form,none)).
+
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
 compile(Config, Tests) ->
@@ -1136,9 +1276,11 @@ flat_expr(Expr) ->
 pp_forms(Bin) ->
     pp_forms(Bin, none).
 
-pp_forms(Bin, Hook) ->
-    PP1 = (catch parse_and_pp_forms(binary_to_list(Bin), Hook)),
-    PP2 = (catch parse_and_pp_forms(PP1, Hook)),
+pp_forms(Bin, Options) when is_binary(Bin) ->
+    pp_forms(to_list(Bin, Options), Options);
+pp_forms(List, Options) when is_list(List) ->
+    PP1 = (catch parse_and_pp_forms(List, Options)),
+    PP2 = (catch parse_and_pp_forms(PP1, Options)),
     case PP1 =:= PP2 of % same line numbers
         true ->
             test_max_line(PP1);
@@ -1146,8 +1288,8 @@ pp_forms(Bin, Hook) ->
             not_ok
     end.
 
-parse_and_pp_forms(String, Hook) ->
-    lists:append(lists:map(fun(AF) -> erl_pp:form(AF, Hook)
+parse_and_pp_forms(String, Options) ->
+    lists:append(lists:map(fun(AF) -> erl_pp:form(AF, Options)
                            end, parse_forms(String))).
 
 parse_forms(Chars) ->
@@ -1157,7 +1299,7 @@ parse_forms(Chars) ->
 parse_forms2([], _Cont, _Line, Forms) ->
     lists:reverse(Forms);
 parse_forms2(String, Cont0, Line, Forms) ->
-    case erl_scan:tokens(Cont0, String, Line) of
+    case erl_scan:tokens(Cont0, String, Line, [unicode]) of
         {done, {ok, Tokens, EndLine}, Chars} ->
             {ok, Form} = erl_parse:parse_form(Tokens),
             parse_forms2(Chars, [], EndLine, [Form | Forms]);
@@ -1173,10 +1315,12 @@ pp_expr(Bin) ->
     pp_expr(Bin, none).
 
 %% Final dot is added.
-pp_expr(Bin, Hook) ->
-    PP1 = (catch parse_and_pp_expr(binary_to_list(Bin), 0, Hook)),
-    PPneg = (catch parse_and_pp_expr(binary_to_list(Bin), -1, Hook)),
-    PP2 = (catch parse_and_pp_expr(PPneg, 0, Hook)),
+pp_expr(Bin, Options) when is_binary(Bin) ->
+    pp_expr(to_list(Bin, Options), Options);
+pp_expr(List, Options) when is_list(List) ->
+    PP1 = (catch parse_and_pp_expr(List, 0, Options)),
+    PPneg = (catch parse_and_pp_expr(List, -1, Options)),
+    PP2 = (catch parse_and_pp_expr(PPneg, 0, Options)),
     if
         PP1 =:= PP2 -> % same line numbers
             case
@@ -1191,14 +1335,23 @@ pp_expr(Bin, Hook) ->
             not_ok
     end.
 
-parse_and_pp_expr(String, Indent, Hook) ->
+parse_and_pp_expr(String, Indent, Options) ->
     StringDot = lists:flatten(String) ++ ".",
-    erl_pp:expr(parse_expr(StringDot), Indent, Hook).
+    erl_pp:expr(parse_expr(StringDot), Indent, Options).
 
 parse_expr(Chars) ->
-    {ok, Tokens, _} = erl_scan:string(Chars),
+    {ok, Tokens, _} = erl_scan:string(Chars, 1, [unicode]),
     {ok, [Expr]} = erl_parse:parse_exprs(Tokens),
     Expr.
+
+to_list(Bin, Options) when is_list(Options) ->
+    case proplists:get_value(encoding, Options) of
+        unicode -> unicode:characters_to_list(Bin);
+        encoding -> binary_to_list(Bin);
+        undefined -> binary_to_list(Bin)
+    end;
+to_list(Bin, _Hook) ->
+    binary_to_list(Bin).
 
 test_new_line(String) ->
     case string:chr(String, $\n) of
@@ -1227,3 +1380,8 @@ filename(Name, Config) ->
 fail() ->
     io:format("failed~n"),
     ?t:fail().
+
+%% +fnu means a peer node has to be started; slave will not do
+start_node(Name, Xargs) ->
+    ?line PA = filename:dirname(code:which(?MODULE)),
+    test_server:start_node(Name, peer, [{args, "-pa " ++ PA ++ " " ++ Xargs}]).

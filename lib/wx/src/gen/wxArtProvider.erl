@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2008-2010. All Rights Reserved.
+%% Copyright Ericsson AB 2008-2013. All Rights Reserved.
 %%
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -17,7 +17,7 @@
 %% %CopyrightEnd%
 %% This file is generated DO NOT EDIT
 
-%% @doc See external documentation: <a href="http://www.wxwidgets.org/manuals/stable/wx_wxartprovider.html">wxArtProvider</a>.
+%% @doc See external documentation: <a href="http://www.wxwidgets.org/manuals/2.8.12/wx_wxartprovider.html">wxArtProvider</a>.
 %% @type wxArtProvider().  An object reference, The representation is internal
 %% and can be changed without notice. It can't be used for comparsion
 %% stored on disc or distributed for use on other nodes.
@@ -29,18 +29,24 @@
 %% inherited exports
 -export([parent_class/1]).
 
+-export_type([wxArtProvider/0]).
 %% @hidden
 parent_class(_Class) -> erlang:error({badtype, ?MODULE}).
 
-%% @spec (Id::string()) -> wxBitmap:wxBitmap()
+-type wxArtProvider() :: wx:wx_object().
 %% @equiv getBitmap(Id, [])
+-spec getBitmap(Id) -> wxBitmap:wxBitmap() when
+	Id::unicode:chardata().
+
 getBitmap(Id)
  when is_list(Id) ->
   getBitmap(Id, []).
 
-%% @spec (Id::string(), [Option]) -> wxBitmap:wxBitmap()
-%% Option = {client, string()} | {size, {W::integer(),H::integer()}}
-%% @doc See <a href="http://www.wxwidgets.org/manuals/stable/wx_wxartprovider.html#wxartprovidergetbitmap">external documentation</a>.
+%% @doc See <a href="http://www.wxwidgets.org/manuals/2.8.12/wx_wxartprovider.html#wxartprovidergetbitmap">external documentation</a>.
+-spec getBitmap(Id, [Option]) -> wxBitmap:wxBitmap() when
+	Id::unicode:chardata(),
+	Option :: {client, unicode:chardata()}
+		 | {size, {W::integer(), H::integer()}}.
 getBitmap(Id, Options)
  when is_list(Id),is_list(Options) ->
   Id_UC = unicode:characters_to_binary([Id,0]),
@@ -51,15 +57,19 @@ getBitmap(Id, Options)
   wxe_util:call(?wxArtProvider_GetBitmap,
   <<(byte_size(Id_UC)):32/?UI,(Id_UC)/binary, 0:(((8- ((4+byte_size(Id_UC)) band 16#7)) band 16#7))/unit:8, BinOpt/binary>>).
 
-%% @spec (Id::string()) -> wxIcon:wxIcon()
 %% @equiv getIcon(Id, [])
+-spec getIcon(Id) -> wxIcon:wxIcon() when
+	Id::unicode:chardata().
+
 getIcon(Id)
  when is_list(Id) ->
   getIcon(Id, []).
 
-%% @spec (Id::string(), [Option]) -> wxIcon:wxIcon()
-%% Option = {client, string()} | {size, {W::integer(),H::integer()}}
-%% @doc See <a href="http://www.wxwidgets.org/manuals/stable/wx_wxartprovider.html#wxartprovidergeticon">external documentation</a>.
+%% @doc See <a href="http://www.wxwidgets.org/manuals/2.8.12/wx_wxartprovider.html#wxartprovidergeticon">external documentation</a>.
+-spec getIcon(Id, [Option]) -> wxIcon:wxIcon() when
+	Id::unicode:chardata(),
+	Option :: {client, unicode:chardata()}
+		 | {size, {W::integer(), H::integer()}}.
 getIcon(Id, Options)
  when is_list(Id),is_list(Options) ->
   Id_UC = unicode:characters_to_binary([Id,0]),

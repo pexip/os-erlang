@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 1998-2011. All Rights Reserved.
+%% Copyright Ericsson AB 1998-2013. All Rights Reserved.
 %%
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -57,13 +57,15 @@ disc_load_table(Tab, Reason) ->
 do_get_disc_copy2(Tab, _Reason, Storage, _Type) when Storage == unknown ->
     verbose("Local table copy of ~p has recently been deleted, ignored.~n",
 	    [Tab]),
-    {loaded, ok};  %% ?
+    {not_loaded, storage_unknown};
 do_get_disc_copy2(Tab, Reason, Storage, Type) when Storage == disc_copies ->
     %% NOW we create the actual table
     Repair = mnesia_monitor:get_env(auto_repair),
-    Args = [{keypos, 2}, public, named_table, Type],
+    StorageProps = val({Tab, storage_properties}),
+    EtsOpts = proplists:get_value(ets, StorageProps, []),
+    Args = [{keypos, 2}, public, named_table, Type | EtsOpts],
     case Reason of
-	{dumper, _} -> %% Resources allready allocated
+	{dumper, _} -> %% Resources already allocated
 	    ignore;
 	_ ->
 	    mnesia_monitor:mktab(Tab, Args),
@@ -82,7 +84,9 @@ do_get_disc_copy2(Tab, Reason, Storage, Type) when Storage == disc_copies ->
     {loaded, ok};
 
 do_get_disc_copy2(Tab, Reason, Storage, Type) when Storage == ram_copies ->
-    Args = [{keypos, 2}, public, named_table, Type],
+    StorageProps = val({Tab, storage_properties}),
+    EtsOpts = proplists:get_value(ets, StorageProps, []),
+    Args = [{keypos, 2}, public, named_table, Type | EtsOpts],
     case Reason of
 	{dumper, _} -> %% Resources allready allocated
 	    ignore;
@@ -115,10 +119,14 @@ do_get_disc_copy2(Tab, Reason, Storage, Type) when Storage == ram_copies ->
     {loaded, ok};
 
 do_get_disc_copy2(Tab, Reason, Storage, Type) when Storage == disc_only_copies ->
+    StorageProps = val({Tab, storage_properties}),
+    DetsOpts = proplists:get_value(dets, StorageProps, []),
+
     Args = [{file, mnesia_lib:tab2dat(Tab)},
 	    {type, mnesia_lib:disk_type(Tab, Type)},
 	    {keypos, 2},
-	    {repair, mnesia_monitor:get_env(auto_repair)}],
+	    {repair, mnesia_monitor:get_env(auto_repair)} 
+	    | DetsOpts],
     case Reason of
 	{dumper, _} ->
 	    mnesia_index:init_index(Tab, Storage),
@@ -200,7 +208,8 @@ do_get_network_copy(Tab, Reason, Ns, Storage, Cs) ->
 		    set({Tab, load_node}, Node),
 		    set({Tab, load_reason}, Reason),
 		    mnesia_controller:i_have_tab(Tab),
-		    dbg_out("Table ~p copied from ~p to ~p~n", [Tab, Node, node()]),
+		    dbg_out("Table ~p copied from ~p to ~p (~b entries)~n",
+                            [Tab, Node, node(), mnesia:table_info(Tab, size)]),
 		    {loaded, ok};
 		Err = {error, _} when element(1, Reason) == dumper ->
 		    {not_loaded,Err};
@@ -349,17 +358,21 @@ do_init_table(Tab,Storage,Cs,SenderPid,
     end.
 
 create_table(Tab, TabSize, Storage, Cs) ->
+    StorageProps = val({Tab, storage_properties}),
     if
 	Storage == disc_only_copies ->
 	    mnesia_lib:lock_table(Tab),
 	    Tmp = mnesia_lib:tab2tmp(Tab),
 	    Size = lists:max([TabSize, 256]),
+	    DetsOpts = lists:keydelete(estimated_no_objects, 1,
+				       proplists:get_value(dets, StorageProps, [])),
 	    Args = [{file, Tmp},
 		    {keypos, 2},
 %%		    {ram_file, true},
 		    {estimated_no_objects, Size},
 		    {repair, mnesia_monitor:get_env(auto_repair)},
-		    {type, mnesia_lib:disk_type(Tab, Cs#cstruct.type)}],
+		    {type, mnesia_lib:disk_type(Tab, Cs#cstruct.type)}
+		    | DetsOpts],
 	    file:delete(Tmp),
 	    case mnesia_lib:dets_sync_open(Tab, Args) of
 		{ok, _} ->
@@ -370,7 +383,8 @@ create_table(Tab, TabSize, Storage, Cs) ->
 		    Else
 	    end;
 	(Storage == ram_copies) or (Storage == disc_copies) ->
-	    Args = [{keypos, 2}, public, named_table, Cs#cstruct.type],
+	    EtsOpts = proplists:get_value(ets, StorageProps, []),
+	    Args = [{keypos, 2}, public, named_table, Cs#cstruct.type | EtsOpts],
 	    case mnesia_monitor:unsafe_mktab(Tab, Args) of
 		Tab ->
 		    {Storage, Tab};
@@ -429,7 +443,7 @@ init_table(Tab, disc_only_copies, Fun, DetsInfo,Sender) ->
 	{ErtsVer, DetsData}  ->
 	    Res = (catch dets:is_compatible_bchunk_format(Tab, DetsData)),
 	    case Res of
-		{'EXIT',{undef,[{dets,_,_}|_]}} ->
+		{'EXIT',{undef,[{dets,_,_,_}|_]}} ->
 		    Sender ! {self(), {old_protocol, Tab}},
 		    dets:init_table(Tab, Fun);  %% Old dets version
 		{'EXIT', What} ->
@@ -474,12 +488,22 @@ finish_copy(Storage,Tab,Cs,SenderPid,DatBin,OrigTabRec) ->
 
 subscr_receiver(TabRef = {_, Tab}, RecName) ->
     receive
-	{mnesia_table_event, {Op, Val, _Tid}} ->
+	{mnesia_table_event, {Op, Val, _Tid}}
+	  when element(1, Val) =:= Tab ->
 	    if
 		Tab == RecName ->
 		    handle_event(TabRef, Op, Val);
 		true ->
 		    handle_event(TabRef, Op, setelement(1, Val, RecName))
+	    end,
+	    subscr_receiver(TabRef, RecName);
+
+	{mnesia_table_event, {Op, Val, _Tid}} when element(1, Val) =:= schema ->
+	    %% clear_table is faked via two schema events
+	    %% a schema record delete and a write
+	    case Op of
+		delete -> handle_event(TabRef, clear_table, {Tab, all});
+		_ -> ok
 	    end,
 	    subscr_receiver(TabRef, RecName);
 
@@ -516,10 +540,13 @@ handle_last({disc_only_copies, Tab}, Type, nobin) ->
     Dat = mnesia_lib:tab2dat(Tab),
     case file:rename(Tmp, Dat) of
 	ok ->
+	    StorageProps = val({Tab, storage_properties}),
+	    DetsOpts = proplists:get_value(dets, StorageProps, []),
+
 	    Args = [{file, mnesia_lib:tab2dat(Tab)},
 		    {type, mnesia_lib:disk_type(Tab, Type)},
 		    {keypos, 2},
-		    {repair, mnesia_monitor:get_env(auto_repair)}],
+		    {repair, mnesia_monitor:get_env(auto_repair)} | DetsOpts],
 	    mnesia_monitor:open_dets(Tab, Args),
 	    ok;
 	{error, Reason} ->

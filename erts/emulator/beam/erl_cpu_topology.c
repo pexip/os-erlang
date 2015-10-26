@@ -1,7 +1,7 @@
 /*
  * %CopyrightBegin%
  *
- * Copyright Ericsson AB 2010-2011. All Rights Reserved.
+ * Copyright Ericsson AB 2010-2013. All Rights Reserved.
  *
  * The contents of this file are subject to the Erlang Public License,
  * Version 1.1, (the "License"); you may not use this file except in
@@ -34,7 +34,7 @@
 #include "bif.h"
 #include "erl_cpu_topology.h"
 
-#define ERTS_MAX_READER_GROUPS 8
+#define ERTS_MAX_READER_GROUPS 64
 
 /*
  * Cpu topology hierarchy.
@@ -486,10 +486,7 @@ erts_sched_check_cpu_bind_post_suspend(ErtsSchedulerData *esdp)
 	erts_thr_set_main_status(1, (int) esdp->no);
 
     /* Make sure we check if we should bind to a cpu or not... */
-    if (esdp->run_queue->flags & ERTS_RUNQ_FLG_SHARED_RUNQ)
-	erts_smp_atomic32_set(&esdp->chk_cpu_bind, 1);
-    else
-	esdp->run_queue->flags |= ERTS_RUNQ_FLG_CHK_CPU_BIND;
+    (void) ERTS_RUNQ_FLGS_SET(esdp->run_queue, ERTS_RUNQ_FLG_CHK_CPU_BIND);
 }
 
 #endif
@@ -501,13 +498,6 @@ erts_sched_check_cpu_bind(ErtsSchedulerData *esdp)
     erts_cpu_groups_map_t *cgm;
     erts_cpu_groups_callback_list_t *cgcl;
     erts_cpu_groups_callback_call_t *cgcc;
-#ifdef ERTS_SMP
-    if (erts_common_run_queue)
-	erts_smp_atomic32_set(&esdp->chk_cpu_bind, 0);
-    else {
-	esdp->run_queue->flags &= ~ERTS_RUNQ_FLG_CHK_CPU_BIND;
-    }
-#endif
     erts_smp_runq_unlock(esdp->run_queue);
     erts_smp_rwmtx_rwlock(&cpuinfo_rwmtx);
     cpu_id = scheduler2cpu_map[esdp->no].bind_id;
@@ -630,30 +620,38 @@ write_schedulers_bind_change(erts_cpu_topology_t *cpudata, int size)
 int
 erts_init_scheduler_bind_type_string(char *how)
 {
+    ErtsCpuBindOrder order;
+
     if (sys_strcmp(how, "u") == 0)
-	cpu_bind_order = ERTS_CPU_BIND_NONE;
-    else if (erts_bind_to_cpu(cpuinfo, -1) == -ENOTSUP)
-	return ERTS_INIT_SCHED_BIND_TYPE_NOT_SUPPORTED;
-    else if (!system_cpudata && !user_cpudata)
-	return ERTS_INIT_SCHED_BIND_TYPE_ERROR_NO_CPU_TOPOLOGY;
+	order = ERTS_CPU_BIND_NONE;
     else if (sys_strcmp(how, "db") == 0)
-	cpu_bind_order = ERTS_CPU_BIND_DEFAULT_BIND;
+	order = ERTS_CPU_BIND_DEFAULT_BIND;
     else if (sys_strcmp(how, "s") == 0)
-	cpu_bind_order = ERTS_CPU_BIND_SPREAD;
+	order = ERTS_CPU_BIND_SPREAD;
     else if (sys_strcmp(how, "ps") == 0)
-	cpu_bind_order = ERTS_CPU_BIND_PROCESSOR_SPREAD;
+	order = ERTS_CPU_BIND_PROCESSOR_SPREAD;
     else if (sys_strcmp(how, "ts") == 0)
-	cpu_bind_order = ERTS_CPU_BIND_THREAD_SPREAD;
+	order = ERTS_CPU_BIND_THREAD_SPREAD;
     else if (sys_strcmp(how, "tnnps") == 0)
-	cpu_bind_order = ERTS_CPU_BIND_THREAD_NO_NODE_PROCESSOR_SPREAD;
+	order = ERTS_CPU_BIND_THREAD_NO_NODE_PROCESSOR_SPREAD;
     else if (sys_strcmp(how, "nnps") == 0)
-	cpu_bind_order = ERTS_CPU_BIND_NO_NODE_PROCESSOR_SPREAD;
+	order = ERTS_CPU_BIND_NO_NODE_PROCESSOR_SPREAD;
     else if (sys_strcmp(how, "nnts") == 0)
-	cpu_bind_order = ERTS_CPU_BIND_NO_NODE_THREAD_SPREAD;
+	order = ERTS_CPU_BIND_NO_NODE_THREAD_SPREAD;
     else if (sys_strcmp(how, "ns") == 0)
-	cpu_bind_order = ERTS_CPU_BIND_NO_SPREAD;
+	order = ERTS_CPU_BIND_NO_SPREAD;
     else
-	return ERTS_INIT_SCHED_BIND_TYPE_ERROR_NO_BAD_TYPE;
+	return ERTS_INIT_SCHED_BIND_TYPE_ERROR_BAD_TYPE;
+
+    if (order != ERTS_CPU_BIND_NONE) {
+	if (erts_bind_to_cpu(cpuinfo, -1) == -ENOTSUP)
+	    return ERTS_INIT_SCHED_BIND_TYPE_NOT_SUPPORTED;
+	else if (!system_cpudata && !user_cpudata)
+	    return ERTS_INIT_SCHED_BIND_TYPE_ERROR_NO_CPU_TOPOLOGY;
+    }
+
+    cpu_bind_order = order;
+
     return ERTS_INIT_SCHED_BIND_TYPE_SUCCESS;
 }
 
@@ -1701,7 +1699,7 @@ erts_early_init_cpu_topology(int no_schedulers,
     }
 
     max_main_threads = erts_get_cpu_configured(cpuinfo);
-    if (max_main_threads > no_schedulers)
+    if (max_main_threads > no_schedulers || max_main_threads < 0)
 	max_main_threads = no_schedulers;
     *max_main_threads_p = max_main_threads;
 
@@ -1729,16 +1727,8 @@ erts_init_cpu_topology(void)
 	scheduler2cpu_map[ix].bound_id = -1;
     }
 
-    if (cpu_bind_order == ERTS_CPU_BIND_UNDEFINED) {
-	int ncpus = erts_get_cpu_configured(cpuinfo);
-	if (ncpus < 1 || erts_no_schedulers < ncpus)
-	    cpu_bind_order = ERTS_CPU_BIND_NONE;
-	else
-	    cpu_bind_order = ((system_cpudata || user_cpudata)
-			      && (erts_bind_to_cpu(cpuinfo, -1) != -ENOTSUP)
-			      ? ERTS_CPU_BIND_DEFAULT_BIND
-			      : ERTS_CPU_BIND_NONE);
-    }
+    if (cpu_bind_order == ERTS_CPU_BIND_UNDEFINED)
+	cpu_bind_order = ERTS_CPU_BIND_NONE;
 
     reader_groups_map = add_cpu_groups(reader_groups,
 				       reader_groups_callback,

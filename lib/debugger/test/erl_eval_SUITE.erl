@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2003-2011. All Rights Reserved.
+%% Copyright Ericsson AB 2003-2013. All Rights Reserved.
 %%
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -39,7 +39,8 @@
          otp_8133/1,
          funs/1,
 	 try_catch/1,
-	 eval_expr_5/1]).
+	 eval_expr_5/1,
+         eep37/1]).
 
 %%
 %% Define to run outside of test server
@@ -63,6 +64,7 @@ config(priv_dir,_) ->
 % Default timetrap timeout (set in init_per_testcase).
 -define(default_timeout, ?t:minutes(1)).
 init_per_testcase(_Case, Config) ->
+    test_lib:interpret(?MODULE),
     ?line Dog = ?t:timetrap(?default_timeout),
     [{watchdog, Dog} | Config].
 end_per_testcase(_Case, Config) ->
@@ -78,7 +80,7 @@ all() ->
      pattern_expr, match_bin, guard_3, guard_4, lc,
      simple_cases, unary_plus, apply_atom, otp_5269,
      otp_6539, otp_6543, otp_6787, otp_6977, otp_7550,
-     otp_8133, funs, try_catch, eval_expr_5].
+     otp_8133, funs, try_catch, eval_expr_5, eep37].
 
 groups() -> 
     [].
@@ -216,13 +218,13 @@ guard_4(doc) ->
 guard_4(suite) ->
     [];
 guard_4(Config) when is_list(Config) ->
-    ?line check(fun() -> if {erlang,'+'}(3,a) -> true ; true -> false end end,
-                "if {erlang,'+'}(3,a) -> true ; true -> false end.",
-                false),
-    ?line check(fun() -> if {erlang,is_integer}(3) -> true ; true -> false end
-                end,
-                "if {erlang,is_integer}(3) -> true ; true -> false end.",
-                true),
+    check(fun() -> if erlang:'+'(3,a) -> true ; true -> false end end,
+	  "if erlang:'+'(3,a) -> true ; true -> false end.",
+	  false),
+    check(fun() -> if erlang:is_integer(3) -> true ; true -> false end
+	  end,
+	  "if erlang:is_integer(3) -> true ; true -> false end.",
+	  true),
     ?line check(fun() -> [X || X <- [1,2,3], erlang:is_integer(X)] end,
                 "[X || X <- [1,2,3], erlang:is_integer(X)].",
                 [1,2,3]),
@@ -230,11 +232,11 @@ guard_4(Config) when is_list(Config) ->
                 end,
                 "if is_atom(is_integer(a)) -> true ; true -> false end.",
                 true),
-    ?line check(fun() -> if {erlang,is_atom}({erlang,is_integer}(a)) -> true;
-                            true -> false end end,
-                "if {erlang,is_atom}({erlang,is_integer}(a)) -> true; "
-                "true -> false end.",
-                true),
+    check(fun() -> if erlang:is_atom(erlang:is_integer(a)) -> true;
+		      true -> false end end,
+	  "if erlang:is_atom(erlang:is_integer(a)) -> true; "
+	  "true -> false end.",
+	  true),
     ?line check(fun() -> if is_atom(3+a) -> true ; true -> false end end,
                 "if is_atom(3+a) -> true ; true -> false end.",
                 false),
@@ -1060,11 +1062,6 @@ do_funs(LFH, EFH) ->
                 concat(["begin F1 = fun(F,N) -> apply(", M,
                         ",count_down,[F, N]) end, F1(F1,1000) end."]),
 		0, ['F1'], LFH, EFH),
-    ?line check(fun() -> F1 = fun(F,N) -> {?MODULE,count_down}(F,N)
-                              end, F1(F1, 1000) end,
-                concat(["begin F1 = fun(F,N) -> {", M,
-                        ",count_down}(F, N) end, F1(F1,1000) end."]),
-		0, ['F1'], LFH, EFH),
     ?line check(fun() -> F = fun(F,N) when N > 0 -> apply(F,[F,N-1]);
                                 (_F,0) -> ok end,
                          F(F, 1000)
@@ -1096,11 +1093,6 @@ do_funs(LFH, EFH) ->
                          true = {2,3} == F(2) end,
                 "begin F = fun(X) -> A = 1+X, {X,A} end,
                        true = {2,3} == F(2) end.", true, ['F'], LFH, EFH),
-    ?line check(fun() -> F = fun(X) -> {erlang,'+'}(X,2) end,
-                         true = 3 == F(1) end,
-                "begin F = fun(X) -> {erlang,'+'}(X,2) end,"
-                "      true = 3 == F(1) end.", true, ['F'],
-               LFH, EFH),
     ?line check(fun() -> F = fun(X) -> byte_size(X) end,
                          ?MODULE:do_apply(F,<<"hej">>) end,
                 concat(["begin F = fun(X) -> size(X) end,",
@@ -1332,6 +1324,27 @@ eval_expr_5(Config) when is_list(Config) ->
 	error:function_clause ->
 	    ok
     end.
+
+eep37(Config) when is_list(Config) ->
+    check(fun () -> (fun _(X) -> X end)(42) end,
+          "(fun _(X) -> X end)(42).",
+          42),
+    check(fun () -> (fun _Id(X) -> X end)(42) end,
+          "(fun _Id(X) -> X end)(42).", 42),
+    check(fun () -> is_function((fun Self() -> Self end)(), 0) end,
+          "is_function((fun Self() -> Self end)(), 0).",
+          true),
+    check(fun () ->
+                  F = fun Fact(N) when N > 0 ->
+                              N * Fact(N - 1);
+                          Fact(0) ->
+                              1
+                       end,
+                  F(6)
+          end,
+          "(fun Fact(N) when N > 0 -> N * Fact(N - 1); Fact(0) -> 1 end)(6).",
+          720),
+    ok.
 
 %% Check the string in different contexts: as is; in fun; from compiled code.
 check(F, String, Result) ->

@@ -1,7 +1,7 @@
 /*
  * %CopyrightBegin%
  *
- * Copyright Ericsson AB 1996-2011. All Rights Reserved.
+ * Copyright Ericsson AB 1996-2013. All Rights Reserved.
  *
  * The contents of this file are subject to the Erlang Public License,
  * Version 1.1, (the "License"); you may not use this file except in
@@ -42,7 +42,7 @@
 #define DEFAULT_PROGNAME "erl"
 
 #ifdef __WIN32__
-#define INI_FILENAME "erl.ini"
+#define INI_FILENAME L"erl.ini"
 #define INI_SECTION "erlang"
 #define DIRSEP "\\"
 #define PATHSEP ";"
@@ -64,9 +64,9 @@
 static const char plusM_au_allocs[]= {
     'u',	/* all alloc_util allocators */
     'B',	/* binary_alloc		*/
-    'C',	/* sbmbc_alloc		*/
     'D',	/* std_alloc		*/
     'E',	/* ets_alloc		*/
+    'F',	/* fix_alloc		*/
     'H',	/* eheap_alloc		*/
     'L',	/* ll_alloc		*/
     'R',	/* driver_alloc		*/
@@ -79,6 +79,7 @@ static const char plusM_au_allocs[]= {
 static char *plusM_au_alloc_switches[] = {
     "as",
     "asbcst",
+    "acul",
     "e",
     "t",
     "lmbcs",
@@ -94,8 +95,6 @@ static char *plusM_au_alloc_switches[] = {
     "rsbcst",
     "sbct",
     "smbcs",
-    "sbmbcs",
-    "sbmbct",
     NULL
 };
 
@@ -104,14 +103,18 @@ static char *plusM_other_switches[] = {
     "ea",
     "ummc",
     "uycs",
+    "usac",
     "im",
     "is",
     "it",
+    "lpm",
     "Mamcbf",
     "Mrmcbf",
     "Mmcs",
-    "Mcci",
-    "Fe",
+    "Mscs",
+    "Mscrfsd",
+    "Msco",
+    "Mscrpm",
     "Ye",
     "Ym",
     "Ytp",
@@ -122,9 +125,17 @@ static char *plusM_other_switches[] = {
 /* +s arguments with values */
 static char *pluss_val_switches[] = {
     "bt",
+    "bwt",
+    "cl",
     "ct",
+    "fwi",
+    "tbt",
+    "wct",
     "wt",
+    "ws",
     "ss",
+    "pp",
+    "ub",
     NULL
 };
 /* +h arguments with values */
@@ -157,20 +168,13 @@ static char *plusz_val_switches[] = {
 #endif
 
 #define SMP_SUFFIX	  ".smp"
-#define HYBRID_SUFFIX	  ".hybrid"
-
-#ifdef __WIN32__
 #define DEBUG_SUFFIX      ".debug"
-#define EMU_TYPE_SUFFIX_LENGTH  (strlen(HYBRID_SUFFIX)+(strlen(DEBUG_SUFFIX)))
-#else
-/* The length of the longest memory architecture suffix. */
-#define EMU_TYPE_SUFFIX_LENGTH  strlen(HYBRID_SUFFIX)
-#endif
+#define EMU_TYPE_SUFFIX_LENGTH  strlen(DEBUG_SUFFIX)
+
 /*
  * Define flags for different memory architectures.
  */
 #define EMU_TYPE_SMP		0x0001
-#define EMU_TYPE_HYBRID		0x0002
 
 #ifdef __WIN32__
 #define EMU_TYPE_DEBUG		0x0004
@@ -184,10 +188,9 @@ void error(char* format, ...);
  * Local functions.
  */
 
-#if !defined(ERTS_HAVE_SMP_EMU) || !defined(ERTS_HAVE_HYBRID_EMU)
+#if !defined(ERTS_HAVE_SMP_EMU)
 static void usage_notsup(const char *switchname);
 #endif
-static void usage_msg(const char *msg);
 static char **build_args_from_env(char *env_var);
 static char **build_args_from_string(char *env_var);
 static void initial_argv_massage(int *argc, char ***argv);
@@ -250,7 +253,9 @@ static char* config_script = NULL; /* used by option -start_erl and -config */
 
 static HANDLE this_module_handle;
 static int run_werl;
-
+static WCHAR *utf8_to_utf16(unsigned char *bytes);
+static char *utf16_to_utf8(WCHAR *wstr);
+static WCHAR *latin1_to_utf16(char *str);
 #endif
 
 /*
@@ -268,8 +273,12 @@ static void
 set_env(char *key, char *value)
 {
 #ifdef __WIN32__
-    if (!SetEnvironmentVariable((LPCTSTR) key, (LPCTSTR) value))
+    WCHAR *wkey = latin1_to_utf16(key);
+    WCHAR *wvalue = utf8_to_utf16(value);
+    if (!SetEnvironmentVariableW(wkey, wvalue))
 	error("SetEnvironmentVariable(\"%s\", \"%s\") failed!", key, value);
+    efree(wkey);
+    efree(wvalue);
 #else
     size_t size = strlen(key) + 1 + strlen(value) + 1;
     char *str = emalloc(size);
@@ -282,25 +291,33 @@ set_env(char *key, char *value)
 #endif
 }
 
+
 static char *
 get_env(char *key)
 {
 #ifdef __WIN32__
     DWORD size = 32;
-    char *value = NULL;
+    WCHAR *value = NULL;
+    WCHAR *wkey = latin1_to_utf16(key);
+    char *res;
     while (1) {
 	DWORD nsz;
 	if (value)
 	    efree(value);
-	value = emalloc(size);
+	value = emalloc(size*sizeof(WCHAR));
 	SetLastError(0);
-	nsz = GetEnvironmentVariable((LPCTSTR) key, (LPTSTR) value, size);
+	nsz = GetEnvironmentVariableW(wkey, value, size);
 	if (nsz == 0 && GetLastError() == ERROR_ENVVAR_NOT_FOUND) {
 	    efree(value);
+	    efree(wkey);
 	    return NULL;
 	}
-	if (nsz <= size)
-	    return value;
+	if (nsz <= size) {
+	    efree(wkey);
+	    res = utf16_to_utf8(value);
+	    efree(value);
+	    return res;
+	}
 	size = nsz;
     }
 #else
@@ -366,9 +383,6 @@ add_extra_suffixes(char *prog, int type)
 #endif
    if (type == EMU_TYPE_SMP) {
        p = write_str(p, SMP_SUFFIX);
-   }
-   else if (type == EMU_TYPE_HYBRID) {
-       p = write_str(p, HYBRID_SUFFIX);
    }
 #ifdef __WIN32__
    if (dll) {
@@ -535,13 +549,6 @@ int main(int argc, char **argv)
 		emu_type_passed |= EMU_TYPE_DEBUG;
 		emu_type |= EMU_TYPE_DEBUG;
 #endif
-	    } else if (strcmp(argv[i], "-hybrid") == 0) {
-		emu_type_passed |= EMU_TYPE_HYBRID;
-#ifdef ERTS_HAVE_HYBRID_EMU
-		emu_type |= EMU_TYPE_HYBRID;
-#else
-		usage_notsup("-hybrid");
-#endif
 	    } else if (strcmp(argv[i], "-extra") == 0) {
 		break;
 	    }
@@ -551,19 +558,6 @@ int main(int argc, char **argv)
 
     erts_cpu_info_destroy(cpuinfo);
     cpuinfo = NULL;
-
-    if ((emu_type & EMU_TYPE_HYBRID) && (emu_type & EMU_TYPE_SMP)) {
-	/*
-	 * We have a conflict. Only using explicitly passed arguments
-	 * may solve it...
-	 */
-	emu_type &= emu_type_passed;
-	if ((emu_type & EMU_TYPE_HYBRID) && (emu_type & EMU_TYPE_SMP)) {
-	    usage_msg("Hybrid heap emulator with SMP support selected. The "
-		      "combination hybrid heap and SMP support is currently "
-		      "not supported.");
-	}
-    }
 
     if (malloc_lib) {
 	if (strcmp(malloc_lib, "libc") != 0)
@@ -812,15 +806,44 @@ int main(int argc, char **argv)
 		  case 'a':
 		  case 'A':
 		  case 'b':
+		  case 'e':
 		  case 'i':
+		  case 'n':
 		  case 'P':
-		  case 'S':
+		  case 'Q':
 		  case 't':
 		  case 'T':
 		  case 'R':
 		  case 'W':
 		  case 'K':
 		      if (argv[i][2] != '\0')
+			  goto the_default;
+		      if (i+1 >= argc)
+			  usage(argv[i]);
+		      argv[i][0] = '-';
+		      add_Eargs(argv[i]);
+		      add_Eargs(argv[i+1]);
+		      i++;
+		      break;
+		  case 'S':
+		      if (argv[i][2] == 'P') {
+			  if (argv[i][3] != '\0')
+			      goto the_default;
+		      }
+#ifdef ERTS_DIRTY_SCHEDULERS
+		      else if (argv[i][2] == 'D') {
+			  char* type = argv[i]+3;
+			  if (strncmp(type, "cpu", 3) != 0 &&
+			      strncmp(type, "Pcpu", 4) != 0 &&
+			      strncmp(type, "io", 2) != 0)
+			      usage(argv[i]);
+			  if ((argv[i][3] == 'c' && argv[i][6] != '\0') ||
+			      (argv[i][3] == 'P' && argv[i][7] != '\0') ||
+			      (argv[i][3] == 'i' && argv[i][5] != '\0'))
+			      goto the_default;
+		      }
+#endif
+		      else if (argv[i][2] != '\0')
 			  goto the_default;
 		      if (i+1 >= argc)
 			  usage(argv[i]);
@@ -923,6 +946,16 @@ int main(int argc, char **argv)
 			  i++;
 		      }
 		      break;
+		  case 'p':
+		      if (argv[i][2] != 'c' || argv[i][3] != '\0')
+			  goto the_default;
+		      if (i+1 >= argc)
+			  usage(argv[i]);
+		      argv[i][0] = '-';
+		      add_Eargs(argv[i]);
+		      add_Eargs(argv[i+1]);
+		      i++;
+		      break;
 		  case 'z':
 		      if (!is_one_of_strings(&argv[i][2], plusz_val_switches)) {
 			  goto the_default;
@@ -1003,8 +1036,7 @@ int main(int argc, char **argv)
 
     if (print_args_exit) {
 	for (i = 1; i < EargsCnt; i++)
-	    printf("%s ", Eargsp[i]);
-	printf("\n");
+	    printf("%s\n", Eargsp[i]);
 	exit(0);
     }
 
@@ -1115,15 +1147,15 @@ usage_aux(void)
 	  "]"
 #endif
 	  "] "
-#ifdef ERTS_HAVE_HYBRID_EMU
-	  "[-hybrid] "
-#endif
 	  "[-make] [-man [manopts] MANPAGE] [-x] [-emu_args] "
 	  "[-args_file FILENAME] [+A THREADS] [+a SIZE] [+B[c|d|i]] [+c] "
 	  "[+h HEAP_SIZE_OPTION] [+K BOOLEAN] "
-	  "[+l] [+M<SUBSWITCH> <ARGUMENT>] [+P MAX_PROCS] [+R COMPAT_REL] "
+	  "[+l] [+M<SUBSWITCH> <ARGUMENT>] [+P MAX_PROCS] [+Q MAX_PORTS] "
+	  "[+R COMPAT_REL] "
 	  "[+r] [+rg READER_GROUPS_LIMIT] [+s SCHEDULER_OPTION] "
-	  "[+S NO_SCHEDULERS:NO_SCHEDULERS_ONLINE] [+T LEVEL] [+V] [+v] "
+	  "[+S NO_SCHEDULERS:NO_SCHEDULERS_ONLINE] "
+	  "[+SP PERCENTAGE_SCHEDULERS:PERCENTAGE_SCHEDULERS_ONLINE] "
+	  "[+T LEVEL] [+V] [+v] "
 	  "[+W<i|w>] [+z MISC_OPTION] [args ...]\n");
   exit(1);
 }
@@ -1135,7 +1167,7 @@ usage(const char *switchname)
     usage_aux();
 }
 
-#if !defined(ERTS_HAVE_SMP_EMU) || !defined(ERTS_HAVE_HYBRID_EMU)
+#if !defined(ERTS_HAVE_SMP_EMU)
 static void
 usage_notsup(const char *switchname)
 {
@@ -1143,13 +1175,6 @@ usage_notsup(const char *switchname)
     usage_aux();
 }
 #endif
-
-static void
-usage_msg(const char *msg)
-{
-    fprintf(stderr, "%s\n", msg);
-    usage_aux();
-}
 
 static void
 usage_format(char *format, ...)
@@ -1176,7 +1201,7 @@ start_epmd(char *epmd)
 	erts_snprintf(epmd_cmd, sizeof(epmd_cmd), "%s" DIRSEP "epmd", bindir);
 	arg1 = "-daemon";
 #else
-	erts_snprintf(epmd_cmd, sizeof(epmd_cmd), "%s" DIRSEP "epmd -daemon", bindir);
+	erts_snprintf(epmd_cmd, sizeof(epmd_cmd), "\"%s" DIRSEP "epmd\" -daemon", bindir);
 #endif
     } 
 #ifdef __WIN32__
@@ -1185,11 +1210,14 @@ start_epmd(char *epmd)
 	strcat(epmd, arg1);
     }
     {
-	STARTUPINFO start;
+	wchar_t wcepmd[MAXPATHLEN+100];
+	STARTUPINFOW start;
 	PROCESS_INFORMATION pi;
 	memset(&start, 0, sizeof (start));
 	start.cb = sizeof (start);
-	if (!CreateProcess(NULL, epmd, NULL, NULL, FALSE, 
+	MultiByteToWideChar(CP_UTF8, 0, epmd, -1, wcepmd, MAXPATHLEN+100);
+
+	if (!CreateProcessW(NULL, wcepmd, NULL, NULL, FALSE, 
 			       CREATE_DEFAULT_ERROR_MODE | DETACHED_PROCESS,
 			       NULL, NULL, &start, &pi))
 	    result = -1;
@@ -1383,53 +1411,49 @@ static void get_start_erl_data(char *file)
 }
 
 
-static char *replace_filename(char *path, char *new_base) 
+static wchar_t *replace_filename(wchar_t *path, wchar_t *new_base) 
 {
-    int plen = strlen(path);
-    char *res = emalloc((plen+strlen(new_base)+1)*sizeof(char));
-    char *p;
+    int plen = wcslen(path);
+    wchar_t *res = (wchar_t *) emalloc((plen+wcslen(new_base)+1)*sizeof(wchar_t));
+    wchar_t *p;
 
-    strcpy(res,path);
-    for (p = res+plen-1 ;p >= res && *p != '\\'; --p)
+    wcscpy(res,path);
+    for (p = res+plen-1 ;p >= res && *p != L'\\'; --p)
         ;
-    *(p+1) ='\0';
-    strcat(res,new_base);
+    *(p+1) =L'\0';
+    wcscat(res,new_base);
     return res;
 }
 
-static char *path_massage(char *long_path)
+static char *path_massage(wchar_t *long_path)
 {
      char *p;
-
-     p = emalloc(MAX_PATH+1);
-     strcpy(p, long_path);
-     GetShortPathName(p, p, MAX_PATH);
+     int len;
+     len = WideCharToMultiByte(CP_UTF8, 0, long_path, -1, NULL, 0, NULL, NULL);
+     p = emalloc(len*sizeof(char));
+     WideCharToMultiByte(CP_UTF8, 0, long_path, -1, p, len, NULL, NULL);
      return p;
 }
     
 static char *do_lookup_in_section(InitSection *inis, char *name, 
-				  char *section, char *filename, int is_path)
+				  char *section, wchar_t *filename, int is_path)
 {
     char *p = lookup_init_entry(inis, name);
 
     if (p == NULL) {
-	error("Could not find key %s in section %s of file %s",
+	error("Could not find key %s in section %s of file %S",
 	      name,section,filename);
     }
 
-    if (is_path) {
-	return path_massage(p);
-    } else {
-	return strsave(p);
-    }
+    return strsave(p);
 }
 
-
+// Setup bindir, rootdir and progname as utf8 buffers
 static void get_parameters(int argc, char** argv)
 {
-    char *p;
-    char buffer[MAX_PATH];
-    char *ini_filename;
+    wchar_t *p;
+    wchar_t buffer[MAX_PATH];
+    wchar_t *ini_filename;
     HANDLE module = GetModuleHandle(NULL); /* This might look strange, but we want the erl.ini 
 					      that resides in the same dir as erl.exe, not 
 					      an erl.ini in our directory */
@@ -1440,34 +1464,35 @@ static void get_parameters(int argc, char** argv)
         error("Cannot GetModuleHandle()");
     }
 
-    if (GetModuleFileName(module,buffer,MAX_PATH) == 0) {
+    if (GetModuleFileNameW(module,buffer,MAX_PATH) == 0) {
         error("Could not GetModuleFileName");
     }
 
     ini_filename = replace_filename(buffer,INI_FILENAME);
 
     if ((inif = load_init_file(ini_filename)) == NULL) {
+	wchar_t wbindir[MAX_PATH];
+	wchar_t wrootdir[MAX_PATH];
+
 	/* Assume that the path is absolute and that
 	   it does not contain any symbolic link */
-	
-	char buffer[MAX_PATH];
-	
+
 	/* Determine bindir */
-	if (GetEnvironmentVariable("ERLEXEC_DIR", buffer, MAX_PATH) == 0) {
-	    strcpy(buffer, ini_filename);
-	    for (p = buffer+strlen(buffer)-1; p >= buffer && *p != '\\'; --p)
+	if (GetEnvironmentVariableW(L"ERLEXEC_DIR", buffer, MAX_PATH) == 0) {
+	    wcscpy(buffer, ini_filename);
+	    for (p = buffer+wcslen(buffer)-1; p >= buffer && *p != L'\\'; --p)
 		;
-	    *p ='\0';
+	    *p = L'\0';
 	}
 	bindir = path_massage(buffer);
 
 	/* Determine rootdir */
-	for (p = buffer+strlen(buffer)-1; p >= buffer && *p != '\\'; --p)
+	for (p = buffer+wcslen(buffer)-1; p >= buffer && *p != L'\\'; --p)
 	    ;
 	p--;
-	for (;p >= buffer && *p != '\\'; --p)
+	for (;p >= buffer && *p != L'\\'; --p)
 	    ;
-	*p ='\0';
+	*p =L'\0';
 	rootdir = path_massage(buffer);
 
 	/* Hardcoded progname */
@@ -1979,7 +2004,7 @@ initial_argv_massage(int *argc, char ***argv)
 
     vix = 0;
 
-    av = build_args_from_env("ERL_" OTP_SYSTEM_VERSION "_FLAGS");
+    av = build_args_from_env("ERL_OTP" OTP_SYSTEM_VERSION "_FLAGS");
     if (av)
 	avv[vix++].argv = av;
 
@@ -2111,4 +2136,147 @@ possibly_quote(char* arg)
     return narg;
 }
 
+/*
+ * Unicode helpers to handle environment and command line parameters on
+ * Windows. We internally handle all environment variables in UTF8,
+ * but put and get the environment using the WCHAR (limited UTF16) interface
+ * 
+ * These are simplified to only handle Unicode characters that can fit in 
+ * Windows simplified UTF16, i.e. characters that fit in 16 bits.
+ */
+
+static int utf8_len(unsigned char first) 
+{
+    if ((first & ((unsigned char) 0x80)) == 0) {
+	return 1;
+    } else if ((first & ((unsigned char) 0xE0)) == 0xC0) {
+	return 2;
+    } else if ((first & ((unsigned char) 0xF0)) == 0xE0) {
+	return 3;
+    } else if ((first & ((unsigned char) 0xF8)) == 0xF0) {
+	return 4;
+    } 
+    return 1; /* will be a '?' */
+}
+
+static WCHAR *utf8_to_utf16(unsigned char *bytes)
+{
+    unsigned int unipoint;
+    unsigned char *tmp = bytes;
+    WCHAR *target, *res;
+    int num = 0;
+    
+    while (*tmp) {
+	num++;
+	tmp += utf8_len(*tmp);
+    }
+    res = target = emalloc((num + 1) * sizeof(WCHAR));
+    while (*bytes) {
+	if (((*bytes) & ((unsigned char) 0x80)) == 0) {
+	    unipoint = (Uint) *bytes;
+	    ++bytes;
+	} else if (((*bytes) & ((unsigned char) 0xE0)) == 0xC0) {
+	    unipoint = 
+		(((Uint) ((*bytes) & ((unsigned char) 0x1F))) << 6) |
+		((Uint) (bytes[1] & ((unsigned char) 0x3F))); 	
+	    bytes += 2;
+	} else if (((*bytes) & ((unsigned char) 0xF0)) == 0xE0) {
+	    unipoint = 
+		(((Uint) ((*bytes) & ((unsigned char) 0xF))) << 12) |
+		(((Uint) (bytes[1] & ((unsigned char) 0x3F))) << 6) |
+		((Uint) (bytes[2] & ((unsigned char) 0x3F)));
+	    if (unipoint > 0xFFFF) {
+		 unipoint = (unsigned int) '?';
+	    }
+	    bytes +=3;
+	} else if (((*bytes) & ((unsigned char) 0xF8)) == 0xF0) {
+	    unipoint = (unsigned int) '?'; /* Cannot put in a wchar */
+	    bytes += 4;
+	} else {
+	    unipoint = (unsigned int) '?';
+	}
+	*target++ = (WCHAR) unipoint;
+    }
+    *target = L'\0';
+    return res;
+}
+
+static int put_utf8(WCHAR ch, unsigned char *target, int sz, int *pos)
+{
+    Uint x = (Uint) ch;
+    if (x < 0x80) {
+    if (*pos >= sz) {
+	return -1;
+    }
+	target[(*pos)++] = (unsigned char) x;
+    }
+    else if (x < 0x800) {
+	if (((*pos) + 1) >= sz) {
+	    return -1;
+	}
+	target[(*pos)++] = (((unsigned char) (x >> 6)) | 
+			    ((unsigned char) 0xC0));
+	target[(*pos)++] = (((unsigned char) (x & 0x3F)) | 
+			    ((unsigned char) 0x80));
+    } else {
+	if ((x >= 0xD800 && x <= 0xDFFF) ||
+	    (x == 0xFFFE) ||
+	    (x == 0xFFFF)) { /* Invalid unicode range */
+	    return -1;
+	}
+	if (((*pos) + 2) >= sz) {
+	    return -1;
+	}
+
+	target[(*pos)++] = (((unsigned char) (x >> 12)) | 
+			    ((unsigned char) 0xE0));
+	target[(*pos)++] = ((((unsigned char) (x >> 6)) & 0x3F)  | 
+			    ((unsigned char) 0x80));
+	target[(*pos)++] = (((unsigned char) (x & 0x3F)) | 
+			    ((unsigned char) 0x80));
+    }
+    return 0;
+}
+
+static int need_bytes_for_utf8(WCHAR x)
+{
+    if (x < 0x80)
+	return 1;
+    else if (x < 0x800)
+	return 2;
+    else 
+	return 3;
+}
+
+static WCHAR *latin1_to_utf16(char *str)
+{
+    int len = strlen(str);
+    int i;
+    WCHAR *wstr = emalloc((len+1) * sizeof(WCHAR));
+    for(i=0;i<len;++i)
+	wstr[i] = (WCHAR) str[i];
+    wstr[len] = L'\0';
+    return wstr;
+}
+
+static char *utf16_to_utf8(WCHAR *wstr) 
+{
+    int len = wcslen(wstr);
+    char *result;
+    int i,pos;
+    int reslen = 0;
+    for(i=0;i<len;++i) {
+	reslen += need_bytes_for_utf8(wstr[i]);
+    }
+    result = emalloc(reslen+1);
+    pos = 0;
+    for(i=0;i<len;++i) {
+	if (put_utf8((int) wstr[i], result, reslen, &pos) < 0) {
+	    break;
+	}
+    }
+    result[pos] = '\0';
+    return result;
+}
+    
 #endif

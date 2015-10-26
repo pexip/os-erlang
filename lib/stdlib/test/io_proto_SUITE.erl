@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2009-2011. All Rights Reserved.
+%% Copyright Ericsson AB 2009-2013. All Rights Reserved.
 %%
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -50,7 +50,7 @@
 -define(privdir(Conf), ?config(priv_dir, Conf)).
 -endif.
 
--define(debug, true).
+%%-define(debug, true).
 
 -ifdef(debug).
 -define(format(S, A), io:format(S, A)).
@@ -96,7 +96,8 @@ groups() ->
     [].
 
 init_per_suite(Config) ->
-    Config.
+    DefShell = get_default_shell(),
+    [{default_shell,DefShell}|Config].
 
 end_per_suite(_Config) ->
     ok.
@@ -124,25 +125,29 @@ unicode_prompt(doc) ->
     ["Test that an Unicode prompt does not crash the shell"];
 unicode_prompt(Config) when is_list(Config) ->
     ?line PA = filename:dirname(code:which(?MODULE)),
-    ?line rtnode([{putline,""},
-		  {putline, "2."},
-		  {getline, "2"},
-		  {putline, "shell:prompt_func({io_proto_SUITE,uprompt})."},
-		  {getline, "default"},
-		  {putline, "io:get_line('')."},
-		  {putline, "hej"},
-		  {getline, "\"hej\\n\""},
-		  {putline, "io:setopts([{binary,true}])."},
-		  {getline, "ok"},
-		  {putline, "io:get_line('')."},
-		  {putline, "hej"},
-		  {getline, "<<\"hej\\n\">>"}
-		  ],[],[],"-pa "++ PA),
+    case proplists:get_value(default_shell,Config) of
+	old ->
+	    ok;
+	new ->
+	    ?line rtnode([{putline,""},
+			  {putline, "2."},
+			  {getline, "2"},
+			  {putline, "shell:prompt_func({io_proto_SUITE,uprompt})."},
+			  {getline, "default"},
+			  {putline, "io:get_line('')."},
+			  {putline, "hej"},
+			  {getline, "\"hej\\n\""},
+			  {putline, "io:setopts([{binary,true}])."},
+			  {getline, "ok"},
+			  {putline, "io:get_line('')."},
+			  {putline, "hej"},
+			  {getline, "<<\"hej\\n\">>"}
+			 ],[],[],"-pa \""++ PA++"\"")
+    end,
     %% And one with oldshell
      ?line rtnode([{putline,""},
 		   {putline, "2."},
-		   {getline_re, ".*2."},
-		   {getline, "2"},
+		   {getline_re, ".*2$"},
 		   {putline, "shell:prompt_func({io_proto_SUITE,uprompt})."},
 		   {getline_re, ".*default"},
 		   {putline, "io:get_line('')."},
@@ -153,7 +158,7 @@ unicode_prompt(Config) when is_list(Config) ->
 		   {putline, "io:get_line('')."},
 		   {putline, "hej"},
 		   {getline_re, ".*<<\"hej\\\\n\">>"}
-		  ],[],[],"-oldshell -pa "++PA),
+		  ],[],[],"-oldshell -pa \""++PA++"\""),
     ok.
     
 
@@ -234,26 +239,30 @@ setopts_getopts(Config) when is_list(Config) ->
 	lists:sort(io:getopts(RFile)),
     ?line eof = io:get_line(RFile,''),
     ?line file:close(RFile),
-    %% So, lets test another node with new interactive shell
-    ?line rtnode([{putline,""},
-		  {putline, "2."},
-		  {getline, "2"},
-		  {putline, "lists:keyfind(binary,1,io:getopts())."},
-		  {getline, "{binary,false}"},
-		  {putline, "io:get_line('')."},
-		  {putline, "hej"},
-		  {getline, "\"hej\\n\""},
-		  {putline, "io:setopts([{binary,true}])."},
-		  {getline, "ok"},
-		  {putline, "io:get_line('')."},
-		  {putline, "hej"},
-		  {getline, "<<\"hej\\n\">>"}
-		  ],[]),
+    case proplists:get_value(default_shell,Config) of
+	old ->
+	    ok;
+	new ->
+	    %% So, lets test another node with new interactive shell
+	    ?line rtnode([{putline,""},
+			  {putline, "2."},
+			  {getline, "2"},
+			  {putline, "lists:keyfind(binary,1,io:getopts())."},
+			  {getline, "{binary,false}"},
+			  {putline, "io:get_line('')."},
+			  {putline, "hej"},
+			  {getline, "\"hej\\n\""},
+			  {putline, "io:setopts([{binary,true}])."},
+			  {getline, "ok"},
+			  {putline, "io:get_line('')."},
+			  {putline, "hej"},
+			  {getline, "<<\"hej\\n\">>"}
+			 ],[])
+    end,
     %% And one with oldshell
     ?line rtnode([{putline,""},
 		  {putline, "2."},
-		  {getline_re, ".*2."},
-		  {getline, "2"},
+		  {getline_re, ".*2$"},
 		  {putline, "lists:keyfind(binary,1,io:getopts())."},
 		  {getline_re, ".*{binary,false}"},
 		  {putline, "io:get_line('')."},
@@ -433,25 +442,30 @@ unicode_options(Config) when is_list(Config) ->
 		      end,
     ?line [ ok = CannotWriteFile(F,FailDir) || F <- AllNoBom ],
 
-    %% OK, time for the group_leaders...
+    case proplists:get_value(default_shell,Config) of
+	old ->
+	    ok;
+	new ->
+	    %% OK, time for the group_leaders...
+	    ?line rtnode([{putline,""},
+			  {putline, "2."},
+			  {getline, "2"},
+			  {putline, "lists:keyfind(encoding,1,io:getopts())."},
+			  {getline, "{encoding,latin1}"},
+			  {putline, "io:format(\"~ts~n\",[[1024]])."},
+			  {getline, "\\x{400}"},
+			  {putline, "io:setopts([unicode])."},
+			  {getline, "ok"},
+			  {putline, "io:format(\"~ts~n\",[[1024]])."},
+			  {getline,
+			   binary_to_list(unicode:characters_to_binary(
+					    [1024],unicode,utf8))}
+			 ],[],"LC_CTYPE=\""++get_lc_ctype()++"\"; "
+			 "export LC_CTYPE; ")
+    end,
     ?line rtnode([{putline,""},
 		  {putline, "2."},
-		  {getline, "2"},
-		  {putline, "lists:keyfind(encoding,1,io:getopts())."},
-		  {getline, "{encoding,latin1}"},
-		  {putline, "io:format(\"~ts~n\",[[1024]])."},
-		  {getline, "\\x{400}"},
-		  {putline, "io:setopts([unicode])."},
-		  {getline, "ok"},
-		  {putline, "io:format(\"~ts~n\",[[1024]])."},
-		  {getline, 
-		   binary_to_list(unicode:characters_to_binary(
-				    [1024],unicode,utf8))}
-		 ],[],"LC_CTYPE=\""++get_lc_ctype()++"\"; export LC_CTYPE; "),
-    ?line rtnode([{putline,""},
-		  {putline, "2."},
-		  {getline_re, ".*2."},
-		  {getline, "2"},
+		  {getline_re, ".*2$"},
 		  {putline, "lists:keyfind(encoding,1,io:getopts())."},
 		  {getline_re, ".*{encoding,latin1}"},
 		  {putline, "io:format(\"~ts~n\",[[1024]])."},
@@ -680,28 +694,30 @@ binary_options(Config) when is_list(Config) ->
     ?line file:close(F3),
     %% OK, time for the group_leaders...
     %% io:format(standard_error,"Hmmm:~w~n",["<<\""++binary_to_list(<<"\345\344\366"/utf8>>)++"\\n\">>"]),
-    ?line rtnode([{putline,""},
-		  {putline, "2."},
-		  {getline, "2"},
-		  {putline, "lists:keyfind(binary,1,io:getopts())."},
-		  {getline, "{binary,false}"},
-		  {putline, "io:get_line('')."},
-		  {putline, "hej"},
-		  {getline, "\"hej\\n\""},
-		  {putline, "io:setopts([{binary,true},unicode])."},
-		  {getline, "ok"},
-		  {putline, "io:get_line('')."},
-		  {putline, "hej"},
-		  {getline, "<<\"hej\\n\">>"},
-		  {putline, "io:get_line('')."},
-		  {putline, binary_to_list(<<"\345\344\366"/utf8>>)},
-		  {getline, "<<\""++binary_to_list(unicode:characters_to_binary(<<"\345\344\366"/utf8>>,latin1,utf8))++"\\n\">>"}
-		  ],[]),
+    case proplists:get_value(default_shell,Config) of
+	old ->
+	    ok;
+	new ->
+	    ?line rtnode([{putline, "2."},
+			  {getline, "2"},
+			  {putline, "lists:keyfind(binary,1,io:getopts())."},
+			  {getline, "{binary,false}"},
+			  {putline, "io:get_line('')."},
+			  {putline, "hej"},
+			  {getline, "\"hej\\n\""},
+			  {putline, "io:setopts([{binary,true},unicode])."},
+			  {getline, "ok"},
+			  {putline, "io:get_line('')."},
+			  {putline, "hej"},
+			  {getline, "<<\"hej\\n\">>"},
+			  {putline, "io:get_line('')."},
+			  {putline, binary_to_list(<<"\345\344\366"/utf8>>)},
+			  {getline, "<<\""++binary_to_list(<<"\345\344\366"/utf8>>)++"\\n\"/utf8>>"}
+			 ],[])
+    end,
    %% And one with oldshell
-    ?line rtnode([{putline,""},
-		  {putline, "2."},
-		  {getline_re, ".*2."},
-		  {getline, "2"},
+    ?line rtnode([{putline, "2."},
+		  {getline_re, ".*2$"},
 		  {putline, "lists:keyfind(binary,1,io:getopts())."},
 		  {getline_re, ".*{binary,false}"},
 		  {putline, "io:get_line('')."},
@@ -714,7 +730,7 @@ binary_options(Config) when is_list(Config) ->
 		  {getline_re, ".*<<\"hej\\\\n\">>"},
 		  {putline, "io:get_line('')."},
 		  {putline, binary_to_list(<<"\345\344\366"/utf8>>)},
-		  {getline_re, ".*<<\""++binary_to_list(unicode:characters_to_binary(<<"\345\344\366"/utf8>>,latin1,utf8))++"\\\\n\">>"}
+		  {getline_re, ".*<<\""++binary_to_list(<<"\345\344\366"/utf8>>)++"\\\\n\"/utf8>>"}
 		  ],[],[],"-oldshell"),
     ok.
 
@@ -732,7 +748,7 @@ bc_with_r12_1(Config) ->
     PA = filename:dirname(code:which(?MODULE)),
     Name1 = io_proto_r12_1,
     ?line N1 = list_to_atom(atom_to_list(Name1) ++ "@" ++ hostname()),
-    ?line ?t:start_node(Name1, peer, [{args, "-pz "++PA},{erl,[{release,"r12b"}]}]),
+    ?line ?t:start_node(Name1, peer, [{args, "-pz \""++PA++"\""},{erl,[{release,"r12b"}]}]),
     DataDir = ?config(data_dir,Config),
     %PrivDir = ?config(priv_dir,Config),
     FileName1 = filename:join([DataDir,"testdata_latin1.dat"]),
@@ -908,13 +924,13 @@ bc_with_r12_gl_1(_Config,Machine) ->
     PA = filename:dirname(code:which(?MODULE)),
     Name1 = io_proto_r12_gl_1,
     ?line N1 = list_to_atom(atom_to_list(Name1) ++ "@" ++ hostname()),
-    ?line ?t:start_node(Name1, peer, [{args, "-pz "++PA},{erl,[{release,"r12b"}]}]),
+    ?line ?t:start_node(Name1, peer, [{args, "-pz \""++PA++"\""},{erl,[{release,"r12b"}]}]),
     TestDataLine1 = [229,228,246],
     TestDataLine1BinUtf = unicode:characters_to_binary(TestDataLine1),
     TestDataLine1BinLatin = list_to_binary(TestDataLine1),
 
-    N2List = create_nodename(), 
-    MyNodeList = atom_to_list(node()), 
+    {ok,N2List} = create_nodename(),
+    MyNodeList = atom2list(node()),
     register(io_proto_suite,self()),
     AM1 = spawn(?MODULE,Machine,
 		[MyNodeList, "io_proto_suite", N2List]),
@@ -1146,9 +1162,11 @@ read_modes_gl(suite) ->
 read_modes_gl(doc) ->
     ["Test various modes when reading from the group leade from another machine"];
 read_modes_gl(Config) when is_list(Config) -> 
-    case get_progs() of
-	{error,Reason} ->
+    case {get_progs(),proplists:get_value(default_shell,Config)} of
+	{{error,Reason},_} ->
 	    {skipped,Reason};
+	{_,old} ->
+	    {skipper,"No new shell"};
 	_ ->
 	    read_modes_gl_1(Config,answering_machine1)
     end.
@@ -1158,8 +1176,8 @@ read_modes_gl_1(_Config,Machine) ->
     TestDataLine1BinUtf = unicode:characters_to_binary(TestDataLine1),
     TestDataLine1BinLatin = list_to_binary(TestDataLine1),
 
-    N2List = create_nodename(), 
-    MyNodeList = atom_to_list(node()), 
+    {ok,N2List} = create_nodename(),
+    MyNodeList = atom2list(node()),
     register(io_proto_suite,self()),
     AM1 = spawn(?MODULE,Machine,
 		[MyNodeList, "io_proto_suite", N2List]),
@@ -1290,7 +1308,7 @@ eof_on_pipe(Config) when is_list(Config) ->
 				   end
 			   end,
 		CommandLine1 = EchoLine ++
-		Erl++" -noshell -eval  "
+		"\""++Erl++"\" -noshell -eval  "
 		"'io:format(\"~p\",[io:get_line(\"\")]),"
 		"io:format(\"~p\",[io:get_line(\"\")]),"
 		"io:format(\"~p\",[io:get_line(\"\")]).' -run init stop",
@@ -1301,7 +1319,7 @@ eof_on_pipe(Config) when is_list(Config) ->
 			exit({unexpected1,Other1})
 		end,
 		CommandLine2 = EchoLine ++
-		Erl++" -noshell -eval  "
+		"\""++Erl++"\" -noshell -eval  "
 		"'io:setopts([binary]),io:format(\"~p\",[io:get_line(\"\")]),"
 		"io:format(\"~p\",[io:get_line(\"\")]),"
 		"io:format(\"~p\",[io:get_line(\"\")]).' -run init stop",
@@ -1340,7 +1358,8 @@ rtnode(Commands,Nodename,ErlPrefix,Extra) ->
 				?line {skip, Reason2};
 			    Tempdir ->
 				?line SPid = 
-				    start_runerl_node(RunErl,ErlPrefix++Erl,
+				    start_runerl_node(RunErl,ErlPrefix++
+							  "\\\""++Erl++"\\\"",
 						      Tempdir,Nodename, Extra),
 				?line CPid = start_toerl_server(ToErl,Tempdir),
 				?line erase(getline_skipped),
@@ -1584,7 +1603,7 @@ create_nodename(X) ->
     case file:read_file_info(filename:join(["/tmp",NN])) of
 	{error,enoent} ->
 	    Host = lists:nth(2,string:tokens(atom_to_list(node()),"@")),
-	    NN++"@"++Host;
+	    {ok,NN++"@"++Host};
 	_ ->
 	    create_nodename(X+1)
     end.
@@ -1607,10 +1626,10 @@ start_runerl_node(RunErl,Erl,Tempdir,Nodename,Extra) ->
 		    " "++Extra
 	    end,
     spawn(fun() ->
-		  ?dbg(RunErl++" "++Tempdir++"/ "++Tempdir++" \""++
-			 Erl++XArg++XXArg++"\""),
-		  os:cmd(RunErl++" "++Tempdir++"/ "++Tempdir++" \""++
-			 Erl++XArg++XXArg++"\"")
+		  ?dbg("\""++RunErl++"\" "++Tempdir++"/ "++Tempdir++
+		       " \""++Erl++XArg++XXArg++"\""),
+		  os:cmd("\""++RunErl++"\" "++Tempdir++"/ "++Tempdir++
+			 " \""++Erl++XArg++XXArg++"\"")
 	  end).
 
 start_toerl_server(ToErl,Tempdir) ->
@@ -1640,7 +1659,7 @@ try_to_erl(Command, N) ->
     end.
 
 toerl_server(Parent,ToErl,Tempdir) ->
-    Port = try_to_erl(ToErl++" "++Tempdir++"/ 2>/dev/null",8),
+    Port = try_to_erl("\""++ToErl++"\" "++Tempdir++"/ 2>/dev/null",8),
     case Port of
 	P when is_port(P) ->
 	    Parent ! {self(),started};
@@ -1751,6 +1770,17 @@ get_data_within(Port, Timeout, Acc) ->
 	    {eol, Acc ++ Data1}
     after Timeout ->
 	    timeout
+    end.
+
+get_default_shell() ->
+    try
+	rtnode([{putline,""},
+		{putline, "whereis(user_drv)."},
+		{getline, "undefined"}],[]),
+	old
+    catch _E:_R ->
+	    ?dbg({_E,_R}),
+	    new
     end.
 
 %%
@@ -1888,6 +1918,9 @@ hostname() ->
 from(H, [H | T]) -> T;
 from(H, [_ | T]) -> from(H, T);
 from(_, []) -> [].
+
+atom2list(A) ->
+    lists:flatten(io_lib:format("~w", [A])).
 
 chomp([]) ->
     [];

@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 1996-2011. All Rights Reserved.
+%% Copyright Ericsson AB 1996-2013. All Rights Reserved.
 %%
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -26,13 +26,14 @@
 	 delete_handler/1, swap_handler/1, swap_sup_handler/1,
 	 notify/1, sync_notify/1, call/1, info/1, hibernate/1,
 	 call_format_status/1, call_format_status_anon/1,
-         error_format_status/1]).
+         error_format_status/1, get_state/1, replace_state/1]).
 
 suite() -> [{ct_hooks,[ts_install_cth]}].
 
 all() -> 
     [start, {group, test_all}, hibernate,
-     call_format_status, call_format_status_anon, error_format_status].
+     call_format_status, call_format_status_anon, error_format_status,
+     get_state, replace_state].
 
 groups() -> 
     [{test_all, [],
@@ -62,6 +63,8 @@ start(suite) -> [];
 start(Config) when is_list(Config) ->
     OldFl = process_flag(trap_exit, true),
 
+    ?line dummy_via:reset(),
+
     ?line {ok, Pid0} = gen_event:start(), %anonymous
     ?line [] = gen_event:which_handlers(Pid0),
     ?line ok = gen_event:stop(Pid0),
@@ -85,6 +88,11 @@ start(Config) when is_list(Config) ->
     ?line [] = gen_event:which_handlers(Pid4),
     ?line ok = gen_event:stop({global, my_dummy_name}),
 
+    ?line {ok, Pid5} = gen_event:start_link({via, dummy_via, my_dummy_name}),
+    ?line [] = gen_event:which_handlers({via, dummy_via, my_dummy_name}),
+    ?line [] = gen_event:which_handlers(Pid5),
+    ?line ok = gen_event:stop({via, dummy_via, my_dummy_name}),
+
     ?line {ok, _} = gen_event:start_link({local, my_dummy_name}),
     ?line {error, {already_started, _}} =
 	gen_event:start_link({local, my_dummy_name}),
@@ -92,15 +100,28 @@ start(Config) when is_list(Config) ->
 	gen_event:start({local, my_dummy_name}),
     ?line ok = gen_event:stop(my_dummy_name),
 
-    ?line {ok, Pid5} = gen_event:start_link({global, my_dummy_name}),
+    ?line {ok, Pid6} = gen_event:start_link({global, my_dummy_name}),
     ?line {error, {already_started, _}} =
 	gen_event:start_link({global, my_dummy_name}),
     ?line {error, {already_started, _}} =
 	gen_event:start({global, my_dummy_name}),
 
-    exit(Pid5, shutdown),
+    exit(Pid6, shutdown),
     receive
-	{'EXIT', Pid5, shutdown} -> ok
+	{'EXIT', Pid6, shutdown} -> ok
+    after 10000 ->
+	    ?t:fail(exit_gen_event)
+    end,
+
+    ?line {ok, Pid7} = gen_event:start_link({via, dummy_via, my_dummy_name}),
+    ?line {error, {already_started, _}} =
+	gen_event:start_link({via, dummy_via, my_dummy_name}),
+    ?line {error, {already_started, _}} =
+	gen_event:start({via, dummy_via, my_dummy_name}),
+
+    exit(Pid7, shutdown),
+    receive
+	{'EXIT', Pid7, shutdown} -> ok
     after 10000 ->
 	    ?t:fail(exit_gen_event)
     end,
@@ -935,4 +956,57 @@ error_format_status(Config) when is_list(Config) ->
     ?t:messages_get(),
     ?line ok = gen_event:stop(Pid),
     process_flag(trap_exit, OldFl),
+    ok.
+
+get_state(suite) ->
+    [];
+get_state(doc) ->
+    ["Test that sys:get_state/1,2 return the gen_event state"];
+get_state(Config) when is_list(Config) ->
+    {ok, Pid} = gen_event:start({local, my_dummy_handler}),
+    State1 = self(),
+    ok = gen_event:add_handler(my_dummy_handler, dummy1_h, [State1]),
+    [{dummy1_h,false,State1}] = sys:get_state(Pid),
+    [{dummy1_h,false,State1}] = sys:get_state(Pid, 5000),
+    State2 = {?MODULE, self()},
+    ok = gen_event:add_handler(my_dummy_handler, {dummy1_h,id}, [State2]),
+    Result1 = sys:get_state(Pid),
+    [{dummy1_h,false,State1},{dummy1_h,id,State2}] = lists:sort(Result1),
+    Result2 = sys:get_state(Pid, 5000),
+    [{dummy1_h,false,State1},{dummy1_h,id,State2}] = lists:sort(Result2),
+    ok = sys:suspend(Pid),
+    Result3 = sys:get_state(Pid),
+    [{dummy1_h,false,State1},{dummy1_h,id,State2}] = lists:sort(Result3),
+    ok = sys:resume(Pid),
+    ok = gen_event:stop(Pid),
+    ok.
+
+replace_state(suite) ->
+    [];
+replace_state(doc) ->
+    ["Test that replace_state/2,3 replace the gen_event state"];
+replace_state(Config) when is_list(Config) ->
+    {ok, Pid} = gen_event:start({local, my_dummy_handler}),
+    State1 = self(),
+    ok = gen_event:add_handler(my_dummy_handler, dummy1_h, [State1]),
+    [{dummy1_h,false,State1}] = sys:get_state(Pid),
+    NState1 = "replaced",
+    Replace1 = fun({dummy1_h,false,_}=S) -> setelement(3,S,NState1) end,
+    [{dummy1_h,false,NState1}] = sys:replace_state(Pid, Replace1),
+    [{dummy1_h,false,NState1}] = sys:get_state(Pid),
+    NState2 = "replaced again",
+    Replace2 = fun({dummy1_h,false,_}=S) -> setelement(3,S,NState2) end,
+    [{dummy1_h,false,NState2}] = sys:replace_state(Pid, Replace2, 5000),
+    [{dummy1_h,false,NState2}] = sys:get_state(Pid),
+    %% verify no change in state if replace function crashes
+    Replace3 = fun(_) -> exit(fail) end,
+    [{dummy1_h,false,NState2}] = sys:replace_state(Pid, Replace3),
+    [{dummy1_h,false,NState2}] = sys:get_state(Pid),
+    %% verify state replaced if process sys suspended
+    NState3 = "replaced again and again",
+    Replace4 = fun({dummy1_h,false,_}=S) -> setelement(3,S,NState3) end,
+    ok = sys:suspend(Pid),
+    [{dummy1_h,false,NState3}] = sys:replace_state(Pid, Replace4),
+    ok = sys:resume(Pid),
+    [{dummy1_h,false,NState3}] = sys:get_state(Pid),
     ok.

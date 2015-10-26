@@ -1,7 +1,7 @@
 /*
  * %CopyrightBegin%
  *
- * Copyright Ericsson AB 2010. All Rights Reserved.
+ * Copyright Ericsson AB 2010-2013. All Rights Reserved.
  *
  * The contents of this file are subject to the Erlang Public License,
  * Version 1.1, (the "License"); you may not use this file except in
@@ -65,55 +65,36 @@ static Export binary_copy_trap_export;
 static BIF_RETTYPE binary_copy_trap(BIF_ALIST_2);
 static Uint max_loop_limit;
 
+static BIF_RETTYPE
+binary_match(Process *p, Eterm arg1, Eterm arg2, Eterm arg3);
+static BIF_RETTYPE
+binary_matches(Process *p, Eterm arg1, Eterm arg2, Eterm arg3);
 
 void erts_init_bif_binary(void)
 {
-    sys_memset((void *) &binary_match_trap_export, 0, sizeof(Export));
-    binary_match_trap_export.address = &binary_match_trap_export.code[3];
-    binary_match_trap_export.code[0] = am_erlang;
-    binary_match_trap_export.code[1] = am_binary_match_trap;
-    binary_match_trap_export.code[2] = 3;
-    binary_match_trap_export.code[3] = (BeamInstr) em_apply_bif;
-    binary_match_trap_export.code[4] = (BeamInstr) &binary_match_trap;
+    erts_init_trap_export(&binary_match_trap_export,
+			  am_erlang, am_binary_match_trap, 3,
+			  &binary_match_trap);
 
-    sys_memset((void *) &binary_matches_trap_export, 0, sizeof(Export));
-    binary_matches_trap_export.address = &binary_matches_trap_export.code[3];
-    binary_matches_trap_export.code[0] = am_erlang;
-    binary_matches_trap_export.code[1] = am_binary_matches_trap;
-    binary_matches_trap_export.code[2] = 3;
-    binary_matches_trap_export.code[3] = (BeamInstr) em_apply_bif;
-    binary_matches_trap_export.code[4] = (BeamInstr) &binary_matches_trap;
+    erts_init_trap_export(&binary_matches_trap_export,
+			  am_erlang, am_binary_matches_trap, 3,
+			  &binary_matches_trap);
 
-    sys_memset((void *) &binary_longest_prefix_trap_export, 0, sizeof(Export));
-    binary_longest_prefix_trap_export.address = &binary_longest_prefix_trap_export.code[3];
-    binary_longest_prefix_trap_export.code[0] = am_erlang;
-    binary_longest_prefix_trap_export.code[1] = am_binary_longest_prefix_trap;
-    binary_longest_prefix_trap_export.code[2] = 3;
-    binary_longest_prefix_trap_export.code[3] = (BeamInstr) em_apply_bif;
-    binary_longest_prefix_trap_export.code[4] = (BeamInstr) &binary_longest_prefix_trap;
+    erts_init_trap_export(&binary_longest_prefix_trap_export,
+			  am_erlang, am_binary_longest_prefix_trap, 3,
+			  &binary_longest_prefix_trap);
 
-    sys_memset((void *) &binary_longest_suffix_trap_export, 0, sizeof(Export));
-    binary_longest_suffix_trap_export.address = &binary_longest_suffix_trap_export.code[3];
-    binary_longest_suffix_trap_export.code[0] = am_erlang;
-    binary_longest_suffix_trap_export.code[1] = am_binary_longest_suffix_trap;
-    binary_longest_suffix_trap_export.code[2] = 3;
-    binary_longest_suffix_trap_export.code[3] = (BeamInstr) em_apply_bif;
-    binary_longest_suffix_trap_export.code[4] = (BeamInstr) &binary_longest_suffix_trap;
+    erts_init_trap_export(&binary_longest_suffix_trap_export,
+			  am_erlang, am_binary_longest_suffix_trap, 3,
+			  &binary_longest_suffix_trap);
 
-    sys_memset((void *) &binary_bin_to_list_trap_export, 0, sizeof(Export));
-    binary_bin_to_list_trap_export.address = &binary_bin_to_list_trap_export.code[3];
-    binary_bin_to_list_trap_export.code[0] = am_erlang;
-    binary_bin_to_list_trap_export.code[1] = am_binary_bin_to_list_trap;
-    binary_bin_to_list_trap_export.code[2] = 3;
-    binary_bin_to_list_trap_export.code[3] = (BeamInstr) em_apply_bif;
-    binary_bin_to_list_trap_export.code[4] = (BeamInstr) &binary_bin_to_list_trap;
-    sys_memset((void *) &binary_copy_trap_export, 0, sizeof(Export));
-    binary_copy_trap_export.address = &binary_copy_trap_export.code[3];
-    binary_copy_trap_export.code[0] = am_erlang;
-    binary_copy_trap_export.code[1] = am_binary_copy_trap;
-    binary_copy_trap_export.code[2] = 2;
-    binary_copy_trap_export.code[3] = (BeamInstr) em_apply_bif;
-    binary_copy_trap_export.code[4] = (BeamInstr) &binary_copy_trap;
+    erts_init_trap_export(&binary_bin_to_list_trap_export,
+			  am_erlang, am_binary_bin_to_list_trap, 3,
+			  &binary_bin_to_list_trap);
+
+    erts_init_trap_export(&binary_copy_trap_export,
+			  am_erlang, am_binary_copy_trap, 2,
+			  &binary_copy_trap);
 
     max_loop_limit = 0;
     return;
@@ -946,6 +927,9 @@ static int do_binary_match_compile(Eterm argument, Eterm *tag, Binary **binp)
 	    if (binary_bitsize(b) != 0) {
 		goto badarg;
 	    }
+	    if (binary_size(b) == 0) {
+		goto badarg;
+	    }
 	    ++words;
 	    characters += binary_size(b);
 	}
@@ -1148,7 +1132,7 @@ static int do_binary_match(Process *p, Eterm subject, Uint hsstart, Uint hsend,
 	    erts_free_aligned_binary_bytes(temp_alloc);
 	    return DO_BIN_MATCH_RESTART;
 	} else {
-	    Eterm epos = erts_make_integer(pos+hsstart,p);
+	    Eterm epos = erts_make_integer(pos,p);
 	    Eterm erlen = erts_make_integer(rlen,p);
 	    hp = HAlloc(p,3);
 	    ret = TUPLE2(hp, epos, erlen);
@@ -1340,9 +1324,9 @@ static int parse_match_opts_list(Eterm l, Eterm bin, Uint *posp, Uint *endp)
 		goto badarg;
 	    }
 	    if (len < 0) {
-		Sint lentmp = -len;
+		Uint lentmp = -(Uint)len;
 		/* overflow */
-		if (lentmp == len || lentmp < 0 || -lentmp != len) {
+		if ((Sint)lentmp < 0) {
 		    goto badarg;
 		}
 		len = lentmp;
@@ -1399,6 +1383,12 @@ static BIF_RETTYPE binary_matches_trap(BIF_ALIST_3)
 
 BIF_RETTYPE binary_match_3(BIF_ALIST_3)
 {
+    return binary_match(BIF_P, BIF_ARG_1, BIF_ARG_2, BIF_ARG_3);
+}
+
+static BIF_RETTYPE
+binary_match(Process *p, Eterm arg1, Eterm arg2, Eterm arg3)
+{
     Uint hsstart;
     Uint hsend;
     Eterm *tp;
@@ -1408,17 +1398,17 @@ BIF_RETTYPE binary_match_3(BIF_ALIST_3)
     int runres;
     Eterm result;
 
-    if (is_not_binary(BIF_ARG_1)) {
+    if (is_not_binary(arg1)) {
 	goto badarg;
     }
-    if (parse_match_opts_list(BIF_ARG_3,BIF_ARG_1,&hsstart,&hsend)) {
+    if (parse_match_opts_list(arg3,arg1,&hsstart,&hsend)) {
 	goto badarg;
     }
     if (hsend == 0) {
 	BIF_RET(am_nomatch);
     }
-    if (is_tuple(BIF_ARG_2)) {
-	tp = tuple_val(BIF_ARG_2);
+    if (is_tuple(arg2)) {
+	tp = tuple_val(arg2);
 	if (arityval(*tp) != 2 || is_not_atom(tp[1])) {
 	    goto badarg;
 	}
@@ -1437,13 +1427,13 @@ BIF_RETTYPE binary_match_3(BIF_ALIST_3)
 	    goto badarg;
 	}
 	bin_term = tp[2];
-    } else if (do_binary_match_compile(BIF_ARG_2,&type,&bin)) {
+    } else if (do_binary_match_compile(arg2,&type,&bin)) {
 	goto badarg;
     }
-    runres = do_binary_match(BIF_P,BIF_ARG_1,hsstart,hsend,type,bin,NIL,&result);
+    runres = do_binary_match(p,arg1,hsstart,hsend,type,bin,NIL,&result);
     if (runres == DO_BIN_MATCH_RESTART && bin_term == NIL) {
-	Eterm *hp = HAlloc(BIF_P, PROC_BIN_SIZE);
-	bin_term = erts_mk_magic_binary_term(&hp, &MSO(BIF_P), bin);
+	Eterm *hp = HAlloc(p, PROC_BIN_SIZE);
+	bin_term = erts_mk_magic_binary_term(&hp, &MSO(p), bin);
     } else if (bin_term == NIL) {
 	erts_bin_free(bin);
     }
@@ -1451,16 +1441,22 @@ BIF_RETTYPE binary_match_3(BIF_ALIST_3)
     case DO_BIN_MATCH_OK:
 	BIF_RET(result);
     case DO_BIN_MATCH_RESTART:
-	BUMP_ALL_REDS(BIF_P);
-	BIF_TRAP3(&binary_match_trap_export, BIF_P, BIF_ARG_1, result, bin_term);
+	BUMP_ALL_REDS(p);
+	BIF_TRAP3(&binary_match_trap_export, p, arg1, result, bin_term);
     default:
 	goto badarg;
     }
  badarg:
-    BIF_ERROR(BIF_P,BADARG);
+    BIF_ERROR(p,BADARG);
 }
 
 BIF_RETTYPE binary_matches_3(BIF_ALIST_3)
+{
+    return binary_matches(BIF_P, BIF_ARG_1, BIF_ARG_2, BIF_ARG_3);
+}
+
+static BIF_RETTYPE
+binary_matches(Process *p, Eterm arg1, Eterm arg2, Eterm arg3)
 {
     Uint hsstart, hsend;
     Eterm *tp;
@@ -1470,17 +1466,17 @@ BIF_RETTYPE binary_matches_3(BIF_ALIST_3)
     int runres;
     Eterm result;
 
-    if (is_not_binary(BIF_ARG_1)) {
+    if (is_not_binary(arg1)) {
 	goto badarg;
     }
-    if (parse_match_opts_list(BIF_ARG_3,BIF_ARG_1,&hsstart,&hsend)) {
+    if (parse_match_opts_list(arg3,arg1,&hsstart,&hsend)) {
 	goto badarg;
     }
     if (hsend == 0) {
 	BIF_RET(NIL);
     }
-    if (is_tuple(BIF_ARG_2)) {
-	tp = tuple_val(BIF_ARG_2);
+    if (is_tuple(arg2)) {
+	tp = tuple_val(arg2);
 	if (arityval(*tp) != 2 || is_not_atom(tp[1])) {
 	    goto badarg;
 	}
@@ -1499,14 +1495,14 @@ BIF_RETTYPE binary_matches_3(BIF_ALIST_3)
 	    goto badarg;
 	}
 	bin_term = tp[2];
-    } else if (do_binary_match_compile(BIF_ARG_2,&type,&bin)) {
+    } else if (do_binary_match_compile(arg2,&type,&bin)) {
 	goto badarg;
     }
-    runres = do_binary_matches(BIF_P,BIF_ARG_1,hsstart,hsend,type,bin,
+    runres = do_binary_matches(p,arg1,hsstart,hsend,type,bin,
 			       NIL,&result);
     if (runres == DO_BIN_MATCH_RESTART && bin_term == NIL) {
-	Eterm *hp = HAlloc(BIF_P, PROC_BIN_SIZE);
-	bin_term = erts_mk_magic_binary_term(&hp, &MSO(BIF_P), bin);
+	Eterm *hp = HAlloc(p, PROC_BIN_SIZE);
+	bin_term = erts_mk_magic_binary_term(&hp, &MSO(p), bin);
     } else if (bin_term == NIL) {
 	erts_bin_free(bin);
     }
@@ -1514,26 +1510,26 @@ BIF_RETTYPE binary_matches_3(BIF_ALIST_3)
     case DO_BIN_MATCH_OK:
 	BIF_RET(result);
     case DO_BIN_MATCH_RESTART:
-	BUMP_ALL_REDS(BIF_P);
-	BIF_TRAP3(&binary_matches_trap_export, BIF_P, BIF_ARG_1, result,
+	BUMP_ALL_REDS(p);
+	BIF_TRAP3(&binary_matches_trap_export, p, arg1, result,
 		  bin_term);
     default:
 	goto badarg;
     }
  badarg:
-    BIF_ERROR(BIF_P,BADARG);
+    BIF_ERROR(p,BADARG);
 }
 
 
 BIF_RETTYPE binary_match_2(BIF_ALIST_2)
 {
-    return binary_match_3(BIF_P,BIF_ARG_1,BIF_ARG_2,((Eterm) 0));
+    return binary_match(BIF_P,BIF_ARG_1,BIF_ARG_2,((Eterm) 0));
 }
 
 
 BIF_RETTYPE binary_matches_2(BIF_ALIST_2)
 {
-    return binary_matches_3(BIF_P,BIF_ARG_1,BIF_ARG_2,((Eterm) 0));
+    return binary_matches(BIF_P,BIF_ARG_1,BIF_ARG_2,((Eterm) 0));
 }
 
 
@@ -1559,9 +1555,9 @@ BIF_RETTYPE erts_binary_part(Process *p, Eterm binary, Eterm epos, Eterm elen)
 	goto badarg;
     }
     if (len < 0) {
-	Sint lentmp = -len;
+	Uint lentmp = -(Uint)len;
 	/* overflow */
-	if (lentmp == len || lentmp < 0 || -lentmp != len) {
+	if ((Sint)lentmp < 0) {
 	    goto badarg;
 	}
 	len = lentmp;
@@ -1648,9 +1644,9 @@ BIF_RETTYPE erts_gc_binary_part(Process *p, Eterm *reg, Eterm live, int range_is
 	goto badarg;
     }
     if (len < 0) {
-	Sint lentmp = -len;
+	Uint lentmp = -(Uint)len;
 	/* overflow */
-	if (lentmp == len || lentmp < 0 || -lentmp != len) {
+	if ((Sint)lentmp < 0) {
 	    goto badarg;
 	}
 	len = lentmp;
@@ -1882,9 +1878,9 @@ static BIF_RETTYPE do_longest_common(Process *p, Eterm list, int direction)
     cd = (CommonData *) ERTS_MAGIC_BIN_DATA(mb);
     l = list;
     while (is_list(l)) {
-	Uint bitoffs;
+	ERTS_DECLARE_DUMMY(Uint bitoffs);
 	Uint bitsize;
-	Uint offset;
+	ERTS_DECLARE_DUMMY(Uint offset);
 	Eterm real_bin;
 	ProcBin* pb;
 
@@ -2217,9 +2213,9 @@ static BIF_RETTYPE binary_bin_to_list_common(Process *p,
 	goto badarg;
     }
     if (len < 0) {
-	Sint lentmp = -len;
+	Uint lentmp = -(Uint)len;
 	/* overflow */
-	if (lentmp == len || lentmp < 0 || -lentmp != len) {
+	if ((Sint)lentmp < 0) {
 	    goto badarg;
 	}
 	len = lentmp;
@@ -2298,18 +2294,11 @@ BIF_RETTYPE binary_bin_to_list_1(BIF_ALIST_1)
     BIF_ERROR(BIF_P,BADARG);
 }
 
-/*
- * Ok, erlang:list_to_binary does not interrupt, and we really don't want
- * an alternative implementation for the exact same thing, why we
- * have descided to use the old non-restarting implementation for now.
- * In reality, there are seldom many iterations involved in doing this, so the
- * problem of long-running bifs is not really that big in this case.
- * So, for now we use the old implementation also in the module binary.
- */
+HIPE_WRAPPER_BIF_DISABLE_GC(binary_list_to_bin, 1)
 
 BIF_RETTYPE binary_list_to_bin_1(BIF_ALIST_1)
 {
-    return erts_list_to_binary_bif(BIF_P, BIF_ARG_1);
+    return erts_list_to_binary_bif(BIF_P, BIF_ARG_1, bif_export[BIF_binary_list_to_bin_1]);
 }
 
 typedef struct {
@@ -2361,7 +2350,7 @@ static BIF_RETTYPE do_binary_copy(Process *p, Eterm bin, Eterm en)
 {
     Uint n;
     byte *bytes;
-    Uint bit_offs;
+    ERTS_DECLARE_DUMMY(Uint bit_offs);
     Uint bit_size;
     size_t size;
     Uint reds = get_reds(p, BINARY_COPY_LOOP_FACTOR);
@@ -2390,9 +2379,9 @@ static BIF_RETTYPE do_binary_copy(Process *p, Eterm bin, Eterm en)
 
     if ((target_size - size) >= reds) {
 	Eterm orig;
-	Uint offset;
-	Uint bit_offset;
-	Uint bit_size;
+	ERTS_DECLARE_DUMMY(Uint offset);
+	ERTS_DECLARE_DUMMY(Uint bit_offset);
+	ERTS_DECLARE_DUMMY(Uint bit_size);
 	CopyBinState *cbs;
 	Eterm *hp;
 	Eterm trap_term;

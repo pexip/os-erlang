@@ -3,9 +3,9 @@ include $(ERL_TOP)/make/target.mk
 include $(ERL_TOP)/make/$(TARGET)/otp.mk
 
 MODULES =  \
+	dyntrace_SUITE \
 	runtime_tools_SUITE \
-	inviso_testmodule1_foo \
-	inviso_SUITE \
+	system_information_SUITE \
 	dbg_SUITE \
 	erts_alloc_config_SUITE
 
@@ -56,10 +56,10 @@ include $(ERL_TOP)/make/otp_release_targets.mk
 release_spec: opt
 
 release_tests_spec: make_emakefile
-	$(INSTALL_DIR) $(RELSYSDIR)
-	$(INSTALL_DATA) runtime_tools.spec runtime_tools.cover $(ERL_FILES) $(RELSYSDIR)
-	$(INSTALL_DATA) $(EMAKEFILE) runtime_tools.cover $(RELSYSDIR)
-	chmod -R u+w $(RELSYSDIR)
-	@tar cf - *_SUITE_data | (cd $(RELSYSDIR); tar xf -)
+	$(INSTALL_DIR) "$(RELSYSDIR)"
+	$(INSTALL_DATA) runtime_tools.spec runtime_tools.cover $(ERL_FILES) "$(RELSYSDIR)"
+	$(INSTALL_DATA) $(EMAKEFILE) runtime_tools.cover "$(RELSYSDIR)"
+	chmod -R u+w "$(RELSYSDIR)"
+	@tar cf - *_SUITE_data | (cd "$(RELSYSDIR)"; tar xf -)
 
 release_docs_spec:

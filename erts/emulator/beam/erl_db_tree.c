@@ -1,7 +1,7 @@
 /*
  * %CopyrightBegin%
  *
- * Copyright Ericsson AB 1998-2011. All Rights Reserved.
+ * Copyright Ericsson AB 1998-2013. All Rights Reserved.
  *
  * The contents of this file are subject to the Erlang Public License,
  * Version 1.1, (the "License"); you may not use this file except in
@@ -49,7 +49,7 @@
 #include "erl_db_tree.h"
 
 #define GETKEY_WITH_POS(Keypos, Tplp) (*((Tplp) + Keypos))
-#define NITEMS(tb) ((int)erts_smp_atomic_read(&(tb)->common.nitems))
+#define NITEMS(tb) ((int)erts_smp_atomic_read_nob(&(tb)->common.nitems))
 
 /*
 ** A stack of this size is enough for an AVL tree with more than
@@ -84,7 +84,7 @@
 */
 static DbTreeStack* get_static_stack(DbTableTree* tb)
 {
-    if (!erts_smp_atomic_xchg(&tb->is_stack_busy, 1)) {
+    if (!erts_smp_atomic_xchg_acqb(&tb->is_stack_busy, 1)) {
 	return &tb->static_stack;
     }
     return NULL;
@@ -96,7 +96,7 @@ static DbTreeStack* get_static_stack(DbTableTree* tb)
 static DbTreeStack* get_any_stack(DbTableTree* tb)
 {
     DbTreeStack* stack;
-    if (!erts_smp_atomic_xchg(&tb->is_stack_busy, 1)) {
+    if (!erts_smp_atomic_xchg_acqb(&tb->is_stack_busy, 1)) {
 	return &tb->static_stack;
     }
     stack = erts_db_alloc(ERTS_ALC_T_DB_STK, (DbTable *) tb,
@@ -110,7 +110,7 @@ static DbTreeStack* get_any_stack(DbTableTree* tb)
 static void release_stack(DbTableTree* tb, DbTreeStack* stack)
 {
     if (stack == &tb->static_stack) {
-	ASSERT(erts_smp_atomic_read(&tb->is_stack_busy) == 1);
+	ASSERT(erts_smp_atomic_read_nob(&tb->is_stack_busy) == 1);
 	erts_smp_atomic_set_relb(&tb->is_stack_busy, 0);
     }
     else {
@@ -344,8 +344,8 @@ static int do_partly_bound_can_match_lesser(Eterm a, Eterm b,
 					    int *done);
 static int do_partly_bound_can_match_greater(Eterm a, Eterm b, 
 					     int *done);
-static BIF_RETTYPE ets_select_reverse(Process *p, Eterm a1, 
-				      Eterm a2, Eterm a3);
+static BIF_RETTYPE ets_select_reverse(BIF_ALIST_3);
+
 
 /* Method interface functions */
 static int db_first_tree(Process *p, DbTable *tbl, 
@@ -452,16 +452,8 @@ DbTableMethod db_tree =
 
 void db_initialize_tree(void)
 {
-    memset(&ets_select_reverse_exp, 0, sizeof(Export));
-    ets_select_reverse_exp.address = 
-	&ets_select_reverse_exp.code[3];
-    ets_select_reverse_exp.code[0] = am_ets;
-    ets_select_reverse_exp.code[1] = am_reverse;
-    ets_select_reverse_exp.code[2] = 3;
-    ets_select_reverse_exp.code[3] =
-	(BeamInstr) em_apply_bif;
-    ets_select_reverse_exp.code[4] = 
-	(BeamInstr) &ets_select_reverse;
+    erts_init_trap_export(&ets_select_reverse_exp, am_ets, am_reverse, 3,
+			  &ets_select_reverse);
     return;
 };
 
@@ -478,7 +470,7 @@ int db_create_tree(Process *p, DbTable *tbl)
 					   sizeof(TreeDbTerm *) * STACK_NEED);
     tb->static_stack.pos = 0;
     tb->static_stack.slot = 0;
-    erts_smp_atomic_init(&tb->is_stack_busy, 0);
+    erts_smp_atomic_init_nob(&tb->is_stack_busy, 0);
     tb->deletion = 0;
     return DB_ERROR_NONE;
 }
@@ -493,7 +485,7 @@ static int db_first_tree(Process *p, DbTable *tbl, Eterm *ret)
 	*ret = am_EOT;
 	return DB_ERROR_NONE;
     }
-    /* Walk down to the tree to the left */
+    /* Walk down the tree to the left */
     if ((stack = get_static_stack(tb)) != NULL) {
 	stack->pos = stack->slot = 0;
     }
@@ -539,7 +531,7 @@ static int db_last_tree(Process *p, DbTable *tbl, Eterm *ret)
 	*ret = am_EOT;
 	return DB_ERROR_NONE;
     }
-    /* Walk down to the tree to the left */
+    /* Walk down the tree to the right */
     if ((stack = get_static_stack(tb)) != NULL) {
 	stack->pos = stack->slot = 0;
     }    
@@ -613,8 +605,8 @@ static int db_put_tree(DbTable *tbl, Eterm obj, int key_clash_fail)
     for (;;)
 	if (!*this) { /* Found our place */
 	    state = 1;
-	    if (erts_smp_atomic_inctest(&tb->common.nitems) >= TREE_MAX_ELEMENTS) {
-		erts_smp_atomic_dec(&tb->common.nitems);
+	    if (erts_smp_atomic_inc_read_nob(&tb->common.nitems) >= TREE_MAX_ELEMENTS) {
+		erts_smp_atomic_dec_nob(&tb->common.nitems);
 		return DB_ERROR_SYSRES;
 	    }
 	    *this = new_dbterm(tb, obj);
@@ -844,8 +836,12 @@ static int db_slot_tree(Process *p, DbTable *tbl,
 
 
 
-static BIF_RETTYPE ets_select_reverse(Process *p, Eterm a1, Eterm a2, Eterm a3)
+static BIF_RETTYPE ets_select_reverse(BIF_ALIST_3)
 {
+    Process *p = BIF_P;
+    Eterm a1 = BIF_ARG_1;
+    Eterm a2 = BIF_ARG_2;
+    Eterm a3 = BIF_ARG_3;
     Eterm list;
     Eterm result;
     Eterm* hp;
@@ -1583,7 +1579,7 @@ static int db_select_delete_continue_tree(Process *p,
     sc.max = 1000;
     sc.keypos = tb->common.keypos;
 
-    ASSERT(!erts_smp_atomic_read(&tb->is_stack_busy));
+    ASSERT(!erts_smp_atomic_read_nob(&tb->is_stack_busy));
     traverse_backwards(tb, &tb->static_stack, lastkey, NULL, &doit_select_delete, &sc);
 
     BUMP_REDS(p, 1000 - sc.max);
@@ -1774,7 +1770,7 @@ static int db_free_table_continue_tree(DbTable *tbl)
 		     (DbTable *) tb,
 		     (void *) tb->static_stack.array,
 		     sizeof(TreeDbTerm *) * STACK_NEED);
-	ASSERT(erts_smp_atomic_read(&tb->common.memory_size)
+	ASSERT(erts_smp_atomic_read_nob(&tb->common.memory_size)
 	       == sizeof(DbTable));
     }
     return result;
@@ -1784,7 +1780,7 @@ static int db_delete_all_objects_tree(Process* p, DbTable* tbl)
 {
     db_free_table_tree(tbl);
     db_create_tree(p, tbl);
-    erts_smp_atomic_set(&tbl->tree.common.nitems, 0);
+    erts_smp_atomic_set_nob(&tbl->tree.common.nitems, 0);
     return 0;
 }
 
@@ -1866,7 +1862,7 @@ static TreeDbTerm *linkout_tree(DbTableTree *tb,
 		tstack[tpos++] = this;
 		state = delsub(this);
 	    }
-	    erts_smp_atomic_dec(&tb->common.nitems);
+	    erts_smp_atomic_dec_nob(&tb->common.nitems);
 	    break;
 	}
     }
@@ -1933,7 +1929,7 @@ static TreeDbTerm *linkout_object_tree(DbTableTree *tb,
 		tstack[tpos++] = this;
 		state = delsub(this);
 	    }
-	    erts_smp_atomic_dec(&tb->common.nitems);
+	    erts_smp_atomic_dec_nob(&tb->common.nitems);
 	    break;
 	}
     }

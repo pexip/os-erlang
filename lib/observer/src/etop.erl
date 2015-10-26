@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %% 
-%% Copyright Ericsson AB 2002-2009. All Rights Reserved.
+%% Copyright Ericsson AB 2002-2013. All Rights Reserved.
 %% 
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -31,9 +31,9 @@
 
 help() ->
     io:format(
-      "Usage of the erlang top program~n"
-      "Options are set as command line parameters as in -node a@host -..~n"
-      "or as parameter to etop:start([{node, a@host}, {...}])~n"
+      "Usage of the Erlang top program~n~n"
+      "Options are set as command line parameters as in -node my@host~n"
+      "or as parameters to etop:start([{node, my@host}, {...}]).~n~n"
       "Options are:~n"
       "  node        atom       Required   The erlang node to measure ~n"
       "  port        integer    The used port, NOTE: due to a bug this program~n"
@@ -44,9 +44,6 @@ help() ->
       "  sort        runtime | reductions | memory | msg_q~n"
       "                         What information to sort by~n"
       "                         Default: runtime (reductions if tracing=off)~n"
-      "  output      graphical | text~n"
-      "                         How to present results~n"
-      "                         Default: graphical~n"
       "  tracing     on | off   etop uses the erlang trace facility, and thus~n"
       "                         no other tracing is possible on the node while~n"
       "                         etop is running, unless this option is set to~n"
@@ -317,7 +314,7 @@ handle_args([_| R], C) ->
 handle_args([], C) ->
     C.
 
-output(graphical) -> etop_gui;
+output(graphical) -> exit({deprecated, "Use observer instead"});
 output(text) -> etop_txt.
 
 
@@ -325,12 +322,39 @@ loadinfo(SysI) ->
     #etop_info{n_procs = Procs, 
 	       run_queue = RQ, 
 	       now = Now,
-	       wall_clock = {_, WC}, 
-	       runtime = {_, RT}} = SysI,
-    Cpu = round(100*RT/WC),
+	       wall_clock = WC,
+	       runtime = RT} = SysI,
+    Cpu = calculate_cpu_utilization(WC,RT),
     Clock = io_lib:format("~2.2.0w:~2.2.0w:~2.2.0w",
 			 tuple_to_list(element(2,calendar:now_to_datetime(Now)))),
     {Cpu,Procs,RQ,Clock}.
+
+calculate_cpu_utilization({_,WC},{_,RT}) ->
+    %% Old version of observer_backend, using statistics(wall_clock)
+    %% and statistics(runtime)
+    case {WC,RT} of
+	{0,0} ->
+	    0;
+	{0,_} ->
+	    100;
+	_ ->
+	    round(100*RT/WC)
+    end;
+calculate_cpu_utilization(_,undefined) ->
+    %% First time collecting - no cpu utilization has been measured
+    %% since scheduler_wall_time flag is not yet on
+    0;
+calculate_cpu_utilization(_,RTInfo) ->
+    %% New version of observer_backend, using statistics(scheduler_wall_time)
+    Sum = lists:foldl(fun({_,A,T},{AAcc,TAcc}) -> {A+AAcc,T+TAcc} end,
+		      {0,0},
+		      RTInfo),
+    case Sum of
+	{0,0} ->
+	    0;
+	{Active,Total} ->
+	    round(100*Active/Total)
+    end.
 
 meminfo(MemI, [Tag|Tags]) -> 
     [round(get_mem(Tag, MemI)/1024)|meminfo(MemI, Tags)];

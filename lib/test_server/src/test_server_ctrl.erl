@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2002-2011. All Rights Reserved.
+%% Copyright Ericsson AB 2002-2014. All Rights Reserved.
 %%
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -17,7 +17,6 @@
 %% %CopyrightEnd%
 %%
 -module(test_server_ctrl).
-
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %%                                                                  %%
 %%                      The Erlang Test Server                      %%
@@ -33,118 +32,6 @@
 %% EASIER TO REMOVE: filename, filelib, lib, re
 %%
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-%% ARCHITECTURE
-%%
-%% The Erlang Test Server can be run on the target machine (local target)
-%% or towards a remote target. The execution flow is mainly the same in
-%% both cases, but with a remote target the test cases are (obviously)
-%% executed on the target machine. Host and target communicates over
-%% socket connections because the host should not be introduced as an
-%% additional node in the distributed erlang system in which the test
-%% cases are run.
-%%
-%%
-%% Local Target:
-%% =============
-%%
-%%   -----
-%%   |   |  test_server_ctrl ({global,test_server})
-%%   ----- (test_server_ctrl.erl)
-%%     |
-%%     |
-%%   -----
-%%   |   | JobProc
-%%   ----- (test_server_ctrl.erl and test_server.erl)
-%%     |
-%%     |
-%%   -----
-%%   |   | CaseProc
-%%   ----- (test_server.erl)
-%%
-%%
-%%
-%% test_server_ctrl is the main process in the system. It is a registered
-%% process, and it will always be alive when testing is ongoing.
-%% test_server_ctrl initiates testing and monitors JobProc(s).
-%%
-%% When target is local, and Test Server is *not* being used by a framework
-%% application (where it might cause duplicate name problems in a distributed
-%% test environment), the process is globally registered as 'test_server'
-%% to be able to simulate the {global,test_server} process on a remote target.
-%%
-%% JobProc is spawned for each 'job' added to the test_server_ctrl.
-%% A job can mean one test case, one test suite or one spec.
-%% JobProc creates and writes logs and presents results from testing.
-%% JobProc is the group leader for CaseProc.
-%%
-%% CaseProc is spawned for each test case. It runs the test case and
-%% sends results and any other information to its group leader - JobProc.
-%%
-%%
-%%
-%% Remote Target:
-%% ==============
-%%
-%% 		HOST				TARGET
-%%
-%% 	                   -----  MainSock   -----
-%%        test_server_ctrl |   |- - - - - - -|   | {global,test_server}
-%%  (test_server_ctrl.erl) -----	     ----- (test_server.erl)
-%% 		             |		       |
-%% 			     |		       |
-%% 		           -----  JobSock    -----
-%% 	          JobProcH |   |- - - - - - -|   | JobProcT
-%%  (test_server_ctrl.erl) -----	     ----- (test_server.erl)
-%% 					       |	
-%% 					       |
-%% 					     -----
-%% 					     |   | CaseProc
-%% 					     ----- (test_server.erl)
-%%
-%%
-%%
-%%
-%% A separate test_server process only exists when target is remote. It
-%% is then the main process on target. It is started when test_server_ctrl
-%% is started, and a socket connection is established between
-%% test_server_ctrl and test_server. The following information can be sent
-%% over MainSock:
-%%
-%% HOST			TARGET
-%%  -> {target_info, TargetInfo}     (during initiation)
-%%  <- {job_proc_killed,Name,Reason} (if a JobProcT dies unexpectedly)
-%%  -> {job,Port,Name}               (to start a new JobProcT)
-%%
-%%
-%% When target is remote, JobProc is split into to processes: JobProcH
-%% executing on Host and JobProcT executing on Target. (The two processes
-%% execute the same code as JobProc does when target is local.) JobProcH
-%% and JobProcT communicates over a socket connection. The following
-%% information can be sent over JobSock:
-%%
-%% HOST			TARGET
-%%  -> {test_case, Case}          To start a new test case
-%%  -> {beam,Mod}                 .beam file as binary to be loaded
-%% 				  on target, e.g. a test suite
-%%  -> {datadir,Tarfile}          Content of the datadir for a test suite
-%%  <- {apply,MFA}                MFA to be applied on host, ignore return;
-%% 				  (apply is used for printing information in
-%% 				  log or console)
-%%  <- {sync_apply,MFA}           MFA to be applied on host, wait for return
-%% 				  (used for starting and stopping slave nodes)
-%%  -> {sync_apply,MFA}           MFA to be applied on target, wait for return
-%% 				  (used for cover compiling and analysing)
-%% <-> {sync_result,Result}       Return value from sync_apply
-%%  <- {test_case_result,Result}  When a test case is finished
-%%  <- {crash_dumps,Tarfile}      When a test case is finished
-%%  -> job_done			  When a job is finished
-%%  <- {privdir,Privdir}          When a job is finished
-%%
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-
-
 
 %%% SUPERVISOR INTERFACE %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 -export([start/0, start/1, start_link/1, stop/0]).
@@ -162,22 +49,24 @@
 -export([jobs/0, run_test/1, wait_finish/0, idle_notify/1,
 	 abort_current_testcase/1, abort/0]).
 -export([start_get_totals/1, stop_get_totals/0]).
--export([get_levels/0, set_levels/3]).
+-export([reject_io_reqs/1, get_levels/0, set_levels/3]).
 -export([multiply_timetraps/1, scale_timetraps/1, get_timetrap_parameters/0]).
--export([cover/2, cover/3, cover/7,
-	 cross_cover_analyse/1, cross_cover_analyse/2, trc/1, stop_trace/0]).
+-export([create_priv_dir/1]).
+-export([cover/1, cover/2, cover/3,
+	 cover_compile/7, cover_analyse/2, cross_cover_analyse/2,
+	 trc/1, stop_trace/0]).
 -export([testcase_callback/1]).
 -export([set_random_seed/1]).
 -export([kill_slavenodes/0]).
 
 %%% TEST_SERVER INTERFACE %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
--export([output/2, print/2, print/3, print_timestamp/2]).
+-export([print/2, print/3, print/4, print_timestamp/2]).
 -export([start_node/3, stop_node/1, wait_for_node/1, is_release_available/1]).
 -export([format/1, format/2, format/3, to_string/1]).
 -export([get_target_info/0]).
 -export([get_hosts/0]).
--export([get_target_os_type/0]).
 -export([node_started/1]).
+-export([uri_encode/1,uri_encode/2]).
 
 %%% DEBUGGER INTERFACE %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 -export([i/0, p/1, p/3, pi/2, pi/4, t/0, t/1]).
@@ -187,6 +76,7 @@
 -export([handle_call/3, handle_cast/2, handle_info/2]).
 -export([do_test_cases/4]).
 -export([do_spec/2, do_spec_list/2]).
+-export([xhtml/2]).
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
@@ -199,24 +89,30 @@
 -define(data_dir_suffix, "_data/").
 -define(suitelog_name, "suite.log").
 -define(coverlog_name, "cover.html").
+-define(raw_coverlog_name, "cover.log").
 -define(cross_coverlog_name, "cross_cover.html").
+-define(raw_cross_coverlog_name, "cross_cover.log").
+-define(cross_cover_info, "cross_cover.info").
 -define(cover_total, "total_cover.log").
+-define(unexpected_io_log, "unexpected_io.log.html").
 -define(last_file, "last_name").
 -define(last_link, "last_link").
 -define(last_test, "last_test").
 -define(html_ext, ".html").
--define(cross_cover_file, "cross.cover").
 -define(now, erlang:now()).
 
--define(pl2a(M), test_server_sup:package_atom(M)).
 -define(void_fun, fun() -> ok end).
 -define(mod_result(X), if X == skip -> skipped;
 			  X == auto_skip -> skipped;
 			  true -> X end).
 
--record(state,{jobs=[],levels={1,19,10},
-	       multiply_timetraps=1,scale_timetraps=true,
-	       finish=false,
+-define(auto_skip_color, "#FFA64D").
+-define(user_skip_color, "#FF8000").
+-define(sortable_table_name, "SortableTable").
+
+-record(state,{jobs=[], levels={1,19,10}, reject_io_reqs=false,
+	       multiply_timetraps=1, scale_timetraps=true,
+	       create_priv_dir=auto_per_run, finish=false,
 	       target_info, trc=false, cover=false, wait_for_node=[],
 	       testcase_callback=undefined, idle_notify=[],
 	       get_totals=false, random_seed=undefined}).
@@ -335,12 +231,12 @@ parse_cmd_line(['SPEC',Spec|Cmds], SpecList, Names, Param, Trc, Cov, TCCB) ->
 	    parse_cmd_line(Cmds, TermList++SpecList, [Name|Names], Param,
 			   Trc, Cov, TCCB);
 	{error,Reason} ->
-	    io:format("Can't open ~s: ~p\n",
-		      [cast_to_list(Spec), file:format_error(Reason)]),
+	    io:format("Can't open ~w: ~p\n",[Spec, file:format_error(Reason)]),
 	    parse_cmd_line(Cmds, SpecList, Names, Param, Trc, Cov, TCCB)
     end;
 parse_cmd_line(['NAME',Name|Cmds], SpecList, Names, Param, Trc, Cov, TCCB) ->
-    parse_cmd_line(Cmds, SpecList, [{name,Name}|Names], Param, Trc, Cov, TCCB);
+    parse_cmd_line(Cmds, SpecList, [{name,atom_to_list(Name)}|Names],
+		   Param, Trc, Cov, TCCB);
 parse_cmd_line(['SKIPMOD',Mod|Cmds], SpecList, Names, Param, Trc, Cov, TCCB) ->
     parse_cmd_line(Cmds, [{skip,{Mod,"by command line"}}|SpecList], Names,
 		   Param, Trc, Cov, TCCB);
@@ -348,17 +244,15 @@ parse_cmd_line(['SKIPCASE',Mod,Case|Cmds], SpecList, Names, Param, Trc, Cov, TCC
     parse_cmd_line(Cmds, [{skip,{Mod,Case,"by command line"}}|SpecList], Names,
 		   Param, Trc, Cov, TCCB);
 parse_cmd_line(['DIR',Dir|Cmds], SpecList, Names, Param, Trc, Cov, TCCB) ->
-    Name = cast_to_list(filename:basename(Dir)),
+    Name = filename:basename(Dir),
     parse_cmd_line(Cmds, [{topcase,{dir,Name}}|SpecList], [Name|Names],
 		   Param, Trc, Cov, TCCB);
 parse_cmd_line(['MODULE',Mod|Cmds], SpecList, Names, Param, Trc, Cov, TCCB) ->
-    parse_cmd_line(Cmds, [{topcase,{Mod,all}}|SpecList], [Mod|Names],
+    parse_cmd_line(Cmds,[{topcase,{Mod,all}}|SpecList],[atom_to_list(Mod)|Names],
 		   Param, Trc, Cov, TCCB);
 parse_cmd_line(['CASE',Mod,Case|Cmds], SpecList, Names, Param, Trc, Cov, TCCB) ->
-    parse_cmd_line(Cmds, [{topcase,{Mod,Case}}|SpecList], [Mod|Names],
+    parse_cmd_line(Cmds,[{topcase,{Mod,Case}}|SpecList],[atom_to_list(Mod)|Names],
 		   Param, Trc, Cov, TCCB);
-parse_cmd_line(['PARAMETERS',Param|Cmds], SpecList, Names, _Param, Trc, Cov, TCCB) ->
-    parse_cmd_line(Cmds, SpecList, Names, Param, Trc, Cov, TCCB);
 parse_cmd_line(['TRACE',Trc|Cmds], SpecList, Names, Param, _Trc, Cov, TCCB) ->
     parse_cmd_line(Cmds, SpecList, Names, Param, Trc, Cov, TCCB);
 parse_cmd_line(['COVER',App,CF,Analyse|Cmds], SpecList, Names, Param, Trc, _Cov, TCCB) ->
@@ -366,17 +260,17 @@ parse_cmd_line(['COVER',App,CF,Analyse|Cmds], SpecList, Names, Param, Trc, _Cov,
 parse_cmd_line(['TESTCASE_CALLBACK',Mod,Func|Cmds], SpecList, Names, Param, Trc, Cov, _) ->
     parse_cmd_line(Cmds, SpecList, Names, Param, Trc, Cov, {Mod,Func});
 parse_cmd_line([Obj|_Cmds], _SpecList, _Names, _Param, _Trc, _Cov, _TCCB) ->
-    io:format("~p: Bad argument: ~p\n", [?MODULE,Obj]),
+    io:format("~w: Bad argument: ~w\n", [?MODULE,Obj]),
     io:format(" Use the `ts' module to start tests.\n", []),
     io:format(" (If you ARE using `ts', there is a bug in `ts'.)\n", []),
     halt(1);
 parse_cmd_line([], SpecList, Names, Param, Trc, Cov, TCCB) ->
-    NameList = lists:reverse(Names, [suite]),
+    NameList = lists:reverse(Names, ["suite"]),
     Name = case lists:keysearch(name, 1, NameList) of
 	       {value,{name,N}} -> N;
 	       false -> hd(NameList)
 	   end,
-    {lists:reverse(SpecList), cast_to_list(Name), Param, Trc, Cov, TCCB}.
+    {lists:reverse(SpecList), Name, Param, Trc, Cov, TCCB}.
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %% cast_to_list(X) -> string()
@@ -390,19 +284,23 @@ cast_to_list(X) -> lists:flatten(io_lib:format("~w", [X])).
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %% START INTERFACE
 
-start() ->
-    start(local).
+%% Kept for backwards compatibility
+start(_) ->
+    start().
+start_link(_) ->
+    start_link().
 
-start(Param) ->
-    case gen_server:start({local,?MODULE}, ?MODULE, [Param], []) of
+
+start() ->
+    case gen_server:start({local,?MODULE}, ?MODULE, [], []) of
 	{ok, Pid} ->
 	    {ok, Pid};
 	Other ->
 	    Other
     end.
 
-start_link(Param) ->
-    case gen_server:start_link({local,?MODULE}, ?MODULE, [Param], []) of
+start_link() ->
+    case gen_server:start_link({local,?MODULE}, ?MODULE, [], []) of
 	{ok, Pid} ->
 	    {ok, Pid};
 	Other ->
@@ -424,14 +322,6 @@ run_test(CommandLine) ->
     testcase_callback(TCCB),
     add_job(Name, {command_line,SpecList}),
 
-    %% adding of jobs involves file i/o which may take long time
-    %% when running a nfs mounted file system (VxWorks).
-    case controller_call(get_target_info) of
-	#target_info{os_family=vxworks} ->
-	    receive after 30000 -> ready_to_wait end;
-	_ ->
-	    wait_now
-    end,
     wait_finish().
 
 %% Converted CoverFile to a string unless it is 'none'
@@ -464,8 +354,7 @@ wait_finish() ->
     ok.
 
 abort_current_testcase(Reason) ->
-    controller_call({abort_current_testcase,Reason}),
-    ok.
+    controller_call({abort_current_testcase,Reason}).
 
 abort() ->
     OldTrap = process_flag(trap_exit, true),
@@ -493,6 +382,9 @@ get_levels() ->
 set_levels(Show, Major, Minor) ->
     controller_call({set_levels,Show,Major,Minor}).
 
+reject_io_reqs(Bool) ->
+    controller_call({reject_io_reqs,Bool}).
+
 multiply_timetraps(N) ->
     controller_call({multiply_timetraps,N}).
 
@@ -501,6 +393,9 @@ scale_timetraps(Bool) ->
 
 get_timetrap_parameters() ->
     controller_call(get_timetrap_parameters).
+
+create_priv_dir(Value) ->
+    controller_call({create_priv_dir,Value}).
 
 trc(TraceFile) ->
     controller_call({trace,TraceFile}, 2*?ACCEPT_TIMEOUT).
@@ -516,9 +411,26 @@ cover(App, Analyse) when is_atom(App) ->
 cover(CoverFile, Analyse) ->
     cover(none, CoverFile, Analyse).
 cover(App, CoverFile, Analyse) ->
-    controller_call({cover,{App,CoverFile},Analyse}).
-cover(App, CoverFile, Exclude, Include, Cross, Export, Analyse) ->
-    controller_call({cover,{App,{CoverFile,Exclude,Include,Cross,Export}},Analyse}).
+    {Excl,Incl,Cross} = read_cover_file(CoverFile),
+    CoverInfo = #cover{app=App,
+		       file=CoverFile,
+		       excl=Excl,
+		       incl=Incl,
+		       cross=Cross,
+		       level=Analyse},
+    controller_call({cover,CoverInfo}).
+
+cover(CoverInfo) ->
+    controller_call({cover,CoverInfo}).
+
+cover_compile(App,File,Excl,Incl,Cross,Analyse,Stop) ->
+    cover_compile(#cover{app=App,
+			 file=File,
+			 excl=Excl,
+			 incl=Incl,
+			 cross=Cross,
+			 level=Analyse,
+			 stop=Stop}).
 
 testcase_callback(ModFunc) ->
     controller_call({testcase_callback,ModFunc}).
@@ -531,20 +443,6 @@ kill_slavenodes() ->
 
 get_hosts() ->
     get(test_server_hosts).
-
-get_target_os_type() ->
-    case whereis(?MODULE) of
-	undefined ->
-	    %% This is probably called on the target node
-	    os:type();
-	Pid when Pid =:= self() ->
-	    os:type();
-	_pid ->
-	    %% This is called on the controller, e.g. from a
-	    %% specification clause of a test case
-	    #target_info{os_type=OsType} = controller_call(get_target_info),
-	    OsType
-    end.
 
 %%--------------------------------------------------------------------
 
@@ -584,24 +482,11 @@ controller_call(Arg, Timeout) ->
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-%% init([Mode])
-%% Mode = lazy | error_logger
-%% StateFile = string()
-%% ReadMode = ignore_errors | halt_on_errors
+%% init([])
 %%
 %% init() is the init function of the test_server's gen_server.
-%% When Mode=error_logger: The init function of the test_server's gen_event
-%% event handler used as a replacement error_logger when running test_suites.
 %%
-%% The init function reads the test server state file, to see what test
-%% suites were running when the test server was last running, and which
-%% flags that were in effect. If no state file is found, or there are
-%% errors in it, defaults are used.
-%%
-%% Mode 'lazy' ignores (and resets to []) any jobs in the state file
-%%
-
-init([Param]) ->
+init([]) ->
     case os:getenv("TEST_SERVER_CALL_TRACE") of
 	false ->
 	    ok;
@@ -611,12 +496,6 @@ init([Param]) ->
 	    test_server_sup:call_trace(TraceSpec)
     end,
     process_flag(trap_exit, true),
-    case lists:keysearch(sasl, 1, application:which_applications()) of
-	{value,_} ->
-	    test_server_h:install();
-	false ->
-	    ok
-    end,
     %% copy format_exception setting from init arg to application environment
     case init:get_argument(test_server_format_exception) of
 	{ok,[[TSFE]]} ->
@@ -625,106 +504,16 @@ init([Param]) ->
 	    ok
     end,
     test_server_sup:cleanup_crash_dumps(),
+    test_server_sup:util_start(),
     State = #state{jobs=[],finish=false},
-    put(test_server_free_targets,[]),
-    case contact_main_target(Param) of
-	{ok,TI} ->
-	    ets:new(slave_tab, [named_table,set,public,{keypos,2}]),
-	    set_hosts([TI#target_info.host]),
-	    {ok,State#state{target_info=TI}};
-	{error,Reason} ->
-	    {stop,Reason}
-    end.
-	
-
-%% If the test is to be run at a remote target, this function sets up
-%% a socket communication with the target.
-contact_main_target(local) ->
-    %% When used by a general framework, global registration of
-    %% test_server should not be required.
-    case os:getenv("TEST_SERVER_FRAMEWORK") of
-	FW when FW =:= false; FW =:= "undefined" ->
-	    %% Local target! The global test_server process implemented by
-	    %% test_server.erl will not be started, so we simulate it by
-	    %% globally registering this process instead.
-	    global:sync(),
-	    case global:whereis_name(test_server) of
-		undefined ->
-		    global:register_name(test_server, self());
-		Pid ->
-		    case node() of
-			N when N == node(Pid) ->
-			    io:format(user, "Warning: test_server already running!\n", []),
-			    global:re_register_name(test_server,self());
-			_ ->
-			    ok
-		    end
-	    end;
-	_ ->
-	    ok
-    end,
-    TI = test_server:init_target_info(),
+    TI0 = test_server:init_target_info(),
     TargetHost = test_server_sup:hoststr(),
-    {ok,TI#target_info{where=local,
-		       host=TargetHost,
-		       naming=naming(),
-		       master=TargetHost}};
-
-contact_main_target(ParameterFile) ->
-    case read_parameters(ParameterFile) of
-	{ok,Par} ->
-	    case test_server_node:start_remote_main_target(Par) of
-		{ok,TI} ->
-		    {ok,TI};
-		{error,Error} ->
-		    {error,{could_not_start_main_target,Error}}
-	    end;
-	{error,Error} ->
-	    {error,{could_not_read_parameterfile,Error}}
-    end.
-
-read_parameters(File) ->
-    case file:consult(File) of
-	{ok,Data} ->
-	    read_parameters(lists:flatten(Data), #par{naming=naming()});
-	Error ->
-	    Error
-    end.
-read_parameters([{type,Type}|Data], Par) -> % mandatory
-    read_parameters(Data, Par#par{type=Type});
-read_parameters([{target,Target}|Data], Par) -> % mandatory
-    read_parameters(Data, Par#par{target=cast_to_list(Target)});
-read_parameters([{slavetargets,SlaveTargets}|Data], Par) ->
-    read_parameters(Data, Par#par{slave_targets=SlaveTargets});
-read_parameters([{longnames,Bool}|Data], Par) ->
-    Naming = if Bool->"-name"; true->"-sname" end,
-    read_parameters(Data, Par#par{naming=Naming});
-read_parameters([{master,{Node,Cookie}}|Data], Par) ->
-    read_parameters(Data, Par#par{master=cast_to_list(Node),
-				 cookie=cast_to_list(Cookie)});
-read_parameters([Other|_Data], _Par) ->
-    {error,{illegal_parameter,Other}};
-read_parameters([], Par) when Par#par.type==undefined ->
-    {error, {missing_mandatory_parameter,type}};
-read_parameters([], Par) when Par#par.target==undefined ->
-    {error, {missing_mandatory_parameter,target}};
-read_parameters([], Par0) ->
-    Par =
-	case {Par0#par.type, Par0#par.master} of
-	    {ose, undefined} ->
-		%% Use this node as master and bootserver for target
-		%% and slave nodes
-		Par0#par{master = atom_to_list(node()),
-			 cookie = atom_to_list(erlang:get_cookie())};
-	    {ose, _Master} ->
-		%% Master for target and slave nodes was defined in parameterfile
-		Par0;
-	    _ ->
-		%% Use target as master for slave nodes,
-		%% (No master is used for target)
-		Par0#par{master="test_server@" ++ Par0#par.target}
-	end,
-    {ok,Par}.
+    TI = TI0#target_info{host=TargetHost,
+			 naming=naming(),
+			 master=TargetHost},
+    ets:new(slave_tab, [named_table,set,public,{keypos,2}]),
+    set_hosts([TI#target_info.host]),
+    {ok,State#state{target_info=TI}}.
 
 naming() ->
     case lists:member($., test_server_sup:hoststr()) of
@@ -740,7 +529,7 @@ naming() ->
 %% is completed.
 %%
 handle_call(kill_slavenodes, _From, State) ->
-    Nodes = test_server_node:kill_nodes(State#state.target_info),
+    Nodes = test_server_node:kill_nodes(),
     {reply, Nodes, State};
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -791,7 +580,7 @@ handle_call({add_job,Dir,Name,TopCase,Skip}, _From, State) ->
     ExtraTools =
 	case State#state.cover of
 	    false -> [];
-	    {App,Analyse} -> [{cover,App,Analyse}]
+	    CoverInfo -> [{cover,CoverInfo}]
 	end,
     ExtraTools1 =
 	case State#state.random_seed of
@@ -807,6 +596,8 @@ handle_call({add_job,Dir,Name,TopCase,Skip}, _From, State) ->
 			    [SpecName,{State#state.multiply_timetraps,
 				       State#state.scale_timetraps}],
 			    LogDir, Name, State#state.levels,
+			    State#state.reject_io_reqs,
+			    State#state.create_priv_dir,
 			    State#state.testcase_callback, ExtraTools1),
 		    NewJobs = [{Name,Pid}|State#state.jobs],
 		    {reply, ok, State#state{jobs=NewJobs}};
@@ -816,6 +607,8 @@ handle_call({add_job,Dir,Name,TopCase,Skip}, _From, State) ->
 			    [SpecList,{State#state.multiply_timetraps,
 				       State#state.scale_timetraps}],
 			    LogDir, Name, State#state.levels,
+			    State#state.reject_io_reqs,
+			    State#state.create_priv_dir,
 			    State#state.testcase_callback, ExtraTools1),
 		    NewJobs = [{Name,Pid}|State#state.jobs],
 		    {reply, ok, State#state{jobs=NewJobs}};
@@ -833,6 +626,8 @@ handle_call({add_job,Dir,Name,TopCase,Skip}, _From, State) ->
 				     {State#state.multiply_timetraps,
 				      State#state.scale_timetraps}],
 				    LogDir, Name, State#state.levels,
+				    State#state.reject_io_reqs,
+				    State#state.create_priv_dir,
 				    State#state.testcase_callback, ExtraTools1),
 			    NewJobs = [{Name,Pid}|State#state.jobs],
 			    {reply, ok, State#state{jobs=NewJobs}}
@@ -886,7 +681,7 @@ handle_call({abort_current_testcase,Reason}, _From, State) ->
 handle_call({finish,Fini}, _From, State) ->
     case State#state.jobs of
 	[] ->
-	    lists:foreach(fun({Cli,Fun}) -> Fun(Cli) end,
+	    lists:foreach(fun({Cli,Fun}) -> Fun(Cli,Fini) end,
 			  State#state.idle_notify),
 	    State2 = State#state{finish=false},
 	    {stop,shutdown,{ok,self()}, State2};
@@ -904,14 +699,11 @@ handle_call({finish,Fini}, _From, State) ->
 
 handle_call({idle_notify,Fun}, {Cli,_Ref}, State) ->
     case State#state.jobs of
-	[] ->
-	    Fun(Cli),
-	    {reply, {ok,self()}, State};
-	_ ->
-	    Subscribed = State#state.idle_notify,
-	    {reply, {ok,self()},
-	     State#state{idle_notify=[{Cli,Fun}|Subscribed]}}
-    end;
+	[] -> self() ! report_idle;
+	_  -> ok
+    end,
+    Subscribed = State#state.idle_notify,
+    {reply, {ok,self()}, State#state{idle_notify=[{Cli,Fun}|Subscribed]}};
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %% handle_call(start_get_totals, From, State) -> {ok,Pid}
@@ -962,6 +754,15 @@ handle_call(get_levels, _From, State) ->
 
 handle_call({set_levels,Show,Major,Minor}, _From, State) ->
     {reply,ok,State#state{levels={Show,Major,Minor}}};
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%% handle_call({reject_io_reqs,Bool}, _, State) -> ok
+%% Bool = bool()
+%%
+%% May be used to switch off stdout printouts to the minor log file
+
+handle_call({reject_io_reqs,Bool}, _From, State) ->
+    {reply,ok,State#state{reject_io_reqs=Bool}};
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %% handle_call({multiply_timetraps,N}, _, State) -> ok
@@ -1032,13 +833,25 @@ handle_call(stop_trace, _From, State) ->
     {reply,R,State#state{trc=false}};
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-%% handle_call({cover,App,Analyse}, _, State) -> ok | {error,Reason}
+%% handle_call({cover,CoverInfo}, _, State) -> ok | {error,Reason}
 %%
-%% All modules inn application App are cover compiled
-%% Analyse indicates on which level the coverage should be analysed
+%% Set specification of cover analysis to be used when running tests
+%% (see start_extra_tools/1 and stop_extra_tools/1)
 
-handle_call({cover,App,Analyse}, _From, State) ->
-    {reply,ok,State#state{cover={App,Analyse}}};
+handle_call({cover,CoverInfo}, _From, State) ->
+    {reply,ok,State#state{cover=CoverInfo}};
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%% handle_call({create_priv_dir,Value}, _, State) -> ok | {error,Reason}
+%%
+%% Set create_priv_dir to either auto_per_run (create common priv dir once
+%% per test run), manual_per_tc (the priv dir name will be unique for each
+%% test case, but the user has to call test_server:make_priv_dir/0 to create
+%% it), or auto_per_tc (unique priv dir created automatically for each test
+%% case).
+
+handle_call({create_priv_dir,Value}, _From, State) ->
+    {reply,ok,State#state{create_priv_dir=Value}};
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %% handle_call({testcase_callback,{Mod,Func}}, _, State) -> ok | {error,Reason}
@@ -1137,11 +950,11 @@ handle_call({wait_for_node, Node}, From, State) ->
 %% - the node is really stopped by test_server when this returns.
 
 handle_call({stop_node, Name}, _From, State) ->
-    R = test_server_node:stop_node(Name, State#state.target_info),
+    R = test_server_node:stop_node(Name),
     {reply, R, State};
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-%% handle_call({stop_node,Name}, _, State) -> ok | {error,Reason}
+%% handle_call({is_release_available,Name}, _, State) -> ok | {error,Reason}
 %%
 %% Tests if the release is available.
 
@@ -1178,42 +991,40 @@ handle_cast({node_started,Node}, State) ->
 %% Pid = pid()
 %% Reason = term()
 %%
-%% Handles exit messages from linked processes. Only test suites and
-%% possibly a target client are expected to be linked.
-%% When a test suite terminates, it is removed from the job queue.
-%% If a target client terminates it means that we lost contact with
-%% target. The test_server_ctrl process is terminated, and teminate/2
-%% will do the cleanup
+%% Handles exit messages from linked processes. Only test suites are
+%% expected to be linked.  When a test suite terminates, it is removed
+%% from the job queue.
+
+handle_info(report_idle, State) ->
+    Finish = State#state.finish,
+    lists:foreach(fun({Cli,Fun}) -> Fun(Cli,Finish) end,
+		  State#state.idle_notify),
+    {noreply,State#state{idle_notify=[]}};
+
 
 handle_info({'EXIT',Pid,Reason}, State) ->
     case lists:keysearch(Pid,2,State#state.jobs) of
 	false ->
-	    TI = State#state.target_info,
-	    case TI#target_info.target_client of
-		Pid ->
-		    %% The target client died - lost contact with target
-		    {stop,{lost_contact_with_target,Reason},State};
-		_other ->
-		    %% not our problem
-		    {noreply,State}
-	    end;
+	    %% not our problem
+	    {noreply,State};
 	{value,{Name,_}} ->
 	    NewJobs = lists:keydelete(Pid, 2, State#state.jobs),
 	    case Reason of
 		normal ->
 		    fine;
 		killed ->
-		    io:format("Suite ~s was killed\n", [Name]);
+		    io:format("Suite ~ts was killed\n", [Name]);
 		_Other ->
-		    io:format("Suite ~s was killed with reason ~p\n",
+		    io:format("Suite ~ts was killed with reason ~p\n",
 			      [Name,Reason])
 	    end,
 	    State2 = State#state{jobs=NewJobs},
+	    Finish = State2#state.finish,
 	    case NewJobs of
 		[] ->
-		    lists:foreach(fun({Cli,Fun}) -> Fun(Cli) end,
+		    lists:foreach(fun({Cli,Fun}) -> Fun(Cli,Finish) end,
 				  State2#state.idle_notify),
-		    case State2#state.finish of
+		    case Finish of
 			false ->
 			    {noreply,State2#state{idle_notify=[]}};
 			_ ->			% true | abort
@@ -1223,9 +1034,9 @@ handle_info({'EXIT',Pid,Reason}, State) ->
 			    {stop,shutdown,State2#state{finish=false}}
 		    end;
 		_ ->				% pending jobs
-		    case State2#state.finish of
+		    case Finish of
 			abort ->		% abort test now!
-			    lists:foreach(fun({Cli,Fun}) -> Fun(Cli) end,
+			    lists:foreach(fun({Cli,Fun}) -> Fun(Cli,Finish) end,
 					  State2#state.idle_notify),
 			    {stop,shutdown,State2#state{finish=false}};
 			_ ->			% true | false
@@ -1234,35 +1045,12 @@ handle_info({'EXIT',Pid,Reason}, State) ->
 	    end
     end;
 
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-%% handle_info({tcp,Sock,Bin}, State)
-%%
-%% Message from remote main target process
-%% Only valid message is 'job_proc_killed', which indicates
-%% that a process running a test suite was killed
-
-handle_info({tcp,_MainSock,<<1,Request/binary>>}, State) ->
-    case binary_to_term(Request) of
-	{job_proc_killed,Name,Reason} ->
-	    %% The only purpose of this is to inform the user about what
-	    %% happened on target.
-	    %% The local job proc will soon be killed by the closed socket or
-	    %% because the job is finished. Then the above clause ('EXIT') will
-	    %% handle the problem.
-	    io:format("Suite ~s was killed on remote target with reason"
-		      " ~p\n", [Name,Reason]);
-	_ ->
-	    ignore
-    end,
-    {noreply,State};
-
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %% handle_info({tcp_closed,Sock}, State)
 %%
 %% A Socket was closed. This indicates that a node died.
 %% This can be
-%% *Target node (if remote)
 %% *Slave or peer node started by a test suite
 %% *Trace controll node
 
@@ -1271,14 +1059,8 @@ handle_info({tcp_closed,Sock}, State=#state{trc=Sock}) ->
     %%! Maybe print something???
     {noreply,State#state{trc=false}};
 handle_info({tcp_closed,Sock}, State) ->
-    case test_server_node:nodedown(Sock,State#state.target_info) of
-	target_died ->
-	    %% terminate/2 will do the cleanup
-	    {stop,target_died,State};
-	_ ->
-	    {noreply,State}
-    end;
-
+    test_server_node:nodedown(Sock),
+    {noreply,State};
 handle_info(_, State) ->
     %% dummy; accept all, do nothing.
     {noreply, State}.
@@ -1288,16 +1070,16 @@ handle_info(_, State) ->
 %% Reason = term()
 %%
 %% Cleans up when the test_server is terminating. Kills the running
-%% test suites (if any) and terminates the remote target (if is exists)
+%% test suites (if any) and any possible remainting slave node
 
 terminate(_Reason, State) ->
+    test_server_sup:util_stop(),
     case State#state.trc of
 	false -> ok;
 	Sock -> test_server_node:stop_tracer_node(Sock)
     end,
     kill_all_jobs(State#state.jobs),
-    test_server_node:stop(State#state.target_info),
-    test_server_h:restore(),
+    test_server_node:kill_nodes(),
     ok.
 
 kill_all_jobs([{_Name,JobPid}|Jobs]) ->
@@ -1312,14 +1094,16 @@ kill_all_jobs([]) ->
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-%% spawn_tester(Mod, Func, Args, Dir, Name, Levels,
-%%              TestCaseCallback, ExtraTools) -> Pid
+%% spawn_tester(Mod, Func, Args, Dir, Name, Levels, RejectIoReqs,
+%%              CreatePrivDir, TestCaseCallback, ExtraTools) -> Pid
 %% Mod = atom()
 %% Func = atom()
 %% Args = [term(),...]
 %% Dir = string()
 %% Name = string()
 %% Levels = {integer(),integer(),integer()}
+%% RejectIoReqs = bool()
+%% CreatePrivDir = auto_per_run | manual_per_tc | auto_per_tc
 %% TestCaseCallback = {CBMod,CBFunc} | undefined
 %% ExtraTools = [ExtraTool,...]
 %% ExtraTool = CoverInfo | TraceInfo | RandomSeed
@@ -1330,43 +1114,63 @@ kill_all_jobs([]) ->
 %% When the named function is done executing, a summary of the results
 %% is printed to the log files.
 
-spawn_tester(Mod, Func, Args, Dir, Name, Levels, TCCallback, ExtraTools) ->
-    spawn_link(
-      fun() -> init_tester(Mod, Func, Args, Dir, Name, Levels,
-			   TCCallback, ExtraTools)
+spawn_tester(Mod, Func, Args, Dir, Name, Levels, RejectIoReqs,
+	     CreatePrivDir, TCCallback, ExtraTools) ->
+    spawn_link(fun() ->
+	      init_tester(Mod, Func, Args, Dir, Name, Levels, RejectIoReqs,
+			   CreatePrivDir, TCCallback, ExtraTools)
       end).
 
-init_tester(Mod, Func, Args, Dir, Name, {SumLev,MajLev,MinLev},
-	    TCCallback, ExtraTools) ->
+init_tester(Mod, Func, Args, Dir, Name, {_,_,MinLev}=Levels,
+	    RejectIoReqs, CreatePrivDir, TCCallback, ExtraTools) ->
     process_flag(trap_exit, true),
+    test_server_io:start_link(),
     put(test_server_name, Name),
     put(test_server_dir, Dir),
     put(test_server_total_time, 0),
     put(test_server_ok, 0),
     put(test_server_failed, 0),
     put(test_server_skipped, {0,0}),
-    put(test_server_summary_level, SumLev),
-    put(test_server_major_level, MajLev),
     put(test_server_minor_level, MinLev),
+    put(test_server_create_priv_dir, CreatePrivDir),
     put(test_server_random_seed, proplists:get_value(random_seed, ExtraTools)),
     put(test_server_testcase_callback, TCCallback),
+    case os:getenv("TEST_SERVER_FRAMEWORK") of
+	FW when FW =:= false; FW =:= "undefined" ->
+	    put(test_server_framework, '$none');	
+	FW ->
+	    put(test_server_framework_name, list_to_atom(FW)),
+	    case os:getenv("TEST_SERVER_FRAMEWORK_NAME") of
+		FWName when FWName =:= false; FWName =:= "undefined" ->
+		    put(test_server_framework_name, '$none');	
+		FWName ->
+		    put(test_server_framework_name, list_to_atom(FWName))
+	    end
+    end,
+
     %% before first print, read and set logging options
     LogOpts = test_server_sup:framework_call(get_logopts, [], []),
     put(test_server_logopts, LogOpts),
-    put(test_server_log_nl, not lists:member(no_nl, LogOpts)),
+
     StartedExtraTools = start_extra_tools(ExtraTools),
+
+    test_server_io:set_job_name(Name),
+    test_server_io:set_gl_props([{levels,Levels},
+				 {auto_nl,not lists:member(no_nl, LogOpts)},
+				 {reject_io_reqs,RejectIoReqs}]),
+    group_leader(test_server_io:get_gl(true), self()),
     {TimeMy,Result} = ts_tc(Mod, Func, Args),
-    put(test_server_common_io_handler, undefined),
-    stop_extra_tools(StartedExtraTools),
+    set_io_buffering(undefined),
+    test_server_io:set_job_name(undefined),
+    catch stop_extra_tools(StartedExtraTools),
     case Result of
 	{'EXIT',test_suites_done} ->
-	    print(25, "DONE, normal exit", []);
+	    ok;
 	{'EXIT',_Pid,Reason} ->
 	    print(1, "EXIT, reason ~p", [Reason]);
 	{'EXIT',Reason} ->
-	    print(1, "EXIT, reason ~p", [Reason]);
-	_Other ->
-	    print(25, "DONE", [])
+	    report_severe_error(Reason),
+	    print(1, "EXIT, reason ~p", [Reason])
     end,
     Time = TimeMy/1000000,
     SuccessStr =
@@ -1376,14 +1180,29 @@ init_tester(Mod, Func, Args, Dir, Name, {SumLev,MajLev,MinLev},
 	end,
     {SkippedN,SkipStr} =
 	case get(test_server_skipped) of
-	    {0,_} -> {0,""};
-	    {Skipped,_} -> {Skipped,io_lib:format(", ~p Skipped", [Skipped])}
+	    {0,0} -> 
+		{0,""};
+	    {USkipped,ASkipped} ->
+		Skipped = USkipped+ASkipped,
+		{Skipped,io_lib:format(", ~w Skipped", [Skipped])}
 	end,
     OkN = get(test_server_ok),
     FailedN = get(test_server_failed),
-    print(html,"<tr><td></td><td><b>TOTAL</b></td><td></td><td></td>"
-	  "<td>~.3fs</td><td><b>~s</b></td><td>~p Ok, ~p Failed~s of ~p</td></tr>\n",
-	  [Time,SuccessStr,OkN,FailedN,SkipStr,OkN+FailedN+SkippedN]).
+    print(html,"\n</tbody>\n<tfoot>\n"
+	  "<tr><td></td><td><b>TOTAL</b></td><td></td><td></td><td></td>"
+	  "<td>~.3fs</td><td><b>~ts</b></td><td>~w Ok, ~w Failed~ts of ~w</td></tr>\n"
+	  "</tfoot>\n",
+	  [Time,SuccessStr,OkN,FailedN,SkipStr,OkN+FailedN+SkippedN]),
+
+    test_server_io:stop([major,html,unexpected_io]),
+    {UnexpectedIoName,UnexpectedIoFooter} = get(test_server_unexpected_footer),
+    {ok,UnexpectedIoFd} = open_html_file(UnexpectedIoName, [append]),
+    io:put_chars(UnexpectedIoFd, "\n</pre>\n"++UnexpectedIoFooter),
+    file:close(UnexpectedIoFd),
+    ok.
+
+report_severe_error(Reason) ->
+    test_server_sup:framework_call(report, [severe_error,Reason]).
 
 %% timer:tc/3
 ts_tc(M, F, A) ->
@@ -1401,11 +1220,10 @@ elapsed_time(Before, After) ->
 
 start_extra_tools(ExtraTools) ->
     start_extra_tools(ExtraTools, []).
-start_extra_tools([{cover,App,Analyse} | ExtraTools], Started) ->
-    case cover_compile(App) of
-	{ok,AnalyseMods} ->
-	    start_extra_tools(ExtraTools,
-			      [{cover,App,Analyse,AnalyseMods}|Started]);
+start_extra_tools([{cover,CoverInfo} | ExtraTools], Started) ->
+    case start_cover(CoverInfo) of
+	{ok,NewCoverInfo} ->
+	    start_extra_tools(ExtraTools,[{cover,NewCoverInfo}|Started]);
 	{error,_} ->
 	    start_extra_tools(ExtraTools, Started)
     end;
@@ -1424,8 +1242,8 @@ stop_extra_tools(ExtraTools) ->
     end,
     stop_extra_tools(ExtraTools, TestDir).
 
-stop_extra_tools([{cover,App,Analyse,AnalyseMods}|ExtraTools], TestDir) ->
-    cover_analyse(App, Analyse, AnalyseMods, TestDir),
+stop_extra_tools([{cover,CoverInfo}|ExtraTools], TestDir) ->
+    stop_cover(CoverInfo,TestDir),
     stop_extra_tools(ExtraTools, TestDir);
 %%stop_extra_tools([_ | ExtraTools], TestDir) ->
 %%    stop_extra_tools(ExtraTools, TestDir);
@@ -1443,14 +1261,14 @@ stop_extra_tools([], _) ->
 %% Reads the named test suite specification file, and executes it.
 %%
 %% This function is meant to be called by a process created by
-%% spawn_tester/7, which sets up some necessary dictionary values.
+%% spawn_tester/10, which sets up some necessary dictionary values.
 
 do_spec(SpecName, TimetrapSpec) when is_list(SpecName) ->
     case file:consult(SpecName) of
 	{ok,TermList} ->
 	    do_spec_list(TermList,TimetrapSpec);
 	{error,Reason} ->
-	    io:format("Can't open ~s: ~p\n", [SpecName,Reason]),
+	    io:format("Can't open ~ts: ~p\n", [SpecName,Reason]),
 	    {error,{cant_open_spec,Reason}}
     end.
 
@@ -1492,7 +1310,7 @@ do_spec(SpecName, TimetrapSpec) when is_list(SpecName) ->
 %% should not be used. Use a configuration test case instead.
 %%
 %% This function is meant to be called by a process created by
-%% spawn_tester/7, which sets up some necessary dictionary values.
+%% spawn_tester/10, which sets up some necessary dictionary values.
 
 do_spec_list(TermList0, TimetrapSpec) ->
     Nodes = [],
@@ -1552,7 +1370,7 @@ generate_nodenames(Num) ->
 generate_nodenames2(0, _Hosts, Acc) ->
     Acc;
 generate_nodenames2(N, Hosts, Acc) ->
-    Host=cast_to_list(lists:nth((N rem (length(Hosts)))+1, Hosts)),
+    Host=lists:nth((N rem (length(Hosts)))+1, Hosts),
     Name=list_to_atom(temp_nodename("nod", []) ++ "@" ++ Host),
     generate_nodenames2(N-1, Hosts, [Name|Acc]).
 
@@ -1605,10 +1423,23 @@ remove_conf([{conf, _Ref, Props, _MF}|Cases], NoConf, Repeats) ->
     end;
 remove_conf([{make,_Ref,_MF}|Cases], NoConf, Repeats) ->
     remove_conf(Cases, NoConf, Repeats);
+remove_conf([{skip_case,{{_M,all},_Cmt},_Mode}|Cases], NoConf, Repeats) ->
+    remove_conf(Cases, NoConf, Repeats);
 remove_conf([{skip_case,{Type,_Ref,_MF,_Cmt}}|Cases],
 	    NoConf, Repeats) when Type==conf;
 				   Type==make ->
     remove_conf(Cases, NoConf, Repeats);
+remove_conf([{skip_case,{Type,_Ref,_MF,_Cmt},_Mode}|Cases],
+	    NoConf, Repeats) when Type==conf;
+				  Type==make ->
+    remove_conf(Cases, NoConf, Repeats);
+remove_conf([C={Mod,error_in_suite,_}|Cases], NoConf, Repeats) ->
+    FwMod = get_fw_mod(?MODULE),
+    if Mod == FwMod ->
+	    remove_conf(Cases, NoConf, Repeats);
+       true ->
+	    remove_conf(Cases, [C|NoConf], Repeats)
+    end;
 remove_conf([C|Cases], NoConf, Repeats) ->
     remove_conf(Cases, [C|NoConf], Repeats);
 remove_conf([], NoConf, true) ->
@@ -1616,6 +1447,11 @@ remove_conf([], NoConf, true) ->
 remove_conf([], NoConf, false) ->
     lists:reverse(NoConf).
 
+get_suites([{skip_case,{{Mod,_F},_Cmt},_Mode}|Tests], Mods) when is_atom(Mod) ->
+    case add_mod(Mod, Mods) of
+	true ->  get_suites(Tests, [Mod|Mods]);
+	false -> get_suites(Tests, Mods)
+    end;
 get_suites([{Mod,_Case}|Tests], Mods) when is_atom(Mod) ->
     case add_mod(Mod, Mods) of
 	true ->  get_suites(Tests, [Mod|Mods]);
@@ -1659,7 +1495,7 @@ add_mod(Mod, Mods) ->
 %% configuration information into the log files.
 %%
 %% This function is meant to be called by a process created by
-%% spawn_tester/7, which sets up some necessary dictionary values.
+%% spawn_tester/10, which sets up some necessary dictionary values.
 do_test_cases(TopCases, SkipCases,
 	      Config, MultiplyTimetrap) when is_integer(MultiplyTimetrap);
 					     MultiplyTimetrap == infinity ->
@@ -1668,12 +1504,8 @@ do_test_cases(TopCases, SkipCases,
 do_test_cases(TopCases, SkipCases,
 	      Config, TimetrapData) when is_list(TopCases),
 					 is_tuple(TimetrapData) ->
-    start_log_file(),
-    FwMod =
-	case os:getenv("TEST_SERVER_FRAMEWORK") of
-	    FW when FW =:= false; FW =:= "undefined" -> ?MODULE;
-	    FW -> list_to_atom(FW)
-	end,
+    {ok,TestDir} = start_log_file(),
+    FwMod = get_fw_mod(?MODULE),
     case collect_all_cases(TopCases, SkipCases) of
 	{error,Why} ->
 	    print(1, "Error starting: ~p", [Why]),
@@ -1685,85 +1517,122 @@ do_test_cases(TopCases, SkipCases,
 		end,
 	    put(test_server_cases, N),
 	    put(test_server_case_num, 0),
+
 	    TestSpec =
 		add_init_and_end_per_suite(TestSpec0, undefined, undefined, FwMod),
+
 	    TI = get_target_info(),
-	    print(1, "Starting test~s",
+	    print(1, "Starting test~ts",
 		  [print_if_known(N, {", ~w test cases",[N]},
 				  {" (with repeated test cases)",[]})]),
 	    Test = get(test_server_name),
+	    TestName = 	if is_list(Test) -> 
+				lists:flatten(io_lib:format("~ts", [Test]));
+			   true ->
+				lists:flatten(io_lib:format("~tp", [Test]))
+			end,			  
+	    TestDescr = "Test " ++ TestName ++ " results",
+
 	    test_server_sup:framework_call(report, [tests_start,{Test,N}]),
 
-	    Header =
-		case test_server_sup:framework_call(overview_html_header, [Test], "") of
-		    ""  ->
-			TestName = lists:flatten(io_lib:format("~p", [Test])),
-			["<!DOCTYPE HTML PUBLIC \"-//W3C//DTD HTML 3.2 Final//EN\">\n",
-			 "<!-- autogenerated by '", atom_to_list(?MODULE), "'. -->\n",
-			 "<html>\n",
-			 "<head><title>Test ", TestName, " results</title>\n",
-			 "<meta http-equiv=\"cache-control\" content=\"no-cache\">\n",
-			 "</head>\n",
-			 "<body bgcolor=\"white\" text=\"black\" ",
-			 "link=\"blue\" vlink=\"purple\" alink=\"red\">",
-			 "<h2>Results from test ", TestName, "</h2>\n"];
-		    Html ->
-			["<!DOCTYPE HTML PUBLIC \"-//W3C//DTD HTML 3.2 Final//EN\">\n",
-			 "<!-- autogenerated by '", atom_to_list(?MODULE), "'. -->\n" | Html]
+	    {Header,Footer} =
+		case test_server_sup:framework_call(get_html_wrapper,
+						    [TestDescr,true,TestDir,
+						    {[],[2,3,4,7,8],[1,6]}], "") of
+		    Empty when (Empty == "") ; (element(2,Empty) == "")  ->
+			put(basic_html, true),
+			{[html_header(TestDescr),
+			  "<h2>Results for test ", TestName, "</h2>\n"],
+			 "\n</body>\n</html>\n"};
+		    {basic_html,Html0,Html1} ->
+			put(basic_html, true),
+			{Html0++["<h1>Results for <i>",TestName,"</i></h1>\n"],
+			 Html1};
+		    {xhtml,Html0,Html1} ->
+			put(basic_html, false),
+			{Html0++["<h1>Results for <i>",TestName,"</i></h1>\n"],
+			 Html1}
 		end,
-	    print(html, Header, []),
+
+	    print(html, Header),
+
+	    print(html, xhtml("<p>", "<h4>")),
 	    print_timestamp(html, "Test started at "),
-
-	    print(html, "<p>Host:<br>\n"),
+	    print(html, xhtml("</p>", "</h4>")),
+	    
+	    print(html, xhtml("\n<p><b>Host info:</b><br>\n",
+			      "\n<p><b>Host info:</b><br />\n")),
 	    print_who(test_server_sup:hoststr(), test_server_sup:get_username()),
-	    print(html, "<br>Used Erlang ~s in <tt>~s</tt>.\n",
+	    print(html, xhtml("<br>Used Erlang v~ts in <tt>~ts</tt></p>\n",
+			      "<br />Used Erlang v~ts in \"~ts\"</p>\n"),
 		  [erlang:system_info(version), code:root_dir()]),
-
+	    
 	    if FwMod == ?MODULE ->
-		    print(html, "<p>Target:<br>\n"),
+		    print(html, xhtml("\n<p><b>Target Info:</b><br>\n",
+				      "\n<p><b>Target Info:</b><br />\n")),
 		    print_who(TI#target_info.host, TI#target_info.username),
-		    print(html, "<br>Used Erlang ~s in <tt>~s</tt>.\n",
+		    print(html,xhtml("<br>Used Erlang v~ts in <tt>~ts</tt></p>\n",
+				     "<br />Used Erlang v~ts in \"~ts\"</p>\n"),
 			  [TI#target_info.version, TI#target_info.root_dir]);
-		true ->
+	       true ->
 		    case test_server_sup:framework_call(target_info, []) of
 			TargetInfo when is_list(TargetInfo),
 			                length(TargetInfo) > 0 ->
-			    print(html, "<p>Target:<br>\n"),
-			    print(html, "~s\n", [TargetInfo]);
+			    print(html, xhtml("\n<p><b>Target info:</b><br>\n",
+					      "\n<p><b>Target info:</b><br />\n")),
+			    print(html, "~ts</p>\n", [TargetInfo]);
 			_ ->
 			    ok
 		    end
 	    end,
-
+	    CoverLog =
+		case get(test_server_cover_log_dir) of
+		    undefined ->
+			?coverlog_name;
+		    AbsLogDir ->
+			AbsLog = filename:join(AbsLogDir,?coverlog_name),
+			make_relative(AbsLog, TestDir)
+		end,
 	    print(html,
-		  "<p><a href=\"~s\">Full textual log</a>\n"
-		  "<br><a href=\"~s\">Coverage log</a>\n",
-		  [?suitelog_name,?coverlog_name]),
-	    print(html,"<p>~s"
-		  "<p>\n"
-		  "<table bgcolor=\"white\" border=\"3\" cellpadding=\"5\">"
-		  "<tr><th>Num</th><th>Module</th><th>Case</th><th>Log</th>"
-		  "<th>Time</th><th>Result</th><th>Comment</th></tr>\n",
-		  [print_if_known(N, {"Suite contains ~p test cases.\n",[N]},
+		  "<p><ul>\n"
+		  "<li><a href=\"~ts\">Full textual log</a></li>\n"
+		  "<li><a href=\"~ts\">Coverage log</a></li>\n"
+		  "<li><a href=\"~ts\">Unexpected I/O log</a></li>\n</ul></p>\n",
+		  [?suitelog_name,CoverLog,?unexpected_io_log]),
+	    print(html,
+		  "<p>~ts</p>\n" ++
+		  xhtml(["<table bgcolor=\"white\" border=\"3\" cellpadding=\"5\">\n",
+			 "<thead>\n"],
+			["<table id=\"",?sortable_table_name,"\">\n",
+			 "<thead>\n"]) ++
+		      "<tr><th>Num</th><th>Module</th><th>Group</th>" ++
+		      "<th>Case</th><th>Log</th><th>Time</th><th>Result</th>" ++
+		      "<th>Comment</th></tr>\n</thead>\n<tbody>\n",
+		  [print_if_known(N, {"<i>Executing <b>~w</b> test cases...</i>"
+				      ++ xhtml("\n<br>\n", "\n<br />\n"),[N]},
 				  {"",[]})]),
-	    print(major, "=cases         ~p", [get(test_server_cases)]),
-	    print(major, "=user          ~s", [TI#target_info.username]),
-	    print(major, "=host          ~s", [TI#target_info.host]),
+
+	    print(major, "=cases         ~w", [get(test_server_cases)]),
+	    print(major, "=user          ~ts", [TI#target_info.username]),
+	    print(major, "=host          ~ts", [TI#target_info.host]),
 
 	    %% If there are no hosts specified,use only the local host
 	    case controller_call(get_hosts) of
 		[] ->
-		    print(major, "=hosts         ~s", [TI#target_info.host]),
+		    print(major, "=hosts         ~ts", [TI#target_info.host]),
 		    controller_call({set_hosts, [TI#target_info.host]});
 		Hosts ->
 		    Str = lists:flatten(lists:map(fun(X) -> [X," "] end, Hosts)),
-		    print(major, "=hosts         ~s", [Str])
+		    print(major, "=hosts         ~ts", [Str])
 	    end,
-	    print(major, "=emulator_vsn  ~s", [TI#target_info.version]),
-	    print(major, "=emulator      ~s", [TI#target_info.emulator]),
-	    print(major, "=otp_release   ~s", [TI#target_info.otp_release]),
+	    print(major, "=emulator_vsn  ~ts", [TI#target_info.version]),
+	    print(major, "=emulator      ~ts", [TI#target_info.emulator]),
+	    print(major, "=otp_release   ~ts", [TI#target_info.otp_release]),
 	    print(major, "=started       ~s",
 		   [lists:flatten(timestamp_get(""))]),
+
+	    test_server_io:set_footer(Footer),
+
 	    run_test_cases(TestSpec, Config, TimetrapData)
     end;
 
@@ -1773,13 +1642,13 @@ do_test_cases(TopCase, SkipCases, Config, TimetrapSpec) ->
 
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-%% start_log_file() -> ok | exit({Error,Reason})
+%% start_log_file() -> {ok,TestDirName} | exit({Error,Reason})
 %% Stem = string()
 %%
 %% Creates the log directories, the major log file and the html log file.
 %% The log files are initialized with some header information.
 %%
-%% The name of the log directory will be <Name>.LOGS/run.<Date>/ where
+%% The name of the log directory will be <Name>.logs/run.<Date>/ where
 %% Name is the test suite name and Date is the current date and time.
 
 start_log_file() ->
@@ -1790,26 +1659,62 @@ start_log_file() ->
 	{error, eexist} ->
 	    ok;
 	MkDirError ->
-	    exit({cant_create_log_dir,{MkDirError,Dir}})
+	    log_file_error(MkDirError, Dir)
     end,
     TestDir = timestamp_filename_get(filename:join(Dir, "run.")),
-    case file:make_dir(TestDir) of
-	ok ->
-	    ok;
-	MkDirError2 ->
-	    exit({cant_create_log_dir,{MkDirError2,TestDir}})
-    end,
+    TestDir1 =
+	case file:make_dir(TestDir) of
+	    ok ->
+		TestDir;
+	    {error,eexist} ->
+		timer:sleep(1000),
+		%% we need min 1 second between timestamps unfortunately
+		TestDirX = timestamp_filename_get(filename:join(Dir, "run.")),
+		case file:make_dir(TestDirX) of
+		    ok ->
+			TestDirX;
+		    MkDirError2 ->
+			log_file_error(MkDirError2, TestDirX)
+		end;
+	    MkDirError2 ->
+		log_file_error(MkDirError2, TestDir)
+	end,
+    FilenameMode = file:native_name_encoding(),
+    ok = write_file(filename:join(Dir, ?last_file),
+		    TestDir1 ++ "\n",
+		    FilenameMode),
+    ok = write_file(?last_file, TestDir1 ++ "\n", FilenameMode),
+    put(test_server_log_dir_base,TestDir1),
 
-    ok = file:write_file(filename:join(Dir, ?last_file), TestDir ++ "\n"),
-    ok = file:write_file(?last_file, TestDir ++ "\n"),
-
-    put(test_server_log_dir_base,TestDir),
-    MajorName = filename:join(TestDir, ?suitelog_name),
+    MajorName = filename:join(TestDir1, ?suitelog_name),
     HtmlName = MajorName ++ ?html_ext,
-    {ok,Major} = file:open(MajorName, [write]),
-    {ok,Html}  = file:open(HtmlName,  [write]),
-    put(test_server_major_fd,Major),
-    put(test_server_html_fd,Html),
+    UnexpectedName = filename:join(TestDir1, ?unexpected_io_log),
+
+    {ok,Major} = open_utf8_file(MajorName),
+    {ok,Html}  = open_html_file(HtmlName),
+
+    {UnexpHeader,UnexpFooter} =
+	case test_server_sup:framework_call(get_html_wrapper,
+					    ["Unexpected I/O log",false,
+					     TestDir, undefined],"") of
+	    UEmpty when (UEmpty == "") ; (element(2,UEmpty) == "")  ->
+		{html_header("Unexpected I/O log"),"\n</body>\n</html>\n"};
+	    {basic_html,UH,UF} ->
+		{UH,UF};
+	    {xhtml,UH,UF} ->
+		{UH,UF}
+	end,
+
+    {ok,Unexpected} = open_html_file(UnexpectedName),
+    io:put_chars(Unexpected, [UnexpHeader,			      
+			      xhtml("<br>\n<h2>Unexpected I/O</h2>",
+				    "<br />\n<h3>Unexpected I/O</h3>"),
+			      "\n<pre>\n"]),
+    put(test_server_unexpected_footer,{UnexpectedName,UnexpFooter}),
+
+    test_server_io:set_fd(major, Major),
+    test_server_io:set_fd(html, Html),
+    test_server_io:set_fd(unexpected_io, Unexpected),
 
     make_html_link(filename:absname(?last_test ++ ?html_ext),
 		   HtmlName, filename:basename(Dir)),
@@ -1817,14 +1722,17 @@ start_log_file() ->
     make_html_link(LinkName ++ ?html_ext, HtmlName,
 		   filename:basename(Dir)),
 
-    PrivDir = filename:join(TestDir, ?priv_dir),
+    PrivDir = filename:join(TestDir1, ?priv_dir),
     ok = file:make_dir(PrivDir),
     put(test_server_priv_dir,PrivDir++"/"),
-    print_timestamp(13,"Suite started at "),
+    print_timestamp(major, "Suite started at "),
 
-    LogInfo = [{topdir,Dir},{rundir,lists:flatten(TestDir)}],
+    LogInfo = [{topdir,Dir},{rundir,lists:flatten(TestDir1)}],
     test_server_sup:framework_call(report, [loginfo,LogInfo]),
-    ok.
+    {ok,TestDir1}.
+
+log_file_error(Error, Dir) ->
+    exit({cannot_create_log_dir,{Error,lists:flatten(Dir)}}).
 
 make_html_link(LinkName, Target, Explanation) ->
     %% if possible use a relative reference to Target.
@@ -1832,89 +1740,96 @@ make_html_link(LinkName, Target, Explanation) ->
     PwdL = filename:split(filename:dirname(LinkName)),
     Href = case lists:prefix(PwdL, TargetL) of
 	       true ->
-		   filename:join(lists:nthtail(length(PwdL), TargetL));
+		   uri_encode(filename:join(lists:nthtail(length(PwdL),TargetL)));
 	       false ->
-		   "file:" ++ Target
+		   "file:" ++ uri_encode(Target)
 	   end,
-    H = io_lib:format("<!DOCTYPE HTML PUBLIC \"-//W3C//DTD HTML 3.2 Final//EN\">\n"
-		      "<!-- autogenerated by '"++atom_to_list(?MODULE)++"'. -->\n"
-		      "<html>\n"
-		      "<head><title>~s</title></head>\n"
-		      "<body bgcolor=\"white\" text=\"black\""
-		      " link=\"blue\" vlink=\"purple\" alink=\"red\">\n"
-		      "<h1>Last test</h1>\n"
-		      "<a href=\"~s\">~s</a>~n"
-		      "</body>\n</html>\n",
-		      [Explanation,Href,Explanation]),
-    ok = file:write_file(LinkName, H).
+    H = [html_header(Explanation),
+	 "<h1>Last test</h1>\n"
+	 "<a href=\"",Href,"\">",Explanation,"</a>\n"
+	 "</body>\n</html>\n"],
+    ok = write_html_file(LinkName, H).
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-%% start_minor_log_file(Mod, Func) -> AbsName
+%% start_minor_log_file(Mod, Func, ParallelTC) -> AbsName
 %% Mod = atom()
 %% Func = atom()
+%% ParallelTC = bool()
 %% AbsName = string()
 %%
 %% Create a minor log file for the test case Mod,Func,Args. The log file
-%% will be stored in the log directory under the name <Mod>.<Func>.log.
-%% Some header info will also be inserted into the log file.
+%% will be stored in the log directory under the name <Mod>.<Func>.html.
+%% Some header info will also be inserted into the log file. If the test
+%% case runs in a parallel group, then to avoid clashing file names if the
+%% case is executed more than once, the name <Mod>.<Func>.<Timestamp>.html
+%% is used.
 
-start_minor_log_file(Mod, Func) ->
+start_minor_log_file(Mod, Func, ParallelTC) ->
+    MFA = {Mod,Func,1},
     LogDir = get(test_server_log_dir_base),
-    Name0 = lists:flatten(io_lib:format("~s.~s~s", [Mod,Func,?html_ext])),
+    Name0 = lists:flatten(io_lib:format("~w.~w~ts", [Mod,Func,?html_ext])),
     Name = downcase(Name0),
     AbsName = filename:join(LogDir, Name),
-    case file:read_file_info(AbsName) of
-	{error,_} ->                         %% normal case, unique name
-	    start_minor_log_file1(Mod, Func, LogDir, AbsName);
-	{ok,_} ->                            %% special case, duplicate names
-	    {_,S,Us} = now(),
+    case (ParallelTC orelse (element(1,file:read_file_info(AbsName))==ok)) of
+	false ->                           %% normal case, unique name
+	    start_minor_log_file1(Mod, Func, LogDir, AbsName, MFA);
+	true ->                            %% special case, duplicate names
+	    Tag = test_server_sup:unique_name(),
 	    Name1_0 =
-		lists:flatten(io_lib:format("~s.~s.~w.~w~s", [Mod,Func,S,
-							     trunc(Us/1000),
-							     ?html_ext])),
+		lists:flatten(io_lib:format("~w.~w.~ts~ts", [Mod,Func,Tag,
+							      ?html_ext])),
 	    Name1 = downcase(Name1_0),
 	    AbsName1 = filename:join(LogDir, Name1),
-	    start_minor_log_file1(Mod, Func, LogDir, AbsName1)
+	    start_minor_log_file1(Mod, Func, LogDir, AbsName1, MFA)
     end.
 
-start_minor_log_file1(Mod, Func, LogDir, AbsName) ->
-    {ok,Fd} = file:open(AbsName, [write]),
+start_minor_log_file1(Mod, Func, LogDir, AbsName, MFA) ->
+    {ok,Fd} = open_html_file(AbsName),
     Lev = get(test_server_minor_level)+1000, %% far down in the minor levels
     put(test_server_minor_fd, Fd),
-    io:fwrite(Fd,
-	      "<!DOCTYPE HTML PUBLIC \"-//W3C//DTD HTML 3.2 Final//EN\">\n"
-	      "<!-- autogenerated by '"++atom_to_list(?MODULE)++"'. -->\n"
-	      "<html>\n"
-	      "<head><title>"++cast_to_list(Mod)++"</title>\n"
-	      "<meta http-equiv=\"cache-control\" content=\"no-cache\">\n"
-	      "</head>\n"
-	      "<body bgcolor=\"white\" text=\"black\""
-	      " link=\"blue\" vlink=\"purple\" alink=\"red\">\n",
-	      []),
+    test_server_gl:set_minor_fd(group_leader(), Fd, MFA),
 
-    SrcListing = downcase(cast_to_list(Mod)) ++ ?src_listing_ext,
+    TestDescr = io_lib:format("Test ~w:~w result", [Mod,Func]),
+    {Header,Footer} =
+	case test_server_sup:framework_call(get_html_wrapper,
+					    [TestDescr,false,
+					     filename:dirname(AbsName),
+					     undefined], "") of
+	    Empty when (Empty == "") ; (element(2,Empty) == "")  ->
+		put(basic_html, true),
+		{html_header(TestDescr), "\n</body>\n</html>\n"};
+	    {basic_html,Html0,Html1} ->
+		put(basic_html, true),
+		{Html0,Html1};
+	    {xhtml,Html0,Html1} ->
+		put(basic_html, false),
+		{Html0,Html1}
+	end,
+    put(test_server_minor_footer, Footer),
+    io:put_chars(Fd, Header),
+
+    SrcListing = downcase(atom_to_list(Mod)) ++ ?src_listing_ext,
     case {filelib:is_file(filename:join(LogDir, SrcListing)),
 	  lists:member(no_src, get(test_server_logopts))} of
 	{true,false} ->
-	    print(Lev, "<a href=\"~s#~s\">source code for ~p:~p/1</a>\n",
-		  [SrcListing,Func,Mod,Func]);
-	_ -> ok
+	    print(Lev, "<a href=\"~ts#~ts\">source code for ~w:~w/1</a>\n",
+		  [uri_encode(SrcListing),
+		   uri_encode(atom_to_list(Func)++"-1",utf8),
+		   Mod,Func]);
+	_ ->
+	    ok
     end,
 
-    io:fwrite(Fd, "<pre>\n", []),
-
-% Stupid BUG!
-%    case catch apply(Mod, Func, [doc]) of
-%	{'EXIT', _Why} -> ok;
-%	Comment -> print(Lev, "Comment: ~s~n<br>", [Comment])
-%    end,
+    io:put_chars(Fd, "<pre>\n"),
 
     AbsName.
 
 stop_minor_log_file() ->
+    test_server_gl:unset_minor_fd(group_leader()),
     Fd = get(test_server_minor_fd),
-    io:fwrite(Fd, "</pre>\n</body>\n</html>\n", []),
-    file:close(Fd),
+    Footer = get(test_server_minor_footer),
+    io:put_chars(Fd, "</pre>\n" ++ Footer),
+    ok = file:close(Fd),
     put(test_server_minor_fd, undefined).
 
 downcase(S) -> downcase(S, []).
@@ -1932,23 +1847,40 @@ downcase([], Result) ->
 %%
 %%  Errors are silently ignored.
 
-html_convert_modules(TestSpec, _Config) ->
-    Mods = html_isolate_modules(TestSpec),
+html_convert_modules(TestSpec, _Config, FwMod) ->
+    Mods = html_isolate_modules(TestSpec, FwMod),
     html_convert_modules(Mods),
     copy_html_files(get(test_server_dir), get(test_server_log_dir_base)).
 
 %% Retrieve a list of modules out of the test spec.
-html_isolate_modules(List) -> html_isolate_modules(List, sets:new()).
+html_isolate_modules(List, FwMod) ->
+    html_isolate_modules(List, sets:new(), FwMod).
 
-html_isolate_modules([], Set) -> sets:to_list(Set);
-html_isolate_modules([{skip_case,_}|Cases], Set) ->
-    html_isolate_modules(Cases, Set);
-html_isolate_modules([{conf,_Ref,_Props,{Mod,_Func}}|Cases], Set) ->
-    html_isolate_modules(Cases, sets:add_element(Mod, Set));
-html_isolate_modules([{Mod,_Case}|Cases], Set) ->
-    html_isolate_modules(Cases, sets:add_element(Mod, Set));
-html_isolate_modules([{Mod,_Case,_Args}|Cases], Set) ->
-    html_isolate_modules(Cases, sets:add_element(Mod, Set)).
+html_isolate_modules([], Set, _) -> sets:to_list(Set);
+html_isolate_modules([{skip_case,{_Case,_Cmt},_Mode}|Cases], Set, FwMod) ->
+    html_isolate_modules(Cases, Set, FwMod);
+html_isolate_modules([{conf,_Ref,Props,{FwMod,_Func}}|Cases], Set, FwMod) ->
+    Set1 = case proplists:get_value(suite, Props) of
+	       undefined -> Set;
+	       Mod -> sets:add_element(Mod, Set)
+	   end,
+    html_isolate_modules(Cases, Set1, FwMod);
+html_isolate_modules([{conf,_Ref,_Props,{Mod,_Func}}|Cases], Set, FwMod) ->
+    html_isolate_modules(Cases, sets:add_element(Mod, Set), FwMod);
+html_isolate_modules([{skip_case,{conf,_Ref,{FwMod,_Func},_Cmt},Mode}|Cases],
+		     Set, FwMod) ->
+    Set1 = case proplists:get_value(suite, get_props(Mode)) of
+	       undefined -> Set;
+	       Mod -> sets:add_element(Mod, Set)
+	   end,
+    html_isolate_modules(Cases, Set1, FwMod);
+html_isolate_modules([{skip_case,{conf,_Ref,{Mod,_Func},_Cmt},_Props}|Cases],
+		     Set, FwMod) ->
+    html_isolate_modules(Cases, sets:add_element(Mod, Set), FwMod);
+html_isolate_modules([{Mod,_Case}|Cases], Set, FwMod) ->
+    html_isolate_modules(Cases, sets:add_element(Mod, Set), FwMod);
+html_isolate_modules([{Mod,_Case,_Args}|Cases], Set, FwMod) ->
+    html_isolate_modules(Cases, sets:add_element(Mod, Set), FwMod).
 
 %% Given a list of modules, convert each module's source code to HTML.
 html_convert_modules([Mod|Mods]) ->
@@ -1992,12 +1924,19 @@ html_convert_modules([]) -> ok.
 %% Convert source code to HTML if possible and needed.
 html_possibly_convert(Src, SrcInfo, Dest) ->
     case file:read_file_info(Dest) of
-	{error,_Reason} ->			% no dest file
-	    erl2html2:convert(Src, Dest);
-	{ok,DestInfo} when DestInfo#file_info.mtime < SrcInfo#file_info.mtime ->
-	    erl2html2:convert(Src, Dest);
-	{ok,_DestInfo} ->
-	    ok					% dest file up to date
+	{ok,DestInfo} when DestInfo#file_info.mtime >= SrcInfo#file_info.mtime ->
+	    ok;					% dest file up to date
+	_ ->
+	    OutDir = get(test_server_log_dir_base),
+	    case test_server_sup:framework_call(get_html_wrapper,
+						["Module "++Src,false,
+						 OutDir,undefined,
+						 encoding(Src)], "") of
+		Empty when (Empty == "") ; (element(2,Empty) == "")  ->
+		    erl2html2:convert(Src, Dest);
+		{_,Header,_} ->
+		    erl2html2:convert(Src, Dest, Header)
+	    end
     end.
 
 %% Copy all HTML files in InDir to OutDir.
@@ -2009,9 +1948,9 @@ copy_html_file(Src, DestDir) ->
     Dest = filename:join(DestDir, filename:basename(Src)),
     case file:read_file(Src) of
 	{ok,Bin} ->
-	    ok = file:write_file(Dest, Bin);
+	    ok = write_binary_file(Dest, Bin);
 	{error,_Reason} ->
-	    io:format("File ~p: read failed\n", [Src])
+	    io:format("File ~ts: read failed\n", [Src])
     end.
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -2022,23 +1961,30 @@ copy_html_file(Src, DestDir) ->
 
 add_init_and_end_per_suite([{make,_,_}=Case|Cases], LastMod, LastRef, FwMod) ->
     [Case|add_init_and_end_per_suite(Cases, LastMod, LastRef, FwMod)];
-add_init_and_end_per_suite([{skip_case,{{Mod,all},_}}=Case|Cases], LastMod,
+add_init_and_end_per_suite([{skip_case,{{Mod,all},_},_}=Case|Cases], LastMod,
 			   LastRef, FwMod) when Mod =/= LastMod ->
     {PreCases, NextMod, NextRef} =
-	do_add_end_per_suite_and_skip(LastMod, LastRef, Mod),
-    PreCases ++ [Case|add_init_and_end_per_suite(Cases, NextMod, NextRef, FwMod)];
-add_init_and_end_per_suite([{skip_case,{{Mod,_},_}}=Case|Cases], LastMod,
-			   LastRef, FwMod) when Mod =/= LastMod ->
+	do_add_end_per_suite_and_skip(LastMod, LastRef, Mod, FwMod),
+    PreCases ++ [Case|add_init_and_end_per_suite(Cases, NextMod,
+						 NextRef, FwMod)];
+add_init_and_end_per_suite([{skip_case,{{Mod,_},_Cmt},_Mode}=Case|Cases],
+			   LastMod, LastRef, FwMod) when Mod =/= LastMod ->
     {PreCases, NextMod, NextRef} =
-	do_add_init_and_end_per_suite(LastMod, LastRef, Mod),
-    PreCases ++ [Case|add_init_and_end_per_suite(Cases, NextMod, NextRef, FwMod)];
+	do_add_init_and_end_per_suite(LastMod, LastRef, Mod, FwMod),
+    PreCases ++ [Case|add_init_and_end_per_suite(Cases, NextMod,
+						 NextRef, FwMod)];
+add_init_and_end_per_suite([{skip_case,{conf,_,{Mod,_},_},_}=Case|Cases],
+			   LastMod, LastRef, FwMod) when Mod =/= LastMod ->
+    {PreCases, NextMod, NextRef} =
+	do_add_init_and_end_per_suite(LastMod, LastRef, Mod, FwMod),
+    PreCases ++ [Case|add_init_and_end_per_suite(Cases, NextMod,
+						 NextRef, FwMod)];
 add_init_and_end_per_suite([{skip_case,{conf,_,{Mod,_},_}}=Case|Cases], LastMod,
 			   LastRef, FwMod) when Mod =/= LastMod ->
     {PreCases, NextMod, NextRef} =
-	do_add_init_and_end_per_suite(LastMod, LastRef, Mod),
-    PreCases ++ [Case|add_init_and_end_per_suite(Cases, NextMod, NextRef, FwMod)];
-add_init_and_end_per_suite([{skip_case,_}=Case|Cases], LastMod, LastRef, FwMod) ->
-    [Case|add_init_and_end_per_suite(Cases, LastMod, LastRef, FwMod)];
+	do_add_init_and_end_per_suite(LastMod, LastRef, Mod, FwMod),
+    PreCases ++ [Case|add_init_and_end_per_suite(Cases, NextMod,
+						 NextRef, FwMod)];
 add_init_and_end_per_suite([{conf,Ref,Props,{FwMod,Func}}=Case|Cases], LastMod,
 			   LastRef, FwMod) ->
     %% if Mod == FwMod, this conf test is (probably) a test case group where
@@ -2047,8 +1993,9 @@ add_init_and_end_per_suite([{conf,Ref,Props,{FwMod,Func}}=Case|Cases], LastMod,
     case proplists:get_value(suite, Props) of
 	Suite when Suite =/= undefined, Suite =/= LastMod ->
 	    {PreCases, NextMod, NextRef} =
-		do_add_init_and_end_per_suite(LastMod, LastRef, Suite),
-	    Case1 = {conf,Ref,proplists:delete(suite,Props),{FwMod,Func}},
+		do_add_init_and_end_per_suite(LastMod, LastRef, Suite, FwMod),
+	    Case1 = {conf,Ref,[{suite,NextMod}|proplists:delete(suite,Props)],
+		     {FwMod,Func}},
 	    PreCases ++ [Case1|add_init_and_end_per_suite(Cases, NextMod,
 							  NextRef, FwMod)];
 	_ ->
@@ -2057,30 +2004,49 @@ add_init_and_end_per_suite([{conf,Ref,Props,{FwMod,Func}}=Case|Cases], LastMod,
 add_init_and_end_per_suite([{conf,_,_,{Mod,_}}=Case|Cases], LastMod,
 			   LastRef, FwMod) when Mod =/= LastMod, Mod =/= FwMod ->
     {PreCases, NextMod, NextRef} =
-	do_add_init_and_end_per_suite(LastMod, LastRef, Mod),
-    PreCases ++ [Case|add_init_and_end_per_suite(Cases, NextMod, NextRef, FwMod)];
+	do_add_init_and_end_per_suite(LastMod, LastRef, Mod, FwMod),
+    PreCases ++ [Case|add_init_and_end_per_suite(Cases, NextMod,
+						 NextRef, FwMod)];
+add_init_and_end_per_suite([SkipCase|Cases], LastMod, LastRef, FwMod)
+  when element(1,SkipCase) == skip_case ->
+    [SkipCase|add_init_and_end_per_suite(Cases, LastMod, LastRef, FwMod)];
 add_init_and_end_per_suite([{conf,_,_,_}=Case|Cases], LastMod, LastRef, FwMod) ->
     [Case|add_init_and_end_per_suite(Cases, LastMod, LastRef, FwMod)];
 add_init_and_end_per_suite([{Mod,_}=Case|Cases], LastMod, LastRef, FwMod)
   when Mod =/= LastMod, Mod =/= FwMod ->
     {PreCases, NextMod, NextRef} =
-	do_add_init_and_end_per_suite(LastMod, LastRef, Mod),
-    PreCases ++ [Case|add_init_and_end_per_suite(Cases, NextMod, NextRef, FwMod)];
+	do_add_init_and_end_per_suite(LastMod, LastRef, Mod, FwMod),
+    PreCases ++ [Case|add_init_and_end_per_suite(Cases, NextMod,
+						 NextRef, FwMod)];
 add_init_and_end_per_suite([{Mod,_,_}=Case|Cases], LastMod, LastRef, FwMod)
   when Mod =/= LastMod, Mod =/= FwMod ->
     {PreCases, NextMod, NextRef} =
-	do_add_init_and_end_per_suite(LastMod, LastRef, Mod),
-    PreCases ++ [Case|add_init_and_end_per_suite(Cases, NextMod, NextRef, FwMod)];
+	do_add_init_and_end_per_suite(LastMod, LastRef, Mod, FwMod),
+    PreCases ++ [Case|add_init_and_end_per_suite(Cases, NextMod,
+						 NextRef, FwMod)];
 add_init_and_end_per_suite([Case|Cases], LastMod, LastRef, FwMod)->
     [Case|add_init_and_end_per_suite(Cases, LastMod, LastRef, FwMod)];
 add_init_and_end_per_suite([], _LastMod, undefined, _FwMod) ->
     [];
 add_init_and_end_per_suite([], _LastMod, skipped_suite, _FwMod) ->
     [];
-add_init_and_end_per_suite([], LastMod, LastRef, _FwMod) ->
-    [{conf,LastRef,[],{LastMod,end_per_suite}}].
+add_init_and_end_per_suite([], LastMod, LastRef, FwMod) ->
+    %% we'll add end_per_suite here even if it's not exported
+    %% (and simply let the call fail if it's missing)
+    case erlang:function_exported(LastMod, end_per_suite, 1) of
+	true ->
+	    [{conf,LastRef,[],{LastMod,end_per_suite}}];
+	false ->
+	    %% let's call a "fake" end_per_suite if it exists			
+	    case erlang:function_exported(FwMod, end_per_suite, 1) of
+		true ->					
+		    [{conf,LastRef,[{suite,LastMod}],{FwMod,end_per_suite}}];
+		false ->		
+		    [{conf,LastRef,[],{LastMod,end_per_suite}}]
+	    end
+    end.    
 
-do_add_init_and_end_per_suite(LastMod, LastRef, Mod) ->
+do_add_init_and_end_per_suite(LastMod, LastRef, Mod, FwMod) ->
     case code:is_loaded(Mod) of
 	false -> code:load_file(Mod);
 	_ -> ok
@@ -2091,7 +2057,16 @@ do_add_init_and_end_per_suite(LastMod, LastRef, Mod) ->
 		Ref = make_ref(),
 		{[{conf,Ref,[],{Mod,init_per_suite}}],Mod,Ref};
 	    false ->
-		{[],Mod,undefined}
+		%% let's call a "fake" init_per_suite if it exists
+		case erlang:function_exported(FwMod, init_per_suite, 1) of
+		    true ->
+			Ref = make_ref(),
+			{[{conf,Ref,[{suite,Mod}],
+			   {FwMod,init_per_suite}}],Mod,Ref};
+		    false ->
+			{[],Mod,undefined}
+		end
+
 	end,
     Cases =
 	if LastRef==undefined ->
@@ -2099,43 +2074,63 @@ do_add_init_and_end_per_suite(LastMod, LastRef, Mod) ->
 	   LastRef==skipped_suite ->
 		Init;
 	   true ->
-		%% Adding end_per_suite here without checking if the
-		%% function is actually exported. This is because a
-		%% conf case must have an end case - so if it doesn't
-		%% exist, it will only fail...
-		[{conf,LastRef,[],{LastMod,end_per_suite}}|Init]
+		%% we'll add end_per_suite here even if it's not exported
+		%% (and simply let the call fail if it's missing)
+		case erlang:function_exported(LastMod, end_per_suite, 1) of
+		    true ->
+			[{conf,LastRef,[],{LastMod,end_per_suite}}|Init];
+		    false ->
+			%% let's call a "fake" end_per_suite if it exists
+			case erlang:function_exported(FwMod, end_per_suite, 1) of
+			    true ->				
+				[{conf,LastRef,[{suite,Mod}],
+				  {FwMod,end_per_suite}}|Init];
+			    false ->
+				[{conf,LastRef,[],{LastMod,end_per_suite}}|Init]
+			end
+		end
 	end,
     {Cases,NextMod,NextRef}.
 
-do_add_end_per_suite_and_skip(LastMod, LastRef, Mod) ->
+do_add_end_per_suite_and_skip(LastMod, LastRef, Mod, FwMod) ->
     case LastRef of
 	No when No==undefined ; No==skipped_suite ->
 	    {[],Mod,skipped_suite};
 	_Ref ->
-	    {[{conf,LastRef,[],{LastMod,end_per_suite}}],Mod,skipped_suite}
+	    case erlang:function_exported(LastMod, end_per_suite, 1) of
+		true ->
+		    {[{conf,LastRef,[],{LastMod,end_per_suite}}],
+		     Mod,skipped_suite};
+		false ->
+		    case erlang:function_exported(FwMod, end_per_suite, 1) of
+			true ->				
+			    %% let's call "fake" end_per_suite if it exists
+			    {[{conf,LastRef,[],{FwMod,end_per_suite}}],
+			     Mod,skipped_suite};
+			false ->
+			    {[{conf,LastRef,[],{LastMod,end_per_suite}}],
+			     Mod,skipped_suite}
+		    end
+	    end    	    
     end.
 
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %% run_test_cases(TestSpec, Config, TimetrapData) -> exit(Result)
 %%
-%% If remote target, a socket connection is established.
 %% Runs the specified tests, then displays/logs the summary.
 
 run_test_cases(TestSpec, Config, TimetrapData) ->
-
-    maybe_open_job_sock(),
-
+    test_server:init_purify(),
     case lists:member(no_src, get(test_server_logopts)) of
 	true ->
 	    ok;
 	false ->
-	    html_convert_modules(TestSpec, Config)
+	    FwMod = get_fw_mod(?MODULE),
+	    html_convert_modules(TestSpec, Config, FwMod)
     end,
 
     run_test_cases_loop(TestSpec, [Config], TimetrapData, [], []),
-
-    maybe_get_privdir(),
 
     {AllSkippedN,UserSkipN,AutoSkipN,SkipStr} =
 	case get(test_server_skipped) of
@@ -2144,51 +2139,16 @@ run_test_cases(TestSpec, Config, TimetrapData) ->
 	end,
     OkN = get(test_server_ok),
     FailedN = get(test_server_failed),
-    print(1, "TEST COMPLETE, ~w ok, ~w failed~s of ~w test cases\n",
+    print(1, "TEST COMPLETE, ~w ok, ~w failed~ts of ~w test cases\n",
 	  [OkN,FailedN,SkipStr,OkN+FailedN+AllSkippedN]),
     test_server_sup:framework_call(report, [tests_done,
 					    {OkN,FailedN,{UserSkipN,AutoSkipN}}]),
     print(major, "=finished      ~s", [lists:flatten(timestamp_get(""))]),
-    print(major, "=failed        ~p", [FailedN]),
-    print(major, "=successful    ~p", [OkN]),
-    print(major, "=user_skipped  ~p", [UserSkipN]),
-    print(major, "=auto_skipped  ~p", [AutoSkipN]),
+    print(major, "=failed        ~w", [FailedN]),
+    print(major, "=successful    ~w", [OkN]),
+    print(major, "=user_skipped  ~w", [UserSkipN]),
+    print(major, "=auto_skipped  ~w", [AutoSkipN]),
     exit(test_suites_done).
-
-%% If the test is run at a remote target, this function sets up a socket
-%% communication with the target for handling this particular job.
-maybe_open_job_sock() ->
-    TI = get_target_info(),
-    case TI#target_info.where of
-	local ->
-	    %% local target
-	    test_server:init_purify();
-	MainSock ->
-	    %% remote target
-	    {ok,LSock} = gen_tcp:listen(0, [binary,
-					    {reuseaddr,true},
-					    {packet,4},
-					    {active,false}]),
-	    {ok,Port} = inet:port(LSock),
-	    request(MainSock, {job,Port,get(test_server_name)}),
-	    case gen_tcp:accept(LSock, ?ACCEPT_TIMEOUT) of
-		{ok,Sock} -> put(test_server_ctrl_job_sock, Sock);
-		{error,Reason} -> exit({no_contact,Reason})
-	    end
-    end.
-
-%% If the test is run at a remote target, this function waits for a
-%% tar packet containing the privdir created by the test case.
-maybe_get_privdir() ->
-    case get(test_server_ctrl_job_sock) of
-	undefined ->
-	    %% local target
-	    ok;
-	Sock ->
-	    %% remote target
-	    request(Sock, job_done),
-	    gen_tcp:close(Sock)
-    end.
 
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -2224,8 +2184,7 @@ maybe_get_privdir() ->
 %% return a new configuration.
 %%
 %% {make,Ref,{Mod,Func,Args}} Mod:Func is a make function, and it is called
-%% with the given arguments. This function will *always* be called on the host
-%% - not on target.
+%% with the given arguments.
 %%
 %% {Mod,Case} This is a normal test case. Determine the correct
 %% configuration, and insert {Mod,Case,Config} as head of the list,
@@ -2241,7 +2200,7 @@ maybe_get_privdir() ->
 %% comment (which gets printed in the log files) describes why the case
 %% was skipped.
 %%
-%% {skip_case,{Case,Comment}} A normal test case skipped by the user.
+%% {skip_case,{Case,Comment},Mode} A normal test case skipped by the user.
 %% The comment (which gets printed in the log files) describes why the
 %% case was skipped.
 %%
@@ -2268,27 +2227,38 @@ maybe_get_privdir() ->
 %% reason, the Mode argument specifies if a parallel group is currently
 %% being executed.
 %%
-%% A parallel test case process will always set the dictionary value
-%% 'test_server_common_io_handler' to the pid of the main (starting)
-%% process. With this value set, the print/3 function will send print
-%% messages to the main process instead of writing the data to file
-%% (only true for printouts to common log files).
+%% The low-level mechanism for buffering IO for the common log files
+%% is handled by the test_server_io module. Buffering is turned on by
+%% test_server_io:start_transaction/0 and off by calling
+%% test_server_io:end_transaction/0. The buffered data for the transaction
+%% can printed by calling test_server_io:print_buffered/1.
+%%
+%% This module is responsible for turning on IO buffering and to later
+%% test_server_io:print_buffered/1 to print the data. To help with this,
+%% two variables in the process dictionary are used:
+%% 'test_server_common_io_handler' and 'test_server_queued_io'. The values
+%% are set to as follwing:
+%%
+%%   Value	Meaning
+%%   -----     -------
+%%   undefined	No parallel test cases running
+%%   {tc,Pid}	Running test cases in a top-level parallel group
+%%   {Ref,Pid}	Running sequential test case inside a parallel group
+%%
+%% FIXME: The Pid is no longer used.
 %%
 %% If a conf group nested under a parallel group in the test
 %% specification should be started, the 'test_server_common_io_handler'
-%% value gets set also on the main process. This causes all printouts
-%% to common files - both from parallel test cases and from cases
-%% executed by the main process - to all end up as messages in the
-%% inbox of the main process.
+%% value gets set also on the main process.
 %%
 %% During execution of a parallel group (or of a group nested under a
 %% parallel group), *any* new test case being started gets registered
 %% in a list saved in the dictionary with 'test_server_queued_io' as key.
 %% When the top level parallel group is finished (only then can we be
 %% sure all parallel test cases have finished and "reported in"), the
-%% list of test cases is traversed in order and printout messages from
-%% each process - including the main process - are handled in turn. See
-%% handle_test_case_io_and_status/0 for details.
+%% list of test cases is traversed in order and test_server_io:print_buffered/1
+%% can be called for each test case. See handle_test_case_io_and_status/0
+%% for details.
 %%
 %% To be able to handle nested conf groups with different properties,
 %% the Mode argument specifies a list of {Ref,Properties} tuples.
@@ -2323,34 +2293,50 @@ maybe_get_privdir() ->
 %% group1_end                                              | --->
 %%
 
-run_test_cases_loop([{auto_skip_case,{Type,Ref,Case,Comment},SkipMode}|Cases],
-		    Config, TimetrapData, Mode, Status) when Type==conf;
-							     Type==make ->
+run_test_cases_loop([{SkipTag,CaseData={Type,_Ref,_Case,_Comment}}|Cases],
+		    Config, TimetrapData, Mode, Status) when
+      ((SkipTag==auto_skip_case) or (SkipTag==skip_case)) and
+      ((Type==conf) or (Type==make)) ->
+    run_test_cases_loop([{SkipTag,CaseData,Mode}|Cases],
+			Config, TimetrapData, Mode, Status);
+
+run_test_cases_loop([{SkipTag,{Type,Ref,Case,Comment},SkipMode}|Cases],
+		    Config, TimetrapData, Mode, Status) when
+      ((SkipTag==auto_skip_case) or (SkipTag==skip_case)) and
+      ((Type==conf) or (Type==make)) ->
     file:set_cwd(filename:dirname(get(test_server_dir))),
     CurrIOHandler = get(test_server_common_io_handler),
     ParentMode = tl(Mode),
+
+    {AutoOrUser,ReportTag} = 
+	if SkipTag == auto_skip_case -> {auto,tc_auto_skip};
+	   SkipTag == skip_case      -> {user,tc_user_skip}
+	end,
 
     %% check and update the mode for test case execution and io msg handling
     case {curr_ref(Mode),check_props(parallel, Mode)} of
 	{Ref,Ref} ->
 	    case check_props(parallel, ParentMode) of
 		false ->
-		    %% this is a skipped end conf for a top level parallel group,
-		    %% buffered io can be flushed
+		    %% this is a skipped end conf for a top level parallel
+		    %% group, buffered io can be flushed
 		    handle_test_case_io_and_status(),
 		    set_io_buffering(undefined),
-		    {Mod,Func} = skip_case(auto, Ref, 0, Case, Comment, false, SkipMode),
-		    test_server_sup:framework_call(report, [tc_auto_skip,
-							    {?pl2a(Mod),Func,Comment}]),
+		    {Mod,Func} = skip_case(AutoOrUser, Ref, 0, Case, Comment,
+					   false, SkipMode),
+		    ConfData = {Mod,{Func,get_name(SkipMode)},Comment},
+		    test_server_sup:framework_call(report,
+						   [ReportTag,ConfData]),
 		    run_test_cases_loop(Cases, Config, TimetrapData, ParentMode,
 					delete_status(Ref, Status));
 		_ ->
-		    %% this is a skipped end conf for a parallel group nested under a
-		    %% parallel group (io buffering is active)
+		    %% this is a skipped end conf for a parallel group nested
+		    %% under a parallel group (io buffering is active)
 		    wait_for_cases(Ref),
-		    {Mod,Func} = skip_case(auto, Ref, 0, Case, Comment, true, SkipMode),
-		    test_server_sup:framework_call(report, [tc_auto_skip,
-							    {?pl2a(Mod),Func,Comment}]),
+		    {Mod,Func} = skip_case(AutoOrUser, Ref, 0, Case, Comment,
+					   true, SkipMode),
+		    ConfData = {Mod,{Func,get_name(SkipMode)},Comment},
+		    test_server_sup:framework_call(report, [ReportTag,ConfData]),
 		    case CurrIOHandler of
 			{Ref,_} ->
 			    %% current_io_handler was set by start conf of this
@@ -2360,18 +2346,21 @@ run_test_cases_loop([{auto_skip_case,{Type,Ref,Case,Comment},SkipMode}|Cases],
 			_ ->
 			    ok
 		    end,
-		    run_test_cases_loop(Cases, Config, TimetrapData, ParentMode,
+		    run_test_cases_loop(Cases, Config,
+					TimetrapData, ParentMode,
 					delete_status(Ref, Status))
 	    end;
 	{Ref,false} ->
 	    %% this is a skipped end conf for a non-parallel group that's not
 	    %% nested under a parallel group
-	    {Mod,Func} = skip_case(auto, Ref, 0, Case, Comment, false, SkipMode),
-	    test_server_sup:framework_call(report, [tc_auto_skip,{?pl2a(Mod),Func,Comment}]),
+	    {Mod,Func} = skip_case(AutoOrUser, Ref, 0, Case, Comment,
+				   false, SkipMode),
+	    ConfData = {Mod,{Func,get_name(SkipMode)},Comment},
+	    test_server_sup:framework_call(report, [ReportTag,ConfData]),
 
-	    %% Check if this group is auto skipped because of error in the init conf.
-	    %% If so, check if the parent group is a sequence, and if it is, skip
-	    %% all proceeding tests in that group.
+	    %% Check if this group is auto skipped because of error in the
+	    %% init conf. If so, check if the parent group is a sequence,
+	    %% and if it is, skip all proceeding tests in that group.
 	    GrName = get_name(Mode),
 	    Cases1 =
 		case get_tc_results(Status) of
@@ -2384,7 +2373,8 @@ run_test_cases_loop([{auto_skip_case,{Type,Ref,Case,Comment},SkipMode}|Cases],
 				    ParentRef ->
 					Reason = {group_result,GrName,failed},
 					skip_cases_upto(ParentRef, Cases,
-							Reason, tc, Mode)
+							Reason, tc, ParentMode,
+							SkipTag)
 				end;
 			    false ->
 				Cases
@@ -2397,8 +2387,10 @@ run_test_cases_loop([{auto_skip_case,{Type,Ref,Case,Comment},SkipMode}|Cases],
 	{Ref,_} ->
 	    %% this is a skipped end conf for a non-parallel group nested under
 	    %% a parallel group (io buffering is active)
-	    {Mod,Func} = skip_case(auto, Ref, 0, Case, Comment, true, SkipMode),
-	    test_server_sup:framework_call(report, [tc_auto_skip,{?pl2a(Mod),Func,Comment}]),
+	    {Mod,Func} = skip_case(AutoOrUser, Ref, 0, Case, Comment,
+				   true, SkipMode),
+	    ConfData = {Mod,{Func,get_name(SkipMode)},Comment},
+	    test_server_sup:framework_call(report, [ReportTag,ConfData]),
 	    case CurrIOHandler of
 		{Ref,_} ->
 		    %% current_io_handler was set by start conf of this
@@ -2413,52 +2405,54 @@ run_test_cases_loop([{auto_skip_case,{Type,Ref,Case,Comment},SkipMode}|Cases],
 	{_,false} ->
 	    %% this is a skipped start conf for a group which is not nested
 	    %% under a parallel group
-	    {Mod,Func} = skip_case(auto, Ref, 0, Case, Comment, false, SkipMode),
-	    test_server_sup:framework_call(report, [tc_auto_skip,{?pl2a(Mod),Func,Comment}]),
-	    run_test_cases_loop(Cases, Config, TimetrapData, [conf(Ref,[])|Mode], Status);
+	    {Mod,Func} = skip_case(AutoOrUser, Ref, 0, Case, Comment,
+				   false, SkipMode),
+	    ConfData = {Mod,{Func,get_name(SkipMode)},Comment},
+	    test_server_sup:framework_call(report, [ReportTag,ConfData]),
+	    run_test_cases_loop(Cases, Config, TimetrapData,
+				[conf(Ref,[])|Mode], Status);
 	{_,Ref0} when is_reference(Ref0) ->
-	    %% this is a skipped start conf for a group nested under a parallel group
-	    %% and if this is the first nested group, io buffering must be activated
+	    %% this is a skipped start conf for a group nested under a parallel
+	    %% group and if this is the first nested group, io buffering must
+	    %% be activated
 	    if CurrIOHandler == undefined ->
 		    set_io_buffering({Ref,self()});
 	       true ->
 		    ok
 	    end,
-	    {Mod,Func} = skip_case(auto, Ref, 0, Case, Comment, true, SkipMode),
-	    test_server_sup:framework_call(report, [tc_auto_skip,{?pl2a(Mod),Func,Comment}]),
-	    run_test_cases_loop(Cases, Config, TimetrapData, [conf(Ref,[])|Mode], Status)
+	    {Mod,Func} = skip_case(AutoOrUser, Ref, 0, Case, Comment,
+				   true, SkipMode),
+	    ConfData = {Mod,{Func,get_name(SkipMode)},Comment},
+	    test_server_sup:framework_call(report, [ReportTag,ConfData]),
+	    run_test_cases_loop(Cases, Config, TimetrapData,
+				[conf(Ref,[])|Mode], Status)
     end;
 
 run_test_cases_loop([{auto_skip_case,{Case,Comment},SkipMode}|Cases],
 		    Config, TimetrapData, Mode, Status) ->
-    {Mod,Func} = skip_case(auto, undefined, get(test_server_case_num)+1, Case, Comment,
-			   (undefined /= get(test_server_common_io_handler)), SkipMode),
-    test_server_sup:framework_call(report, [tc_auto_skip,{?pl2a(Mod),Func,Comment}]),
+    {Mod,Func} = skip_case(auto, undefined, get(test_server_case_num)+1,
+			   Case, Comment, is_io_buffered(), SkipMode),
+    test_server_sup:framework_call(report, [tc_auto_skip,
+					    {Mod,{Func,get_name(SkipMode)},
+					     Comment}]),
     run_test_cases_loop(Cases, Config, TimetrapData, Mode,
 			update_status(skipped, Mod, Func, Status));
 
-run_test_cases_loop([{skip_case,{conf,Ref,Case,Comment}}|Cases0],
+run_test_cases_loop([{skip_case,{{Mod,all}=Case,Comment},SkipMode}|Cases],
 		    Config, TimetrapData, Mode, Status) ->
-    {Mod,Func} = skip_case(user, Ref, 0, Case, Comment,
-			   (undefined /= get(test_server_common_io_handler))),
-    {Cases,Config1} =
-	case curr_ref(Mode) of
-	    Ref ->
-		%% skipped end conf
-		{Cases0,tl(Config)};
-	    _ ->
-		%% skipped start conf
-		{skip_cases_upto(Ref, Cases0, Comment, conf, Mode),Config}
-	end,
-    test_server_sup:framework_call(report, [tc_user_skip,{?pl2a(Mod),Func,Comment}]),
-    run_test_cases_loop(Cases, Config1, TimetrapData, Mode,
-			update_status(skipped, Mod, Func, Status));
+    skip_case(user, undefined, 0, Case, Comment, false, SkipMode),
+    test_server_sup:framework_call(report, [tc_user_skip,
+					    {Mod,{all,get_name(SkipMode)},
+					     Comment}]),
+    run_test_cases_loop(Cases, Config, TimetrapData, Mode, Status);
 
-run_test_cases_loop([{skip_case,{Case,Comment}}|Cases],
+run_test_cases_loop([{skip_case,{Case,Comment},SkipMode}|Cases],
 		    Config, TimetrapData, Mode, Status) ->
-    {Mod,Func} = skip_case(user, undefined, get(test_server_case_num)+1, Case, Comment,
-			   (undefined /= get(test_server_common_io_handler))),
-    test_server_sup:framework_call(report, [tc_user_skip,{?pl2a(Mod),Func,Comment}]),
+    {Mod,Func} = skip_case(user, undefined, get(test_server_case_num)+1,
+			   Case, Comment, is_io_buffered(), SkipMode),
+    test_server_sup:framework_call(report, [tc_user_skip,
+					    {Mod,{Func,get_name(SkipMode)},
+					     Comment}]),
     run_test_cases_loop(Cases, Config, TimetrapData, Mode,
 			update_status(skipped, Mod, Func, Status));
 
@@ -2472,8 +2466,9 @@ run_test_cases_loop([{conf,Ref,Props,{Mod,Func}}|_Cases]=Cs0,
 	    {Ref,Ref} ->
 		case check_props(parallel, tl(Mode0)) of
 		    false ->
-			%% this is an end conf for a top level parallel group, collect
-			%% results from the test case processes and calc total time
+			%% this is an end conf for a top level parallel group,
+			%% collect results from the test case processes
+			%% and calc total time
 			OkSkipFail = handle_test_case_io_and_status(),
 			file:set_cwd(filename:dirname(get(test_server_dir))),
 			After = ?now,
@@ -2658,24 +2653,43 @@ run_test_cases_loop([{conf,Ref,Props,{Mod,Func}}|_Cases]=Cs0,
 				      "(configuration case ~w)", [What]);
 			   (_) -> ok
 			end,
-
     CfgProps = if StartConf ->
 		       if Shuffle == undefined ->
 			       [{tc_group_properties,Props}];
 			  true ->
-			       [{tc_group_properties,[Shuffle|delete_shuffle(Props)]}]
+			       [{tc_group_properties,
+				 [Shuffle|delete_shuffle(Props)]}]
 		       end;
 		  not StartConf ->
 		       {TcOk,TcSkip,TcFail} = get_tc_results(Status1),
 		       [{tc_group_properties,get_props(Mode0)},
-			{tc_group_result,[{ok,TcOk},{skipped,TcSkip},{failed,TcFail}]}]
+			{tc_group_result,[{ok,TcOk},
+					  {skipped,TcSkip},
+					  {failed,TcFail}]}]
 	       end,
-    ActualCfg =
-	update_config(hd(Config), [{priv_dir,get(test_server_priv_dir)},
-				   {data_dir,get_data_dir(Mod)}] ++ CfgProps),
-    CurrMode = curr_mode(Ref, Mode0, Mode),
 
-    ConfCaseResult = run_test_case(Ref, 0, Mod, Func, [ActualCfg], skip_init, target,
+    SuiteName = proplists:get_value(suite, Props),
+    case get(test_server_create_priv_dir) of
+	auto_per_run ->				% use common priv_dir
+	    TSDirs = [{priv_dir,get(test_server_priv_dir)},
+		      {data_dir,get_data_dir(Mod, SuiteName)}];    
+	_ ->
+	    TSDirs = [{data_dir,get_data_dir(Mod, SuiteName)}]
+    end,
+
+    ActualCfg = 
+	if not StartConf ->
+		update_config(hd(Config), TSDirs ++ CfgProps);
+	   true ->
+		GroupPath = lists:flatmap(fun({_Ref,[],_T}) -> [];
+					     ({_Ref,GrProps,_T}) -> [GrProps]
+					  end, Mode0),
+		update_config(hd(Config), 
+			      TSDirs ++ [{tc_group_path,GroupPath} | CfgProps])
+	end,
+
+    CurrMode = curr_mode(Ref, Mode0, Mode),
+    ConfCaseResult = run_test_case(Ref, 0, Mod, Func, [ActualCfg], skip_init,
 				   TimetrapData, CurrMode),
 
     case ConfCaseResult of
@@ -2689,10 +2703,12 @@ run_test_cases_loop([{conf,Ref,Props,{Mod,Func}}|_Cases]=Cs0,
 		    run_test_cases_loop(Cases, [NewCfg|Config],
 					TimetrapData, Mode, Status2);
 		Bad ->
-		    print(minor, "~n*** ~p returned bad elements in Config: ~p.~n",
+		    print(minor,
+			  "~n*** ~w returned bad elements in Config: ~p.~n",
 			  [Func,Bad]),
 		    Reason = {failed,{Mod,init_per_suite,bad_return}},
-		    Cases2 = skip_cases_upto(Ref, Cases, Reason, conf, CurrMode),
+		    Cases2 = skip_cases_upto(Ref, Cases, Reason, conf, CurrMode,
+					     auto_skip_case),
 		    set_io_buffering(IOHandler),
 		    stop_minor_log_file(),
 		    run_test_cases_loop(Cases2, Config, TimetrapData, Mode,
@@ -2704,19 +2720,22 @@ run_test_cases_loop([{conf,Ref,Props,{Mod,Func}}|_Cases]=Cs0,
 	    stop_minor_log_file(),
 	    run_test_cases_loop(Cases, [NewCfg|Config], TimetrapData, Mode, Status2);
 	{_,{framework_error,{FwMod,FwFunc},Reason},_} ->
-	    print(minor, "~n*** ~p failed in ~p. Reason: ~p~n", [FwMod,FwFunc,Reason]),
-	    print(1, "~p failed in ~p. Reason: ~p~n", [FwMod,FwFunc,Reason]),
+	    print(minor, "~n*** ~w failed in ~w. Reason: ~p~n",
+		  [FwMod,FwFunc,Reason]),
+	    print(1, "~w failed in ~w. Reason: ~p~n", [FwMod,FwFunc,Reason]),
 	    exit(framework_error);
 	{_,Fail,_} when element(1,Fail) == 'EXIT';
 			element(1,Fail) == timetrap_timeout;
+			element(1,Fail) == user_timetrap_error;
 			element(1,Fail) == failed ->
 	    {Cases2,Config1,Status3} =
 		if StartConf ->
 			ReportAbortRepeat(failed),
-			print(minor, "~n*** ~p failed.~n"
+			print(minor, "~n*** ~w failed.~n"
 			      "    Skipping all cases.", [Func]),
 			Reason = {failed,{Mod,Func,Fail}},
-			{skip_cases_upto(Ref, Cases, Reason, conf, CurrMode),
+			{skip_cases_upto(Ref, Cases, Reason, conf, CurrMode,
+					 auto_skip_case),
 			 Config,
 			 update_status(failed, group_result, get_name(Mode),
 				       delete_status(Ref, Status2))};
@@ -2728,36 +2747,53 @@ run_test_cases_loop([{conf,Ref,Props,{Mod,Func}}|_Cases]=Cs0,
 	    set_io_buffering(IOHandler),
 	    stop_minor_log_file(),
 	    run_test_cases_loop(Cases2, Config1, TimetrapData, Mode, Status3);
-	{died,Why,_} when Func == init_per_suite ->
-	    print(minor, "~n*** Unexpected exit during init_per_suite.~n", []),
-	    Reason = {failed,{Mod,init_per_suite,Why}},
-	    Cases2 = skip_cases_upto(Ref, Cases, Reason, conf, CurrMode),
+
+	{_,{auto_skip,SkipReason},_} ->
+	    %% this case can only happen if the framework (not the user)
+	    %% decides to skip execution of a conf function
+	    {Cases2,Config1,Status3} =
+		if StartConf ->
+			ReportAbortRepeat(auto_skipped),
+			print(minor, "~n*** ~w auto skipped.~n"
+			      "    Skipping all cases.", [Func]),
+			{skip_cases_upto(Ref, Cases, SkipReason, conf, CurrMode,
+					 auto_skip_case),
+			 Config,
+			 delete_status(Ref, Status2)};
+		   not StartConf ->
+			ReportRepeatStop(),
+			print_conf_time(ConfTime),
+			{Cases,tl(Config),delete_status(Ref, Status2)}
+		end,
 	    set_io_buffering(IOHandler),
 	    stop_minor_log_file(),
-	    run_test_cases_loop(Cases2, Config, TimetrapData, Mode,
-				delete_status(Ref, Status2));
+	    run_test_cases_loop(Cases2, Config1, TimetrapData, Mode, Status3);
+
 	{_,{Skip,Reason},_} when StartConf and ((Skip==skip) or (Skip==skipped)) ->
 	    ReportAbortRepeat(skipped),
-	    print(minor, "~n*** ~p skipped.~n"
+	    print(minor, "~n*** ~w skipped.~n"
 		  "    Skipping all cases.", [Func]),
 	    set_io_buffering(IOHandler),
 	    stop_minor_log_file(),
-	    run_test_cases_loop(skip_cases_upto(Ref, Cases, Reason, conf, CurrMode),
-				Config, TimetrapData, Mode,
+	    run_test_cases_loop(skip_cases_upto(Ref, Cases, Reason, conf,
+						CurrMode, skip_case),
+				[hd(Config)|Config], TimetrapData, Mode,
 				delete_status(Ref, Status2));
 	{_,{skip_and_save,Reason,_SavedConfig},_} when StartConf ->
 	    ReportAbortRepeat(skipped),
-	    print(minor, "~n*** ~p skipped.~n"
+	    print(minor, "~n*** ~w skipped.~n"
 		  "    Skipping all cases.", [Func]),
 	    set_io_buffering(IOHandler),
 	    stop_minor_log_file(),
-	    run_test_cases_loop(skip_cases_upto(Ref, Cases, Reason, conf, CurrMode),
-				Config, TimetrapData, Mode,
+	    run_test_cases_loop(skip_cases_upto(Ref, Cases, Reason, conf,
+						CurrMode, skip_case),
+				[hd(Config)|Config], TimetrapData, Mode,
 				delete_status(Ref, Status2));
 	{_,_Other,_} when Func == init_per_suite ->
 	    print(minor, "~n*** init_per_suite failed to return a Config list.~n", []),
 	    Reason = {failed,{Mod,init_per_suite,bad_return}},
-	    Cases2 = skip_cases_upto(Ref, Cases, Reason, conf, CurrMode),
+	    Cases2 = skip_cases_upto(Ref, Cases, Reason, conf, CurrMode,
+				     auto_skip_case),
 	    set_io_buffering(IOHandler),
 	    stop_minor_log_file(),
 	    run_test_cases_loop(Cases2, Config, TimetrapData, Mode,
@@ -2769,7 +2805,6 @@ run_test_cases_loop([{conf,Ref,Props,{Mod,Func}}|_Cases]=Cs0,
 	    stop_minor_log_file(),
 	    run_test_cases_loop(Cases, [hd(Config)|Config], TimetrapData,
 				Mode, Status2);
-
 	{_,_EndConfRetVal,Opts} ->
 	    %% Check if return_group_result is set (ok, skipped or failed) and
 	    %% if so:
@@ -2784,7 +2819,8 @@ run_test_cases_loop([{conf,Ref,Props,{Mod,Func}}|_Cases]=Cs0,
 			case {curr_ref(Mode),check_prop(sequence, Mode)} of
 			    {ParentRef,ParentRef} ->
 				Reason = {group_result,GrName,failed},
-				{skip_cases_upto(ParentRef, Cases, Reason, tc, Mode),
+				{skip_cases_upto(ParentRef, Cases, Reason, tc,
+						 Mode, auto_skip_case),
 				 update_status(failed, group_result, GrName,
 					       delete_status(Ref, Status2))};
 			    _ ->
@@ -2802,16 +2838,19 @@ run_test_cases_loop([{conf,Ref,Props,{Mod,Func}}|_Cases]=Cs0,
 	    ReportRepeatStop(),
 	    set_io_buffering(IOHandler),
 	    stop_minor_log_file(),
-	    run_test_cases_loop(Cases2, tl(Config), TimetrapData, Mode, Status3)
+	    run_test_cases_loop(Cases2, tl(Config), TimetrapData,
+				Mode, Status3)
     end;
 
-run_test_cases_loop([{make,Ref,{Mod,Func,Args}}|Cases0], Config, TimetrapData, Mode, Status) ->
-    case run_test_case(Ref, 0, Mod, Func, Args, skip_init, host, TimetrapData) of
+run_test_cases_loop([{make,Ref,{Mod,Func,Args}}|Cases0], Config, TimetrapData,
+		    Mode, Status) ->
+    case run_test_case(Ref, 0, Mod, Func, Args, skip_init, TimetrapData) of
 	{_,Why={'EXIT',_},_} ->
- 	    print(minor, "~n*** ~p failed.~n"
+	    print(minor, "~n*** ~w failed.~n"
  		  "    Skipping all cases.", [Func]),
 	    Reason = {failed,{Mod,Func,Why}},
-	    Cases = skip_cases_upto(Ref, Cases0, Reason, conf, Mode),
+	    Cases = skip_cases_upto(Ref, Cases0, Reason, conf, Mode,
+				    auto_skip_case),
 	    stop_minor_log_file(),
 	    run_test_cases_loop(Cases, Config, TimetrapData, Mode, Status);
 	{_,_Whatever,_} ->
@@ -2825,34 +2864,45 @@ run_test_cases_loop([{conf,_Ref,_Props,_X}=Conf|_Cases0],
 
 run_test_cases_loop([{Mod,Case}|Cases], Config, TimetrapData, Mode, Status) ->
     ActualCfg =
-	update_config(hd(Config), [{priv_dir,get(test_server_priv_dir)},
-				   {data_dir,get_data_dir(Mod)}]),
+	case get(test_server_create_priv_dir) of
+	    auto_per_run ->
+		update_config(hd(Config), [{priv_dir,get(test_server_priv_dir)},
+					   {data_dir,get_data_dir(Mod)}]);
+	    _ ->
+		update_config(hd(Config), [{data_dir,get_data_dir(Mod)}])
+	end,
     run_test_cases_loop([{Mod,Case,[ActualCfg]}|Cases], Config,
 			TimetrapData, Mode, Status);
 
 run_test_cases_loop([{Mod,Func,Args}|Cases], Config, TimetrapData, Mode, Status) ->
-    Num = put(test_server_case_num, get(test_server_case_num)+1),
+    {Num,RunInit} =
+	case FwMod = get_fw_mod(?MODULE) of
+	    Mod when Func == error_in_suite ->
+		{-1,skip_init};
+	    _ ->
+		{put(test_server_case_num, get(test_server_case_num)+1),
+		 run_init}
+	end,
+
     %% check the current execution mode and save info about the case if
     %% detected that printouts to common log files is handled later
-    case check_prop(parallel, Mode) of
+
+    case check_prop(parallel, Mode) =:= false andalso is_io_buffered() of
+	true ->
+	    %% sequential test case nested in a parallel group;
+	    %% io is buffered, so we must queue this test case
+	    queue_test_case_io(undefined, self(), Num+1, Mod, Func);
 	false ->
-	    case get(test_server_common_io_handler) of
-		undefined ->
-		    %% io printouts are written to straight to file
-		    ok;
-		_ ->
-		    %% io messages are buffered, put test case in queue
-		    queue_test_case_io(undefined, self(), Num+1, Mod, Func)
-	    end;
-	_ ->
 	    ok
     end,
+
     case run_test_case(undefined, Num+1, Mod, Func, Args,
-		       run_init, target, TimetrapData, Mode) of
+		       RunInit, TimetrapData, Mode) of
 	%% callback to framework module failed, exit immediately
 	{_,{framework_error,{FwMod,FwFunc},Reason},_} ->
-	    print(minor, "~n*** ~p failed in ~p. Reason: ~p~n", [FwMod,FwFunc,Reason]),
-	    print(1, "~p failed in ~p. Reason: ~p~n", [FwMod,FwFunc,Reason]),
+	    print(minor, "~n*** ~w failed in ~w. Reason: ~p~n",
+		  [FwMod,FwFunc,Reason]),
+	    print(1, "~w failed in ~w. Reason: ~p~n", [FwMod,FwFunc,Reason]),
 	    stop_minor_log_file(),
 	    exit(framework_error);
 	%% sequential execution of test case finished
@@ -2884,10 +2934,12 @@ run_test_cases_loop([{Mod,Func,Args}|Cases], Config, TimetrapData, Mode, Status)
 			    stop_minor_log_file(),
 			    run_test_cases_loop(Cases, Config, TimetrapData, Mode, Status1);
 		       true ->	              % skip rest of cases in sequence
-			    print(minor, "~n*** ~p failed.~n"
-				  "    Skipping all other cases in sequence.", [Func]),
+			    print(minor, "~n*** ~w failed.~n"
+				  "    Skipping all other cases in sequence.",
+				  [Func]),
 			    Reason = {failed,{Mod,Func}},
-			    Cases2 = skip_cases_upto(Ref, Cases, Reason, tc, Mode),
+			    Cases2 = skip_cases_upto(Ref, Cases, Reason, tc,
+						     Mode, auto_skip_case),
 			    stop_minor_log_file(),
 			    run_test_cases_loop(Cases2, Config, TimetrapData, Mode, Status1)
 		    end
@@ -2895,8 +2947,8 @@ run_test_cases_loop([{Mod,Func,Args}|Cases], Config, TimetrapData, Mode, Status)
 	%% the test case is being executed in parallel with the main process (and
 	%% other test cases) and Pid is the dedicated process executing the case
 	Pid ->
-	    %% io from Pid will be buffered in the main process inbox and handled
-	    %% later, so we have to save info about the case
+	    %% io from Pid will be buffered by the test_server_io process and
+	    %% handled later, so we have to save info about the case
 	    queue_test_case_io(undefined, Pid, Num+1, Mod, Func),
 	    run_test_cases_loop(Cases, Config, TimetrapData, Mode, Status)
     end;
@@ -2939,7 +2991,6 @@ get_tc_results([{_,{OkSkipFail,_}} | _Status]) ->
     OkSkipFail;
 get_tc_results([]) ->		      % in case init_per_suite crashed
     {[],[],[]}.
-
 
 conf(Ref, Props) ->
     {Ref,Props,?now}.
@@ -2991,15 +3042,28 @@ conf_start(Ref, Mode) ->
 	false -> 0
     end.
 
+
 get_data_dir(Mod) ->
-    case code:which(Mod) of
+    get_data_dir(Mod, undefined).
+
+get_data_dir(Mod, Suite) ->
+    UseMod = if Suite == undefined -> Mod;
+		true               -> Suite
+	     end,
+    case code:which(UseMod) of
 	non_existing ->
-	    print(12, "The module ~p is not loaded", [Mod]),
+	    print(12, "The module ~w is not loaded", [Mod]),
 	    [];
+	cover_compiled ->
+	    MainCoverNode = cover:get_main_node(),
+	    {file,File} = rpc:call(MainCoverNode,cover,is_compiled,[UseMod]),
+	    do_get_data_dir(UseMod,File);
 	FullPath ->
-	    filename:dirname(FullPath) ++ "/" ++ cast_to_list(Mod) ++
-		?data_dir_suffix
+	    do_get_data_dir(UseMod,FullPath)
     end.
+
+do_get_data_dir(Mod,File) ->
+    filename:dirname(File) ++ "/" ++ atom_to_list(Mod) ++ ?data_dir_suffix.
 
 print_conf_time(0) ->
     ok;
@@ -3095,13 +3159,13 @@ cases_to_shuffle(Ref, Cases) ->
 
 cases_to_shuffle(Ref, [{conf,Ref,_,_} | _]=Cs, N, Ix) ->          % end
     {N-1,Ix,Cs};
-cases_to_shuffle(Ref, [{skip_case,{_,Ref,_,_}} | _]=Cs, N, Ix) -> % end
+cases_to_shuffle(Ref, [{skip_case,{_,Ref,_,_},_} | _]=Cs, N, Ix) -> % end
     {N-1,Ix,Cs};
 
 cases_to_shuffle(Ref, [{conf,Ref1,_,_}=C | Cs], N, Ix) ->          % nested group
     {Cs1,Rest} = get_subcases(Ref1, Cs, []),
     cases_to_shuffle(Ref, Rest, N+1, [{N,[C|Cs1]} | Ix]);
-cases_to_shuffle(Ref, [{skip_case,{_,Ref1,_,_}}=C | Cs], N, Ix) -> % nested group
+cases_to_shuffle(Ref, [{skip_case,{_,Ref1,_,_},_}=C | Cs], N, Ix) -> % nested group
     {Cs1,Rest} = get_subcases(Ref1, Cs, []),
     cases_to_shuffle(Ref, Rest, N+1, [{N,[C|Cs1]} | Ix]);
 
@@ -3110,7 +3174,7 @@ cases_to_shuffle(Ref, [C | Cs], N, Ix) ->
 
 get_subcases(SubRef, [{conf,SubRef,_,_}=C | Cs], SubCs) ->
     {lists:reverse([C|SubCs]),Cs};
-get_subcases(SubRef, [{skip_case,{_,SubRef,_,_}}=C | Cs], SubCs) ->
+get_subcases(SubRef, [{skip_case,{_,SubRef,_,_},_}=C | Cs], SubCs) ->
     {lists:reverse([C|SubCs]),Cs};
 get_subcases(SubRef, [C|Cs], SubCs) ->
     get_subcases(SubRef, Cs, [C|SubCs]).
@@ -3132,10 +3196,6 @@ random_order(N, {Pos,NewSeed}, IxCases, Shuffled) ->
 %% SendSync determines if start and finished messages must be sent so
 %% that the printouts can be buffered and handled in order with io from
 %% parallel processes.
-
-skip_case(Type, Ref, CaseNum, Case, Comment, SendSync) ->
-    skip_case(Type, Ref, CaseNum, Case, Comment, SendSync, []).
-
 skip_case(Type, Ref, CaseNum, Case, Comment, SendSync, Mode) ->
     MF = {Mod,Func} = case Case of
 			  {M,F,_A} -> {M,F};
@@ -3144,7 +3204,9 @@ skip_case(Type, Ref, CaseNum, Case, Comment, SendSync, Mode) ->
     if SendSync ->
 	    queue_test_case_io(Ref, self(), CaseNum, Mod, Func),
 	    self() ! {started,Ref,self(),CaseNum,Mod,Func},
+	    test_server_io:start_transaction(),
 	    skip_case1(Type, CaseNum, Mod, Func, Comment, Mode),
+	    test_server_io:end_transaction(),
 	    self() ! {finished,Ref,self(),CaseNum,Mod,Func,skipped,{0,skipped,[]}};
        not SendSync ->
 	    skip_case1(Type, CaseNum, Mod, Func, Comment, Mode)
@@ -3153,26 +3215,46 @@ skip_case(Type, Ref, CaseNum, Case, Comment, SendSync, Mode) ->
 
 skip_case1(Type, CaseNum, Mod, Func, Comment, Mode) ->
     {{Col0,Col1},_} = get_font_style((CaseNum > 0), Mode),
-    ResultCol = if Type == auto -> "#ffcc99";
-		   Type == user -> "#ff9933"
+    ResultCol = if Type == auto -> ?auto_skip_color;
+		   Type == user -> ?user_skip_color
 		end,
-
+    print(major, "~n=case          ~w:~w", [Mod,Func]),
+    GroupName =	case get_name(Mode) of
+		    undefined ->
+			"";
+		    GrName ->
+			GrName1 = cast_to_list(GrName),
+			print(major, "=group_props   ~p", [[{name,GrName1}]]),
+			GrName1
+		end,
+    print(major, "=started       ~s", [lists:flatten(timestamp_get(""))]),
     Comment1 = reason_to_string(Comment),
-
-    print(major, "~n=case          ~p:~p", [Mod,Func]),
-    print(major, "=started         ~s", [lists:flatten(timestamp_get(""))]),
-    print(major, "=result          skipped: ~s", [Comment1]),
-    print(2,"*** Skipping test case #~w ~p ***", [CaseNum,{Mod,Func}]),
+    if Type == auto ->
+	    print(major, "=result        auto_skipped: ~ts", [Comment1]);
+       Type == user ->
+	    print(major, "=result        skipped: ~ts", [Comment1])
+    end,
+    if CaseNum == 0 ->
+	    print(2,"*** Skipping ~w ***", [{Mod,Func}]);
+       true ->
+	    print(2,"*** Skipping test case #~w ~w ***", [CaseNum,{Mod,Func}])
+    end,
+    TR = xhtml("<tr valign=\"top\">", ["<tr class=\"",odd_or_even(),"\">"]),	       
+    GroupName =	case get_name(Mode) of
+		    undefined -> "";
+		    Name      -> cast_to_list(Name)
+		end,
     print(html,
-	  "<tr valign=top>"
-	  "<td>" ++ Col0 ++ "~s" ++ Col1 ++ "</td>"
-	  "<td>" ++ Col0 ++ "~p" ++ Col1 ++ "</td>"
-	  "<td>" ++ Col0 ++ "~p" ++ Col1 ++ "</td>"
+	  TR ++ "<td>" ++ Col0 ++ "~ts" ++ Col1 ++ "</td>"
+	  "<td>" ++ Col0 ++ "~w" ++ Col1 ++ "</td>"
+	  "<td>" ++ Col0 ++ "~ts" ++ Col1 ++ "</td>"
+	  "<td>" ++ Col0 ++ "~w" ++ Col1 ++ "</td>"
 	  "<td>" ++ Col0 ++ "< >" ++ Col1 ++ "</td>"
 	  "<td>" ++ Col0 ++ "0.000s" ++ Col1 ++ "</td>"
-	  "<td><font color=\"~s\">SKIPPED</font></td>"
-	  "<td>~s</td></tr>\n",
-	  [num2str(CaseNum),Mod,Func,ResultCol,Comment1]),
+	  "<td><font color=\"~ts\">SKIPPED</font></td>"
+	  "<td>~ts</td></tr>\n",
+	  [num2str(CaseNum),fw_name(Mod),GroupName,Func,ResultCol,Comment1]),
+
     if CaseNum > 0 ->
 	    {US,AS} = get(test_server_skipped),
 	    case Type of
@@ -3186,12 +3268,14 @@ skip_case1(Type, CaseNum, Mod, Func, Comment, Mode) ->
 
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-%% skip_cases_upto(Ref, Cases, Reason, Origin, Mode) -> Cases1
+%% skip_cases_upto(Ref, Cases, Reason, Origin, Mode, SkipType) -> Cases1
 %%
+%% SkipType = skip_case | auto_skip_case
 %% Mark all cases tagged with Ref as skipped.
 
-skip_cases_upto(Ref, Cases, Reason, Origin, Mode) ->
-    {_,Modified,Rest} = modify_cases_upto(Ref, {skip,Reason,Origin,Mode}, Cases),
+skip_cases_upto(Ref, Cases, Reason, Origin, Mode, SkipType) ->    
+    {_,Modified,Rest} =
+	modify_cases_upto(Ref, {skip,Reason,Origin,Mode,SkipType}, Cases),
     Modified++Rest.
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -3227,6 +3311,7 @@ modify_cases_upto(Ref, ModOp, Cases, Orig, Alt) ->
     %% same ref in the list, if not, this *is* an end conf case
     case lists:any(fun({_,R,_,_}) when R == Ref -> true;
 		      ({_,R,_})   when R == Ref -> true;
+		      ({skip_case,{_,R,_,_},_}) when R == Ref -> true;
 		      ({skip_case,{_,R,_,_}}) when R == Ref -> true;
 		      (_) -> false
 		   end, Cases) of
@@ -3237,39 +3322,70 @@ modify_cases_upto(Ref, ModOp, Cases, Orig, Alt) ->
     end.
 
 %% next case is a conf with same ref, must be end conf = we're done
-modify_cases_upto1(Ref, {skip,Reason,conf,Mode}, [{conf,Ref,_Props,MF}|T], Orig, Alt) ->
+modify_cases_upto1(Ref, {skip,Reason,conf,Mode,skip_case},
+		   [{conf,Ref,_Props,MF}|T], Orig, Alt) ->
+    {Orig,[{skip_case,{conf,Ref,MF,Reason},Mode}|Alt],T};
+modify_cases_upto1(Ref, {skip,Reason,conf,Mode,auto_skip_case},
+		   [{conf,Ref,_Props,MF}|T], Orig, Alt) ->
     {Orig,[{auto_skip_case,{conf,Ref,MF,Reason},Mode}|Alt],T};
 modify_cases_upto1(Ref, {copy,NewRef}, [{conf,Ref,Props,MF}=C|T], Orig, Alt) ->
     {[C|Orig],[{conf,NewRef,update_repeat(Props),MF}|Alt],T};
 
 %% we've skipped all remaining cases in a sequence
-modify_cases_upto1(Ref, {skip,_,tc,_}, [{conf,Ref,_Props,_MF}|_]=Cs, Orig, Alt) ->
+modify_cases_upto1(Ref, {skip,_,tc,_,_},
+		   [{conf,Ref,_Props,_MF}|_]=Cs, Orig, Alt) ->
     {Orig,Alt,Cs};
 
 %% next is a make case
-modify_cases_upto1(Ref, {skip,Reason,_,Mode}, [{make,Ref,MF}|T], Orig, Alt) ->
-    {Orig,[{auto_skip_case,{make,Ref,MF,Reason},Mode}|Alt],T};
+modify_cases_upto1(Ref, {skip,Reason,_,Mode,SkipType},
+		   [{make,Ref,MF}|T], Orig, Alt) ->
+    {Orig,[{SkipType,{make,Ref,MF,Reason},Mode}|Alt],T};
 modify_cases_upto1(Ref, {copy,NewRef}, [{make,Ref,MF}=M|T], Orig, Alt) ->
     {[M|Orig],[{make,NewRef,MF}|Alt],T};
 
 %% next case is a user skipped end conf with the same ref = we're done
-modify_cases_upto1(Ref, {skip,Reason,_,Mode}, [{skip_case,{Type,Ref,MF,_Cmt}}|T], Orig, Alt) ->
-    {Orig,[{auto_skip_case,{Type,Ref,MF,Reason},Mode}|Alt],T};
-modify_cases_upto1(Ref, {copy,NewRef}, [{skip_case,{Type,Ref,MF,Cmt}}=C|T], Orig, Alt) ->
+modify_cases_upto1(Ref, {skip,Reason,_,Mode,SkipType},
+		   [{skip_case,{Type,Ref,MF,_Cmt},_}|T], Orig, Alt) ->
+    {Orig,[{SkipType,{Type,Ref,MF,Reason},Mode}|Alt],T};
+modify_cases_upto1(Ref, {skip,Reason,_,Mode,SkipType},
+		   [{skip_case,{Type,Ref,MF,_Cmt}}|T], Orig, Alt) ->
+    {Orig,[{SkipType,{Type,Ref,MF,Reason},Mode}|Alt],T};
+modify_cases_upto1(Ref, {copy,NewRef},
+		   [{skip_case,{Type,Ref,MF,Cmt},Mode}=C|T], Orig, Alt) ->
+    {[C|Orig],[{skip_case,{Type,NewRef,MF,Cmt},Mode}|Alt],T};
+modify_cases_upto1(Ref, {copy,NewRef},
+		   [{skip_case,{Type,Ref,MF,Cmt}}=C|T], Orig, Alt) ->
     {[C|Orig],[{skip_case,{Type,NewRef,MF,Cmt}}|Alt],T};
 
 %% next is a skip_case, could be one test case or 'all' in suite, we must proceed
-modify_cases_upto1(Ref, ModOp, [{skip_case,{_F,_Cmt}}=MF|T], Orig, Alt) ->
+modify_cases_upto1(Ref, ModOp, [{skip_case,{_F,_Cmt},_Mode}=MF|T], Orig, Alt) ->
     modify_cases_upto1(Ref, ModOp, T, [MF|Orig], [MF|Alt]);
 
 %% next is a normal case (possibly in a sequence), mark as skipped, or copy, and proceed
-modify_cases_upto1(Ref, {skip,Reason,_,Mode}=Op, [{_M,_F}=MF|T], Orig, Alt) ->
+modify_cases_upto1(Ref, {skip,Reason,_,Mode,skip_case}=Op,
+		   [{_M,_F}=MF|T], Orig, Alt) ->
+    modify_cases_upto1(Ref, Op, T, Orig, [{skip_case,{MF,Reason},Mode}|Alt]);
+modify_cases_upto1(Ref, {skip,Reason,_,Mode,auto_skip_case}=Op,
+		   [{_M,_F}=MF|T], Orig, Alt) ->
     modify_cases_upto1(Ref, Op, T, Orig, [{auto_skip_case,{MF,Reason},Mode}|Alt]);
 modify_cases_upto1(Ref, CopyOp, [{_M,_F}=MF|T], Orig, Alt) ->
     modify_cases_upto1(Ref, CopyOp, T, [MF|Orig], [MF|Alt]);
 
+%% next is a conf case, modify the Mode arg to keep track of sub groups
+modify_cases_upto1(Ref, {skip,Reason,FType,Mode,SkipType},
+		   [{conf,OtherRef,Props,_MF}|T], Orig, Alt) ->
+    case hd(Mode) of
+	{OtherRef,_,_} ->			% end conf
+	    modify_cases_upto1(Ref, {skip,Reason,FType,tl(Mode),SkipType},
+			       T, Orig, Alt);
+	_ ->					% start conf
+	    Mode1 = [conf(OtherRef,Props)|Mode],
+	    modify_cases_upto1(Ref, {skip,Reason,FType,Mode1,SkipType},
+			       T, Orig, Alt)
+    end;
+
 %% next is some other case, ignore or copy
-modify_cases_upto1(Ref, {skip,_,_,_}=Op, [_|T], Orig, Alt) ->
+modify_cases_upto1(Ref, {skip,_,_,_,_}=Op, [_Other|T], Orig, Alt) ->
     modify_cases_upto1(Ref, Op, T, Orig, Alt);
 modify_cases_upto1(Ref, CopyOp, [C|T], Orig, Alt) ->
     modify_cases_upto1(Ref, CopyOp, T, [C|Orig], [C|Alt]).
@@ -3280,11 +3396,18 @@ modify_cases_upto1(Ref, CopyOp, [C|T], Orig, Alt) ->
 %%
 %% Save info about current process (always the main process) buffering
 %% io printout messages from parallel test case processes (*and* possibly
-%% also the main process). If the value is the default 'undefined',
-%% io is not buffered but printed directly to file (see print/3).
+%% also the main process).
 
 set_io_buffering(IOHandler) ->
     put(test_server_common_io_handler, IOHandler).
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%% is_io_buffered() -> true|false
+%%
+%% Test whether is being buffered.
+
+is_io_buffered() ->
+    get(test_server_common_io_handler) =/= undefined.
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %% queue_test_case_io(Pid, Num, Mod, Func) -> ok
@@ -3333,7 +3456,7 @@ wait_and_resend(Ref, [{_,CurrPid,CaseNum,Mod,Func}|Ps] = Cases, Ok,Skip,Fail) ->
     receive
 	{finished,_Ref,CurrPid,CaseNum,Mod,Func,Result,_RetVal} = Msg ->
 	    %% resend message to main process so that it can be used
-	    %% to handle buffered io messages later
+	    %% to test_server_io:print_buffered/1 later
 	    self() ! Msg,
 	    MF = {Mod,Func},
 	    {Ok1,Skip1,Fail1} =
@@ -3346,7 +3469,7 @@ wait_and_resend(Ref, [{_,CurrPid,CaseNum,Mod,Func}|Ps] = Cases, Ok,Skip,Fail) ->
 	{'EXIT',CurrPid,Reason} when Reason /= normal ->
 	    %% unexpected termination of test case process
 	    {value,{_,_,CaseNum,Mod,Func}} = lists:keysearch(CurrPid, 2, Cases),
-	    print(1, "Error! Process for test case #~p (~p:~p) died! Reason: ~p",
+	    print(1, "Error! Process for test case #~w (~w:~w) died! Reason: ~p",
 		  [CaseNum, Mod, Func, Reason]),
 	    exit({unexpected_termination,{CaseNum,Mod,Func},{CurrPid,Reason}})
     end;
@@ -3364,16 +3487,18 @@ rm_cases_upto(Ref, [_|Ps]) ->
 %%
 %% Each parallel test case process prints to its own minor log file during
 %% execution. The common log files (major, html etc) must however be
-%% written to sequentially. The test case processes send print requests
-%% to the main (starting) process (the same process executing
-%% run_test_cases_loop/4), which handles these requests in the same
-%% order that the test case processes were started.
+%% written to sequentially. This is handled by calling
+%% test_server_io:start_transaction/0 to tell the test_server_io process
+%% to buffer all print requests.
 %%
-%% An io session is always started with a {started,Ref,Pid,Num,Mod,Func}
-%% message and terminated with {finished,Ref,Pid,Num,Mod,Func,Result,RetVal}.
-%% The result shipped with the finished message from a parallel process
-%% is used to update status data of the current test run. An 'EXIT'
-%% message from each parallel test case process (after finishing and
+%% An io session is always started with a
+%% {started,Ref,Pid,Num,Mod,Func} message (and
+%% test_server_io:start_transaction/0 will be called) and terminated
+%% with {finished,Ref,Pid,Num,Mod,Func,Result,RetVal} (and
+%% test_server_io:end_transaction/0 will be called).  The result
+%% shipped with the finished message from a parallel process is used
+%% to update status data of the current test run. An 'EXIT' message
+%% from each parallel test case process (after finishing and
 %% terminating) is also received and handled here.
 %%
 %% During execution of a parallel group, any cases (conf or normal)
@@ -3382,13 +3507,13 @@ rm_cases_upto(Ref, [_|Ps]) ->
 %% correct sequence. This function handles also the print messages
 %% generated by nested group cases that have been executed sequentially
 %% by the main process (note that these cases do not generate 'EXIT'
-%% messages, only 'start', 'print' and 'finished' messages).
+%% messages, only 'start' and 'finished' messages).
 %%
 %% See the header comment for run_test_cases_loop/4 for more
 %% info about IO handling.
 %%
 %% Note: It is important that the type of messages handled here
-%% do not get consumated by test_server:run_test_case_msgloop/5
+%% do not get consumed by test_server:run_test_case_msgloop/5
 %% during the test case execution (e.g. in the catch clause of
 %% the receive)!
 
@@ -3415,7 +3540,7 @@ handle_test_case_io_and_status() ->
 
 %% Handle cases (without Ref) that belong to the top parallel group (i.e. when Refs = [])
 handle_io_and_exit_loop([], [{undefined,CurrPid,CaseNum,Mod,Func}|Ps] = Cases, Ok,Skip,Fail) ->
-    %% retreive the start message for the current io session (= testcase)
+    %% retrieve the start message for the current io session (= testcase)
     receive
 	{started,_,CurrPid,CaseNum,Mod,Func} ->
 	    {Ok1,Skip1,Fail1} =
@@ -3455,11 +3580,18 @@ handle_io_and_exit_loop(_, [], Ok,Skip,Fail) ->
 
 handle_io_and_exits(Main, CurrPid, CaseNum, Mod, Func, Cases) ->
     receive
+	{abort_current_testcase=Tag,_Reason,From} ->
+	    %% If a parallel group is executing, there is no unique
+	    %% current test case, so we must generate an error.
+	    From ! {self(),Tag,{error,parallel_group}},
+	    handle_io_and_exits(Main, CurrPid, CaseNum, Mod, Func, Cases);
 	%% end of io session from test case executed by main process
 	{finished,_,Main,CaseNum,Mod,Func,Result,_RetVal} ->
+	    test_server_io:print_buffered(CurrPid),
 	    {Result,{Mod,Func}};
 	%% end of io session from test case executed by parallel process
 	{finished,_,CurrPid,CaseNum,Mod,Func,Result,RetVal} ->
+	    test_server_io:print_buffered(CurrPid),
 	    case Result of
 		ok ->
 		    put(test_server_ok, get(test_server_ok)+1);
@@ -3472,15 +3604,11 @@ handle_io_and_exits(Main, CurrPid, CaseNum, Mod, Func, Cases) ->
 	    end,
 	    {Result,{Mod,Func}};
 
-	%% print to common log file
-	{print,CurrPid,Detail,Msg} ->
-	    output({Detail,Msg}, internal),
-	    handle_io_and_exits(Main, CurrPid, CaseNum, Mod, Func, Cases);
-
 	%% unexpected termination of test case process
 	{'EXIT',TCPid,Reason} when Reason /= normal ->
+	    test_server_io:print_buffered(CurrPid),
 	    {value,{_,_,Num,M,F}} = lists:keysearch(TCPid, 2, Cases),
-	    print(1, "Error! Process for test case #~p (~p:~p) died! Reason: ~p",
+	    print(1, "Error! Process for test case #~w (~w:~w) died! Reason: ~p",
 		  [Num, M, F, Reason]),
 	    exit({unexpected_termination,{Num,M,F},{TCPid,Reason}})
     end.
@@ -3488,19 +3616,15 @@ handle_io_and_exits(Main, CurrPid, CaseNum, Mod, Func, Cases) ->
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %% run_test_case(Ref, Num, Mod, Func, Args, RunInit,
-%%               Where, TimetrapData, Mode) -> RetVal
+%%               TimetrapData, Mode) -> RetVal
 %%
 %% Creates the minor log file and inserts some test case specific headers
-%% and footers into the log files. If a remote target is used, the test
-%% suite (binary) and the content of data_dir is sent. Then the test case
-%% is executed and the result is printed to the log files (also info
-%% about lingering processes & slave nodes in the system is presented).
+%% and footers into the log files. Then the test case is executed and the
+%% result is printed to the log files (also info about lingering processes
+%% & slave nodes in the system is presented).
 %%
 %% RunInit decides if the per test case init is to be run (true for all
 %% but conf cases).
-%%
-%% Where specifies if the test case should run on target or on the host.
-%% (Note that 'make' test cases always run on host).
 %%
 %% Mode specifies if the test case should be executed by a dedicated,
 %% parallel, process rather than sequentially by the main process. If
@@ -3510,121 +3634,162 @@ handle_io_and_exits(Main, CurrPid, CaseNum, Mod, Func, Cases) ->
 %% RetVal is the result of executing the test case. It contains info
 %% about the execution time and the return value of the test case function.
 
-run_test_case(Ref, Num, Mod, Func, Args, RunInit, Where, TimetrapData) ->
+run_test_case(Ref, Num, Mod, Func, Args, RunInit, TimetrapData) ->
     file:set_cwd(filename:dirname(get(test_server_dir))),
-    run_test_case1(Ref, Num, Mod, Func, Args, RunInit, Where,
-		   TimetrapData, [], [], self()).
+    run_test_case1(Ref, Num, Mod, Func, Args, RunInit,
+		   TimetrapData, [], self()).
 
-run_test_case(Ref, Num, Mod, Func, Args, skip_init, Where, TimetrapData, Mode) ->
+run_test_case(Ref, Num, Mod, Func, Args, skip_init, TimetrapData, Mode) ->
     %% a conf case is always executed by the main process
-    run_test_case1(Ref, Num, Mod, Func, Args, skip_init, Where,
-		   TimetrapData, [], Mode, self());
+    run_test_case1(Ref, Num, Mod, Func, Args, skip_init,
+		   TimetrapData, Mode, self());
 
-run_test_case(Ref, Num, Mod, Func, Args, RunInit, Where, TimetrapData, Mode) ->
+run_test_case(Ref, Num, Mod, Func, Args, RunInit, TimetrapData, Mode) ->
     file:set_cwd(filename:dirname(get(test_server_dir))),
+    Main = self(),
     case check_prop(parallel, Mode) of
 	false ->
 	    %% this is a sequential test case
-	    run_test_case1(Ref, Num, Mod, Func, Args, RunInit, Where,
-			   TimetrapData, [], Mode, self());
+	    run_test_case1(Ref, Num, Mod, Func, Args, RunInit,
+			   TimetrapData, Mode, Main);
 	_Ref ->
 	    %% this a parallel test case, spawn the new process
-	    Main = self(),
-	    {dictionary,State} = process_info(self(), dictionary),
-	    spawn_link(fun() ->
-			   run_test_case1(Ref, Num, Mod, Func, Args, RunInit, Where,
-					  TimetrapData, State, Mode, Main)
-		       end)
+	    Dictionary = get(),
+	    {dictionary,Dictionary} = process_info(self(), dictionary),
+	    spawn_link(
+	      fun() ->
+		      process_flag(trap_exit, true),
+		      [put(Key, Val) || {Key,Val} <- Dictionary],
+		      set_io_buffering({tc,Main}),
+		      run_test_case1(Ref, Num, Mod, Func, Args, RunInit,
+				     TimetrapData, Mode, Main)
+	      end)
     end.
 
-run_test_case1(Ref, Num, Mod, Func, Args, RunInit, Where,
-	       TimetrapData, State, Mode, Main) ->
-    %% if this runs on a parallel test case process,
-    %% copy the dictionary from the main process
-    do_if_parallel(Main, fun() -> process_flag(trap_exit, true) end, ok),
-    CopyDict = fun() -> lists:foreach(fun({Key,Val}) -> put(Key, Val) end, State) end,
-    do_if_parallel(Main, CopyDict, ok),
-    do_if_parallel(Main, fun() -> put(test_server_common_io_handler, {tc,Main}) end, ok),
+run_test_case1(Ref, Num, Mod, Func, Args, RunInit,
+	       TimetrapData, Mode, Main) ->
+    group_leader(test_server_io:get_gl(Main == self()), self()),
+
     %% if io is being buffered, send start io session message
     %% (no matter if case runs on parallel or main process)
-    case get(test_server_common_io_handler) of
-	undefined -> ok;
-	_ -> Main ! {started,Ref,self(),Num,Mod,Func}
+    case is_io_buffered() of
+	false -> ok;
+	true ->
+	    test_server_io:start_transaction(),
+	    Main ! {started,Ref,self(),Num,Mod,Func}
     end,
     TSDir = get(test_server_dir),
-    case Where of
-	target ->
-	    maybe_send_beam_and_datadir(Mod);
-	host ->
-	    ok
-    end,
-    test_server_sup:framework_call(report, [tc_start,{?pl2a(Mod),Func}]),
-    print(major, "=case          ~p:~p", [Mod, Func]),
-    MinorName = start_minor_log_file(Mod, Func),
-    print(minor, "<a name=top></a>", []),
+
+    print(major, "=case          ~w:~w", [Mod, Func]),
+    MinorName = start_minor_log_file(Mod, Func, self() /= Main),
+    print(minor, "<a name=\"top\"></a>", [], internal_raw),
     MinorBase = filename:basename(MinorName),
-    print(major, "=logfile       ~s", [filename:basename(MinorName)]),
+    print(major, "=logfile       ~ts", [filename:basename(MinorName)]),
+
+    UpdatedArgs =
+	%% maybe create unique private directory for test case or config func
+	case get(test_server_create_priv_dir) of
+	    auto_per_run ->
+		update_config(hd(Args), [{tc_logfile,MinorName}]);
+	    PrivDirMode ->
+		%% create unique private directory for test case
+		RunDir = filename:dirname(MinorName),
+		Ext =
+		    if Num == 0 ->
+			    {_,S,Us} = now(),
+			    lists:flatten(io_lib:format(".~w.~w", [S,Us]));
+		       true ->
+			    lists:flatten(io_lib:format(".~w", [Num]))
+		    end,
+		PrivDir = filename:join(RunDir, ?priv_dir) ++ Ext,
+		if PrivDirMode == auto_per_tc ->
+			ok = file:make_dir(PrivDir);
+		   PrivDirMode == manual_per_tc ->
+			ok
+		end,
+		update_config(hd(Args), [{priv_dir,PrivDir++"/"},
+					 {tc_logfile,MinorName}])
+	end,
+    GrName = get_name(Mode),
+    test_server_sup:framework_call(report,
+				   [tc_start,{{Mod,{Func,GrName}},
+					      MinorName}]),
+
     print_props((RunInit==skip_init), get_props(Mode)),
+    GrNameStr =	case GrName of
+		    undefined -> "";
+		    Name      -> cast_to_list(Name)
+		end,
     print(major, "=started       ~s", [lists:flatten(timestamp_get(""))]),
     {{Col0,Col1},Style} = get_font_style((RunInit==run_init), Mode),
-    print(html,	  "<tr valign=top><td>" ++ Col0 ++ "~s" ++ Col1 ++ "</td>"
-		  "<td>" ++ Col0 ++ "~p" ++ Col1 ++ "</td>"
-		  "<td><a href=\"~s\">~p</a></td>"
-		  "<td><a href=\"~s#top\"><</a> <a href=\"~s#end\">></a></td>",
-		  [num2str(Num),Mod,MinorBase,Func,MinorBase,MinorBase]),
+    TR = xhtml("<tr valign=\"top\">", ["<tr class=\"",odd_or_even(),"\">"]),
+    EncMinorBase = uri_encode(MinorBase),
+    print(html,	TR ++ "<td>" ++ Col0 ++ "~ts" ++ Col1 ++ "</td>"
+	  "<td>" ++ Col0 ++ "~w" ++ Col1 ++ "</td>"
+	  "<td>" ++ Col0 ++ "~ts" ++ Col1 ++ "</td>"
+	  "<td><a href=\"~ts\">~w</a></td>"
+	  "<td><a href=\"~ts#top\"><</a> <a href=\"~ts#end\">></a></td>",
+	  [num2str(Num),fw_name(Mod),GrNameStr,EncMinorBase,Func,
+	   EncMinorBase,EncMinorBase]),
 
-    do_if_parallel(Main, ok, fun erlang:yield/0),
+    do_unless_parallel(Main, fun erlang:yield/0),
+
     %% run the test case
     {Result,DetectedFail,ProcsBefore,ProcsAfter} =
-	run_test_case_apply(Num, Mod, Func, Args, get_name(Mode),
-			    RunInit, Where, TimetrapData),
+	run_test_case_apply(Num, Mod, Func, [UpdatedArgs], GrName,
+			    RunInit, TimetrapData),
     {Time,RetVal,Loc,Opts,Comment} =
 	case Result of
 	    Normal={_Time,_RetVal,_Loc,_Opts,_Comment} -> Normal;
 	    {died,DReason,DLoc,DCmt} -> {died,DReason,DLoc,[],DCmt}
 	end,
 
-    print(minor, "<a name=end></a>", []),
+    print(minor, "<a name=\"end\"></a>", [], internal_raw),
+    print(minor, "\n", [], internal_raw),
     print_timestamp(minor, "Ended at "),
     print(major, "=ended         ~s", [lists:flatten(timestamp_get(""))]),
 
-    do_if_parallel(Main, ok, fun() -> file:set_cwd(filename:dirname(TSDir)) end),
+    do_unless_parallel(Main, fun() -> file:set_cwd(filename:dirname(TSDir)) end),
 
     %% call the appropriate progress function clause to print the results to log
     Status =
 	case {Time,RetVal} of
 	    {died,{timetrap_timeout,TimetrapTimeout}} ->
-		progress(failed, Num, Mod, Func, Loc,
+		progress(failed, Num, Mod, Func, GrName, Loc,
 			 timetrap_timeout, TimetrapTimeout, Comment, Style);
 	    {died,Reason} ->
-		progress(failed, Num, Mod, Func, Loc, Reason,
+		progress(failed, Num, Mod, Func, GrName, Loc, Reason,
 			 Time, Comment, Style);
-	    {_,{'EXIT',{Skip,Reason}}} when Skip==skip; Skip==skipped ->
-		progress(skip, Num, Mod, Func, Loc, Reason,
+	    {_,{'EXIT',{Skip,Reason}}} when Skip==skip; Skip==skipped;
+					    Skip==auto_skip ->
+		progress(skip, Num, Mod, Func, GrName, Loc, Reason,
 			 Time, Comment, Style);
 	    {_,{'EXIT',_Pid,{Skip,Reason}}} when Skip==skip; Skip==skipped ->
-		progress(skip, Num, Mod, Func, Loc, Reason,
+		progress(skip, Num, Mod, Func, GrName, Loc, Reason,
 			 Time, Comment, Style);
 	    {_,{'EXIT',_Pid,Reason}} ->
-		progress(failed, Num, Mod, Func, Loc, Reason,
+		progress(failed, Num, Mod, Func, GrName, Loc, Reason,
 			 Time, Comment, Style);
 	    {_,{'EXIT',Reason}} ->
-		progress(failed, Num, Mod, Func, Loc, Reason,
+		progress(failed, Num, Mod, Func, GrName, Loc, Reason,
 			 Time, Comment, Style);
-	    {_, {Fail, Reason}} when Fail =:= fail; Fail =:= failed ->
-		progress(failed, Num, Mod, Func, Loc, Reason,
+	    {_,{Fail,Reason}} when Fail =:= fail; Fail =:= failed ->
+		progress(failed, Num, Mod, Func, GrName, Loc, Reason,
 			 Time, Comment, Style);
-	    {_, {Skip, Reason}} when Skip==skip; Skip==skipped ->
-		progress(skip, Num, Mod, Func, Loc, Reason,
+	    {_,Reason={auto_skip,_Why}} ->
+		progress(skip, Num, Mod, Func, GrName, Loc, Reason,
+			 Time, Comment, Style);		
+	    {_,{Skip,Reason}} when Skip==skip; Skip==skipped ->
+		progress(skip, Num, Mod, Func, GrName, Loc, Reason,
 			 Time, Comment, Style);
 	    {Time,RetVal} ->
 		case DetectedFail of
 		    [] ->
-			progress(ok, Num, Mod, Func, Loc, RetVal,
+			progress(ok, Num, Mod, Func, GrName, Loc, RetVal,
 				 Time, Comment, Style);
 
 		    Reason ->
-			progress(failed, Num, Mod, Func, Loc, Reason,
+			progress(failed, Num, Mod, Func, GrName, Loc, Reason,
 				 Time, Comment, Style)
 		end
 	end,
@@ -3693,14 +3858,17 @@ run_test_case1(Ref, Num, Mod, Func, Args, RunInit, Where,
        true ->
 	    ok
     end,
-    check_new_crash_dumps(Where),
+    test_server_sup:check_new_crash_dumps(),
 
     %% if io is being buffered, send finished message
     %% (no matter if case runs on parallel or main process)
-    case get(test_server_common_io_handler) of
-	undefined -> ok;
-	_ -> Main ! {finished,Ref,self(),Num,Mod,Func,
-		     ?mod_result(Status),{Time,RetVal,Opts}}
+    case is_io_buffered() of
+	false ->
+	    ok;
+	true ->
+	    test_server_io:end_transaction(),
+	    Main ! {finished,Ref,self(),Num,Mod,Func,
+		    ?mod_result(Status),{Time,RetVal,Opts}}
     end,
     {Time,RetVal,Opts}.
 
@@ -3708,125 +3876,15 @@ run_test_case1(Ref, Num, Mod, Func, Args, RunInit, Where,
 %%--------------------------------------------------------------------
 %% various help functions
 
-%% Call If() if we're on parallel process, or
-%% call Else() if we're on main process
-do_if_parallel(Pid, If, Else) ->
+%% Call Action if we are running on the main process (not parallel).
+do_unless_parallel(Main, Action) when is_function(Action, 0) ->
     case self() of
-	Pid ->
-	    if is_function(Else) -> Else();
-	       true -> Else
-	    end;
-	_ ->
-	    if is_function(If) -> If();
-	       true -> If
-	    end
+	Main -> Action();
+	_ -> ok
     end.
 
 num2str(0) -> "";
 num2str(N) -> integer_to_list(N).
-
-%% If remote target, this function sends the test suite (if not already sent)
-%% and the content of datadir til target.
-maybe_send_beam_and_datadir(Mod) ->
-    case get(test_server_ctrl_job_sock) of
-	undefined ->
-	    %% local target
-	    ok;
-	JobSock ->
-	    %% remote target
-	    case get(test_server_downloaded_suites) of
-		undefined ->
-		    send_beam_and_datadir(Mod, JobSock),
-		    put(test_server_downloaded_suites, [Mod]);
-		Suites ->
-		    case lists:member(Mod, Suites) of
-			false ->
-			    send_beam_and_datadir(Mod, JobSock),
-			    put(test_server_downloaded_suites, [Mod|Suites]);
-			true ->
-			    ok
-		    end
-	    end
-    end.
-
-send_beam_and_datadir(Mod, JobSock) ->
-    case code:which(Mod) of
-	non_existing ->
-	    io:format("** WARNING: Suite ~w could not be found on host\n",
-		      [Mod]);
-	BeamFile ->
-	    send_beam(JobSock, Mod, BeamFile)
-    end,
-    DataDir = get_data_dir(Mod),
-    case file:read_file_info(DataDir) of
-	{ok,_I} ->
-	    {ok,All} = file:list_dir(DataDir),
-	    AddTarFiles =
-		case controller_call(get_target_info) of
-		    #target_info{os_family=ose} ->
-			ObjExt = code:objfile_extension(),
-			Wc = filename:join(DataDir, "*" ++ ObjExt),
-			ModsInDatadir = filelib:wildcard(Wc),
-			SendBeamFun = fun(X) -> send_beam(JobSock, X) end,
-			lists:foreach(SendBeamFun, ModsInDatadir),
-			%% No need to send C code or makefiles since
-			%% no compilation can be done on target anyway.
-			%% Compiled C code must exist on target.
-			%% Beam files are already sent as binaries.
-			%% Erlang source are sent in case the test case
-			%% is to compile it.
-			Filter = fun("Makefile") -> false;
-				    ("Makefile.src") -> false;
-				    (Y) ->
-					 case filename:extension(Y) of
-					     ".c"   -> false;
-					     ObjExt -> false;
-					     _      -> true
-					 end
-				 end,
-			lists:filter(Filter, All);
-		    _ ->
-			All
-		end,
-	    Tarfile =  "data_dir.tar.gz",
-	    {ok,Tar} = erl_tar:open(Tarfile, [write,compressed]),
-	    ShortDataDir = filename:basename(DataDir),
-	    AddTarFun =
-		fun(File) ->
-			Long = filename:join(DataDir, File),
-			Short = filename:join(ShortDataDir, File),
-			ok = erl_tar:add(Tar, Long, Short, [])
-		end,
-	    lists:foreach(AddTarFun, AddTarFiles),
-	    ok = erl_tar:close(Tar),
-	    {ok,TarBin} = file:read_file(Tarfile),
-	    file:delete(Tarfile),
-	    request(JobSock, {{datadir,Tarfile}, TarBin});
-	{error,_R} ->
-	    ok
-    end.
-
-send_beam(JobSock, BeamFile) ->
-    Mod=filename:rootname(filename:basename(BeamFile), code:objfile_extension()),
-    send_beam(JobSock, list_to_atom(Mod), BeamFile).
-send_beam(JobSock, Mod, BeamFile) ->
-    {ok,BeamBin} = file:read_file(BeamFile),
-    request(JobSock, {{beam,Mod,BeamFile}, BeamBin}).
-
-check_new_crash_dumps(Where) ->
-    case Where of
-	target ->
-	    case get(test_server_ctrl_job_sock) of
-		undefined ->
-		    ok;
-		Socket ->
-		    read_job_sock_loop(Socket)
-	    end;
-	_ ->
-	    ok
-    end,
-    test_server_sup:check_new_crash_dumps().
-
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %% progress(Result, CaseNum, Mod, Func, Location, Reason, Time,
@@ -3836,16 +3894,17 @@ check_new_crash_dumps(Where) ->
 %% Note: Strings that are to be written to the minor log must
 %% be prefixed with "=== " here, or the indentation will be wrong.
 
-progress(skip, CaseNum, Mod, Func, Loc, Reason, Time,
+progress(skip, CaseNum, Mod, Func, GrName, Loc, Reason, Time,
 	 Comment, {St0,St1}) ->
-    {Reason1,{Color,Ret}} = if_auto_skip(Reason,
-					 fun() -> {"#ffcc99",auto_skip} end,
-					 fun() -> {"#ff9933",skip} end),
-    print(major, "=result        skipped", []),
-    print(1, "*** SKIPPED *** ~s",
-	  [get_info_str(Func, CaseNum, get(test_server_cases))]),
-    test_server_sup:framework_call(report, [tc_done,{?pl2a(Mod),Func,
-						     {skipped,Reason1}}]),
+    {Reason1,{Color,Ret,ReportTag}} = 
+	if_auto_skip(Reason,
+		     fun() -> {?auto_skip_color,auto_skip,auto_skipped} end,
+		     fun() -> {?user_skip_color,skip,skipped} end),
+    print(major, "=result        ~w: ~p", [ReportTag,Reason1]),
+    print(1, "*** SKIPPED ~ts ***",
+	  [get_info_str(Mod,Func, CaseNum, get(test_server_cases))]),
+    test_server_sup:framework_call(report, [tc_done,{Mod,{Func,GrName},
+						     {ReportTag,Reason1}}]),
     ReasonStr = reason_to_string(Reason1),
     ReasonStr1 = lists:flatten([string:strip(S,left) ||
 				S <- string:tokens(ReasonStr,[$\n])]),
@@ -3857,76 +3916,76 @@ progress(skip, CaseNum, Mod, Func, Loc, Reason, Time,
 	end,
     Comment1 = case Comment of
 		   "" -> "";
-		   _ -> "<br>(" ++ to_string(Comment) ++ ")"
+		   _ -> xhtml("<br>(","<br />(") ++ to_string(Comment) ++ ")"
 	       end,
     print(html,
 	  "<td>" ++ St0 ++ "~.3fs" ++ St1 ++ "</td>"
-	  "<td><font color=\"~s\">SKIPPED</font></td>"
-	  "<td>~s~s</td></tr>\n",
+	  "<td><font color=\"~ts\">SKIPPED</font></td>"
+	  "<td>~ts~ts</td></tr>\n",
 	  [Time,Color,ReasonStr2,Comment1]),
     FormatLoc = test_server_sup:format_loc(Loc),
-    print(minor, "=== location ~s", [FormatLoc]),
-    print(minor, "=== reason = ~s", [ReasonStr1]),
+    print(minor, "=== location ~ts", [FormatLoc]),
+    print(minor, "=== reason = ~ts", [ReasonStr1]),
     Ret;
 
-progress(failed, CaseNum, Mod, Func, Loc, timetrap_timeout, T,
+progress(failed, CaseNum, Mod, Func, GrName, Loc, timetrap_timeout, T,
 	 Comment0, {St0,St1}) ->
     print(major, "=result        failed: timeout, ~p", [Loc]),
-    print(1, "*** FAILED *** ~s",
-	  [get_info_str(Func, CaseNum, get(test_server_cases))]),
+    print(1, "*** FAILED ~ts ***",
+	  [get_info_str(Mod,Func, CaseNum, get(test_server_cases))]),
     test_server_sup:framework_call(report,
-				   [tc_done,{?pl2a(Mod),Func,
+				   [tc_done,{Mod,{Func,GrName},
 					     {failed,timetrap_timeout}}]),
     FormatLastLoc = test_server_sup:format_loc(get_last_loc(Loc)),
-    ErrorReason = io_lib:format("{timetrap_timeout,~s}", [FormatLastLoc]),
+    ErrorReason = io_lib:format("{timetrap_timeout,~ts}", [FormatLastLoc]),
     Comment =
 	case Comment0 of
 	    "" -> "<font color=\"red\">" ++ ErrorReason ++ "</font>";
-	    _ -> "<font color=\"red\">" ++ ErrorReason ++ "</font><br>" ++
-                 to_string(Comment0)
+	    _ -> "<font color=\"red\">" ++ ErrorReason ++ 
+		 xhtml("</font><br>","</font><br />") ++ to_string(Comment0)
 	end,
     print(html,
 	  "<td>" ++ St0 ++ "~.3fs" ++ St1 ++ "</td>"
 	  "<td><font color=\"red\">FAILED</font></td>"
-	  "<td>~s</td></tr>\n",
+	  "<td>~ts</td></tr>\n",
 	  [T/1000,Comment]),
     FormatLoc = test_server_sup:format_loc(Loc),
-    print(minor, "=== location ~s", [FormatLoc]),
+    print(minor, "=== location ~ts", [FormatLoc]),
     print(minor, "=== reason = timetrap timeout", []),
     failed;
 
-progress(failed, CaseNum, Mod, Func, Loc, {testcase_aborted,Reason}, _T,
+progress(failed, CaseNum, Mod, Func, GrName, Loc, {testcase_aborted,Reason}, _T,
 	 Comment0, {St0,St1}) ->
     print(major, "=result        failed: testcase_aborted, ~p", [Loc]),
-    print(1, "*** FAILED *** ~s",
-	  [get_info_str(Func, CaseNum, get(test_server_cases))]),
+    print(1, "*** FAILED ~ts ***",
+	  [get_info_str(Mod,Func, CaseNum, get(test_server_cases))]),
     test_server_sup:framework_call(report,
-				   [tc_done,{?pl2a(Mod),Func,
+				   [tc_done,{Mod,{Func,GrName},
 					     {failed,testcase_aborted}}]),
     FormatLastLoc = test_server_sup:format_loc(get_last_loc(Loc)),
-    ErrorReason = io_lib:format("{testcase_aborted,~s}", [FormatLastLoc]),
+    ErrorReason = io_lib:format("{testcase_aborted,~ts}", [FormatLastLoc]),
     Comment =
 	case Comment0 of
 	    "" -> "<font color=\"red\">" ++ ErrorReason ++ "</font>";
-	    _ -> "<font color=\"red\">" ++ ErrorReason ++ "</font><br>" ++
-                 to_string(Comment0)
+	    _ -> "<font color=\"red\">" ++ ErrorReason ++ 
+		 xhtml("</font><br>","</font><br />") ++ to_string(Comment0)
 	end,
     print(html,
 	  "<td>" ++ St0 ++ "died" ++ St1 ++ "</td>"
 	  "<td><font color=\"red\">FAILED</font></td>"
-	  "<td>~s</td></tr>\n",
+	  "<td>~ts</td></tr>\n",
 	  [Comment]),
     FormatLoc = test_server_sup:format_loc(Loc),
-    print(minor, "=== location ~s", [FormatLoc]),
+    print(minor, "=== location ~ts", [FormatLoc]),
     print(minor, "=== reason = {testcase_aborted,~p}", [Reason]),
     failed;
 
-progress(failed, CaseNum, Mod, Func, unknown, Reason, Time,
+progress(failed, CaseNum, Mod, Func, GrName, unknown, Reason, Time,
 	 Comment0, {St0,St1}) ->
-    print(major, "=result        failed: ~p, ~p", [Reason,unknown]),
-    print(1, "*** FAILED *** ~s",
-	  [get_info_str(Func, CaseNum, get(test_server_cases))]),
-    test_server_sup:framework_call(report, [tc_done,{?pl2a(Mod),Func,
+    print(major, "=result        failed: ~p, ~w", [Reason,unknown]),
+    print(1, "*** FAILED ~ts ***",
+	  [get_info_str(Mod,Func, CaseNum, get(test_server_cases))]),
+    test_server_sup:framework_call(report, [tc_done,{Mod,{Func,GrName},
 						     {failed,Reason}}]),
     TimeStr = io_lib:format(if is_float(Time) -> "~.3fs";
 			       true -> "~w"
@@ -3943,25 +4002,26 @@ progress(failed, CaseNum, Mod, Func, unknown, Reason, Time,
     Comment =
 	case Comment0 of
 	    "" -> "<font color=\"red\">" ++ ErrorReason2 ++ "</font>";
-	    _ -> "<font color=\"red\">" ++ ErrorReason2 ++ "</font><br>" ++
+	    _ -> "<font color=\"red\">" ++ ErrorReason2 ++ 
+		 xhtml("</font><br>","</font><br />") ++
 		 to_string(Comment0)
 	end,
     print(html,
-	  "<td>" ++ St0 ++ "~s" ++ St1 ++ "</td>"
+	  "<td>" ++ St0 ++ "~ts" ++ St1 ++ "</td>"
 	  "<td><font color=\"red\">FAILED</font></td>"
-	  "<td>~s</td></tr>\n",
+	  "<td>~ts</td></tr>\n",
 	  [TimeStr,Comment]),
-    print(minor, "=== location ~s", [unknown]),
+    print(minor, "=== location ~w", [unknown]),
     {FStr,FormattedReason} = format_exception(Reason),
-    print(minor, "=== reason = "++FStr, [FormattedReason]),
+    print(minor, "=== reason = " ++ FStr, [FormattedReason]),
     failed;
 
-progress(failed, CaseNum, Mod, Func, Loc, Reason, Time,
+progress(failed, CaseNum, Mod, Func, GrName, Loc, Reason, Time,
 	 Comment0, {St0,St1}) ->
     print(major, "=result        failed: ~p, ~p", [Reason,Loc]),
-    print(1, "*** FAILED *** ~s",
-	  [get_info_str(Func, CaseNum, get(test_server_cases))]),
-    test_server_sup:framework_call(report, [tc_done,{?pl2a(Mod),Func,
+    print(1, "*** FAILED ~ts ***",
+	  [get_info_str(Mod,Func, CaseNum, get(test_server_cases))]),
+    test_server_sup:framework_call(report, [tc_done,{Mod,{Func,GrName},
 						     {failed,Reason}}]),
     TimeStr = io_lib:format(if is_float(Time) -> "~.3fs";
 			       true -> "~w"
@@ -3969,24 +4029,24 @@ progress(failed, CaseNum, Mod, Func, Loc, Reason, Time,
     Comment =
 	case Comment0 of
 	    "" -> "";
-	    _ -> "<br>" ++ to_string(Comment0)
+	    _ -> xhtml("<br>","<br />") ++ to_string(Comment0)
 	end,
     FormatLastLoc = test_server_sup:format_loc(get_last_loc(Loc)),
     print(html,
-	  "<td>" ++ St0 ++ "~s" ++ St1 ++ "</td>"
+	  "<td>" ++ St0 ++ "~ts" ++ St1 ++ "</td>"
 	  "<td><font color=\"red\">FAILED</font></td>"
-	  "<td><font color=\"red\">~s</font>~s</td></tr>\n",
+	  "<td><font color=\"red\">~ts</font>~ts</td></tr>\n",
 	  [TimeStr,FormatLastLoc,Comment]),
     FormatLoc = test_server_sup:format_loc(Loc),
-    print(minor, "=== location ~s", [FormatLoc]),
+    print(minor, "=== location ~ts", [FormatLoc]),
     {FStr,FormattedReason} = format_exception(Reason),
-    print(minor, "=== reason = "++FStr, [FormattedReason]),
+    print(minor, "=== reason = " ++ FStr, [FormattedReason]),
     failed;
 
-progress(ok, _CaseNum, Mod, Func, _Loc, RetVal, Time,
+progress(ok, _CaseNum, Mod, Func, GrName, _Loc, RetVal, Time,
 	 Comment0, {St0,St1}) ->
     print(minor, "successfully completed test case", []),
-    test_server_sup:framework_call(report, [tc_done,{?pl2a(Mod),Func,ok}]),
+    test_server_sup:framework_call(report, [tc_done,{Mod,{Func,GrName},ok}]),
     Comment =
 	case RetVal of
 	    {comment,RetComment} ->
@@ -3994,12 +4054,12 @@ progress(ok, _CaseNum, Mod, Func, _Loc, RetVal, Time,
 		HtmlCmt = test_server_sup:framework_call(format_comment,
 							 [String],
 							 String),
-		print(major, "=result        ok: ~s", [String]),
+		print(major, "=result        ok: ~ts", [String]),
 		"<td>" ++ HtmlCmt ++ "</td>";
 	    _ ->
 		print(major, "=result        ok", []),
 		case Comment0 of
-		    "" -> "";
+		    "" -> "<td></td>";
 		    _ -> "<td>" ++ to_string(Comment0) ++ "</td>"
 		end
 	end,
@@ -4007,7 +4067,7 @@ progress(ok, _CaseNum, Mod, Func, _Loc, RetVal, Time,
     print(html,
 	  "<td>" ++ St0 ++ "~.3fs" ++ St1 ++ "</td>"
 	  "<td><font color=\"green\">Ok</font></td>"
-	  "~s</tr>\n",
+	  "~ts</tr>\n",
 	  [Time,Comment]),
     print(minor, "=== returned value = ~p", [RetVal]),
     ok.
@@ -4015,26 +4075,67 @@ progress(ok, _CaseNum, Mod, Func, _Loc, RetVal, Time,
 %%--------------------------------------------------------------------
 %% various help functions
 
+get_fw_mod(Mod) ->
+    case get(test_server_framework) of
+	undefined ->
+	    case os:getenv("TEST_SERVER_FRAMEWORK") of
+		FW when FW =:= false; FW =:= "undefined" ->
+		    Mod;
+		FW ->
+		    list_to_atom(FW)
+	    end;
+	'$none' -> Mod;
+	FW      -> FW
+    end.
+
+fw_name(?MODULE) ->
+    test_server;
+fw_name(Mod) ->
+    case get(test_server_framework_name) of
+	undefined ->
+	    case get_fw_mod(undefined) of
+		undefined ->
+		    Mod;
+		Mod ->
+		    case os:getenv("TEST_SERVER_FRAMEWORK_NAME") of
+			FWName when FWName =:= false; FWName =:= "undefined" ->
+			    Mod;
+			FWName ->
+			    list_to_atom(FWName)
+		    end;
+		_ ->
+		    Mod
+	    end;
+	'$none' ->
+	    Mod;
+	FWName ->
+	    case get_fw_mod(Mod) of
+		Mod -> FWName;
+		_ -> Mod
+	    end	
+    end.
+
 if_auto_skip(Reason={failed,{_,init_per_testcase,_}}, True, _False) ->
     {Reason,True()};
-if_auto_skip({_T,{skip,Reason={failed,{_,init_per_testcase,_}}},_Opts}, True, _False) ->
+if_auto_skip({skip,Reason={failed,{_,init_per_testcase,_}}}, True, _False) ->
     {Reason,True()};
-if_auto_skip({fw_auto_skip,Reason}, True, _False) ->
-    {Reason,True()};
-if_auto_skip({_T,{skip,{fw_auto_skip,Reason}},_Opts}, True, _False) ->
+if_auto_skip({auto_skip,Reason}, True, _False) ->
     {Reason,True()};
 if_auto_skip(Reason, _True, False) ->
     {Reason,False()}.
 
-update_skip_counters(RetVal, {US,AS}) ->
-    {_,Result} = if_auto_skip(RetVal, fun() -> {US,AS+1} end, fun() -> {US+1,AS} end),
+update_skip_counters({_T,Pat,_Opts}, {US,AS}) ->
+    {_,Result} = if_auto_skip(Pat, fun() -> {US,AS+1} end, fun() -> {US+1,AS} end),
+    Result;    
+update_skip_counters(Pat, {US,AS}) ->
+    {_,Result} = if_auto_skip(Pat, fun() -> {US,AS+1} end, fun() -> {US+1,AS} end),
     Result.
 
-get_info_str(Func, 0, _Cases) ->
-    atom_to_list(Func);
-get_info_str(_Func, CaseNum, unknown) ->
+get_info_str(Mod,Func, 0, _Cases) ->
+    io_lib:format("~w", [{Mod,Func}]);
+get_info_str(_Mod,_Func, CaseNum, unknown) ->
     "test case " ++ integer_to_list(CaseNum);
-get_info_str(_Func, CaseNum, Cases) ->
+get_info_str(_Mod,_Func, CaseNum, Cases) ->
     "test case " ++ integer_to_list(CaseNum) ++
 	" of " ++ integer_to_list(Cases).
 
@@ -4045,8 +4146,8 @@ print_if_known(Known, {SK,AK}, {SU,AU}) ->
     io_lib:format(S, A).
 
 to_string(Term) when is_list(Term) ->
-    case (catch io_lib:format("~s", [Term])) of
-	{'EXIT',_} -> io_lib:format("~p", [Term]);
+    case (catch io_lib:format("~ts", [Term])) of
+	{'EXIT',_} -> lists:flatten(io_lib:format("~p", [Term]));
 	String     -> lists:flatten(String)
     end;
 to_string(Term) ->
@@ -4118,8 +4219,8 @@ get_font_style1(default) ->
 %% set to false.
 
 format_exception(Reason={_Error,Stack}) when is_list(Stack) ->
-    case os:getenv("TEST_SERVER_FRAMEWORK") of
-	FW when FW =:= false; FW =:= "undefined" ->
+    case get_fw_mod(undefined) of
+	undefined ->
 	    case application:get_env(test_server, format_exception) of
 		{ok,false} ->
 		    {"~p",Reason};
@@ -4127,7 +4228,7 @@ format_exception(Reason={_Error,Stack}) when is_list(Stack) ->
 		    do_format_exception(Reason)
 	    end;
 	FW ->
-	    case application:get_env(list_to_atom(FW), format_exception) of
+	    case application:get_env(FW, format_exception) of
 		{ok,false} ->
 		    {"~p",Reason};
 		_ ->
@@ -4147,17 +4248,16 @@ do_format_exception(Reason={Error,Stack}) ->
 	    {"~p",Reason};
 	Formatted  ->
 	    Formatted1 = re:replace(Formatted, "exception error: ", "", [{return,list}]),
-	    {"~s",lists:flatten(Formatted1)}
+	    {"~ts",lists:flatten(Formatted1)}
     end.
 
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %% run_test_case_apply(CaseNum, Mod, Func, Args, Name, RunInit,
-%%                     Where, TimetrapData) ->
+%%                     TimetrapData) ->
 %%  {{Time,RetVal,Loc,Opts,Comment},DetectedFail,ProcessesBefore,ProcessesAfter} |
 %%  {{died,Reason,unknown,Comment},DetectedFail,ProcessesBefore,ProcessesAfter}
 %% Name = atom()
-%% Where = target | host
 %% Time = float()   (seconds)
 %% RetVal = term()
 %% Loc = term()
@@ -4166,27 +4266,11 @@ do_format_exception(Reason={Error,Stack}) ->
 %% DetectedFail = [{File,Line}]
 %% ProcessesBefore = ProcessesAfter = integer()
 %%
-%% Where indicates if the test should run on target or always on the host.
-%%
-%% If test is to be run on target, and target is remote the request is
-%% sent over socket to target, and test_server runs the case and sends the
-%% result back over the socket. Else test_server runs the case directly on host.
 
-run_test_case_apply(CaseNum, Mod, Func, Args, Name, RunInit, host, TimetrapData) ->
+run_test_case_apply(CaseNum, Mod, Func, Args, Name, RunInit,
+		    TimetrapData) ->
     test_server:run_test_case_apply({CaseNum,Mod,Func,Args,Name,RunInit,
-				     TimetrapData});
-run_test_case_apply(CaseNum, Mod, Func, Args, Name, RunInit, target, TimetrapData) ->
-    case get(test_server_ctrl_job_sock) of
-	undefined ->
-	    %% local target
-	    test_server:run_test_case_apply({CaseNum,Mod,Func,Args,Name,RunInit,
-					     TimetrapData});
-	JobSock ->
-	    %% remote target
-	    request(JobSock, {test_case,{CaseNum,Mod,Func,Args,Name,RunInit,
-					 TimetrapData}}),
-	    read_job_sock_loop(JobSock)
-    end.
+				     TimetrapData}).
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %% print(Detail, Format, Args) -> ok
@@ -4196,16 +4280,6 @@ run_test_case_apply(CaseNum, Mod, Func, Args, Name, RunInit, target, TimetrapDat
 %%
 %% Just like io:format, except that depending on the Detail value, the output
 %% is directed to console, major and/or minor log files.
-%%
-%% To handle printouts to common (not minor) log files from parallel test
-%% case processes, the test_server_common_io_handler value is checked. If
-%% set, the data is sent to the main controlling process. Note that test
-%% cases that belong to a conf group nested under a parallel group will also
-%% get its io data sent to main rather than immediately printed out, even
-%% if the test cases are executed by the same, main, process (ie the main
-%% process sends messages to itself then).
-%%
-%% Buffered io is handled by the handle_test_case_io_and_status/0 function.
 
 print(Detail, Format) ->
     print(Detail, Format, []).
@@ -4218,19 +4292,7 @@ print(Detail, Format, Args, Printer) ->
     print_or_buffer(Detail, Msg, Printer).
 
 print_or_buffer(Detail, Msg, Printer) ->
-    case get(test_server_minor_level) of
-	_ when Detail == minor ->
-	    output({Detail,Msg}, Printer);
-	MinLevel when is_number(Detail), Detail >= MinLevel ->
-	    output({Detail,Msg}, Printer);
-	_ ->					% Detail < Minor | major | html
-	    case get(test_server_common_io_handler) of
-		undefined ->
-		    output({Detail,Msg}, Printer);
-		{_,MainPid} ->
-		    MainPid ! {print,self(),Detail,Msg}
-	    end
-    end.
+    test_server_gl:print(group_leader(), Detail, Msg, Printer).
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %% print_timestamp(Detail, Leader) -> ok
@@ -4252,7 +4314,7 @@ print_who(Host, User) ->
 		  "" -> "";
 		  _ -> " by " ++ User
 	      end,
-    print(html, "Run~s on ~s", [UserStr,Host]).
+    print(html, "Run~ts on ~ts", [UserStr,Host]).
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %% format(Format) -> IoLibReturn
@@ -4294,103 +4356,25 @@ format(Detail, Format, Args) ->
     print_or_buffer(Detail, Str, self()).
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-%% output({Level,Message}, Sender) -> ok
-%% Level = integer() | minor | major | html
-%% Message = string() | [integer()]
-%% Sender = string() | internal
+%% xhtml(BasicHtml, XHtml) -> BasicHtml | XHtml
 %%
-%% Outputs the message on the channels indicated by Level. If Level is an
-%% atom, only the corresponding channel receives the output. When Level is
-%% an integer console, major and/or minor log file will receive output
-%% depending on the user set thresholds (see get_levels/0, set_levels/3)
+xhtml(HTML, XHTML) ->
+    case get(basic_html) of
+	true -> HTML;
+	_ -> XHTML
+    end.
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%% odd_or_even() -> "odd" | "even"
 %%
-%% When printing on the console, the message is prefixed with the test
-%% suite's name. In case a name is not set (yet), Sender is used.
-%%
-%% When not outputting to the console, and the Sender is 'internal',
-%% the message is prefixed with "=== ", so that it will be apparent that
-%% the message comes from the test server and not the test suite itself.
-
-output({Level,Msg}, Sender) when is_integer(Level) ->
-    SumLev = get(test_server_summary_level),
-    if  Level =< SumLev ->
-	    output_to_fd(stdout, Msg, Sender);
-	true ->
-	    ok
-    end,
-    MajLev = get(test_server_major_level),
-    if  Level =< MajLev ->
-	    output_to_fd(get(test_server_major_fd), Msg, Sender);
-	true ->
-	    ok
-    end,
-    MinLev = get(test_server_minor_level),
-    if  Level >= MinLev ->
-	    output_to_fd(get(test_server_minor_fd), Msg, Sender);
-	true ->
-	    ok
-    end;
-output({minor,Bytes}, Sender) when is_list(Bytes) ->
-    output_to_fd(get(test_server_minor_fd), Bytes, Sender);
-output({major,Bytes}, Sender) when is_list(Bytes) ->
-    output_to_fd(get(test_server_major_fd), Bytes, Sender);
-output({minor,Bytes}, Sender) when is_binary(Bytes) ->
-    output_to_fd(get(test_server_minor_fd),binary_to_list(Bytes), Sender);
-output({major,Bytes}, Sender) when is_binary(Bytes) ->
-    output_to_fd(get(test_server_major_fd),binary_to_list(Bytes), Sender);
-output({html,Msg}, _Sender) ->
-    case get(test_server_html_fd) of
-	undefined ->
-	    ok;
-	Fd ->
-	    io:put_chars(Fd,Msg),
-	    case file:position(Fd, {cur, 0}) of
-		{ok, Pos} ->
-		    %% We are writing to a seekable file.  Finalise so
-		    %% we get complete valid (and viewable) HTML code.
-		    %% Then rewind to overwrite the finalising code.
-		    io:put_chars(Fd, "\n</table>\n</body>\n</html>\n"),
-		    file:position(Fd, Pos);
-		{error, epipe} ->
-		    %% The file is not seekable.  We cannot erase what
-		    %% we've already written --- so the reader will
-		    %% have to wait until we're done.
-		    ok
-	    end
-    end;
-output({minor,Data}, Sender) ->
-    output_to_fd(get(test_server_minor_fd),
-		 lists:flatten(io_lib:format(
-				 "Unexpected output: ~p~n", [Data])),Sender);
-output({major,Data}, Sender) ->
-    output_to_fd(get(test_server_major_fd),
-		 lists:flatten(io_lib:format(
-				 "Unexpected output: ~p~n", [Data])),Sender).
-
-output_to_fd(stdout, Msg, Sender) ->
-    Name =
-	case get(test_server_name) of
-	    undefined -> Sender;
-	    Other -> Other
-	end,
-    io:format("Testing ~s: ~s\n", [Name, lists:flatten(Msg)]);
-output_to_fd(undefined, _Msg, _Sender) ->
-    ok;
-output_to_fd(Fd, [$=|Msg], internal) ->
-    io:put_chars(Fd, [$=]),
-    io:put_chars(Fd, Msg),
-    io:put_chars(Fd, "\n");
-
-output_to_fd(Fd, Msg, internal) ->
-    io:put_chars(Fd, [$=,$=,$=,$ ]),
-    io:put_chars(Fd, Msg),
-    io:put_chars(Fd, "\n");
-
-output_to_fd(Fd, Msg, _Sender) ->
-    io:put_chars(Fd, Msg),
-    case get(test_server_log_nl) of
-	false -> ok;
-	_     -> io:put_chars(Fd, "\n")
+odd_or_even() ->
+    case get(odd_or_even) of
+	even ->
+	    put(odd_or_even, odd),
+	    "even";
+	_ ->
+	    put(odd_or_even, even),
+	    "odd"
     end.
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -4401,7 +4385,7 @@ output_to_fd(Fd, Msg, _Sender) ->
 %% date and time. The resulting string is suitable as a filename.
 timestamp_filename_get(Leader) ->
     timestamp_get_internal(Leader,
-			   "~s~w-~2.2.0w-~2.2.0w_~2.2.0w.~2.2.0w.~2.2.0w").
+			   "~ts~w-~2.2.0w-~2.2.0w_~2.2.0w.~2.2.0w.~2.2.0w").
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %% timestamp_get(Leader) -> string()
@@ -4411,7 +4395,7 @@ timestamp_filename_get(Leader) ->
 %% date and time. The resulting string is suitable for display.
 timestamp_get(Leader) ->
     timestamp_get_internal(Leader,
-			   "~s~w-~2.2.0w-~2.2.0w ~2.2.0w:~2.2.0w:~2.2.0w").
+			   "~ts~w-~2.2.0w-~2.2.0w ~2.2.0w:~2.2.0w:~2.2.0w").
 
 timestamp_get_internal(Leader, Format) ->
     {YY,MM,DD,H,M,S} = time_get(),
@@ -4518,8 +4502,7 @@ update_config(Config, []) ->
 %%                           Cases is treated according to this table, then
 %%                           FinMFA is placed in the BasicCaseList. InitMFA
 %%                           and FinMFA are make/unmake functions. If InitMFA
-%%                           fails, Cases are not run. InitMFA and FinMFA are
-%%                           always run on the host - not on target.
+%%                           fails, Cases are not run.
 %%
 %% When a function is called, above, it means that the function is invoked
 %% and the return is expected to be:
@@ -4552,18 +4535,18 @@ update_config(Config, []) ->
 
 collect_all_cases(Top, Skip) when is_list(Skip) ->
     Result =
-	case collect_cases(Top, #cc{mod=[],skip=Skip}) of
+	case collect_cases(Top, #cc{mod=[],skip=Skip}, []) of
 	    {ok,Cases,_St} -> Cases;
 	    Other          -> Other
 	end,
     Result.
 
 
-collect_cases([], St) -> {ok,[],St};
-collect_cases([Case|Cs0], St0) ->
-    case collect_cases(Case, St0) of
+collect_cases([], St, _) -> {ok,[],St};
+collect_cases([Case|Cs0], St0, Mode) ->
+    case collect_cases(Case, St0, Mode) of
 	{ok,FlatCases1,St1} ->
-	    case collect_cases(Cs0, St1) of
+	    case collect_cases(Cs0, St1, Mode) of
 		{ok,FlatCases2,St} ->
 		    {ok,FlatCases1 ++ FlatCases2,St};
 		{error,_Reason} = Error -> Error
@@ -4572,54 +4555,71 @@ collect_cases([Case|Cs0], St0) ->
     end;
 
 
-collect_cases({module,Case}, St) when is_atom(Case), is_atom(St#cc.mod) ->
-    collect_case({St#cc.mod,Case}, St);
-collect_cases({module,Mod,Case}, St) ->
-    collect_case({Mod,Case}, St);
-collect_cases({module,Mod,Case,Args}, St) ->
-    collect_case({Mod,Case,Args}, St);
+collect_cases({module,Case}, St, Mode) when is_atom(Case), is_atom(St#cc.mod) ->
+    collect_case({St#cc.mod,Case}, St, Mode);
+collect_cases({module,Mod,Case}, St, Mode) ->
+    collect_case({Mod,Case}, St, Mode);
+collect_cases({module,Mod,Case,Args}, St, Mode) ->
+    collect_case({Mod,Case,Args}, St, Mode);
 
-collect_cases({dir,SubDir}, St) ->
-    collect_files(SubDir, "*_SUITE", St);
-collect_cases({dir,SubDir,Pattern}, St) ->
-    collect_files(SubDir, Pattern++"*", St);
+collect_cases({dir,SubDir}, St, Mode) ->
+    collect_files(SubDir, "*_SUITE", St, Mode);
+collect_cases({dir,SubDir,Pattern}, St, Mode) ->
+    collect_files(SubDir, Pattern++"*", St, Mode);
 
-collect_cases({conf,InitF,CaseList,FinMF}, St) when is_atom(InitF) ->
-    collect_cases({conf,[],{St#cc.mod,InitF},CaseList,FinMF}, St);
-collect_cases({conf,InitMF,CaseList,FinF}, St) when is_atom(FinF) ->
-    collect_cases({conf,[],InitMF,CaseList,{St#cc.mod,FinF}}, St);
-collect_cases({conf,InitMF,CaseList,FinMF}, St0) ->
-    collect_cases({conf,[],InitMF,CaseList,FinMF}, St0);
-collect_cases({conf,Props,InitF,CaseList,FinMF}, St) when is_atom(InitF) ->
+collect_cases({conf,InitF,CaseList,FinMF}, St, Mode) when is_atom(InitF) ->
+    collect_cases({conf,[],{St#cc.mod,InitF},CaseList,FinMF}, St, Mode);
+collect_cases({conf,InitMF,CaseList,FinF}, St, Mode) when is_atom(FinF) ->
+    collect_cases({conf,[],InitMF,CaseList,{St#cc.mod,FinF}}, St, Mode);
+collect_cases({conf,InitMF,CaseList,FinMF}, St0, Mode) ->
+    collect_cases({conf,[],InitMF,CaseList,FinMF}, St0, Mode);
+collect_cases({conf,Props,InitF,CaseList,FinMF}, St, Mode) when is_atom(InitF) ->
     case init_props(Props) of
 	{error,_} ->
 	    {ok,[],St};
 	Props1 ->
-	    collect_cases({conf,Props1,{St#cc.mod,InitF},CaseList,FinMF}, St)
+	    collect_cases({conf,Props1,{St#cc.mod,InitF},CaseList,FinMF},
+			  St, Mode)
     end;
-collect_cases({conf,Props,InitMF,CaseList,FinF}, St) when is_atom(FinF) ->
+collect_cases({conf,Props,InitMF,CaseList,FinF}, St, Mode) when is_atom(FinF) ->
     case init_props(Props) of
 	{error,_} ->
 	    {ok,[],St};
 	Props1 ->
-	    collect_cases({conf,Props1,InitMF,CaseList,{St#cc.mod,FinF}}, St)
+	    collect_cases({conf,Props1,InitMF,CaseList,{St#cc.mod,FinF}},
+			  St, Mode)
     end;
-collect_cases({conf,Props,InitMF,CaseList,FinMF} = Conf, St) ->
+collect_cases({conf,Props,InitMF,CaseList,FinMF} = Conf, St, Mode) ->
     case init_props(Props) of
 	{error,_} ->
 	    {ok,[],St};
 	Props1 ->
 	    Ref = make_ref(),
 	    Skips = St#cc.skip,
+	    Props2 = [{suite,St#cc.mod} | lists:delete(suite,Props1)],
+	    Mode1 = [{Ref,Props2,undefined} | Mode],
 	    case in_skip_list({St#cc.mod,Conf}, Skips) of
 		{true,Comment} ->	    	           % conf init skipped
-		    {ok,[{skip_case,{conf,Ref,InitMF,Comment}} |
+		    {ok,[{skip_case,{conf,Ref,InitMF,Comment},Mode1} |
 			 [] ++ [{conf,Ref,[],FinMF}]],St};
 		{true,Name,Comment} when is_atom(Name) ->  % all cases skipped
-		    {ok,[{skip_case,{{St#cc.mod,{group,Name}},Comment}}],St};
+		    case collect_cases(CaseList, St, Mode1) of
+			{ok,[],_St} = Empty ->
+			    Empty;
+			{ok,FlatCases,St1} ->
+			    Cases2Skip = FlatCases ++ [{conf,Ref,
+							keep_name(Props1),
+							FinMF}],
+			    Skipped = skip_cases_upto(Ref, Cases2Skip, Comment,
+						      conf, Mode1, skip_case),
+			    {ok,[{skip_case,{conf,Ref,InitMF,Comment},Mode1} |
+				 Skipped],St1};
+			{error,_Reason} = Error ->
+			    Error
+		    end;
 		{true,ToSkip,_} when is_list(ToSkip) ->    % some cases skipped
 		    case collect_cases(CaseList,
-				       St#cc{skip=ToSkip++Skips}) of
+				       St#cc{skip=ToSkip++Skips}, Mode1) of
 			{ok,[],_St} = Empty ->
 			    Empty;
 			{ok,FlatCases,St1} ->
@@ -4631,7 +4631,7 @@ collect_cases({conf,Props,InitMF,CaseList,FinMF} = Conf, St) ->
 			    Error
 		    end;
 		false ->
-		    case collect_cases(CaseList, St) of
+		    case collect_cases(CaseList, St, Mode1) of
 			{ok,[],_St} = Empty ->
 			    Empty;
 			{ok,FlatCases,St1} ->
@@ -4645,8 +4645,8 @@ collect_cases({conf,Props,InitMF,CaseList,FinMF} = Conf, St) ->
 	    end
     end;
 
-collect_cases({make,InitMFA,CaseList,FinMFA}, St0) ->
-    case collect_cases(CaseList, St0) of
+collect_cases({make,InitMFA,CaseList,FinMFA}, St0, Mode) ->
+    case collect_cases(CaseList, St0, Mode) of
 	{ok,[],_St} = Empty -> Empty;
 	{ok,FlatCases,St} ->
 	    Ref = make_ref(),
@@ -4655,60 +4655,62 @@ collect_cases({make,InitMFA,CaseList,FinMFA}, St0) ->
 	{error,_Reason} = Error -> Error
     end;
 
-collect_cases({Module, Cases}, St) when is_list(Cases)  ->
-    case (catch collect_case(Cases, St#cc{mod=Module}, [])) of
+collect_cases({Module, Cases}, St, Mode) when is_list(Cases)  ->
+    case (catch collect_case(Cases, St#cc{mod=Module}, [], Mode)) of
 	{ok, NewCases, NewSt} ->
  	    {ok, NewCases, NewSt};
  	Other ->
 	    {error, Other}
      end;
 
-collect_cases({_Mod,_Case}=Spec, St) ->
-    collect_case(Spec, St);
+collect_cases({_Mod,_Case}=Spec, St, Mode) ->
+    collect_case(Spec, St, Mode);
 
-collect_cases({_Mod,_Case,_Args}=Spec, St) ->
-    collect_case(Spec, St);
-collect_cases(Case, St) when is_atom(Case), is_atom(St#cc.mod) ->
-    collect_case({St#cc.mod,Case}, St);
-collect_cases(Other, St) ->
+collect_cases({_Mod,_Case,_Args}=Spec, St, Mode) ->
+    collect_case(Spec, St, Mode);
+collect_cases(Case, St, Mode) when is_atom(Case), is_atom(St#cc.mod) ->
+    collect_case({St#cc.mod,Case}, St, Mode);
+collect_cases(Other, St, _Mode) ->
     {error,{bad_subtest_spec,St#cc.mod,Other}}.
 
-collect_case({Mod,{conf,_,_,_,_}=Conf}, St) ->
-    collect_case_invoke(Mod, Conf, [], St);
+collect_case({Mod,{conf,_,_,_,_}=Conf}, St, Mode) ->
+    collect_case_invoke(Mod, Conf, [], St, Mode);
 
-collect_case(MFA, St) ->
+collect_case(MFA, St, Mode) ->
     case in_skip_list(MFA, St#cc.skip) of
 	{true,Comment} ->
-	    {ok,[{skip_case,{MFA,Comment}}],St};
+	    {ok,[{skip_case,{MFA,Comment},Mode}],St};
 	false ->
 	    case MFA of
-		{Mod,Case} -> collect_case_invoke(Mod, Case, MFA, St);
+		{Mod,Case} -> collect_case_invoke(Mod, Case, MFA, St, Mode);
 		{_Mod,_Case,_Args} -> {ok,[MFA],St}
 	    end
     end.
 
-collect_case([], St, Acc) ->
+collect_case([], St, Acc, _Mode) ->
     {ok, Acc, St};
 
-collect_case([Case | Cases], St, Acc) ->
-    {ok, FlatCases, NewSt}  = collect_case({St#cc.mod, Case}, St),
-    collect_case(Cases, NewSt, Acc ++ FlatCases).
+collect_case([Case | Cases], St, Acc, Mode) ->
+    {ok, FlatCases, NewSt}  = collect_case({St#cc.mod, Case}, St, Mode),
+    collect_case(Cases, NewSt, Acc ++ FlatCases, Mode).
 
-collect_case_invoke(Mod, Case, MFA, St) ->
-    case os:getenv("TEST_SERVER_FRAMEWORK") of
-	FW when FW =:= false; FW =:= "undefined" ->
+collect_case_invoke(Mod, Case, MFA, St, Mode) ->
+    case get_fw_mod(undefined) of
+	undefined ->
 	    case catch apply(Mod, Case, [suite]) of
 		{'EXIT',_} ->
 		    {ok,[MFA],St};
 		Suite ->
-		    collect_subcases(Mod, Case, MFA, St, Suite)
+		    collect_subcases(Mod, Case, MFA, St, Suite, Mode)
 	    end;
 	_ ->
-	    Suite = test_server_sup:framework_call(get_suite, [?pl2a(Mod),Case], []),
-	    collect_subcases(Mod, Case, MFA, St, Suite)
+	    Suite = test_server_sup:framework_call(get_suite,
+						   [Mod,Case],
+						   []),
+	    collect_subcases(Mod, Case, MFA, St, Suite, Mode)
     end.
 
-collect_subcases(Mod, Case, MFA, St, Suite) ->
+collect_subcases(Mod, Case, MFA, St, Suite, Mode) ->
     case Suite of
 	[] when Case == all -> {ok,[],St};
 	[] when element(1, Case) == conf -> {ok,[],St};
@@ -4716,28 +4718,28 @@ collect_subcases(Mod, Case, MFA, St, Suite) ->
 %%%! --- START Kept for backwards compatibility ---
 %%%! Requirements are not used
 	{req,ReqList} ->
-	    collect_case_deny(Mod, Case, MFA, ReqList, [], St);
+	    collect_case_deny(Mod, Case, MFA, ReqList, [], St, Mode);
 	{req,ReqList,SubCases} ->
-	    collect_case_deny(Mod, Case, MFA, ReqList, SubCases, St);
+	    collect_case_deny(Mod, Case, MFA, ReqList, SubCases, St, Mode);
 %%%! --- END Kept for backwards compatibility ---
 	{Skip,Reason} when Skip==skip; Skip==skipped ->
-	    {ok,[{skip_case,{MFA,Reason}}],St};
+	    {ok,[{skip_case,{MFA,Reason},Mode}],St};
 	{error,Reason} ->
 	    throw(Reason);
 	SubCases ->
-	    collect_case_subcases(Mod, Case, SubCases, St)
+	    collect_case_subcases(Mod, Case, SubCases, St, Mode)
     end.
 
-collect_case_subcases(Mod, Case, SubCases, St0) ->
+collect_case_subcases(Mod, Case, SubCases, St0, Mode) ->
     OldMod = St0#cc.mod,
-    case collect_cases(SubCases, St0#cc{mod=Mod}) of
+    case collect_cases(SubCases, St0#cc{mod=Mod}, Mode) of
 	{ok,FlatCases,St} ->
 	    {ok,FlatCases,St#cc{mod=OldMod}};
 	{error,Reason} ->
 	    {error,{{Mod,Case},Reason}}
     end.
 
-collect_files(Dir, Pattern, St) ->
+collect_files(Dir, Pattern, St, Mode) ->
     {ok,Cwd} = file:get_cwd(),
     Dir1 = filename:join(Cwd, Dir),
     Wc = filename:join([Dir1,Pattern++code:objfile_extension()]),
@@ -4747,20 +4749,24 @@ collect_files(Dir, Pattern, St) ->
 	    {error,{collect_fail,Dir,Pattern}};
 	Mods0 ->
 	    Mods = [{path_to_module(Mod),all} || Mod <- lists:sort(Mods0)],
-	    collect_cases(Mods, St)
+	    collect_cases(Mods, St, Mode)
     end.
 
-path_to_module(Path) ->
+path_to_module(Path) when is_list(Path) ->
+    %% If this is called with a binary, then we are probably in +fnu
+    %% mode and have found a beam file with name encoded as latin1. We
+    %% will let this crash since it can not work to load such a module
+    %% anyway. It should be removed or renamed!
     list_to_atom(filename:rootname(filename:basename(Path))).
 
-collect_case_deny(Mod, Case, MFA, ReqList, SubCases, St) ->
+collect_case_deny(Mod, Case, MFA, ReqList, SubCases, St, Mode) ->
     case {check_deny(ReqList, St#cc.skip),SubCases} of
 	{{denied,Comment},_SubCases} ->
-	    {ok,[{skip_case,{MFA,Comment}}],St};
+	    {ok,[{skip_case,{MFA,Comment},Mode}],St};
 	{granted,[]} ->
 	    {ok,[MFA],St};
 	{granted,SubCases} ->
-	    collect_case_subcases(Mod, Case, SubCases, St)
+	    collect_case_subcases(Mod, Case, SubCases, St, Mode)
     end.
 
 check_deny([Req|Reqs], DenyList) ->
@@ -4858,10 +4864,12 @@ init_props(Props) ->
     end.
 
 keep_name(Props) ->
-    lists:filter(fun({name,_}) -> true; (_) -> false end, Props).
+    lists:filter(fun({name,_}) -> true;
+		    ({suite,_}) -> true;
+		    (_) -> false end, Props).
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-%%                 Target node handling functions                   %%
+%%                 Node handling functions                   %%
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -4879,15 +4887,15 @@ get_target_info() ->
 %% Called by test_server. See test_server:start_node/3 for details
 
 start_node(Name, Type, Options) ->
-    T = 10 * ?ACCEPT_TIMEOUT, % give some extra time
+    T = 10 * ?ACCEPT_TIMEOUT * test_server:timetrap_scale_factor(),
     format(minor, "Attempt to start ~w node ~p with options ~p",
 	   [Type, Name, Options]),
     case controller_call({start_node,Name,Type,Options}, T) of
 	{{ok,Nodename}, Host, Cmd, Info, Warning} ->
 	    format(minor,
-		   "Successfully started node ~p on ~p with command: ~p",
+		   "Successfully started node ~w on ~tp with command: ~ts",
 		   [Nodename, Host, Cmd]),
-	    format(major, "=node_start    ~p", [Nodename]),
+	    format(major, "=node_start    ~w", [Nodename]),
 	    case Info of
 		[] -> ok;
 		_ -> format(minor, Info)
@@ -4901,16 +4909,16 @@ start_node(Name, Type, Options) ->
 	    {ok, Nodename};
 	{fail,{Ret, Host, Cmd}}  ->
 	    format(minor,
-		   "Failed to start node ~p on ~p with command: ~p~n"
+		   "Failed to start node ~tp on ~tp with command: ~ts~n"
 		   "Reason: ~p",
 		   [Name, Host, Cmd, Ret]),
 	    {fail,Ret};
 	{Ret, undefined, undefined} ->
-	    format(minor, "Failed to start node ~p: ~p", [Name,Ret]),
+	    format(minor, "Failed to start node ~tp: ~p", [Name,Ret]),
 	    Ret;
 	{Ret, Host, Cmd} ->
 	    format(minor,
-		   "Failed to start node ~p on ~p with command: ~p~n"
+		   "Failed to start node ~tp on ~tp with command: ~ts~n"
 		   "Reason: ~p",
 		   [Name, Host, Cmd, Ret]),
 	    Ret
@@ -4924,7 +4932,8 @@ start_node(Name, Type, Options) ->
 %% when the new node has contacted test_server_ctrl again
 
 wait_for_node(Slave) ->
-    case catch controller_call({wait_for_node,Slave},10000) of
+    T = 10000 * test_server:timetrap_scale_factor(),
+    case catch controller_call({wait_for_node,Slave},T) of
 	{'EXIT',{timeout,_}} -> {error,timeout};
 	ok -> ok
     end.
@@ -4946,60 +4955,6 @@ is_release_available(Release) ->
 
 stop_node(Slave) ->
     controller_call({stop_node,Slave}).
-
-
-%%--------------------------------------------------------------------
-%% Functions handling target communication over socket
-
-%% Generic send function for communication with target
-request(Sock,Request) ->
-    gen_tcp:send(Sock,<<1,(term_to_binary(Request))/binary>>).
-
-%% Receive and decode request on job specific socket
-%% Used when test is running on a remote target
-read_job_sock_loop(Sock) ->
-    case gen_tcp:recv(Sock,0) of
-	{error,Reason} ->
-	    gen_tcp:close(Sock),
-	    exit({controller,connection_lost,Reason});
-	{ok,<<1,Request/binary>>} ->
-	    case decode(binary_to_term(Request)) of
-		ok ->
-		    read_job_sock_loop(Sock);
-		{stop,Result} ->
-		    Result
-	    end
-    end.
-
-decode({apply,{M,F,A}}) ->
-    apply(M,F,A),
-    ok;
-decode({sync_apply,{M,F,A}}) ->
-    R = apply(M,F,A),
-    request(get(test_server_ctrl_job_sock),{sync_result,R}),
-    ok;
-decode({sync_result,Result}) ->
-    {stop,Result};
-decode({test_case_result,Result}) ->
-    {stop,Result};
-decode({privdir,empty_priv_dir}) ->
-    {stop,ok};
-decode({{privdir,PrivDirTar},TarBin}) ->
-    Root = get(test_server_log_dir_base),
-    unpack_tar(Root,PrivDirTar,TarBin),
-    {stop,ok};
-decode({crash_dumps,no_crash_dumps}) ->
-    {stop,ok};
-decode({{crash_dumps,CrashDumpTar},TarBin}) ->
-    Dir = test_server_sup:crash_dump_dir(),
-    unpack_tar(Dir,CrashDumpTar,TarBin),
-    {stop,ok}.
-
-unpack_tar(Dir,TarFileName0,TarBin) ->
-    TarFileName = filename:join(Dir,TarFileName0),
-    ok = file:write_file(TarFileName,TarBin),
-    ok = erl_tar:extract(TarFileName,[compressed,{cwd,Dir}]),
-    ok = file:delete(TarFileName).
 
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -5106,97 +5061,122 @@ pinfo(P) ->
 %% - it does not belong to the application, but is listed in the
 %%   {include,List} part of the App.cover file
 %% - it does not belong to the application, but is listed in the
-%%   cross.cover file (in the test_server application) under 'all'
-%%   or under the tested application.
+%%   {cross,[{Tag,List}]} part of the App.cover file
 %%
-%% The modules listed in the cross.cover file are modules that are
-%% hevily used by other applications than the one they belong
-%% to. After all tests are completed, these modules can be analysed
-%% with coverage data from all tests - see cross_cover_analyse/1. The
-%% result is stored in a file called cross_cover.html in the
-%% run.<timestamp> directory of the application the modules belong
-%% to.
+%% The modules listed in the 'cross' part of the cover file are
+%% modules that are heavily used by other tests than the one where
+%% they are explicitly tested. They should then be listed as 'cross'
+%% in the cover file for the test where they are used but do not
+%% belong.
 %%
-%% For example, the lists module is listed in cross.cover to be
-%% included in all tests. lists belongs to the stdlib
-%% application. cross_cover_analyse/1 will create a file named
-%% cross_cover.html under the newest stdlib.logs/run.xxx directory,
-%% where the coverage result for the lists module from all tests is
-%% presented.
+%% After all tests are completed, the these modules can be analysed
+%% with coverage data from all tests where they are compiled - see
+%% cross_cover_analyse/2. The result is stored in a file called
+%% cross_cover.html in the run.<timestamp> directory of the
+%% test the modules belong to.
 %%
-%% The lists module is also presented in the normal coverage log
-%% for stdlib, but that only includes the coverage achieved by
-%% the stdlib tests themselves.
+%% Example:
+%% If the module m1 belongs to system s1 but is heavily used also in
+%% the tests for another system s2, then the cover files for the two
+%% systems could be like this:
 %%
-%% The Cross cover file cross.cover contains elements like this:
-%% {App,Modules}.
-%% where App can be an application name or the atom all. The
-%% application (or all applications) shall cover compile the listed
-%% Modules.
+%% s1.cover:
+%%  {include,[m1]}.
+%%
+%% s2.cover:
+%%  {include,[....]}. % modules belonging to system s2
+%%  {cross,[{s1,[m1]}]}.
+%%
+%% When the tests for both s1 and s2 are completed, run
+%% cross_cover_analyse(Level,[{s1,S1LogDir},{s2,S2LogDir}]), and
+%% the accumulated cover data for m1 will be written to
+%% S1LogDir/[run.<timestamp>/]cross_cover.html
+%%
+%% S1LogDir and S2LogDir are either the run.<timestamp> directories
+%% for the two tests, or the parent directory of these, in which case
+%% the latest run.<timestamp> directory will be chosen.
+%%
+%% Note that the m1 module will also be presented in the normal
+%% coverage log for s1 (due to the include statement in s1.cover), but
+%% that only includes the coverage achieved by the s1 test itself.
+%%
+%% The Tag in the 'cross' statement in the cover file has no other
+%% purpose than mapping the list of modules ([m1] in the example
+%% above) to the correct log directory where it should be included in
+%% the cross_cover.html file (S1LogDir in the example above).
+%% I.e. the value of the Tag has no meaning, it could be foo as well
+%% as s1 above, as long as the same Tag is used in the cover file and
+%% in the call to cross_cover_analyse/2.
 
 
 %% Cover compilation
 %% The compilation is executed on the target node
-cover_compile({App,{_File,Exclude,Include,Cross,_Export}}) ->
-    cover_compile1({App,Exclude,Include,Cross});
+start_cover(#cover{}=CoverInfo) ->
+    cover_compile(CoverInfo);
+start_cover({log,CoverLogDir}=CoverInfo) ->
+    %% Cover is controlled by the framework - here's the log
+    put(test_server_cover_log_dir,CoverLogDir),
+    {ok,CoverInfo}.
 
-cover_compile({App,CoverFile}) ->
-    Cross = get_cross_modules(App),
-    {Exclude,Include} = read_cover_file(CoverFile),
-    cover_compile1({App,Exclude,Include,Cross}).
-
-cover_compile1(What) ->
-    case get(test_server_ctrl_job_sock) of
-	undefined ->
-	    %% local target
-	    test_server:cover_compile(What);
-	JobSock ->
-	    %% remote target
-	    request(JobSock, {sync_apply,{test_server,cover_compile,[What]}}),
-	    read_job_sock_loop(JobSock)
-    end.
-
+cover_compile(CoverInfo) ->
+    test_server:cover_compile(CoverInfo).
 
 %% Read the coverfile for an application and return a list of modules
 %% that are members of the application but shall not be compiled
 %% (Exclude), and a list of modules that are not members of the
 %% application but shall be compiled (Include).
 read_cover_file(none) ->
-    {[],[]};
+    {[],[],[]};
 read_cover_file(CoverFile) ->
     case file:consult(CoverFile) of
 	{ok,List} ->
-	    case check_cover_file(List, [], []) of
-		{ok,Exclude,Include} -> {Exclude,Include};
+	    case check_cover_file(List, [], [], []) of
+		{ok,Exclude,Include,Cross} -> {Exclude,Include,Cross};
 		error ->
 		    io:fwrite("Faulty format of CoverFile ~p\n", [CoverFile]),
-		    {[],[]}
+		    {[],[],[]}
 	    end;
 	{error,Reason} ->
-	    io:fwrite("Can't read CoverFile ~p\nReason: ~p\n",
+	    io:fwrite("Can't read CoverFile ~ts\nReason: ~p\n",
 		      [CoverFile,Reason]),
-	    {[],[]}
+	    {[],[],[]}
     end.
 
-check_cover_file([{exclude,all}|Rest], _, Include) ->
-    check_cover_file(Rest, all, Include);
-check_cover_file([{exclude,Exclude}|Rest], _, Include) ->
+check_cover_file([{exclude,all}|Rest], _, Include, Cross) ->
+    check_cover_file(Rest, all, Include, Cross);
+check_cover_file([{exclude,Exclude}|Rest], _, Include, Cross) ->
     case lists:all(fun(M) -> is_atom(M) end, Exclude) of
 	true ->
-	    check_cover_file(Rest, Exclude, Include);
+	    check_cover_file(Rest, Exclude, Include, Cross);
 	false ->
 	    error
     end;
-check_cover_file([{include,Include}|Rest], Exclude, _) ->
+check_cover_file([{include,Include}|Rest], Exclude, _, Cross) ->
     case lists:all(fun(M) -> is_atom(M) end, Include) of
 	true ->
-	    check_cover_file(Rest, Exclude, Include);
+	    check_cover_file(Rest, Exclude, Include, Cross);
 	false ->
 	    error
     end;
-check_cover_file([], Exclude, Include) ->
-    {ok,Exclude,Include}.
+check_cover_file([{cross,Cross}|Rest], Exclude, Include, _) ->
+    case check_cross(Cross) of
+	true ->
+	    check_cover_file(Rest, Exclude, Include, Cross);
+	false ->
+	    error
+    end;
+check_cover_file([], Exclude, Include, Cross) ->
+    {ok,Exclude,Include,Cross}.
 
+check_cross([{Tag,Modules}|Rest]) ->
+    case lists:all(fun(M) -> is_atom(M) end, [Tag|Modules]) of
+	true ->
+	    check_cross(Rest);
+	false ->
+	    false
+    end;
+check_cross([]) ->
+    true.
 
 
 %% Cover analysis, per application
@@ -5207,38 +5187,62 @@ check_cover_file([], Exclude, Include) ->
 %%
 %% This per application analysis writes the file cover.html in the
 %% application's run.<timestamp> directory.
-cover_analyse({App,CoverInfo}, Analyse, AnalyseMods, TestDir) ->
+stop_cover(#cover{}=CoverInfo, TestDir) ->
+    cover_analyse(CoverInfo, TestDir);
+stop_cover(_CoverInfo, _TestDir) ->
+    %% Cover is probably controlled by the framework
+    ok.
+
+make_relative(AbsDir, VsDir) ->
+    DirTokens = filename:split(AbsDir),
+    VsTokens = filename:split(VsDir),
+    filename:join(make_relative1(DirTokens, VsTokens)).
+
+make_relative1([T | DirTs], [T | VsTs]) ->
+    make_relative1(DirTs, VsTs);
+make_relative1(Last = [_File], []) ->
+    Last;
+make_relative1(Last = [_File], VsTs) ->
+    Ups = ["../" || _ <- VsTs],
+    Ups ++ Last;
+make_relative1(DirTs, []) ->
+    DirTs;
+make_relative1(DirTs, VsTs) ->
+    Ups = ["../" || _ <- VsTs],
+    Ups ++ DirTs.
+
+
+cover_analyse(CoverInfo, TestDir) ->
     write_default_cross_coverlog(TestDir),
 
-    {ok,CoverLog} = file:open(filename:join(TestDir, ?coverlog_name), [write]),
+    {ok,CoverLog} = open_html_file(filename:join(TestDir, ?coverlog_name)),
     write_coverlog_header(CoverLog),
+    #cover{app=App,
+	   file=CoverFile,
+	   excl=Excluded,
+	   cross=Cross} = CoverInfo,
     io:fwrite(CoverLog, "<h1>Coverage for application '~w'</h1>\n", [App]),
     io:fwrite(CoverLog,
-	      "<p><a href=\"~s\">Coverdata collected over all tests</a></p>",
+	      "<p><a href=\"~ts\">Coverdata collected over all tests</a></p>",
 	      [?cross_coverlog_name]),
 
-    {CoverFile,_Included,Excluded} =
-	case CoverInfo of
-	    {File,Excl,Incl,_Cross,Export} ->
-		cover:export(Export),
-		{File,Incl,Excl};
-	    File ->
-		{Excl,Incl} = read_cover_file(File),
-		{File,Incl,Excl}
-	end,
-    io:fwrite(CoverLog, "<p>CoverFile: <code>~p</code>\n", [CoverFile]),
+    io:fwrite(CoverLog, "<p>CoverFile: <code>~tp</code>\n", [CoverFile]),
+    write_cross_cover_info(TestDir,Cross),
 
     case length(cover:imported_modules()) of
 	Imps when Imps > 0 ->
-	    io:fwrite(CoverLog, "<p>Analysis includes data from ~w imported module(s).\n",
+	    io:fwrite(CoverLog,
+		      "<p>Analysis includes data from ~w imported module(s).\n",
 		      [Imps]);
 	_ ->
 	    ok
     end,
 
-    io:fwrite(CoverLog, "<p>Excluded module(s): <code>~p</code>\n", [Excluded]),
+    io:fwrite(CoverLog, "<p>Excluded module(s): <code>~tp</code>\n", [Excluded]),
 
-    Coverage = cover_analyse(Analyse, AnalyseMods),
+    Coverage = test_server:cover_analyse(TestDir, CoverInfo),
+    write_binary_file(filename:join(TestDir,?raw_coverlog_name),
+		      term_to_binary(Coverage)),
 
     case lists:filter(fun({_M,{_,_,_}}) -> false;
 			 (_) -> true
@@ -5252,35 +5256,25 @@ cover_analyse({App,CoverInfo}, Analyse, AnalyseMods, TestDir) ->
     end,
 
     TotPercent = write_cover_result_table(CoverLog, Coverage),
-    file:write_file(filename:join(TestDir, ?cover_total),
-		    term_to_binary(TotPercent)).
+    write_binary_file(filename:join(TestDir, ?cover_total),
+		      term_to_binary(TotPercent)).
 
-cover_analyse(Analyse, AnalyseMods) ->
-    TestDir = get(test_server_log_dir_base),
-    case get(test_server_ctrl_job_sock) of
-	undefined ->
-	    %% local target
-	    test_server:cover_analyse({Analyse,TestDir}, AnalyseMods);
-	JobSock ->
-	    %% remote target
-	    request(JobSock, {sync_apply,{test_server,
-					  cover_analyse,
-					  [Analyse,AnalyseMods]}}),
-	    read_job_sock_loop(JobSock)
-    end.
-
-
-%% Cover analysis, cross application
+%% Cover analysis - accumulated over multiple tests
 %% This can be executed on any node after all tests are finished.
-%% The node's current directory must be the same as when the tests
-%% were run.
-cross_cover_analyse(Analyse) ->
-    cross_cover_analyse(Analyse, undefined).
-
-cross_cover_analyse(Analyse, CrossModules) ->
-    CoverdataFiles = get_coverdata_files(),
+%% Analyse = overview | details
+%% TagDirs = [{Tag,Dir}]
+%%   Tag = atom(), identifier
+%%   Dir = string(), the log directory for Tag, it can be a
+%%         run.<timestamp> directory or the parent directory of
+%%         such (in which case the latest run.<timestamp> directory
+%%         is used)
+cross_cover_analyse(Analyse, TagDirs0) ->
+    TagDirs = get_latest_run_dirs(TagDirs0),
+    TagMods = get_all_cross_info(TagDirs,[]),
+    TagDirMods = add_cross_modules(TagMods,TagDirs),
+    CoverdataFiles = get_coverdata_files(TagDirMods),
     lists:foreach(fun(CDF) -> cover:import(CDF) end, CoverdataFiles),
-    io:fwrite("Cover analysing... ", []),
+    io:fwrite("Cover analysing...\n", []),
     DetailsFun =
 	case Analyse of
 	    details ->
@@ -5288,100 +5282,111 @@ cross_cover_analyse(Analyse, CrossModules) ->
 			OutFile = filename:join(Dir,
 						atom_to_list(M) ++
 						".CROSS_COVER.html"),
-			cover:analyse_to_file(M, OutFile, [html]),
-			{file,OutFile}
+			case cover:analyse_to_file(M, OutFile, [html]) of
+			    {ok,_} ->
+				{file,OutFile};
+			    Error ->
+				Error
+			end
 		end;
 	    _ ->
 		fun(_,_) -> undefined end
 	end,
-    SortedModules =
-	case CrossModules of
-	    undefined ->
-		sort_modules([Mod || Mod <- get_all_cross_modules(),
-				     lists:member(Mod, cover:imported_modules())], []);
-	    _ ->
-		sort_modules(CrossModules, [])
-	end,
-    Coverage = analyse_apps(SortedModules, DetailsFun, []),
+    Coverage = analyse_tests(TagDirMods, DetailsFun, []),
     cover:stop(),
-    write_cross_cover_logs(Coverage).
+    write_cross_cover_logs(Coverage,TagDirMods).
 
-%% For each application from which there are modules listed in the
-%% cross.cover, write a cross cover log (cross_cover.html).
-write_cross_cover_logs([{App,Coverage}|T]) ->
-    case last_test_for_app(App) of
-	false ->
-	    ok;
-	Dir ->
+write_cross_cover_info(_Dir,[]) ->
+    ok;
+write_cross_cover_info(Dir,Cross) ->
+    write_binary_file(filename:join(Dir,?cross_cover_info),
+		      term_to_binary(Cross)).
+
+%% For each test from which there are cross cover analysed
+%% modules, write a cross cover log (cross_cover.html).
+write_cross_cover_logs([{Tag,Coverage}|T],TagDirMods) ->
+    case lists:keyfind(Tag,1,TagDirMods) of
+	{_,Dir,Mods} when Mods=/=[] ->
+	    write_binary_file(filename:join(Dir,?raw_cross_coverlog_name),
+			      term_to_binary(Coverage)),
 	    CoverLogName = filename:join(Dir,?cross_coverlog_name),
-	    {ok,CoverLog} = file:open(CoverLogName, [write]),
+	    {ok,CoverLog} = open_html_file(CoverLogName),
 	    write_coverlog_header(CoverLog),
 	    io:fwrite(CoverLog,
 		      "<h1>Coverage results for \'~w\' from all tests</h1>\n",
-		      [App]),
+		      [Tag]),
 	    write_cover_result_table(CoverLog, Coverage),
-	    io:fwrite("Written file ~p\n", [CoverLogName])
+	    io:fwrite("Written file ~tp\n", [CoverLogName]);
+	_ ->
+	    ok
     end,
-    write_cross_cover_logs(T);
-write_cross_cover_logs([]) ->
+    write_cross_cover_logs(T,TagDirMods);
+write_cross_cover_logs([],_) ->
     io:fwrite("done\n", []).
 
-%% Find all exported coverdata files. First find all the latest
-%% run.<timestamp> directories, and the check if there is a file named
-%% all.coverdata.
-get_coverdata_files() ->
-    PossibleFiles = [last_coverdata_file(Dir) ||
-			Dir <- filelib:wildcard([$*|?logdir_ext]),
-			filelib:is_dir(Dir)],
-    [File || File <- PossibleFiles, filelib:is_file(File)].
+%% Get the latest run.<timestamp> directories
+get_latest_run_dirs([{Tag,Dir}|Rest]) ->
+    [{Tag,get_latest_run_dir(Dir)} | get_latest_run_dirs(Rest)];
+get_latest_run_dirs([]) ->
+    [].
 
-last_coverdata_file(Dir) ->
-    LastDir = last_test(filelib:wildcard(filename:join(Dir,"run.[1-2]*")),false),
-    filename:join(LastDir,"all.coverdata").
+get_latest_run_dir(Dir) ->
+    case filelib:wildcard(filename:join(Dir,"run.[1-2]*")) of
+	[] ->
+	    Dir;
+	[H|T] ->
+	    get_latest_dir(T,H)
+    end.
 
-
-%% Find the latest run.<timestamp> directory for the given application.
-last_test_for_app(App) ->
-    AppLogDir = atom_to_list(App)++?logdir_ext,
-    last_test(filelib:wildcard(filename:join(AppLogDir,"run.[1-2]*")),false).
-
-last_test([Run|Rest], false) ->
-    last_test(Rest, Run);
-last_test([Run|Rest], Latest) when Run > Latest ->
-    last_test(Rest, Run);
-last_test([_|Rest], Latest) ->
-    last_test(Rest, Latest);
-last_test([], Latest) ->
+get_latest_dir([H|T],Latest) when H>Latest ->
+    get_latest_dir(T,H);
+get_latest_dir([_|T],Latest) ->
+    get_latest_dir(T,Latest);
+get_latest_dir([],Latest) ->
     Latest.
 
-%% Sort modules according to the application they belong to.
-%% Return [{App,LastTestDir,ModuleList}]
-sort_modules([M|Modules], Acc) ->
-    App = get_app(M),
-    Acc1 =
-	case lists:keysearch(App, 1, Acc) of
-	    {value,{App,LastTest,List}} ->
-		lists:keyreplace(App, 1, Acc, {App,LastTest,[M|List]});
-	    false ->
-		[{App,last_test_for_app(App),[M]}|Acc]
-	end,
-    sort_modules(Modules, Acc1);
-sort_modules([], Acc) ->
+get_all_cross_info([{_Tag,Dir}|Rest],Acc) ->
+    case file:read_file(filename:join(Dir,?cross_cover_info)) of
+	{ok,Bin} ->
+	    TagMods = binary_to_term(Bin),
+	    get_all_cross_info(Rest,TagMods++Acc);
+	_ ->
+	    get_all_cross_info(Rest,Acc)
+    end;
+get_all_cross_info([],Acc) ->
     Acc.
 
-get_app(Module) ->
-    Beam = code:which(Module),
-    AppDir = filename:basename(filename:dirname(filename:dirname(Beam))),
-    [AppStr|_] = string:tokens(AppDir,"-"),
-    list_to_atom(AppStr).
+%% Associate the cross cover modules with their log directories
+add_cross_modules(TagMods,TagDirs)->
+    do_add_cross_modules(TagMods,[{Tag,Dir,[]} || {Tag,Dir} <- TagDirs]).
+do_add_cross_modules([{Tag,Mods1}|TagMods],TagDirMods)->
+    NewTagDirMods =
+	case lists:keytake(Tag,1,TagDirMods) of
+	    {value,{Tag,Dir,Mods},Rest} ->
+		[{Tag,Dir,lists:umerge(lists:sort(Mods1),Mods)}|Rest];
+	    false ->
+		TagDirMods
+	end,
+    do_add_cross_modules(TagMods,NewTagDirMods);
+do_add_cross_modules([],TagDirMods) ->
+    %% Just to get the modules in the same order as in the normal cover log
+    [{Tag,Dir,lists:reverse(Mods)} || {Tag,Dir,Mods} <- TagDirMods].
+
+%% Find all exported coverdata files.
+get_coverdata_files(TagDirMods) ->
+    lists:flatmap(
+      fun({_,LatestDir,_}) ->
+	      filelib:wildcard(filename:join(LatestDir,"all.coverdata"))
+      end,
+      TagDirMods).
 
 
-%% For each application, analyse all modules
+%% For each test, analyse all modules
 %% Used for cross cover analysis.
-analyse_apps([{App,LastTest,Modules}|T], DetailsFun, Acc) ->
+analyse_tests([{Tag,LastTest,Modules}|T], DetailsFun, Acc) ->
     Cov = analyse_modules(LastTest, Modules, DetailsFun, []),
-    analyse_apps(T, DetailsFun, [{App,Cov}|Acc]);
-analyse_apps([], _DetailsFun, Acc) ->
+    analyse_tests(T, DetailsFun, [{Tag,Cov}|Acc]);
+analyse_tests([], _DetailsFun, Acc) ->
     Acc.
 
 %% Analyse each module
@@ -5394,38 +5399,9 @@ analyse_modules(_Dir, [], _DetailsFun, Acc) ->
     Acc.
 
 
-%% Read the cross cover file (cross.cover)
-get_all_cross_modules() ->
-    get_cross_modules(all).
-get_cross_modules(App) ->
-    case file:consult(?cross_cover_file) of
-	{ok,List} ->
-	    get_cross_modules(App, List, []);
-	_X ->
-	    []
-    end.
-
-get_cross_modules(App, [{_To,Modules}|T], Acc) when App==all->
-    get_cross_modules(App, T, Acc ++ Modules);
-get_cross_modules(App, [{To,Modules}|T], Acc) when To==App; To==all->
-    get_cross_modules(App, T, Acc ++ Modules);
-get_cross_modules(App, [_H|T], Acc) ->
-    get_cross_modules(App, T, Acc);
-get_cross_modules(_App, [], Acc) ->
-    Acc.
-
-
 %% Support functions for writing the cover logs (both cross and normal)
 write_coverlog_header(CoverLog) ->
-    case catch
-	io:fwrite(CoverLog,
-		  "<!DOCTYPE HTML PUBLIC \"-//W3C//DTD HTML 3.2 Final//EN\">\n"
-		  "<!-- autogenerated by '~w'. -->\n"
-		  "<html>\n"
-		  "<head><title>Coverage results</title></head>\n"
-		  "<body bgcolor=\"white\" text=\"black\" "
-		  "link=\"blue\" vlink=\"purple\" alink=\"red\">",
-		  [?MODULE]) of
+    case catch io:put_chars(CoverLog,html_header("Coverage results")) of
 	{'EXIT',Reason} ->
 	    io:format("\n\nERROR: Could not write normal heading in coverlog.\n"
 		      "CoverLog: ~w\n"
@@ -5444,20 +5420,22 @@ format_analyse(M,Cov,NotCov,undefined) ->
 		  "<td align=right>~w</td></tr>\n",
 		  [M,pc(Cov,NotCov),Cov,NotCov]);
 format_analyse(M,Cov,NotCov,{file,File}) ->
-    io_lib:fwrite("<tr><td><a href=\"~s\">~w</a></td>"
+    io_lib:fwrite("<tr><td><a href=\"~ts\">~w</a></td>"
 		  "<td align=right>~w %</td>"
 		  "<td align=right>~w</td>"
 		  "<td align=right>~w</td></tr>\n",
-		  [filename:basename(File),M,pc(Cov,NotCov),Cov,NotCov]);
+		  [uri_encode(filename:basename(File)),
+		   M,pc(Cov,NotCov),Cov,NotCov]);
 format_analyse(M,Cov,NotCov,{lines,Lines}) ->
     CoverOutName = atom_to_list(M)++".COVER.html",
-    {ok,CoverOut} = file:open(CoverOutName, [write]),
+    {ok,CoverOut} = open_html_file(CoverOutName),
     write_not_covered(CoverOut,M,Lines),
-    io_lib:fwrite("<tr><td><a href=\"~s\">~w</a></td>"
+    ok = file:close(CoverOut),
+    io_lib:fwrite("<tr><td><a href=\"~ts\">~w</a></td>"
 		  "<td align=right>~w %</td>"
 		  "<td align=right>~w</td>"
 		  "<td align=right>~w</td></tr>\n",
-		  [CoverOutName,M,pc(Cov,NotCov),Cov,NotCov]);
+		  [uri_encode(CoverOutName),M,pc(Cov,NotCov),Cov,NotCov]);
 format_analyse(M,Cov,NotCov,{error,_}) ->
     io_lib:fwrite("<tr><td>~w</td>"
 		  "<td align=right>~w %</td>"
@@ -5473,8 +5451,8 @@ pc(Cov,NotCov) ->
 
 
 write_not_covered(CoverOut,M,Lines) ->
+    io:put_chars(CoverOut,html_header("Coverage results for "++atom_to_list(M))),
     io:fwrite(CoverOut,
-	      "<html>\n"
 	      "The following lines in module ~w are not covered:\n"
 	      "<table border=3 cellpadding=5>\n"
 	      "<th>Line Number</th>\n",
@@ -5485,24 +5463,25 @@ write_not_covered(CoverOut,M,Lines) ->
 			  ok
 		  end,
 		  Lines),
-    io:fwrite(CoverOut,"</table>\n</html>\n", []).
+    io:put_chars(CoverOut,"</table>\n</body>\n</html>\n").
 
 
 write_default_coverlog(TestDir) ->
-    {ok,CoverLog} = file:open(filename:join(TestDir,?coverlog_name), [write]),
+    {ok,CoverLog} = open_html_file(filename:join(TestDir,?coverlog_name)),
     write_coverlog_header(CoverLog),
-    io:fwrite(CoverLog,"Cover tool is not used\n</body></html>\n", []),
-    file:close(CoverLog).
+    io:put_chars(CoverLog,"Cover tool is not used\n</body></html>\n"),
+    ok = file:close(CoverLog).
 
 write_default_cross_coverlog(TestDir) ->
     {ok,CrossCoverLog} =
-	file:open(filename:join(TestDir,?cross_coverlog_name), [write]),
+	open_html_file(filename:join(TestDir,?cross_coverlog_name)),
     write_coverlog_header(CrossCoverLog),
-    io:fwrite(CrossCoverLog,
-	      "No cross cover modules exist for this application,<br>"
-	      "or cross cover analysis is not completed.\n"
-	      "</body></html>\n", []),
-    file:close(CrossCoverLog).
+    io:put_chars(CrossCoverLog,
+		 ["No cross cover modules exist for this application,",
+		  xhtml("<br>","<br />"),
+		  "or cross cover analysis is not completed.\n"
+		  "</body></html>\n"]),
+    ok = file:close(CrossCoverLog).
 
 write_cover_result_table(CoverLog,Coverage) ->
     io:fwrite(CoverLog,
@@ -5513,7 +5492,7 @@ write_cover_result_table(CoverLog,Coverage) ->
     {TotCov,TotNotCov} =
 	lists:foldl(fun({M,{Cov,NotCov,Details}},{AccCov,AccNotCov}) ->
 			    Str = format_analyse(M,Cov,NotCov,Details),
-			    io:fwrite(CoverLog,"~s", [Str]),
+			    io:fwrite(CoverLog,"~ts", [Str]),
 			    {AccCov+Cov,AccNotCov+NotCov};
 		       ({_M,{error,_Reason}},{AccCov,AccNotCov}) ->
 			    {AccCov,AccNotCov}
@@ -5528,5 +5507,97 @@ write_cover_result_table(CoverLog,Coverage) ->
 	      "</body>\n"
 	      "</html>\n",
 	      [TotPercent,TotCov,TotNotCov]),
-    file:close(CoverLog),
+    ok = file:close(CoverLog),
     TotPercent.
+
+
+%%%-----------------------------------------------------------------
+%%% Support functions for writing files
+
+%% HTML files are always written with utf8 encoding
+html_header(Title) ->
+    ["<!DOCTYPE HTML PUBLIC \"-//W3C//DTD HTML 3.2 Final//EN\">\n"
+     "<!-- autogenerated by '", atom_to_list(?MODULE), "'. -->\n"
+     "<html>\n"
+     "<head>\n"
+     "<title>", Title, "</title>\n"
+     "<meta http-equiv=\"cache-control\" content=\"no-cache\">\n"
+     "<meta http-equiv=\"content-type\" content=\"text/html; charset=utf-8\">\n"
+     "</head>\n"
+     "<body bgcolor=\"white\" text=\"black\" "
+     "link=\"blue\" vlink=\"purple\" alink=\"red\">\n"].
+
+open_html_file(File) ->
+    open_utf8_file(File).
+
+open_html_file(File,Opts) ->
+    open_utf8_file(File,Opts).
+
+write_html_file(File,Content) ->
+    write_file(File,Content,utf8).
+
+%% The 'major' log file, which is a pure text file is also written
+%% with utf8 encoding
+open_utf8_file(File) ->
+    case file:open(File,AllOpts=[write,{encoding,utf8}]) of
+	{error,Reason} -> {error,{Reason,{File,AllOpts}}};
+	Result         -> Result
+    end.
+
+open_utf8_file(File,Opts) ->
+    case file:open(File,AllOpts=[{encoding,utf8}|Opts]) of
+	{error,Reason} -> {error,{Reason,{File,AllOpts}}};
+	Result         -> Result
+    end.
+
+%% Write a file with specified encoding
+write_file(File,Content,latin1) ->
+    file:write_file(File,Content);
+write_file(File,Content,utf8) ->
+    write_binary_file(File,unicode:characters_to_binary(Content)).
+
+%% Write a file with only binary data
+write_binary_file(File,Content) ->
+    file:write_file(File,Content).
+
+%% Encoding of hyperlinks in HTML files
+uri_encode(File) ->
+    Encoding = file:native_name_encoding(),
+    uri_encode(File,Encoding).
+
+uri_encode(File,Encoding) ->
+    Components = filename:split(File),
+    filename:join([uri_encode_comp(C,Encoding) || C <- Components]).
+
+%% Encode the reference to a "filename of the given encoding" so it
+%% can be inserted in a utf8 encoded HTML file.
+%% This does almost the same as http_uri:encode/1, except
+%% 1. it does not convert @, : and / (in order to preserve nodename and c:/)
+%% 2. if the file name is in latin1, it also encodes all
+%%    characters >127 - i.e. latin1 but not ASCII.
+uri_encode_comp([Char|Chars],Encoding) ->
+    Reserved = sets:is_element(Char, reserved()),
+    case (Char>127 andalso Encoding==latin1) orelse Reserved of
+	true ->
+	    [ $% | http_util:integer_to_hexlist(Char)] ++
+		uri_encode_comp(Chars,Encoding);
+	false ->
+	    [Char | uri_encode_comp(Chars,Encoding)]
+    end;
+uri_encode_comp([],_) ->
+    [].
+
+%% Copied from http_uri.erl, but slightly modified
+%% (not converting @, : and /)
+reserved() ->
+    sets:from_list([$;, $&, $=, $+, $,, $?,
+		    $#, $[, $], $<, $>, $\", ${, $}, $|,
+                    $\\, $', $^, $%, $ ]).
+
+encoding(File) ->
+    case epp:read_encoding(File) of
+	none ->
+	    epp:default_encoding();
+	E ->
+	    E
+    end.

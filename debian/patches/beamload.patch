@@ -1,0 +1,15 @@
+Author: Sergei Golovan
+Description: Patch fixes function declaration.
+Bugs-Debian: https://bugs.debian.org/cgi-bin/bugreport.cgi?bug=747593
+
+--- a/erts/emulator/beam/beam_load.c
++++ b/erts/emulator/beam/beam_load.c
+@@ -43,7 +43,7 @@
+ #include "hipe_arch.h"
+ #endif
+ 
+-ErlDrvBinary* erts_gzinflate_buffer(char*, int);
++ErlDrvBinary* erts_gzinflate_buffer(char*, uLong);
+ 
+ #define MAX_OPARGS 8
+ #define CALLED    0

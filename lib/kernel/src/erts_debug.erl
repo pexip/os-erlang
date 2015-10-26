@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %% 
-%% Copyright Ericsson AB 1999-2009. All Rights Reserved.
+%% Copyright Ericsson AB 1999-2013. All Rights Reserved.
 %% 
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -28,6 +28,135 @@
 %%   same/2
 %%   flat_size/1
 
+%%% BIFs
+
+-export([breakpoint/2, disassemble/1, display/1, dist_ext_to_term/2,
+         dump_monitors/1, dump_links/1, flat_size/1,
+         get_internal_state/1, instructions/0, lock_counters/1,
+         same/2, set_internal_state/2]).
+
+-spec breakpoint(MFA, Flag) -> non_neg_integer() when
+      MFA :: {Module :: module(),
+              Function :: atom(),
+              Arity :: arity() | '_'},
+      Flag :: boolean().
+
+breakpoint(_, _) ->
+    erlang:nif_error(undef).
+
+-spec disassemble(What) -> false | undef | Result when
+      What :: MFA | Address,
+      Result :: {Address, Code, MFA},
+      MFA :: mfa(),
+      Address :: non_neg_integer(),
+      Code :: binary().
+
+disassemble(_) ->
+    erlang:nif_error(undef).
+
+-spec display(Term) -> string() when
+      Term :: term().
+
+display(_) ->
+    erlang:nif_error(undef).
+
+-spec dist_ext_to_term(Tuple, Binary) -> term() when
+      Tuple :: tuple(),
+      Binary :: binary().
+
+dist_ext_to_term(_, _) ->
+    erlang:nif_error(undef).
+
+-spec dump_monitors(Id) -> true when
+      Id :: pid() | atom().
+
+dump_monitors(_) ->
+    erlang:nif_error(undef).
+
+-spec dump_links(Id) -> true when
+      Id :: pid() | port() | atom().
+
+dump_links(_) ->
+    erlang:nif_error(undef).
+
+-spec flat_size(Term) -> non_neg_integer() when
+      Term :: term().
+
+flat_size(_) ->
+    erlang:nif_error(undef).
+
+-spec get_internal_state(W) -> term() when
+      W :: reds_left | node_and_dist_references | monitoring_nodes
+         | next_pid | 'DbTable_words' | check_io_debug
+         | process_info_args | processes | processes_bif_info
+         | max_atom_out_cache_index | nbalance | available_internal_state
+         | force_heap_frags | memory
+         | {process_status, pid()}
+         | {link_list, pid() | port() | node()}
+         | {monitor_list, pid() | node()}
+         | {channel_number, non_neg_integer()}
+         | {have_pending_exit, pid() | port() | atom()}
+         | {binary_info, binary()}
+         | {term_to_binary_no_funs, term()}
+         | {dist_port, port()}
+         | {atom_out_cache_index, atom()}
+         | {fake_scheduler_bindings,
+            default_bind | spread | processor_spread | thread_spread
+            | thread_no_node_processor_spread | no_node_processor_spread
+            | no_node_thread_spread | no_spread | unbound}
+         | {reader_groups_map, non_neg_integer()}.
+
+get_internal_state(_) ->
+    erlang:nif_error(undef).
+
+-spec instructions() -> [string()].
+
+instructions() ->
+    erlang:nif_error(undef).
+
+-spec lock_counters(info) -> term();
+                      (clear) -> ok;
+                      ({copy_save, boolean()}) -> boolean();
+                      ({process_locks, boolean()}) -> boolean().
+
+lock_counters(_) ->
+    erlang:nif_error(undef).
+
+-spec same(Term1, Term2) -> boolean() when
+      Term1 :: term(),
+      Term2 :: term().
+
+same(_, _) ->
+    erlang:nif_error(undef).
+
+-spec set_internal_state(available_internal_state, boolean()) -> boolean();
+                           (reds_left, non_neg_integer()) -> true;
+                           (block, non_neg_integer()) -> true;
+                           (sleep, non_neg_integer()) -> true;
+                           (block_scheduler, non_neg_integer()) -> true;
+                           (next_pid, non_neg_integer()) -> false | integer();
+                           (force_gc, pid() | atom()) -> boolean();
+                           (send_fake_exit_signal, {pid() | port(), pid(), term()}) -> dead | message | unaffected | exit;
+                           (colliding_names, {atom(), non_neg_integer()}) ->
+                                   [atom()];
+                           (binary_loop_limit, default) -> -1;
+                           (binary_loop_limit, non_neg_integer()) -> non_neg_integer();
+                           (re_loop_limit, default) -> -1;
+                           (re_loop_limit, non_neg_integer()) -> non_neg_integer();
+                           (unicode_loop_limit, default) -> -1;
+                           (unicode_loop_limit, non_neg_integer()) -> non_neg_integer();
+                           (hipe_test_reschedule_suspend, term()) -> nil();
+                           (hipe_test_reschedule_resume, pid() | port()) -> boolean();
+                           (test_long_gc_sleep, non_neg_integer()) -> true;
+                           (kill_dist_connection, port()) -> boolean();
+                           (not_running_optimization, boolean()) -> boolean();
+                           (wait, deallocations) -> ok.
+
+set_internal_state(_, _) ->
+    erlang:nif_error(undef).
+
+%%% End of BIFs
+
 %% size(Term)
 %%  Returns the size of Term in actual heap words. Shared subterms are
 %%  counted once.  Example: If A = [a,b], B =[A,A] then size(B) returns 8,
@@ -53,6 +182,16 @@ size(Tuple, Seen0, Sum0) when is_tuple(Tuple) ->
 	    Sum = Sum0 + 1 + tuple_size(Tuple),
 	    tuple_size(1, tuple_size(Tuple), Tuple, Seen, Sum)
     end;
+size(Map, Seen0, Sum) when is_map(Map) ->
+    case remember_term(Map, Seen0) of
+	seen -> {Sum,Seen0};
+	Seen -> map_size(Map, Seen, Sum)
+    end;
+size(Fun, Seen0, Sum) when is_function(Fun) ->
+    case remember_term(Fun, Seen0) of
+	seen -> {Sum,Seen0};
+	Seen -> fun_size(Fun, Seen, Sum)
+    end;
 size(Term, Seen0, Sum) ->
     case erts_debug:flat_size(Term) of
 	0 -> {Sum,Seen0};
@@ -68,7 +207,28 @@ tuple_size(I, Sz, _, Seen, Sum) when I > Sz ->
 tuple_size(I, Sz, Tuple, Seen0, Sum0) ->
     {Sum,Seen} = size(element(I, Tuple), Seen0, Sum0),
     tuple_size(I+1, Sz, Tuple, Seen, Sum).
-	    
+
+map_size(Map,Seen0,Sum0) ->
+    Kt = erts_internal:map_to_tuple_keys(Map),
+    Vs = maps:values(Map),
+    {Sum1,Seen1} = size(Kt,Seen0,Sum0),
+    fold_size(Vs,Seen1,Sum1+length(Vs)+3).
+
+fun_size(Fun, Seen, Sum) ->
+    case erlang:fun_info(Fun, type) of
+	{type,external} ->
+	    {Sum + erts_debug:flat_size(Fun),Seen};
+	{type,local} ->
+	    Sz = erts_debug:flat_size(fun() -> ok end),
+	    {env,Env} = erlang:fun_info(Fun, env),
+	    fold_size(Env, Seen, Sum+Sz+length(Env))
+    end.
+
+fold_size([H|T], Seen0, Sum0) ->
+    {Sum,Seen} = size(H, Seen0, Sum0),
+    fold_size(T, Seen, Sum);
+fold_size([], Seen, Sum) -> {Sum,Seen}.
+
 remember_term(Term, Seen) ->
     case gb_trees:lookup(Term, Seen) of
 	none -> gb_trees:insert(Term, [Term], Seen);
@@ -139,7 +299,7 @@ dff(Name, Fs) when is_list(Name) ->
 	    try
 		dff(F, Fs)
 	    after
-		file:close(F)
+		_ = file:close(F)
 	    end;
 	{error,Reason} ->
 	    {error,{badopen,Reason}}

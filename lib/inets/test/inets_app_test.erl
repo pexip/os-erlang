@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %% 
-%% Copyright Ericsson AB 2002-2011. All Rights Reserved.
+%% Copyright Ericsson AB 2002-2012. All Rights Reserved.
 %% 
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -35,6 +35,15 @@
 init_per_testcase(undef_funcs, Config) ->
     NewConfig = lists:keydelete(watchdog, 1, Config),
     Dog = test_server:timetrap(inets_test_lib:minutes(10)),
+
+    %% We need to check if there is a point to run this test.
+    %% On some platforms, crypto will not build, which in turn
+    %% causes ssl to not build (at this time, this will
+    %% change in the future).
+    %% So, we first check if we can start crypto, and if not,
+    %% we skip this test case!
+    ?ENSURE_STARTED(crypto),
+
     [{watchdog, Dog}| NewConfig];
 init_per_testcase(_, Config) ->
     Config.
@@ -45,8 +54,7 @@ end_per_testcase(_Case, Config) ->
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
 all() -> 
-    [fields, modules, exportall, app_depend,
-     undef_funcs].
+    [fields, modules, exportall, app_depend, undef_funcs].
 
 groups() -> 
     [].
@@ -241,20 +249,6 @@ undef_funcs(suite) ->
 undef_funcs(doc) ->
     [];
 undef_funcs(Config) when is_list(Config) ->
-    %% We need to check if there is a point to run this test.
-    %% On some platforms, crypto will not build, which in turn
-    %% causes ssl to not to not build (at this time, this will
-    %% change in the future).
-    %% So, we first check if we can start crypto, and if not, 
-    %% we skip this test case!
-    case (catch crypto:start()) of
-	ok ->
-	    ok;
-	{error, {already_started, crypto}} ->
-	    ok;
-	_ ->
-	    ?SKIP(crypto_start_check_failed)
-    end, 
     App            = inets,
     AppFile        = key1search(app_file, Config),
     Mods           = key1search(modules, AppFile),
@@ -266,7 +260,7 @@ undef_funcs(Config) when is_list(Config) ->
     ok             = xref:set_default(XRef, 
 				      [{verbose,false},{warnings,false}]),
     XRefName       = undef_funcs_make_name(App, xref_name),
-    {ok, XRefName} = xref:add_release(XRef, Root, {name,XRefName}),
+    {ok, XRefName} = xref:add_release(XRef, Root, {name, XRefName}),
     {ok, App}      = xref:replace_application(XRef, App, EbinDir),
     {ok, Undefs}   = xref:analyze(XRef, undefined_function_calls),
     xref:stop(XRef),

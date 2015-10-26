@@ -1,7 +1,7 @@
 #
 # %CopyrightBegin%
 # 
-# Copyright Ericsson AB 2000-2011. All Rights Reserved.
+# Copyright Ericsson AB 2000-2013. All Rights Reserved.
 # 
 # The contents of this file are subject to the Erlang Public License,
 # Version 1.1, (the "License"); you may not use this file except in
@@ -29,9 +29,7 @@ VSN=$(JINTERFACE_VSN)
 # Common Macros
 # ----------------------------------------------------
 
-# call recursive make explicitly below
-# due to separate makefiles for Ronja & OTP
-# SUB_DIRECTORIES = com/ericsson/otp/erlang 
+SUB_DIRECTORIES = com/ericsson/otp/erlang
 
 SPECIAL_TARGETS = 
 
@@ -49,17 +47,7 @@ POM_SRC= $(POM_FILE).src
 # ----------------------------------------------------
 
 $(POM_TARGET): $(POM_SRC) ../vsn.mk
-	sed -e 's;%VSN%;$(VSN);' $< > $@
+	$(vsn_verbose)sed -e 's;%VSN%;$(VSN);' $< > $@
 
-# ----------------------------------------------------
-# Default Subdir Targets
-# ----------------------------------------------------
 
-.PHONY: debug opt instr release docs release_docs tests release_tests clean depend
-
-debug opt instr release docs release_docs tests release_tests clean depend: $(TARGET_FILES)
-	set -e; set -x; \
-	case "$(MAKE)" in *clearmake*) tflag="-T";; *) tflag="";; esac; \
-	if test -f com/ericsson/otp/erlang/ignore_config_record.inf; then xflag=$$tflag; fi; \
-	(cd com/ericsson/otp/erlang && $(MAKE) -f Makefile.otp $$xflag $@)
-
+include $(ERL_TOP)/make/otp_subdir.mk

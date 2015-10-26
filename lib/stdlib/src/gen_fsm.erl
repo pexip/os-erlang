@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 1996-2010. All Rights Reserved.
+%% Copyright Ericsson AB 1996-2014. All Rights Reserved.
 %%
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -113,13 +113,13 @@
 	 start_timer/2,send_event_after/2,cancel_timer/1,
 	 enter_loop/4, enter_loop/5, enter_loop/6, wake_hib/6]).
 
--export([behaviour_info/1]).
-
 %% Internal exports
 -export([init_it/6,
 	 system_continue/3,
 	 system_terminate/4,
 	 system_code_change/4,
+	 system_get_state/1,
+	 system_replace_state/2,
 	 format_status/2]).
 
 -import(error_logger, [format/2]).
@@ -128,13 +128,38 @@
 %%% Interface functions.
 %%% ---------------------------------------------------
 
--spec behaviour_info(atom()) -> 'undefined' | [{atom(), arity()}].
-
-behaviour_info(callbacks) ->
-    [{init,1},{handle_event,3},{handle_sync_event,4},{handle_info,3},
-     {terminate,3},{code_change,4}];
-behaviour_info(_Other) ->
-    undefined.
+-callback init(Args :: term()) ->
+    {ok, StateName :: atom(), StateData :: term()} |
+    {ok, StateName :: atom(), StateData :: term(), timeout() | hibernate} |
+    {stop, Reason :: term()} | ignore.
+-callback handle_event(Event :: term(), StateName :: atom(),
+                       StateData :: term()) ->
+    {next_state, NextStateName :: atom(), NewStateData :: term()} |
+    {next_state, NextStateName :: atom(), NewStateData :: term(),
+     timeout() | hibernate} |
+    {stop, Reason :: term(), NewStateData :: term()}.
+-callback handle_sync_event(Event :: term(), From :: {pid(), Tag :: term()},
+                            StateName :: atom(), StateData :: term()) ->
+    {reply, Reply :: term(), NextStateName :: atom(), NewStateData :: term()} |
+    {reply, Reply :: term(), NextStateName :: atom(), NewStateData :: term(),
+     timeout() | hibernate} |
+    {next_state, NextStateName :: atom(), NewStateData :: term()} |
+    {next_state, NextStateName :: atom(), NewStateData :: term(),
+     timeout() | hibernate} |
+    {stop, Reason :: term(), Reply :: term(), NewStateData :: term()} |
+    {stop, Reason :: term(), NewStateData :: term()}.
+-callback handle_info(Info :: term(), StateName :: atom(),
+                      StateData :: term()) ->
+    {next_state, NextStateName :: atom(), NewStateData :: term()} |
+    {next_state, NextStateName :: atom(), NewStateData :: term(),
+     timeout() | hibernate} |
+    {stop, Reason :: normal | term(), NewStateData :: term()}.
+-callback terminate(Reason :: normal | shutdown | {shutdown, term()}
+		    | term(), StateName :: atom(), StateData :: term()) ->
+    term().
+-callback code_change(OldVsn :: term() | {down, term()}, StateName :: atom(),
+		      StateData :: term(), Extra :: term()) ->
+    {ok, NextStateName :: atom(), NewStateData :: term()}.
 
 %%% ---------------------------------------------------
 %%% Starts a generic state machine.
@@ -142,7 +167,7 @@ behaviour_info(_Other) ->
 %%% start(Name, Mod, Args, Options)
 %%% start_link(Mod, Args, Options)
 %%% start_link(Name, Mod, Args, Options) where:
-%%%    Name ::= {local, atom()} | {global, atom()}
+%%%    Name ::= {local, atom()} | {global, atom()} | {via, atom(), term()}
 %%%    Mod  ::= atom(), callback module implementing the 'real' fsm
 %%%    Args ::= term(), init arguments (to Mod:init/1)
 %%%    Options ::= [{debug, [Flag]}]
@@ -168,6 +193,9 @@ start_link(Name, Mod, Args, Options) ->
 send_event({global, Name}, Event) ->
     catch global:send(Name, {'$gen_event', Event}),
     ok;
+send_event({via, Mod, Name}, Event) ->
+    catch Mod:send(Name, {'$gen_event', Event}),
+    ok;
 send_event(Name, Event) ->
     Name ! {'$gen_event', Event},
     ok.
@@ -190,6 +218,9 @@ sync_send_event(Name, Event, Timeout) ->
 
 send_all_state_event({global, Name}, Event) ->
     catch global:send(Name, {'$gen_all_state_event', Event}),
+    ok;
+send_all_state_event({via, Mod, Name}, Event) ->
+    catch Mod:send(Name, {'$gen_all_state_event', Event}),
     ok;
 send_all_state_event(Name, Event) ->
     Name ! {'$gen_all_state_event', Event},
@@ -250,7 +281,10 @@ cancel_timer(Ref) ->
 enter_loop(Mod, Options, StateName, StateData) ->
     enter_loop(Mod, Options, StateName, StateData, self(), infinity).
 
-enter_loop(Mod, Options, StateName, StateData, ServerName = {_,_}) ->
+enter_loop(Mod, Options, StateName, StateData, {Scope,_} = ServerName)
+  when Scope == local; Scope == global ->
+    enter_loop(Mod, Options, StateName, StateData, ServerName,infinity);
+enter_loop(Mod, Options, StateName, StateData, {via,_,_} = ServerName) ->
     enter_loop(Mod, Options, StateName, StateData, ServerName,infinity);
 enter_loop(Mod, Options, StateName, StateData, Timeout) ->
     enter_loop(Mod, Options, StateName, StateData, self(), Timeout).
@@ -273,13 +307,22 @@ get_proc_name({local, Name}) ->
 	    exit(process_not_registered)
     end;
 get_proc_name({global, Name}) ->
-    case global:safe_whereis_name(Name) of
+    case global:whereis_name(Name) of
 	undefined ->
 	    exit(process_not_registered_globally);
 	Pid when Pid =:= self() ->
 	    Name;
 	_Pid ->
 	    exit(process_not_registered_globally)
+    end;
+get_proc_name({via, Mod, Name}) ->
+    case Mod:whereis_name(Name) of
+	undefined ->
+	    exit({process_not_registered_via, Mod});
+	Pid when Pid =:= self() ->
+	    Name;
+	_Pid ->
+	    exit({process_not_registered_via, Mod})
     end.
 
 get_parent() ->
@@ -295,9 +338,9 @@ get_parent() ->
 name_to_pid(Name) ->
     case whereis(Name) of
 	undefined ->
-	    case global:safe_whereis_name(Name) of
+	    case global:whereis_name(Name) of
 		undefined ->
-		    exit(could_not_find_registerd_name);
+		    exit(could_not_find_registered_name);
 		Pid ->
 		    Pid
 	    end;
@@ -325,12 +368,15 @@ init_it(Starter, Parent, Name0, Mod, Args, Options) ->
 	    proc_lib:init_ack(Starter, {ok, self()}), 	    
 	    loop(Parent, Name, StateName, StateData, Mod, Timeout, Debug);
 	{stop, Reason} ->
+	    unregister_name(Name0),
 	    proc_lib:init_ack(Starter, {error, Reason}),
 	    exit(Reason);
 	ignore ->
+	    unregister_name(Name0),
 	    proc_lib:init_ack(Starter, ignore),
 	    exit(normal);
 	{'EXIT', Reason} ->
+	    unregister_name(Name0),
 	    proc_lib:init_ack(Starter, {error, Reason}),
 	    exit(Reason);
 	Else ->
@@ -341,7 +387,17 @@ init_it(Starter, Parent, Name0, Mod, Args, Options) ->
 
 name({local,Name}) -> Name;
 name({global,Name}) -> Name;
+name({via,_, Name}) -> Name;
 name(Pid) when is_pid(Pid) -> Pid.
+
+unregister_name({local,Name}) ->
+    _ = (catch unregister(Name));
+unregister_name({global,Name}) ->
+    _ = global:unregister_name(Name);
+unregister_name({via, Mod, Name}) ->
+    _ = Mod:unregister_name(Name);
+unregister_name(Pid) when is_pid(Pid) ->
+    Pid.
 
 %%-----------------------------------------------------------------
 %% The MAIN loop
@@ -401,6 +457,13 @@ system_code_change([Name, StateName, StateData, Mod, Time],
 	    {ok, [Name, NewStateName, NewStateData, Mod, Time]};
 	Else -> Else
     end.
+
+system_get_state([_Name, StateName, StateData, _Mod, _Time]) ->
+    {ok, {StateName, StateData}}.
+
+system_replace_state(StateFun, [Name, StateName, StateData, Mod, Time]) ->
+    Result = {NStateName, NStateData} = StateFun({StateName, StateData}),
+    {ok, Result, [Name, NStateName, NStateData, Mod, Time]}.
 
 %%-----------------------------------------------------------------
 %% Format debug messages.  Print them as the call-back module sees
@@ -484,7 +547,7 @@ handle_msg(Msg, Parent, Name, StateName, StateData, Mod, _Time, Debug) ->
 	{stop, Reason, Reply, NStateData} when From =/= undefined ->
 	    {'EXIT', R} = (catch terminate(Reason, Name, Msg, Mod,
 					   StateName, NStateData, Debug)),
-	    reply(Name, From, Reply, Debug, StateName),
+	    _ = reply(Name, From, Reply, Debug, StateName),
 	    exit(R);
 	{'EXIT', What} ->
 	    terminate(What, Name, Msg, Mod, StateName, StateData, Debug);
@@ -531,7 +594,8 @@ reply(Name, {To, Tag}, Reply, Debug, StateName) ->
 terminate(Reason, Name, Msg, Mod, StateName, StateData, Debug) ->
     case catch Mod:terminate(Reason, StateName, StateData) of
 	{'EXIT', R} ->
-	    error_info(R, Name, Msg, StateName, StateData, Debug),
+	    FmtStateData = format_status(terminate, Mod, get(), StateData),
+	    error_info(R, Name, Msg, StateName, FmtStateData, Debug),
 	    exit(R);
 	_ ->
 	    case Reason of
@@ -542,17 +606,7 @@ terminate(Reason, Name, Msg, Mod, StateName, StateData, Debug) ->
  		{shutdown,_}=Shutdown ->
  		    exit(Shutdown);
 		_ ->
-                    FmtStateData =
-                        case erlang:function_exported(Mod, format_status, 2) of
-                            true ->
-                                Args = [get(), StateData],
-                                case catch Mod:format_status(terminate, Args) of
-                                    {'EXIT', _} -> StateData;
-                                    Else -> Else
-                                end;
-                            _ ->
-                                StateData
-                        end,
+                    FmtStateData = format_status(terminate, Mod, get(), StateData),
 		    error_info(Reason,Name,Msg,StateName,FmtStateData,Debug),
 		    exit(Reason)
 	    end
@@ -561,16 +615,16 @@ terminate(Reason, Name, Msg, Mod, StateName, StateData, Debug) ->
 error_info(Reason, Name, Msg, StateName, StateData, Debug) ->
     Reason1 = 
 	case Reason of
-	    {undef,[{M,F,A}|MFAs]} ->
+	    {undef,[{M,F,A,L}|MFAs]} ->
 		case code:is_loaded(M) of
 		    false ->
-			{'module could not be loaded',[{M,F,A}|MFAs]};
+			{'module could not be loaded',[{M,F,A,L}|MFAs]};
 		    _ ->
 			case erlang:function_exported(M, F, length(A)) of
 			    true ->
 				Reason;
 			    false ->
-				{'function not exported',[{M,F,A}|MFAs]}
+				{'function not exported',[{M,F,A,L}|MFAs]}
 			end
 		end;
 	    _ ->
@@ -617,21 +671,29 @@ format_status(Opt, StatusData) ->
     Header = gen:format_status_header("Status for state machine",
                                       Name),
     Log = sys:get_debug(log, Debug, []),
-    DefaultStatus = [{data, [{"StateData", StateData}]}],
-    Specfic =
-	case erlang:function_exported(Mod, format_status, 2) of
-	    true ->
-		case catch Mod:format_status(Opt,[PDict,StateData]) of
-		    {'EXIT', _} -> DefaultStatus;
-                    StatusList when is_list(StatusList) -> StatusList;
-		    Else -> [Else]
-		end;
-	    _ ->
-		DefaultStatus
-	end,
+    Specfic = format_status(Opt, Mod, PDict, StateData),
+    Specfic = case format_status(Opt, Mod, PDict, StateData) of
+		  S when is_list(S) -> S;
+		  S -> [S]
+	      end,
     [{header, Header},
      {data, [{"Status", SysState},
 	     {"Parent", Parent},
 	     {"Logged events", Log},
 	     {"StateName", StateName}]} |
      Specfic].
+
+format_status(Opt, Mod, PDict, State) ->
+    DefStatus = case Opt of
+		    terminate -> State;
+		    _ -> [{data, [{"StateData", State}]}]
+		end,
+    case erlang:function_exported(Mod, format_status, 2) of
+	true ->
+	    case catch Mod:format_status(Opt, [PDict, State]) of
+		{'EXIT', _} -> DefStatus;
+		Else -> Else
+	    end;
+	_ ->
+	    DefStatus
+    end.

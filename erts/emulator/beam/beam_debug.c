@@ -1,7 +1,7 @@
 /*
  * %CopyrightBegin%
  *
- * Copyright Ericsson AB 1998-2011. All Rights Reserved.
+ * Copyright Ericsson AB 1998-2013. All Rights Reserved.
  *
  * The contents of this file are subject to the Erlang Public License,
  * Version 1.1, (the "License"); you may not use this file except in
@@ -37,6 +37,7 @@
 #include "beam_load.h"
 #include "beam_bp.h"
 #include "erl_binary.h"
+#include "erl_thr_progress.h"
 
 #ifdef ARCH_64
 # define HEXF "%016bpX"
@@ -49,15 +50,18 @@ void dbg_bt(Process* p, Eterm* sp);
 void dbg_where(BeamInstr* addr, Eterm x0, Eterm* reg);
 
 static int print_op(int to, void *to_arg, int op, int size, BeamInstr* addr);
-Eterm
-erts_debug_same_2(Process* p, Eterm term1, Eterm term2)
+
+BIF_RETTYPE
+erts_debug_same_2(BIF_ALIST_2)
 {
-    return (term1 == term2) ? am_true : am_false;
+    return (BIF_ARG_1 == BIF_ARG_2) ? am_true : am_false;
 }
 
-Eterm
-erts_debug_flat_size_1(Process* p, Eterm term)
+BIF_RETTYPE
+erts_debug_flat_size_1(BIF_ALIST_1)
 {
+    Process* p = BIF_P;
+    Eterm term = BIF_ARG_1;
     Uint size = size_object(term);
 
     if (IS_USMALL(0, size)) {
@@ -68,14 +72,19 @@ erts_debug_flat_size_1(Process* p, Eterm term)
     }
 }
 
-Eterm
-erts_debug_breakpoint_2(Process* p, Eterm MFA, Eterm bool)
+
+BIF_RETTYPE
+erts_debug_breakpoint_2(BIF_ALIST_2)
 {
+    Process* p = BIF_P;
+    Eterm MFA = BIF_ARG_1;
+    Eterm bool = BIF_ARG_2;
     Eterm* tp;
     Eterm mfa[3];
     int i;
     int specified = 0;
     Eterm res;
+    BpFunctions f;
 
     if (bool != am_true && bool != am_false)
 	goto error;
@@ -106,18 +115,30 @@ erts_debug_breakpoint_2(Process* p, Eterm MFA, Eterm bool)
 	mfa[2] = signed_val(mfa[2]);
     }
 
-    erts_smp_proc_unlock(p, ERTS_PROC_LOCK_MAIN);
-    erts_smp_block_system(0);
-
-    if (bool == am_true) {
-	res = make_small(erts_set_debug_break(mfa, specified));
-    } else {
-	res = make_small(erts_clear_debug_break(mfa, specified));
+    if (!erts_try_seize_code_write_permission(BIF_P)) {
+	ERTS_BIF_YIELD2(bif_export[BIF_erts_debug_breakpoint_2],
+			BIF_P, BIF_ARG_1, BIF_ARG_2);
     }
+    erts_smp_proc_unlock(p, ERTS_PROC_LOCK_MAIN);
+    erts_smp_thr_progress_block();
 
-    erts_smp_release_system();
+    erts_bp_match_functions(&f, mfa, specified);
+    if (bool == am_true) {
+	erts_set_debug_break(&f);
+	erts_install_breakpoints(&f);
+	erts_commit_staged_bp();
+    } else {
+	erts_clear_debug_break(&f);
+	erts_commit_staged_bp();
+	erts_uninstall_breakpoints(&f);
+    }
+    erts_consolidate_bp_data(&f, 1);
+    res = make_small(f.matched);
+    erts_bp_free_matched_functions(&f);
+
+    erts_smp_thr_progress_unblock();
     erts_smp_proc_lock(p, ERTS_PROC_LOCK_MAIN);
-
+    erts_release_code_write_permission();
     return res;
 
  error:
@@ -175,9 +196,11 @@ erts_debug_instructions_0(BIF_ALIST_0)
     return res;
 }
 
-Eterm
-erts_debug_disassemble_1(Process* p, Eterm addr)
+BIF_RETTYPE
+erts_debug_disassemble_1(BIF_ALIST_1)
 {
+    Process* p = BIF_P;
+    Eterm addr = BIF_ARG_1;
     erts_dsprintf_buf_t *dsbufp;
     Eterm* hp;
     Eterm* tp;
@@ -197,6 +220,7 @@ erts_debug_disassemble_1(Process* p, Eterm addr)
 	    BIF_RET(am_false);
 	}
     } else if (is_tuple(addr)) {
+	ErtsCodeIndex code_ix;
 	Module* modp;
 	Eterm mod;
 	Eterm name;
@@ -215,14 +239,14 @@ erts_debug_disassemble_1(Process* p, Eterm addr)
 	    goto error;
 	}
 	arity = signed_val(tp[3]);
-	modp = erts_get_module(mod);
+	code_ix = erts_active_code_ix();
+	modp = erts_get_module(mod, code_ix);
 
 	/*
 	 * Try the export entry first to allow disassembly of special functions
 	 * such as erts_debug:apply/4.  Then search for it in the module.
 	 */
-
-	if ((ep = erts_find_function(mod, name, arity)) != NULL) {
+	if ((ep = erts_find_function(mod, name, arity, code_ix)) != NULL) {
 	    /* XXX: add "&& ep->address != ep->code+3" condition?
 	     * Consider a traced function.
 	     * Its ep will have ep->address == ep->code+3.
@@ -231,9 +255,9 @@ erts_debug_disassemble_1(Process* p, Eterm addr)
 	     * But this code_ptr will point to the start of the Export,
 	     * not the function's func_info instruction. BOOM !?
 	     */
-	    code_ptr = ((BeamInstr *) ep->address) - 5;
+	    code_ptr = ((BeamInstr *) ep->addressv[code_ix]) - 5;
 	    funcinfo = code_ptr+2;
-	} else if (modp == NULL || (code_base = modp->code) == NULL) {
+	} else if (modp == NULL || (code_base = modp->curr.code) == NULL) {
 	    BIF_RET(am_undef);
 	} else {
 	    n = code_base[MI_NUM_FUNCTIONS];
@@ -611,6 +635,11 @@ print_op(int to, void *to_arg, int op, int size, BeamInstr* addr)
     case op_i_put_tuple_rI:
     case op_i_put_tuple_xI:
     case op_i_put_tuple_yI:
+    case op_new_map_jdII:
+    case op_update_map_assoc_jsdII:
+    case op_update_map_exact_jsdII:
+    case op_i_has_map_fields_fsI:
+    case op_i_get_map_elements_fsI:
 	{
 	    int n = unpacked[-1];
 

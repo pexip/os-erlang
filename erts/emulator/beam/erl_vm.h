@@ -1,7 +1,7 @@
 /*
  * %CopyrightBegin%
  *
- * Copyright Ericsson AB 1996-2011. All Rights Reserved.
+ * Copyright Ericsson AB 1996-2014. All Rights Reserved.
  *
  * The contents of this file are subject to the Erlang Public License,
  * Version 1.1, (the "License"); you may not use this file except in
@@ -29,17 +29,8 @@
 /* #define FORCE_HEAP_FRAGS */
 
 
-#if defined(HYBRID)
-/* # define CHECK_FOR_HOLES */
-#endif
-
 #if defined(DEBUG) && !defined(CHECK_FOR_HOLES) && !defined(__WIN32__)
 # define CHECK_FOR_HOLES
-#endif
-
-#if defined(HYBRID)
-/* #  define INCREMENTAL 1    */ /* Incremental garbage collection */
-/* #  define INC_TIME_BASED 1 */ /* Time-based incremental GC (vs Work-based) */
 #endif
 
 #define BEAM 1
@@ -55,7 +46,6 @@
    heap data on the C stack or if we use the buffers in the scheduler data. */
 #define TMP_HEAP_SIZE 128            /* Number of Eterm in the schedulers
 				        small heap for transient heap data */
-#define CMP_TMP_HEAP_SIZE       2    /* cmp wants its own tmp-heap... */
 #define ERL_ARITH_TMP_HEAP_SIZE 4    /* as does erl_arith... */
 #define BEAM_EMU_TMP_HEAP_SIZE  2    /* and beam_emu... */
 
@@ -70,24 +60,10 @@
 #define H_DEFAULT_SIZE  233        /* default (heap + stack) min size */
 #define VH_DEFAULT_SIZE  32768     /* default virtual (bin) heap min size (words) */
 
-#ifdef HYBRID
-#  define SH_DEFAULT_SIZE  2629425 /* default message area min size */
-#endif
-
-#ifdef INCREMENTAL
-#  define INC_NoPAGES       256   /* Number of pages in the old generation */
-#  define INC_PAGESIZE      32768 /* The size of each page */
-#  define INC_STORAGE_SIZE  1024  /* The size of gray stack and similar */
-#endif
-
 #define CP_SIZE 1
 
 #define ErtsHAllocLockCheck(P) \
-  ERTS_SMP_LC_ASSERT((ERTS_PROC_LOCK_MAIN & erts_proc_lc_my_proc_locks((P))) \
-      	             || ((P)->id == ERTS_INVALID_PID) \
-		     || ((P)->scheduler_data \
-			 && (P) == (P)->scheduler_data->match_pseudo_process) \
-		     || erts_is_system_blocked(0))
+  ERTS_SMP_LC_ASSERT(erts_dbg_check_halloc_lock((P)))
 
 
 #ifdef DEBUG
@@ -103,7 +79,7 @@
 #  ifdef CHECK_FOR_HOLES
 #    define INIT_HEAP_MEM(p,sz) erts_set_hole_marker(HEAP_TOP(p), (sz))
 #  else
-#    define INIT_HEAP_MEM(p,sz) memset(HEAP_TOP(p),DEBUG_BAD_BYTE,(sz)*sizeof(Eterm*))
+#    define INIT_HEAP_MEM(p,sz) memset(HEAP_TOP(p),0x01,(sz)*sizeof(Eterm*))
 #  endif
 #else
 #  define INIT_HEAP_MEM(p,sz) ((void)0)
@@ -121,7 +97,7 @@
  * failing that, in a heap fragment.
  */
 #define HAllocX(p, sz, xtra)		                              \
-    (ASSERT_EXPR((sz) >= 0),					      \
+  (ASSERT((sz) >= 0),					              \
      ErtsHAllocLockCheck(p),					      \
      (IS_FORCE_HEAP_FRAGS || (((HEAP_LIMIT(p) - HEAP_TOP(p)) < (sz))) \
       ? erts_heap_alloc((p),(sz),(xtra))                              \
@@ -158,14 +134,14 @@
  */
 #ifdef CHECK_FOR_HOLES
 # define HeapOnlyAlloc(p, sz)					\
-    (ASSERT_EXPR((sz) >= 0),					\
-     (ASSERT_EXPR(((HEAP_LIMIT(p) - HEAP_TOP(p)) >= (sz))),	\
+    (ASSERT((sz) >= 0),					        \
+     (ASSERT(((HEAP_LIMIT(p) - HEAP_TOP(p)) >= (sz))),	        \
       (erts_set_hole_marker(HEAP_TOP(p), (sz)),			\
        (HEAP_TOP(p) = HEAP_TOP(p) + (sz), HEAP_TOP(p) - (sz)))))
 #else
 # define HeapOnlyAlloc(p, sz)					\
-    (ASSERT_EXPR((sz) >= 0),					\
-     (ASSERT_EXPR(((HEAP_LIMIT(p) - HEAP_TOP(p)) >= (sz))),	\
+    (ASSERT((sz) >= 0),					        \
+     (ASSERT(((HEAP_LIMIT(p) - HEAP_TOP(p)) >= (sz))),	        \
       (HEAP_TOP(p) = HEAP_TOP(p) + (sz), HEAP_TOP(p) - (sz))))
 #endif
 

@@ -2,7 +2,7 @@
 %%-----------------------------------------------------------------------
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2008-2010. All Rights Reserved.
+%% Copyright Ericsson AB 2008-2014. All Rights Reserved.
 %%
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -36,10 +36,11 @@
 -export([beg_clause_new/3, cleanup/1, end_case_new/1, end_clause_new/3,
          get_curr_fun/1, get_curr_fun_args/1, get_new_table/1,
          get_race_analysis/1, get_race_list/1, get_race_list_size/1,
+	 get_race_list_and_size/1,
          let_tag_new/2, new/0, put_curr_fun/3, put_fun_args/2,
          put_race_analysis/2, put_race_list/3]).
 
--export_type([races/0, mfa_or_funlbl/0, core_vars/0]).
+-export_type([races/0, core_vars/0]).
 
 -include("dialyzer.hrl").
 
@@ -66,8 +67,6 @@
 %%%
 %%% ===========================================================================
 
--type mfa_or_funlbl() :: label() | mfa().
-
 -type label_type()  :: label() | [label()] | {label()} | ?no_label.
 -type args()        :: [label_type() | [string()]].
 -type core_vars()   :: cerl:cerl() | ?no_arg | ?bypassed.
@@ -86,6 +85,12 @@
 -type race_tag()   :: 'whereis_register' | 'whereis_unregister'
                     | 'ets_lookup_insert' | 'mnesia_dirty_read_write'.
 
+%% The following type is similar to the dial_warning() type but has a
+%% tag which is local to this module and is not propagated to outside
+-type dial_race_warning() :: {race_warn_tag(), file_line(), {atom(), [term()]}}.
+-type race_warn_tag() :: ?WARN_WHEREIS_REGISTER | ?WARN_WHEREIS_UNREGISTER
+                      | ?WARN_ETS_LOOKUP_INSERT | ?WARN_MNESIA_DIRTY_READ_WRITE.
+
 -record(beg_clause, {arg        :: var_to_map1(),
                      pats       :: var_to_map1(),
                      guard      :: cerl:cerl()}).
@@ -94,28 +99,28 @@
                      guard      :: cerl:cerl()}).
 -record(end_case,   {clauses    :: [#end_clause{}]}).
 -record(curr_fun,   {status     :: 'in' | 'out',
-                     mfa        :: mfa_or_funlbl(),
+                     mfa        :: dialyzer_callgraph:mfa_or_funlbl(),
                      label      :: label(),
                      def_vars   :: [core_vars()],
                      arg_types  :: [erl_types:erl_type()],
                      call_vars  :: [core_vars()],
-                     var_map    :: dict()}).
+                     var_map    :: dict:dict()}).
 -record(dep_call,   {call_name  :: dep_calls(),
                      args       :: args(),
                      arg_types  :: [erl_types:erl_type()],
                      vars       :: [core_vars()],
-                     state      :: _, %% XXX: recursive
+                     state      :: dialyzer_dataflow:state(),
                      file_line  :: file_line(),
-                     var_map    :: dict()}).
--record(fun_call,   {caller     :: mfa_or_funlbl(),
-                     callee     :: mfa_or_funlbl(),
+                     var_map    :: dict:dict()}).
+-record(fun_call,   {caller     :: dialyzer_callgraph:mfa_or_funlbl(),
+                     callee     :: dialyzer_callgraph:mfa_or_funlbl(),
                      arg_types  :: [erl_types:erl_type()],
                      vars       :: [core_vars()]}).
 -record(let_tag,    {var        :: var_to_map1(),
                      arg        :: var_to_map1()}).
 -record(warn_call,  {call_name  :: warn_calls(),
                      args       :: args(),
-                     var_map    :: dict()}).
+                     var_map    :: dict:dict()}).
 
 -type case_tags()  :: 'beg_case' | #beg_clause{} | #end_clause{} | #end_case{}.
 -type code()       :: [#dep_call{} | #fun_call{} | #warn_call{} |
@@ -130,10 +135,10 @@
                      vars       :: [core_vars()],
                      file_line  :: file_line(),
                      index      :: non_neg_integer(),
-                     fun_mfa    :: mfa_or_funlbl(),
+                     fun_mfa    :: dialyzer_callgraph:mfa_or_funlbl(),
                      fun_label  :: label()}).
 
--record(races, {curr_fun                :: mfa_or_funlbl(),
+-record(races, {curr_fun                :: dialyzer_callgraph:mfa_or_funlbl(),
                 curr_fun_label          :: label(),
                 curr_fun_args = 'empty' :: core_args(),
                 new_table = 'no_t'      :: table(),
@@ -142,7 +147,7 @@
                 race_tags = []          :: [#race_fun{}],
                 %% true for fun types and warning mode
                 race_analysis = false   :: boolean(),
-                race_warnings = []      :: [dial_warning()]}).
+                race_warnings = []      :: [dial_race_warning()]}).
 
 %%% ===========================================================================
 %%%
@@ -158,7 +163,8 @@
 %%%
 %%% ===========================================================================
 
--spec store_race_call(mfa_or_funlbl(), [erl_types:erl_type()], [core_vars()],
+-spec store_race_call(dialyzer_callgraph:mfa_or_funlbl(),
+		      [erl_types:erl_type()], [core_vars()],
                       file_line(), dialyzer_dataflow:state()) ->
   dialyzer_dataflow:state().
 
@@ -347,6 +353,7 @@ fixup_race_list(RaceWarnTag, WarnVarArgs, State) ->
   DepList2 =
     fixup_race_list_helper(NewParents, Calls, CurrFun, WarnVarArgs,
                            RaceWarnTag, NewState),
+  dialyzer_dataflow:dispose_state(CleanState),
   lists:usort(cleanup_dep_calls(DepList1 ++ DepList2)).
 
 fixup_race_list_helper(Parents, Calls, CurrFun, WarnVarArgs, RaceWarnTag,
@@ -381,13 +388,15 @@ fixup_race_forward_pullout(CurrFun, CurrFunLabel, Calls, Code, RaceList,
                            InitFun, WarnVarArgs, RaceWarnTag, RaceVarMap,
                            FunDefVars, FunCallVars, FunArgTypes, NestingLevel,
                            State) ->
+  TState = dialyzer_dataflow:state__duplicate(State),
   {DepList, NewCurrFun, NewCurrFunLabel, NewCalls,
    NewCode, NewRaceList, NewRaceVarMap, NewFunDefVars,
    NewFunCallVars, NewFunArgTypes, NewNestingLevel} =
     fixup_race_forward(CurrFun, CurrFunLabel, Calls, Code, RaceList,
                        InitFun, WarnVarArgs, RaceWarnTag, RaceVarMap,
                        FunDefVars, FunCallVars, FunArgTypes, NestingLevel,
-                       cleanup_race_code(State)),
+                       cleanup_race_code(TState)),
+  dialyzer_dataflow:dispose_state(TState),
   case NewCode of
     [] -> DepList;
     [#fun_call{caller = NewCurrFun, callee = Call, arg_types = FunTypes,
@@ -981,8 +990,7 @@ fixup_race_forward_helper(CurrFun, CurrFunLabel, Fun, FunLabel,
            NewRaceVarMap, Args, NewFunArgs, NewFunTypes, NestingLevel};
         {CurrFun, Fun} ->
           NewCallsToAnalyze = lists:delete(Head, CallsToAnalyze),
-          NewRaceVarMap =
-            race_var_map(Args, NewFunArgs, RaceVarMap, bind),
+          NewRaceVarMap = race_var_map(Args, NewFunArgs, RaceVarMap, bind),
           RetC =
             case Fun of
               InitFun ->
@@ -1009,8 +1017,7 @@ fixup_race_forward_helper(CurrFun, CurrFunLabel, Fun, FunLabel,
                            label = FunLabel, var_map = NewRaceVarMap,
                            def_vars = Args, call_vars = NewFunArgs,
                            arg_types = NewFunTypes}|
-                 lists:reverse(StateRaceList)] ++
-                  RetC;
+                 lists:reverse(StateRaceList)] ++ RetC;
               _ ->
                 [#curr_fun{status = in, mfa = Fun,
                            label = FunLabel, var_map = NewRaceVarMap,
@@ -1045,13 +1052,9 @@ fixup_race_backward(CurrFun, Calls, CallsToAnalyze, Parents, Height) ->
             false -> [CurrFun|Parents]
           end;
         [Head|Tail] ->
-          MorePaths =
-            case Head of
-              {Parent, CurrFun} -> true;
-              {Parent, _TupleB} -> false
-            end,
-          case MorePaths of
-            true ->
+	  {Parent, TupleB} = Head,
+	  case TupleB =:= CurrFun of
+            true ->  % more paths are needed
               NewCallsToAnalyze = lists:delete(Head, CallsToAnalyze),
               NewParents =
                 fixup_race_backward(Parent, NewCallsToAnalyze,
@@ -1562,7 +1565,7 @@ any_args(StrList) ->
       end
   end.
 
--spec bind_dict_vars(label(), label(), dict()) -> dict().
+-spec bind_dict_vars(label(), label(), dict:dict()) -> dict:dict().
 
 bind_dict_vars(Key, Label, RaceVarMap) ->
   case Key =:= Label of
@@ -1748,16 +1751,19 @@ compare_vars(Var1, Var2, RaceVarMap) when is_integer(Var1), is_integer(Var2) ->
 compare_vars(_Var1, _Var2, _RaceVarMap) ->
   false.
 
--spec compare_var_list(label_type(), [label_type()], dict()) -> boolean().
+-spec compare_var_list(label_type(), [label_type()], dict:dict()) -> boolean().
 
 compare_var_list(Var, VarList, RaceVarMap) ->
   lists:any(fun (V) -> compare_vars(Var, V, RaceVarMap) end, VarList).
 
 ets_list_args(MaybeList) ->
   case is_list(MaybeList) of
-    true -> [ets_tuple_args(T) || T <- MaybeList];
+    true ->
+      try [ets_tuple_args(T) || T <- MaybeList]
+      catch _:_ -> [?no_label]
+      end;
     false -> [ets_tuple_args(MaybeList)]
- end.
+  end.
 
 ets_list_argtypes(ListStr) ->
   ListStr1 = string:strip(ListStr, left, $[),
@@ -1842,7 +1848,8 @@ ets_tuple_argtypes1(Str, Tuple, TupleList, NestingLevel) ->
   end.
 
 format_arg(?bypassed) -> ?no_label;
-format_arg(Arg) ->
+format_arg(Arg0) ->
+  Arg = cerl:fold_literal(Arg0),
   case cerl:type(Arg) of
     var -> cerl_trees:get_label(Arg);
     tuple -> list_to_tuple([format_arg(A) || A <- cerl:tuple_es(Arg)]);
@@ -1872,7 +1879,7 @@ format_args_1([Arg|Args], [Type|Types], CleanState) ->
     case Arg =:= ?bypassed of
       true -> [?no_label, format_type(Type, CleanState)];
       false ->
-        case cerl:is_literal(Arg) of
+        case cerl:is_literal(cerl:fold_literal(Arg)) of
           true -> [?no_label, format_cerl(Arg)];
           false -> [format_arg(Arg), format_type(Type, CleanState)]
         end
@@ -1950,7 +1957,8 @@ mnesia_tuple_argtypes(TupleStr) ->
   [TupleStr2|_T] = string:tokens(TupleStr1, " ,"),
   lists:flatten(string:tokens(TupleStr2, " |")).
 
--spec race_var_map(var_to_map1(), var_to_map2(), dict(), op()) -> dict().
+-spec race_var_map(var_to_map1(), var_to_map2(), dict:dict(), op()) ->
+        dict:dict().
 
 race_var_map(Vars1, Vars2, RaceVarMap, Op) ->
   case Vars1 =:= ?no_arg orelse Vars1 =:= ?bypassed
@@ -2141,7 +2149,8 @@ race_var_map_guard_helper1(Arg, Pats, RaceVarMap, Op) ->
       end
   end.
 
-race_var_map_guard_helper2(Arg, Pat, Bool, RaceVarMap, Op) ->
+race_var_map_guard_helper2(Arg, Pat0, Bool, RaceVarMap, Op) ->
+  Pat = cerl:fold_literal(Pat0),
   case cerl:type(Pat) of
     literal ->
       [Arg1, Arg2] = cerl:call_args(Arg),
@@ -2405,7 +2414,7 @@ end_case_new(Clauses) ->
 end_clause_new(Arg, Pats, Guard) ->
   #end_clause{arg = Arg, pats = Pats, guard = Guard}.
 
--spec get_curr_fun(races()) -> mfa_or_funlbl().
+-spec get_curr_fun(races()) -> dialyzer_callgraph:mfa_or_funlbl().
 
 get_curr_fun(#races{curr_fun = CurrFun}) ->
   CurrFun.
@@ -2435,6 +2444,12 @@ get_race_list(#races{race_list = RaceList}) ->
 get_race_list_size(#races{race_list_size = RaceListSize}) ->
   RaceListSize.
 
+-spec get_race_list_and_size(races()) -> {code(), non_neg_integer()}.
+
+get_race_list_and_size(#races{race_list = RaceList,
+			      race_list_size = RaceListSize}) ->
+  {RaceList, RaceListSize}.
+
 -spec let_tag_new(var_to_map1(), var_to_map1()) -> #let_tag{}.
 
 let_tag_new(Var, Arg) ->
@@ -2444,7 +2459,7 @@ let_tag_new(Var, Arg) ->
 
 new() -> #races{}.
 
--spec put_curr_fun(mfa_or_funlbl(), label(), races()) ->
+-spec put_curr_fun(dialyzer_callgraph:mfa_or_funlbl(), label(), races()) ->
   races().
 
 put_curr_fun(CurrFun, CurrFunLabel, Races) ->

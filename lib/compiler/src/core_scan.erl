@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %% 
-%% Copyright Ericsson AB 2000-2009. All Rights Reserved.
+%% Copyright Ericsson AB 2000-2013. All Rights Reserved.
 %% 
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -31,16 +31,16 @@
 %% 173 - 176	{ - ~		punctuation
 %% 177		DEL		control
 %% 200 - 237			control
-%% 240 - 277	NBSP - ¿	punctuation
-%% 300 - 326	À - Ö		uppercase
-%% 327		×		punctuation
-%% 330 - 336	Ø - Þ		uppercase
-%% 337 - 366	ß - ö		lowercase
-%% 367		÷		punctuation
-%% 370 - 377	ø - ÿ		lowercase
+%% 240 - 277	NBSP - Â¿	punctuation
+%% 300 - 326	Ã€ - Ã–		uppercase
+%% 327		Ã—		punctuation
+%% 330 - 336	Ã˜ - Ãž		uppercase
+%% 337 - 366	ÃŸ - Ã¶		lowercase
+%% 367		Ã·		punctuation
+%% 370 - 377	Ã¸ - Ã¿		lowercase
 %%
 %% Many punctuation characters region have special meaning.  Must
-%% watch using × \327, bvery close to x \170
+%% watch using Ã— \327, bvery close to x \170
 
 -module(core_scan).
 
@@ -95,7 +95,7 @@ format_error(Other) -> io_lib:write(Other).
 
 string_thing($') -> "atom";    %' stupid emacs
 string_thing($") -> "string".  %" stupid emacs
-
+
 %% Re-entrant pre-scanner.
 %%
 %% If the input list of characters is insufficient to build a term the
@@ -213,7 +213,7 @@ pre_comment(eof, Sofar, Pos) ->
 
 pre_error(E, Epos, Pos) ->
     {error,{Epos,core_scan,E}, Pos}.
-
+
 %% scan(CharList, StartPos)
 %%  This takes a list of characters and tries to tokenise them.
 %%
@@ -239,11 +239,11 @@ scan1([C|Cs], Toks, Pos) when C >= $\200, C =< $\240 ->
     scan1(Cs, Toks, Pos);
 scan1([C|Cs], Toks, Pos) when C >= $a, C =< $z ->	%Keywords
     scan_key_word(C, Cs, Toks, Pos);
-scan1([C|Cs], Toks, Pos) when C >= $ß, C =< $ÿ, C /= $÷ ->
+scan1([C|Cs], Toks, Pos) when C >= $ÃŸ, C =< $Ã¿, C /= $Ã· ->
     scan_key_word(C, Cs, Toks, Pos);
 scan1([C|Cs], Toks, Pos) when C >= $A, C =< $Z ->	%Variables
     scan_variable(C, Cs, Toks, Pos);
-scan1([C|Cs], Toks, Pos) when C >= $À, C =< $Þ, C /= $× ->
+scan1([C|Cs], Toks, Pos) when C >= $Ã€, C =< $Ãž, C /= $Ã— ->
     scan_variable(C, Cs, Toks, Pos);
 scan1([C|Cs], Toks, Pos) when C >= $0, C =< $9 ->	%Numbers
     scan_number(C, Cs, Toks, Pos);
@@ -271,6 +271,8 @@ scan1("->" ++ Cs, Toks, Pos) ->
     scan1(Cs, [{'->',Pos}|Toks], Pos);
 scan1("-|" ++ Cs, Toks, Pos) ->
     scan1(Cs, [{'-|',Pos}|Toks], Pos);
+scan1("::" ++ Cs, Toks, Pos) ->
+    scan1(Cs, [{'::',Pos}|Toks], Pos);
 scan1([C|Cs], Toks, Pos) ->				%Punctuation character
     P = list_to_atom([C]),
     scan1(Cs, [{P,Pos}|Toks], Pos);
@@ -308,9 +310,9 @@ scan_name([], Ncs) ->
     {Ncs,[]}.
 
 name_char(C) when C >= $a, C =< $z -> true;
-name_char(C) when C >= $ß, C =< $ÿ, C /= $÷ -> true;
+name_char(C) when C >= $ÃŸ, C =< $Ã¿, C /= $Ã· -> true;
 name_char(C) when C >= $A, C =< $Z -> true;
-name_char(C) when C >= $À, C =< $Þ, C /= $× -> true;
+name_char(C) when C >= $Ã€, C =< $Ãž, C /= $Ã— -> true;
 name_char(C) when C >= $0, C =< $9 -> true;
 name_char($_) -> true;
 name_char($@) -> true;

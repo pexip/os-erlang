@@ -2,7 +2,7 @@
 %%-----------------------------------------------------------------------
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2006-2011. All Rights Reserved.
+%% Copyright Ericsson AB 2006-2014. All Rights Reserved.
 %%
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -49,7 +49,10 @@ build(Opts) ->
 		  ?WARN_CALLGRAPH,
 		  ?WARN_CONTRACT_RANGE,
 		  ?WARN_CONTRACT_TYPES,
-		  ?WARN_CONTRACT_SYNTAX],
+		  ?WARN_CONTRACT_SYNTAX,
+		  ?WARN_BEHAVIOUR,
+		  ?WARN_UNDEFINED_CALLBACK,
+                  ?WARN_UNKNOWN],
   DefaultWarns1 = ordsets:from_list(DefaultWarns),
   InitPlt = dialyzer_plt:get_default_plt(),
   DefaultOpts = #options{},
@@ -192,6 +195,11 @@ build_options([{OptionName, Value} = Term|Rest], Options) ->
     callgraph_file ->
       assert_filename(Value),
       build_options(Rest, Options#options{callgraph_file = Value});
+    timing ->
+      build_options(Rest, Options#options{timing = Value});
+    solvers ->
+      assert_solvers(Value),
+      build_options(Rest, Options#options{solvers = Value});
     _ ->
       bad_option("Unknown dialyzer command line option", Term)
   end;
@@ -253,6 +261,15 @@ is_plt_mode(plt_remove)   -> true;
 is_plt_mode(plt_check)    -> true;
 is_plt_mode(succ_typings) -> false.
 
+assert_solvers([]) ->
+  ok;
+assert_solvers([v1|Terms]) ->
+  assert_solvers(Terms);
+assert_solvers([v2|Terms]) ->
+  assert_solvers(Terms);
+assert_solvers([Term|_]) ->
+  bad_option("Illegal value for solver", Term).
+
 -spec build_warnings([atom()], [dial_warning()]) -> [dial_warning()].
 
 build_warnings([Opt|Opts], Warnings) ->
@@ -275,14 +292,16 @@ build_warnings([Opt|Opts], Warnings) ->
       no_contracts ->
 	Warnings1 = ordsets:del_element(?WARN_CONTRACT_SYNTAX, Warnings),
 	ordsets:del_element(?WARN_CONTRACT_TYPES, Warnings1);
+      no_behaviours ->
+	ordsets:del_element(?WARN_BEHAVIOUR, Warnings);
+      no_undefined_callbacks ->
+	ordsets:del_element(?WARN_UNDEFINED_CALLBACK, Warnings);
       unmatched_returns ->
 	ordsets:add_element(?WARN_UNMATCHED_RETURN, Warnings);
       error_handling ->
 	ordsets:add_element(?WARN_RETURN_ONLY_EXIT, Warnings);
       race_conditions ->
 	ordsets:add_element(?WARN_RACE_CONDITION, Warnings);
-      behaviours ->
-	ordsets:add_element(?WARN_BEHAVIOUR, Warnings);
       specdiffs ->
 	S = ordsets:from_list([?WARN_CONTRACT_SUBTYPE, 
 			       ?WARN_CONTRACT_SUPERTYPE,
@@ -292,6 +311,8 @@ build_warnings([Opt|Opts], Warnings) ->
 	ordsets:add_element(?WARN_CONTRACT_SUBTYPE, Warnings);
       underspecs ->
 	ordsets:add_element(?WARN_CONTRACT_SUPERTYPE, Warnings);
+      no_unknown ->
+	ordsets:del_element(?WARN_UNKNOWN, Warnings);
       OtherAtom ->
 	bad_option("Unknown dialyzer warning option", OtherAtom)
     end,

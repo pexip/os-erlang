@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 1996-2011. All Rights Reserved.
+%% Copyright Ericsson AB 1996-2013. All Rights Reserved.
 %%
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -141,6 +141,17 @@
 -define(SETUPTIME, 7000).
 
 -include("net_address.hrl").
+
+%%% BIF
+
+-export([dflag_unicode_io/1]).
+
+-spec dflag_unicode_io(pid()) -> boolean().
+
+dflag_unicode_io(_) ->
+    erlang:nif_error(undef).
+
+%%% End of BIF
 
 %% Interface functions
 
@@ -295,21 +306,21 @@ do_connect(Node, Type, WaitForBarred) -> %% Type = normal | hidden
     end.
 
 passive_connect_monitor(Parent, Node) ->
-    monitor_nodes(true,[{node_type,all}]),
+    ok = monitor_nodes(true,[{node_type,all}]),
     case lists:member(Node,nodes([connected])) of
 	true ->
-	    monitor_nodes(false,[{node_type,all}]),
+	    ok = monitor_nodes(false,[{node_type,all}]),
 	    Parent ! {self(),true};
 	_ ->
 	    Ref = make_ref(),
 	    Tref = erlang:send_after(connecttime(),self(),Ref),
 	    receive
 		Ref ->
-		    monitor_nodes(false,[{node_type,all}]),
+		    ok = monitor_nodes(false,[{node_type,all}]),
 		    Parent ! {self(), false};
 		{nodeup,Node,_} ->
-		    monitor_nodes(false,[{node_type,all}]),
-		    erlang:cancel_timer(Tref),
+		    ok = monitor_nodes(false,[{node_type,all}]),
+		    _ = erlang:cancel_timer(Tref),
 		    Parent ! {self(),true}
 	    end
     end.
@@ -723,7 +734,7 @@ handle_info(transition_period_end,
 				       how = How}} = State) ->
     ?tckr_dbg(transition_period_ended),
     case How of
-	shorter -> Tckr ! {new_ticktime, T};
+	shorter -> Tckr ! {new_ticktime, T}, done;
 	_       -> done
     end,
     {noreply,State#state{tick = #tick{ticker = Tckr, time = T}}};
@@ -1329,20 +1340,20 @@ start_protos(Name, [Proto | Ps], Node, Ls) ->
 		    start_protos(Name, Ps, Node, Ls)
 	    end;
 	{'EXIT', {undef,_}} ->
-	    error_logger:info_msg("Protocol: ~p: not supported~n", [Proto]),
+	    error_logger:info_msg("Protocol: ~tp: not supported~n", [Proto]),
 	    start_protos(Name,Ps, Node, Ls);
 	{'EXIT', Reason} ->
-	    error_logger:info_msg("Protocol: ~p: register error: ~p~n",
+	    error_logger:info_msg("Protocol: ~tp: register error: ~tp~n",
 				  [Proto, Reason]),
 	    start_protos(Name,Ps, Node, Ls);
 	{error, duplicate_name} ->
-	    error_logger:info_msg("Protocol: ~p: the name " ++
+	    error_logger:info_msg("Protocol: ~tp: the name " ++
 				  atom_to_list(Node) ++
 				  " seems to be in use by another Erlang node",
 				  [Proto]),
 	    start_protos(Name,Ps, Node, Ls);
 	{error, Reason} ->
-	    error_logger:info_msg("Protocol: ~p: register/listen error: ~p~n",
+	    error_logger:info_msg("Protocol: ~tp: register/listen error: ~tp~n",
 				  [Proto, Reason]),
 	    start_protos(Name,Ps, Node, Ls)
     end;
@@ -1562,9 +1573,10 @@ async_gen_server_reply(From, Msg) ->
         ok ->
             ok;
         nosuspend ->
-            spawn(fun() -> catch erlang:send(Pid, M, [noconnect]) end);
+            _ = spawn(fun() -> catch erlang:send(Pid, M, [noconnect]) end),
+	    ok;
         noconnect ->
             ok; % The gen module takes care of this case.
-        {'EXIT', _}=EXIT ->
-            EXIT
+        {'EXIT', _} ->
+            ok
     end.

@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 1996-2010. All Rights Reserved.
+%% Copyright Ericsson AB 1996-2013. All Rights Reserved.
 %%
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -197,6 +197,11 @@ dirty_update_counter(Config, Storage) ->
  
     ?match(1,  mnesia:dirty_update_counter({Tab, foo}, 1)),
     ?match([{Tab, foo,1}], mnesia:dirty_read({Tab,foo})),
+
+    ?match({ok,_}, mnesia:subscribe({table, Tab, detailed})),
+
+    ?match(2, mnesia:dirty_update_counter({Tab, foo}, 1)),
+    ?match([{Tab, foo,2}], mnesia:dirty_read({Tab,foo})),
 
     ?verify_mnesia(Nodes, []).
 
@@ -525,6 +530,9 @@ dirty_index_update_bag(Config, Storage) ->
     %% Simple Index
     ?match([], mnesia:dirty_index_read(Tab, 2, ValPos)),
     ?match(ok, mnesia:dirty_write(Rec1)),
+    ?match([Rec1], mnesia:dirty_index_read(Tab, 2, ValPos)),
+
+    ?match(ok, mnesia:dirty_delete_object(Rec5)),
     ?match([Rec1], mnesia:dirty_index_read(Tab, 2, ValPos)),
 
     ?match({atomic, ok}, mnesia:transaction(fun() -> mnesia:write(Rec2) end)), 

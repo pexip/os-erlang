@@ -1,7 +1,7 @@
 %% 
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2002-2010. All Rights Reserved.
+%% Copyright Ericsson AB 2002-2014. All Rights Reserved.
 %%
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -22,10 +22,13 @@
 -include_lib("kernel/include/file.hrl").
 
 
--export([hostname/0, hostname/1, localhost/0, os_type/0, sz/1,
+-export([hostname/0, hostname/1, localhost/0, localhost/1, os_type/0, sz/1,
 	 display_suite_info/1]).
 -export([non_pc_tc_maybe_skip/4, os_based_skip/1]).
--export([replace_config/3, set_config/3, get_config/2, get_config/3]).
+-export([fix_data_dir/1, 
+	 init_suite_top_dir/2, init_group_top_dir/2, init_testcase_top_dir/2, 
+	 lookup/2, 
+	 replace_config/3, set_config/3, get_config/2, get_config/3]).
 -export([fail/3, skip/3]).
 -export([millis/0, millis_diff/2, hours/1, minutes/1, seconds/1, sleep/1]).
 -export([flush_mqueue/0, trap_exit/0, trap_exit/1]).
@@ -37,7 +40,7 @@
 -export([watchdog/3, watchdog_start/1, watchdog_start/2, watchdog_stop/1]).
 -export([del_dir/1]).
 -export([cover/1]).
--export([p/2, print/5]).
+-export([p/2, print/5, formated_timestamp/0]).
 
 
 %% ----------------------------------------------------------------------
@@ -56,6 +59,9 @@ from(_H, []) -> [].
 
 localhost() ->
     {ok, Ip} = snmp_misc:ip(net_adm:localhost()),
+    Ip.
+localhost(Family) ->
+    {ok, Ip} = snmp_misc:ip(net_adm:localhost(), Family),
     Ip.
 
 sz(L) when is_list(L) ->
@@ -198,6 +204,97 @@ os_based_skip(_Crap) ->
 %% Test suite utility functions
 %% 
 
+fix_data_dir(Config) ->
+    DataDir0     = lookup(data_dir, Config),
+    DataDir1     = filename:split(filename:absname(DataDir0)),
+    [_|DataDir2] = lists:reverse(DataDir1),
+    DataDir      = filename:join(lists:reverse(DataDir2) ++ [?snmp_test_data]),
+    Config1      = lists:keydelete(data_dir, 1, Config),
+    [{data_dir, DataDir ++ "/"} | Config1].
+
+
+init_suite_top_dir(Suite, Config0) ->
+    io:format("~w:init_suite_top_dir -> entry with"
+	      "~n   Suite:   ~p"
+	      "~n   Config0: ~p"
+	      "~n", [?MODULE, Suite, Config0]),
+    Dir         = lookup(priv_dir, Config0),
+    SuiteTopDir = filename:join(Dir, Suite),
+    case file:make_dir(SuiteTopDir) of
+        ok ->
+            ok;
+        {error, eexist} ->
+            ok;
+        {error, Reason} ->
+            fail({failed_creating_suite_top_dir, SuiteTopDir, Reason}, 
+		 ?MODULE, ?LINE)
+    end,
+
+    %% This is just in case...
+    Config1 = lists:keydelete(snmp_group_top_dir, 1, Config0), 
+    Config2 = lists:keydelete(snmp_suite_top_dir, 1, Config1), 
+    [{snmp_suite_top_dir, SuiteTopDir} | Config2].
+
+
+init_group_top_dir(GroupName, Config) ->
+    io:format("~w:init_group_top_dir -> entry with"
+	      "~n   GroupName: ~p"
+	      "~n   Config:    ~p"
+	      "~n", [?MODULE, GroupName, Config]),
+    case lists:keysearch(snmp_group_top_dir, 1, Config) of
+	{value, {_Key, Dir}} ->
+	    %% This is a sub-group, so create our dir within Dir
+	    GroupTopDir = filename:join(Dir, GroupName),
+	    case file:make_dir(GroupTopDir) of
+		ok ->
+		    ok;
+		{error, Reason} ->
+		    fail({failed_creating_group_top_dir, GroupTopDir, Reason}, 
+			 ?MODULE, ?LINE)
+	    end,
+	    [{snmp_group_top_dir, GroupTopDir} | Config];
+
+	_ ->
+	    case lists:keysearch(snmp_suite_top_dir, 1, Config) of
+		{value, {_Key, Dir}} ->
+		    GroupTopDir = filename:join(Dir, GroupName),
+		    case file:make_dir(GroupTopDir) of
+			ok ->
+			    ok;
+			{error, Reason} ->
+			    fail({failed_creating_group_top_dir, 
+				  GroupTopDir, Reason}, 
+				 ?MODULE, ?LINE)
+		    end,
+		    [{snmp_group_top_dir, GroupTopDir} | Config];
+		_ ->
+		    fail(could_not_find_suite_top_dir, ?MODULE, ?LINE)
+	    end
+    end.
+
+
+init_testcase_top_dir(Case, Config) ->
+    io:format("~w:init_testcase_top_dir -> entry with"
+	      "~n   Case:   ~p"
+	      "~n   Config: ~p"
+	      "~n", [?MODULE, Case, Config]),
+    case lists:keysearch(snmp_group_top_dir, 1, Config) of
+	{value, {_Key, Dir}} ->
+	    CaseTopDir = filename:join(Dir, Case),
+	    ok = file:make_dir(CaseTopDir),
+	    CaseTopDir;
+	false ->
+	    case lists:keysearch(snmp_suite_top_dir, 1, Config) of
+		{value, {_Key, Dir}} ->
+		    CaseTopDir = filename:join(Dir, Case),
+		    ok = file:make_dir(CaseTopDir),
+		    CaseTopDir;
+		false ->
+		    fail(failed_creating_case_top_dir, ?MODULE, ?LINE)
+	    end
+    end.
+
+
 replace_config(Key, Config, NewValue) ->
     lists:keyreplace(Key, 1, Config, {Key, NewValue}).
 
@@ -220,6 +317,9 @@ get_config(Key,C,Default) ->
             Default
     end.
 
+lookup(Key, Config) ->
+    {value, {Key, Value}} = lists:keysearch(Key, 1, Config),
+    Value.
 
 fail(Reason, Mod, Line) ->
     exit({suite_failed, Reason, Mod, Line}).
@@ -227,7 +327,7 @@ fail(Reason, Mod, Line) ->
 skip(Reason, Module, Line) ->
     String = lists:flatten(io_lib:format("Skipping ~p(~p): ~p~n", 
 					 [Module, Line, Reason])),
-    exit({skipped, String}).
+    exit({skip, String}).
     
 
 %% ----------------------------------------------------------------
@@ -338,7 +438,7 @@ crypto_start() ->
     end.
  
 crypto_support() ->
-    crypto_support([md5_mac_96, sha_mac_96], []).
+    crypto_support([md5, sha], []).
  
 crypto_support([], []) ->
     yes;
@@ -353,12 +453,7 @@ crypto_support([Func|Funcs], Acc) ->
     end.
  
 is_crypto_supported(Func) ->
-    %% The 'catch' handles the case when 'crypto' is
-    %% not present in the system (or not started).
-    case (catch lists:member(Func, crypto:info())) of
-        true -> true;
-        _ -> false
-    end.
+    snmp_misc:is_crypto_supported(Func). 
  
  
 %% ----------------------------------------------------------------
@@ -419,8 +514,6 @@ warning_msg(F, A) ->
 timeout(T) ->
     trunc(timeout(T, os:type())).
 
-timeout(T, vxworks) ->
-    5 * T * timetrap_scale_factor();
 timeout(T, _) ->
     T * timetrap_scale_factor().
             
@@ -521,15 +614,18 @@ p(F, A) when is_list(F) andalso is_list(A) ->
 
 print(Prefix, Module, Line, Format, Args) ->
     io:format("*** [~s] ~s ~p ~p ~p:~p *** " ++ Format ++ "~n", 
-	      [format_timestamp(now()), 
+	      [formated_timestamp(), 
 	       Prefix, node(), self(), Module, Line|Args]).
+
+formated_timestamp() ->
+    format_timestamp(os:timestamp()).
 
 format_timestamp({_N1, _N2, N3} = Now) ->
     {Date, Time}   = calendar:now_to_datetime(Now),
     {YYYY,MM,DD}   = Date,
     {Hour,Min,Sec} = Time,
     FormatDate =
-        io_lib:format("~.4w:~.2.0w:~.2.0w ~.2.0w:~.2.0w:~.2.0w 4~w",
+        io_lib:format("~.4w:~.2.0w:~.2.0w ~.2.0w:~.2.0w:~.2.0w ~w",
                       [YYYY,MM,DD,Hour,Min,Sec,round(N3/1000)]),
     lists:flatten(FormatDate).
 

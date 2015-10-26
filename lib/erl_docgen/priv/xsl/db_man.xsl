@@ -3,7 +3,7 @@
      #
      # %CopyrightBegin%
      #
-     # Copyright Ericsson AB 2009-2011. All Rights Reserved.
+     # Copyright Ericsson AB 2009-2012. All Rights Reserved.
      #
      # The contents of this file are subject to the Erlang Public License,
      # Version 1.1, (the "License"); you may not use this file except in
@@ -137,8 +137,9 @@
          (there is no spec with more than one clause) -->
     <xsl:if test="count($clause/guard) > 0 or count($type) > 0">
       <xsl:text>&#10;.RS</xsl:text>
-      <xsl:text>&#10;.TP 3</xsl:text>
+      <xsl:text>&#10;.LP</xsl:text>
       <xsl:text>&#10;Types:&#10;</xsl:text>
+      <xsl:text>&#10;.RS 3</xsl:text>
 
         <xsl:choose>
           <xsl:when test="$output_subtypes">
@@ -164,6 +165,8 @@
           <xsl:with-param name="type_desc" select="$type_desc"/>
           <xsl:with-param name="local_types" select="$local_types"/>
         </xsl:call-template>
+        <xsl:text>&#10;.RE</xsl:text>
+
       <xsl:text>&#10;.RE</xsl:text>
 
     </xsl:if>
@@ -257,8 +260,8 @@
 
   <!-- Similar to <d> -->
   <xsl:template match="type_desc">
-    <xsl:text>&#10;</xsl:text><xsl:apply-templates/>
-    <xsl:text>&#10;.br</xsl:text>
+    <xsl:text>&#10;.RS 2&#10;</xsl:text><xsl:apply-templates/>
+    <xsl:text>&#10;.RE</xsl:text>
   </xsl:template>
 
   <!-- Datatypes -->
@@ -451,13 +454,21 @@
 
   <!-- *ref/Section -->
   <xsl:template match="erlref/section|comref/section|cref/section|fileref/section|appref/section">
-    <xsl:text>&#10;.SH "</xsl:text><xsl:value-of select="translate(title, 'abcdefghijklmnopqrstuvwxyz','ABCDEFGHIJKLMNOPQRSTUVWXYZ')"/><xsl:text>"&#10;</xsl:text>
+      <xsl:text>&#10;.SH "</xsl:text><xsl:call-template name="replace-string">
+        <xsl:with-param name="text" select="translate(title, 'abcdefghijklmnopqrstuvwxyz','ABCDEFGHIJKLMNOPQRSTUVWXYZ')" />
+        <xsl:with-param name="replace" select="&quot;\&quot;" />
+        <xsl:with-param name="with" select="&quot;\\\&quot;" />
+      </xsl:call-template><xsl:text>"&#10;</xsl:text>
     <xsl:apply-templates/>
   </xsl:template>
 
   <!-- *ref/Subsection -->
   <xsl:template match="section/section">
-    <xsl:text>&#10;.SS "</xsl:text><xsl:value-of select="title"/><xsl:text>"&#10;</xsl:text>
+    <xsl:text>&#10;.SS "</xsl:text><xsl:call-template name="replace-string">
+        <xsl:with-param name="text" select="title" />
+        <xsl:with-param name="replace" select="&quot;\&quot;" />
+        <xsl:with-param name="with" select="&quot;\\\&quot;" />
+      </xsl:call-template><xsl:text>"&#10;</xsl:text>
     <xsl:apply-templates/>
   </xsl:template>
 
@@ -583,7 +594,15 @@
   </xsl:template>
 
   <xsl:template match="seealso">
-    <xsl:text>\fB</xsl:text><xsl:apply-templates/><xsl:text>\fR\&amp;</xsl:text>
+    <xsl:choose>
+      <xsl:when test="ancestor::head">
+	<!-- The header of Dialyzer specs -->
+	<xsl:apply-templates/>
+      </xsl:when>
+      <xsl:otherwise>
+	<xsl:text>\fB</xsl:text><xsl:apply-templates/><xsl:text>\fR\&amp;</xsl:text>
+      </xsl:otherwise>
+    </xsl:choose>
   </xsl:template>
 
   <!-- Code -->
@@ -747,8 +766,30 @@
 
   <xsl:template name="name">
     <xsl:text>&#10;.B&#10;</xsl:text>
-    <xsl:apply-templates/>
+    <xsl:choose>
+      <xsl:when test="ancestor::cref">
+        <xsl:value-of select="ret"/>
+        <xsl:call-template name="maybe-space-after-ret">
+          <xsl:with-param name="s" select="ret"/>
+        </xsl:call-template>
+        <xsl:value-of select="nametext"/>
+      </xsl:when>
+      <xsl:otherwise>
+        <xsl:apply-templates/>
+      </xsl:otherwise>
+    </xsl:choose>
     <xsl:text>&#10;.br</xsl:text>
+  </xsl:template>
+
+  <xsl:template name="maybe-space-after-ret">
+    <xsl:param name="s"/>
+    <xsl:variable name="last_char"
+	          select="substring($s, string-length($s), 1)"/>
+    <xsl:choose>
+      <xsl:when test="$last_char != '*'">
+        <xsl:text> </xsl:text>
+      </xsl:when>
+    </xsl:choose>
   </xsl:template>
 
 
@@ -757,9 +798,11 @@
     <!-- The case where @name != 0 is taken care of in "type_name" -->
     <xsl:if test="string-length(@name) = 0 and string-length(@variable) = 0">
       <xsl:text>&#10;.RS</xsl:text>
-      <xsl:text>&#10;.TP 3</xsl:text>
+      <xsl:text>&#10;.LP</xsl:text>
       <xsl:text>&#10;Types:&#10;</xsl:text>
+      <xsl:text>&#10;.RS 3</xsl:text>
       <xsl:apply-templates/>
+      <xsl:text>&#10;.RE</xsl:text>
       <xsl:text>&#10;.RE</xsl:text>
     </xsl:if>
   </xsl:template>
@@ -767,14 +810,14 @@
 
   <!-- V -->
   <xsl:template match="v">
-    <xsl:text>&#10;</xsl:text><xsl:value-of select="normalize-space(text())"/>
+    <xsl:text>&#10;</xsl:text><xsl:apply-templates/>
     <xsl:text>&#10;.br</xsl:text>
   </xsl:template>
 
   <!-- D -->
   <xsl:template match="d">
-    <xsl:text>&#10;</xsl:text><xsl:apply-templates/>
-    <xsl:text>&#10;.br</xsl:text>
+    <xsl:text>&#10;.RS 2&#10;</xsl:text><xsl:apply-templates/>
+    <xsl:text>&#10;.RE</xsl:text>
   </xsl:template>
 
   <!-- Desc -->

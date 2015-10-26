@@ -1,7 +1,7 @@
 /*
  * %CopyrightBegin%
  *
- * Copyright Ericsson AB 1996-2011. All Rights Reserved.
+ * Copyright Ericsson AB 1996-2013. All Rights Reserved.
  *
  * The contents of this file are subject to the Erlang Public License,
  * Version 1.1, (the "License"); you may not use this file except in
@@ -37,6 +37,7 @@
 #include "beam_load.h"
 #include "erl_instrument.h"
 #include "erl_bif_timer.h"
+#include "erl_thr_progress.h"
 
 /* Forward declarations -- should really appear somewhere else */
 static void process_killer(void);
@@ -60,19 +61,26 @@ extern char* erts_system_version[];
 static void
 port_info(int to, void *to_arg)
 {
-    int i;
-    for (i = 0; i < erts_max_ports; i++)
-	print_port_info(to, to_arg, i);
+    int i, max = erts_ptab_max(&erts_port);
+    for (i = 0; i < max; i++) {
+	Port *p = erts_pix2port(i);
+	if (p)
+	    print_port_info(p, to, to_arg);
+    }
 }
 
 void
 process_info(int to, void *to_arg)
 {
-    int i;
-    for (i = 0; i < erts_max_processes; i++) {
-	if ((process_tab[i] != NULL) && (process_tab[i]->i != ENULL)) {
-	   if (process_tab[i]->status != P_EXITING)
-	       print_process_info(to, to_arg, process_tab[i]);
+    int i, max = erts_ptab_max(&erts_proc);
+    for (i = 0; i < max; i++) {
+	Process *p = erts_pix2proc(i);
+	if (p && p->i != ENULL) {
+	    /* Do not include processes with no heap,
+	     * they are most likely just created and has invalid data
+	     */
+	    if (!ERTS_PROC_IS_EXITING(p) && p->heap != NULL)
+		print_process_info(to, to_arg, p);
 	}
     }
 
@@ -82,25 +90,37 @@ process_info(int to, void *to_arg)
 static void
 process_killer(void)
 {
-    int i, j;
+    int i, j, max = erts_ptab_max(&erts_proc);
     Process* rp;
 
     erts_printf("\n\nProcess Information\n\n");
     erts_printf("--------------------------------------------------\n");
-    for (i = erts_max_processes-1; i >= 0; i--) {
-	if (((rp = process_tab[i]) != NULL) && rp->i != ENULL) {
+    for (i = max-1; i >= 0; i--) {
+	rp = erts_pix2proc(i);
+	if (rp && rp->i != ENULL) {
 	    int br;
 	    print_process_info(ERTS_PRINT_STDOUT, NULL, rp);
 	    erts_printf("(k)ill (n)ext (r)eturn:\n");
 	    while(1) {
 		if ((j = sys_get_key(0)) <= 0)
-		    halt_0(0);
+		    erl_exit(0, "");
 		switch(j) {
-		case 'k':
-		    if (rp->status == P_WAITING) {
-			ErtsProcLocks rp_locks = ERTS_PROC_LOCKS_XSIG_SEND;
-			erts_smp_proc_inc_refc(rp);
-			erts_smp_proc_lock(rp, rp_locks);
+		case 'k': {
+		    ErtsProcLocks rp_locks = ERTS_PROC_LOCKS_XSIG_SEND;
+		    erts_aint32_t state;
+		    erts_smp_proc_inc_refc(rp);
+		    erts_smp_proc_lock(rp, rp_locks);
+		    state = erts_smp_atomic32_read_acqb(&rp->state);
+		    if (state & (ERTS_PSFLG_FREE
+				 | ERTS_PSFLG_EXITING
+				 | ERTS_PSFLG_ACTIVE
+				 | ERTS_PSFLG_ACTIVE_SYS
+				 | ERTS_PSFLG_IN_RUNQ
+				 | ERTS_PSFLG_RUNNING
+				 | ERTS_PSFLG_RUNNING_SYS)) {
+			erts_printf("Can only kill WAITING processes this way\n");
+		    }
+		    else {
 			(void) erts_send_exit_signal(NULL,
 						     NIL,
 						     rp,
@@ -109,12 +129,10 @@ process_killer(void)
 						     NIL,
 						     NULL,
 						     0);
-			erts_smp_proc_unlock(rp, rp_locks);
-			erts_smp_proc_dec_refc(rp);
 		    }
-		    else
-			erts_printf("Can only kill WAITING processes this way\n");
-
+		    erts_smp_proc_unlock(rp, rp_locks);
+		    erts_smp_proc_dec_refc(rp);
+		}
 		case 'n': br = 1; break;
 		case 'r': return;
 		default: return;
@@ -179,48 +197,45 @@ static void doit_print_monitor(ErtsMonitor *mon, void *vpcontext)
 void
 print_process_info(int to, void *to_arg, Process *p)
 {
+    time_t approx_started;
     int garbing = 0;
     int running = 0;
     struct saved_calls *scb;
+    erts_aint32_t state;
 
     /* display the PID */
-    erts_print(to, to_arg, "=proc:%T\n", p->id);
+    erts_print(to, to_arg, "=proc:%T\n", p->common.id);
 
     /* Display the state */
     erts_print(to, to_arg, "State: ");
-    switch (p->status) {
-    case P_FREE:
+
+    state = erts_smp_atomic32_read_acqb(&p->state);
+    if (state & ERTS_PSFLG_FREE)
 	erts_print(to, to_arg, "Non Existing\n"); /* Should never happen */
-	break;
-    case P_RUNABLE:
-	erts_print(to, to_arg, "Scheduled\n");
-	break;
-    case P_WAITING:
-	erts_print(to, to_arg, "Waiting\n");
-	break;
-    case P_SUSPENDED:
-	erts_print(to, to_arg, "Suspended\n");
-	break;
-    case P_RUNNING:
-	erts_print(to, to_arg, "Running\n");
-	running = 1;
-	break;
-    case P_EXITING:
+    else if (state & ERTS_PSFLG_EXITING)
 	erts_print(to, to_arg, "Exiting\n");
-	break;
-    case P_GARBING:
-	erts_print(to, to_arg, "Garbing\n");
+    else if (state & ERTS_PSFLG_GC) {
 	garbing = 1;
 	running = 1;
-	break;
+	erts_print(to, to_arg, "Garbing\n");
     }
+    else if (state & ERTS_PSFLG_SUSPENDED)
+	erts_print(to, to_arg, "Suspended\n");
+    else if (state & ERTS_PSFLG_RUNNING) {
+	running = 1;
+	erts_print(to, to_arg, "Running\n");
+    }
+    else if (state & ERTS_PSFLG_ACTIVE)
+	erts_print(to, to_arg, "Scheduled\n");
+    else
+	erts_print(to, to_arg, "Waiting\n");
 
     /*
      * If the process is registered as a global process, display the
      * registered name
      */
-    if (p->reg != NULL)
-	erts_print(to, to_arg, "Name: %T\n", p->reg->name);
+    if (p->common.u.alive.reg)
+	erts_print(to, to_arg, "Name: %T\n", p->common.u.alive.reg->name);
 
     /*
      * Display the initial function name
@@ -241,10 +256,11 @@ print_process_info(int to, void *to_arg, Process *p)
 		   p->current[1],
 		   p->current[2]);
     }
+    erts_print(to, to_arg, "Run queue: %d\n", erts_get_runq_proc(p)->ix);
 
     erts_print(to, to_arg, "Spawned by: %T\n", p->parent);
-
-    erts_print(to, to_arg, "Started: %s", ctime((time_t*)&p->started.tv_sec));
+    approx_started = (time_t) p->approx_started;
+    erts_print(to, to_arg, "Started: %s", ctime(&approx_started));
     ERTS_SMP_MSGQ_MV_INQ2PRIVQ(p);
     erts_print(to, to_arg, "Message queue length: %d\n", p->msg.len);
 
@@ -294,11 +310,11 @@ print_process_info(int to, void *to_arg, Process *p)
     }
 
     /* display the links only if there are any*/
-    if (p->nlinks != NULL || p->monitors != NULL) {
+    if (ERTS_P_LINKS(p) || ERTS_P_MONITORS(p)) {
 	PrintMonitorContext context = {1,to}; 
 	erts_print(to, to_arg,"Link list: [");
-	erts_doforall_links(p->nlinks, &doit_print_link, &context);	
-	erts_doforall_monitors(p->monitors, &doit_print_monitor, &context);
+	erts_doforall_links(ERTS_P_LINKS(p), &doit_print_link, &context);	
+	erts_doforall_monitors(ERTS_P_MONITORS(p), &doit_print_monitor, &context);
 	erts_print(to, to_arg,"]\n");
     }
 
@@ -321,6 +337,7 @@ print_process_info(int to, void *to_arg, Process *p)
     erts_print(to, to_arg, "Heap unused: %bpu\n", (p->hend - p->htop));
     erts_print(to, to_arg, "OldHeap unused: %bpu\n",
 	       (OLD_HEAP(p) == NULL) ? 0 : (OLD_HEND(p) - OLD_HTOP(p)) );
+    erts_print(to, to_arg, "Memory: %beu\n", erts_process_memory(p));
 
     if (garbing) {
 	print_garb_info(to, to_arg, p);
@@ -375,17 +392,22 @@ loaded(int to, void *to_arg)
     int old = 0;
     int cur = 0;
     BeamInstr* code;
+    Module* modp;
+    ErtsCodeIndex code_ix;
+
+    code_ix = erts_active_code_ix();
+    erts_rlock_old_code(code_ix);
 
     /*
      * Calculate and print totals.
      */
-    for (i = 0; i < module_code_size(); i++) {
-	if (module_code(i) != NULL &&
-	    ((module_code(i)->code_length != 0) ||
-	     (module_code(i)->old_code_length != 0))) {
-	    cur += module_code(i)->code_length;
-	    if (module_code(i)->old_code_length != 0) {
-		old += module_code(i)->old_code_length;
+    for (i = 0; i < module_code_size(code_ix); i++) {
+	if ((modp = module_code(i, code_ix)) != NULL &&
+	    ((modp->curr.code_length != 0) ||
+	     (modp->old.code_length != 0))) {
+	    cur += modp->curr.code_length;
+	    if (modp->old.code_length != 0) {
+		old += modp->old.code_length;
 	    }
 	}
     }
@@ -396,21 +418,22 @@ loaded(int to, void *to_arg)
      * Print one line per module.
      */
 
-    for (i = 0; i < module_code_size(); i++) {
+    for (i = 0; i < module_code_size(code_ix); i++) {
+	modp = module_code(i, code_ix);
 	if (!ERTS_IS_CRASH_DUMPING) {
 	    /*
 	     * Interactive dump; keep it brief.
 	     */
-	    if (module_code(i) != NULL &&
-	    ((module_code(i)->code_length != 0) ||
-	     (module_code(i)->old_code_length != 0))) {
-		erts_print(to, to_arg, "%T", make_atom(module_code(i)->module));
-		cur += module_code(i)->code_length;
-		erts_print(to, to_arg, " %d", module_code(i)->code_length );
-		if (module_code(i)->old_code_length != 0) {
+	    if (modp != NULL &&
+	    ((modp->curr.code_length != 0) ||
+	     (modp->old.code_length != 0))) {
+		erts_print(to, to_arg, "%T", make_atom(modp->module));
+		cur += modp->curr.code_length;
+		erts_print(to, to_arg, " %d", modp->curr.code_length );
+		if (modp->old.code_length != 0) {
 		    erts_print(to, to_arg, " (%d old)",
-			       module_code(i)->old_code_length );
-		    old += module_code(i)->old_code_length;
+			       modp->old.code_length );
+		    old += modp->old.code_length;
 		}
 		erts_print(to, to_arg, "\n");
 	    }
@@ -418,15 +441,15 @@ loaded(int to, void *to_arg)
 	    /*
 	     * To crash dump; make it parseable.
 	     */
-	    if (module_code(i) != NULL &&
-		((module_code(i)->code_length != 0) ||
-		 (module_code(i)->old_code_length != 0))) {
+	    if (modp != NULL &&
+		((modp->curr.code_length != 0) ||
+		 (modp->old.code_length != 0))) {
 		erts_print(to, to_arg, "=mod:");
-		erts_print(to, to_arg, "%T", make_atom(module_code(i)->module));
+		erts_print(to, to_arg, "%T", make_atom(modp->module));
 		erts_print(to, to_arg, "\n");
 		erts_print(to, to_arg, "Current size: %d\n",
-			   module_code(i)->code_length);
-		code = module_code(i)->code;
+			   modp->curr.code_length);
+		code = modp->curr.code;
 		if (code != NULL && code[MI_ATTR_PTR]) {
 		    erts_print(to, to_arg, "Current attributes: ");
 		    dump_attributes(to, to_arg, (byte *) code[MI_ATTR_PTR],
@@ -438,9 +461,9 @@ loaded(int to, void *to_arg)
 				    code[MI_COMPILE_SIZE]);
 		}
 
-		if (module_code(i)->old_code_length != 0) {
-		    erts_print(to, to_arg, "Old size: %d\n", module_code(i)->old_code_length);
-		    code = module_code(i)->old_code;
+		if (modp->old.code_length != 0) {
+		    erts_print(to, to_arg, "Old size: %d\n", modp->old.code_length);
+		    code = modp->old.code;
 		    if (code[MI_ATTR_PTR]) {
 			erts_print(to, to_arg, "Old attributes: ");
 			dump_attributes(to, to_arg, (byte *) code[MI_ATTR_PTR],
@@ -455,6 +478,7 @@ loaded(int to, void *to_arg)
 	    }
 	}
     }
+    erts_runlock_old_code(code_ix);
 }
 
 
@@ -611,22 +635,23 @@ bin_check(void)
 {
     Process  *rp;
     struct erl_off_heap_header* hdr;
-    int i, printed = 0;
+    int i, printed = 0, max = erts_ptab_max(&erts_proc);
 
-    for (i=0; i < erts_max_processes; i++) {
-	if ((rp = process_tab[i]) == NULL)
+    for (i=0; i < max; i++) {
+	rp = erts_pix2proc(i);
+	if (!rp)
 	    continue;
 	for (hdr = rp->off_heap.first; hdr; hdr = hdr->next) {
 	    if (hdr->thing_word == HEADER_PROC_BIN) {
 		ProcBin *bp = (ProcBin*) hdr;
 		if (!printed) {
-		    erts_printf("Process %T holding binary data \n", rp->id);
+		    erts_printf("Process %T holding binary data \n", rp->common.id);
 		    printed = 1;
 		}
 		erts_printf("%p orig_size: %bpd, norefs = %bpd\n",
 			    bp->val, 
 			    bp->val->orig_size, 
-			    erts_smp_atomic_read(&bp->val->refc));
+			    erts_smp_atomic_read_nob(&bp->val->refc));
 	    }
 	}
 	if (printed) {
@@ -644,37 +669,88 @@ bin_check(void)
 void
 erl_crash_dump_v(char *file, int line, char* fmt, va_list args)
 {
+#ifdef ERTS_SMP
+    ErtsThrPrgrData tpd_buf; /* in case we aren't a managed thread... */
+#endif
     int fd;
+    size_t envsz;
     time_t now;
+    char env[21]; /* enough to hold any 64-bit integer */
     size_t dumpnamebufsize = MAXPATHLEN;
     char dumpnamebuf[MAXPATHLEN];
     char* dumpname;
+    int secs;
+    int env_erl_crash_dump_seconds_set = 1;
 
-    if (ERTS_IS_CRASH_DUMPING)
+    if (ERTS_SOMEONE_IS_CRASH_DUMPING)
 	return;
 
-    /* Wait for all threads to block. If all threads haven't blocked
+#ifdef ERTS_SMP
+    /*
+     * Wait for all managed threads to block. If all threads haven't blocked
      * after a minute, we go anyway and hope for the best...
      *
      * We do not release system again. We expect an exit() or abort() after
      * dump has been written.
-     *
-     * NOTE: We allow gc therefore it is important not to lock *any*
-     *       process locks.
      */
-    erts_smp_emergency_block_system(60000, ERTS_BS_FLG_ALLOW_GC);
+    erts_thr_progress_fatal_error_block(60000, &tpd_buf);
     /* Either worked or not... */
 
     /* Allow us to pass certain places without locking... */
-#ifdef ERTS_SMP
-    erts_smp_atomic_inc(&erts_writing_erl_crash_dump);
+    erts_smp_atomic32_set_mb(&erts_writing_erl_crash_dump, 1);
+    erts_smp_tsd_set(erts_is_crash_dumping_key, (void *) 1);
 #else
     erts_writing_erl_crash_dump = 1;
 #endif
 
-    erts_sys_prepare_crash_dump();
+    envsz = sizeof(env);
+    /* ERL_CRASH_DUMP_SECONDS not set
+     * if we have a heart port, break immediately
+     * otherwise dump crash indefinitely (until crash is complete)
+     * same as ERL_CRASH_DUMP_SECONDS = 0
+     * - do not write dump
+     * - do not set an alarm
+     * - break immediately
+     *
+     * ERL_CRASH_DUMP_SECONDS = 0
+     * - do not write dump
+     * - do not set an alarm
+     * - break immediately
+     *
+     * ERL_CRASH_DUMP_SECONDS < 0
+     * - do not set alarm
+     * - write dump until done
+     *
+     * ERL_CRASH_DUMP_SECONDS = S (and S positive)
+     * - Don't dump file forever
+     * - set alarm (set in sys)
+     * - write dump until alarm or file is written completely
+     */
+	
+    if (erts_sys_getenv__("ERL_CRASH_DUMP_SECONDS", env, &envsz) != 0) {
+	env_erl_crash_dump_seconds_set = 0;
+	secs = -1;
+    } else {
+	env_erl_crash_dump_seconds_set = 1;
+	secs = atoi(env);
+    }
 
-    if (erts_sys_getenv("ERL_CRASH_DUMP",&dumpnamebuf[0],&dumpnamebufsize) != 0)
+    if (secs == 0) {
+	return;
+    }
+
+    /* erts_sys_prepare_crash_dump returns 1 if heart port is found, otherwise 0
+     * If we don't find heart (0) and we don't have ERL_CRASH_DUMP_SECONDS set
+     * we should continue writing a dump
+     *
+     * beware: secs -1 means no alarm
+     */
+
+    if (erts_sys_prepare_crash_dump(secs) && !env_erl_crash_dump_seconds_set ) {
+	return;
+    }
+
+    if (erts_sys_getenv__("ERL_CRASH_DUMP",&dumpnamebuf[0],&dumpnamebufsize) != 0)
 	dumpname = "erl_crash.dump";
     else
 	dumpname = &dumpnamebuf[0];
@@ -684,7 +760,7 @@ erl_crash_dump_v(char *file, int line, char* fmt, va_list args)
 	return; /* Can't create the crash dump, skip it */
     
     time(&now);
-    erts_fdprintf(fd, "=erl_crash_dump:0.1\n%s", ctime(&now));
+    erts_fdprintf(fd, "=erl_crash_dump:0.3\n%s", ctime(&now));
 
     if (file != NULL)
        erts_fdprintf(fd, "The error occurred in file %s, line %d\n", file, line);
@@ -700,7 +776,7 @@ erl_crash_dump_v(char *file, int line, char* fmt, va_list args)
     erts_print_nif_taints(fd, NULL);
     erts_fdprintf(fd, "Atoms: %d\n", atom_table_size());
     info(fd, NULL); /* General system info */
-    if (process_tab != NULL)  /* XXX true at init */
+    if (erts_ptab_initialized(&erts_proc))
 	process_info(fd, NULL); /* Info about each process and port */
     db_info(fd, NULL, 0);
     erts_print_bif_timer_info(fd, NULL);

@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 1997-2010. All Rights Reserved.
+%% Copyright Ericsson AB 1997-2012. All Rights Reserved.
 %%
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -543,7 +543,8 @@ measurement_server_init() ->
     Server = case OS of
 	{unix, Flavor} when Flavor==sunos;
 			    Flavor==linux ->
-	    port_server_start();
+	    {ok, Pid} = port_server_start_link(),
+	    Pid;
 	{unix, Flavor} when Flavor==darwin;
 			    Flavor==freebsd;
 			    Flavor==dragonfly;
@@ -588,8 +589,9 @@ measurement_server_loop(State) ->
 		Error -> Pid ! {error, Error}
 	    end,
 	    measurement_server_loop(State);
-        {'EXIT', Pid, _n} when State#internal.port == Pid -> 
-	    measurement_server_loop(State#internal{port = port_server_start()});
+        {'EXIT', OldPid, _n} when State#internal.port == OldPid ->
+	    {ok, NewPid} = port_server_start_link(),
+	    measurement_server_loop(State#internal{port = NewPid});
 	_Other ->
 	    measurement_server_loop(State)
     end.
@@ -605,12 +607,12 @@ port_server_call(Pid, Command) ->
 	{Pid, {error, Reason}} -> {error, Reason}
     end.
     
-port_server_start() ->
+port_server_start_link() ->
     Timeout = 6000,
     Pid = spawn_link(fun() -> port_server_init(Timeout) end),
     Pid ! {self(), ?ping},
     receive
-	{Pid, {data,4711}} -> Pid;
+	{Pid, {data,4711}} -> {ok, Pid};
 	{error,Reason} -> {error, Reason}
     after Timeout -> 
 	{error, timeout}
@@ -764,8 +766,7 @@ port_receive_cpu_util_entries(_, _, Data) ->
      exit({data_mismatch, Data}).
 
 start_portprogram() ->
-    Command = filename:join([code:priv_dir(os_mon), "bin", "cpu_sup"]),
-    Port = open_port({spawn, Command}, [stream]),
+    Port = os_mon:open_port("cpu_sup", [stream]),
     port_command(Port, ?ping),
     4711 = port_receive_uint32(Port, 5000),
     Port.

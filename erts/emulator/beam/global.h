@@ -1,7 +1,7 @@
 /*
  * %CopyrightBegin%
  *
- * Copyright Ericsson AB 1996-2011. All Rights Reserved.
+ * Copyright Ericsson AB 1996-2014. All Rights Reserved.
  *
  * The contents of this file are subject to the Erlang Public License,
  * Version 1.1, (the "License"); you may not use this file except in
@@ -28,6 +28,7 @@
 #include "hash.h"
 #include "index.h"
 #include "atom.h"
+#include "code_ix.h"
 #include "export.h"
 #include "module.h"
 #include "register.h"
@@ -37,44 +38,9 @@
 #include "erl_process.h"
 #include "erl_sys_driver.h"
 #include "erl_debug.h"
-
-typedef struct port Port;
-#include "erl_port_task.h"
-
-#define ERTS_MAX_NO_OF_ASYNC_THREADS 1024
-extern int erts_async_max_threads;
-#define ERTS_ASYNC_THREAD_MIN_STACK_SIZE 16	/* Kilo words */
-#define ERTS_ASYNC_THREAD_MAX_STACK_SIZE 8192	/* Kilo words */
-extern int erts_async_thread_suggested_stack_size;
-
-typedef struct erts_driver_t_ erts_driver_t;
-
-#define SMALL_IO_QUEUE 5   /* Number of fixed elements */
-
-typedef struct {
-    int size;       /* total size in bytes */
-
-    SysIOVec* v_start;
-    SysIOVec* v_end;
-    SysIOVec* v_head;
-    SysIOVec* v_tail;
-    SysIOVec  v_small[SMALL_IO_QUEUE];
-
-    ErlDrvBinary** b_start;
-    ErlDrvBinary** b_end;
-    ErlDrvBinary** b_head;
-    ErlDrvBinary** b_tail;
-    ErlDrvBinary*  b_small[SMALL_IO_QUEUE];
-} ErlIOQueue;
-
-typedef struct line_buf {  /* Buffer used in line oriented I/O */
-    int bufsiz;              /* Size of character buffer */
-    int ovlen;               /* Length of overflow data */
-    int ovsiz;               /* Actual size of overflow buffer */
-    char data[1];            /* Starting point of buffer data,
-			      data[0] is a flag indicating an unprocess CR,
-			      The rest is the overflow buffer. */
-} LineBuf;
+#include "error.h"
+#include "erl_utils.h"
+#include "erl_port.h"
 
 struct enif_environment_t /* ErlNifEnv */
 {
@@ -93,157 +59,6 @@ extern Eterm erts_nif_taints(Process* p);
 extern void erts_print_nif_taints(int to, void* to_arg);
 void erts_unload_nif(struct erl_module_nif* nif);
 extern void erl_nif_init(void);
-
-/*
- * Port Specific Data.
- *
- * Only use PrtSD for very rarely used data.
- */
-
-#define ERTS_PRTSD_SCHED_ID 0
-
-#define ERTS_PRTSD_SIZE 1
-
-typedef struct {
-    void *data[ERTS_PRTSD_SIZE];
-} ErtsPrtSD;
-
-#ifdef ERTS_SMP
-typedef struct ErtsXPortsList_ ErtsXPortsList;
-#endif
-
-/*
- * Port locking:
- *
- * Locking is done either driver specific or port specific. When
- * driver specific locking is used, all instances of the driver,
- * i.e. ports running the driver, share the same lock. When port
- * specific locking is used each instance have its own lock.
- *
- * Most fields in the Port structure are protected by the lock
- * referred to by the lock field. I'v called it the port lock.
- * This lock is shared between all ports running the same driver
- * when driver specific locking is used.
- *
- * The 'sched' field is protected by the port tasks lock
- * (see erl_port_tasks.c)
- *
- * The 'status' field is protected by a combination of the port lock,
- * the port tasks lock, and the state_lck. It may be read if
- * the state_lck, or the port lock is held. It may only be
- * modified if both the port lock and the state_lck is held
- * (with one exception; see below). When changeing status from alive
- * to dead or vice versa, also the port task lock has to be held.
- * This in order to guarantee that tasks are scheduled only for
- * ports that are alive.
- *
- * The status field may be modified with only the state_lck
- * held when status is changed from dead to alive. This since no
- * threads can have any references to the port other than via the
- * port table.
- *
- * /rickard
- */
-
-struct port {
-    ErtsPortTaskSched sched;
-    ErtsPortTaskHandle timeout_task;
-#ifdef ERTS_SMP
-    erts_smp_atomic_t refc;
-    erts_smp_mtx_t *lock;
-    ErtsXPortsList *xports;
-    erts_smp_atomic_t run_queue;
-    erts_smp_spinlock_t state_lck;  /* protects: id, status, snapshot */
-#endif
-    Eterm id;                   /* The Port id of this port */
-    Eterm connected;            /* A connected process */
-    Eterm caller;		/* Current caller. */
-    Eterm data;			/* Data associated with port. */
-    ErlHeapFragment* bp;	/* Heap fragment holding data (NULL if imm data). */
-    ErtsLink *nlinks;
-    ErtsMonitor *monitors;      /* Only MON_ORIGIN monitors of pid's */
-    Uint bytes_in;		/* Number of bytes read */
-    Uint bytes_out;		/* Number of bytes written */
-#ifdef ERTS_SMP
-    ErtsSmpPTimer *ptimer;
-#else
-    ErlTimer tm;                 /* Timer entry */
-#endif
-    
-    Eterm tracer_proc;		/* If the port is traced, this is the tracer */
-    Uint trace_flags;		/* Trace flags */
-
-    ErlIOQueue ioq;              /* driver accessible i/o queue */
-    DistEntry *dist_entry;       /* Dist entry used in DISTRIBUTION */
-    char *name;		         /* String used in the open */
-    erts_driver_t* drv_ptr;
-    long drv_data;
-    ErtsProcList *suspended;	 /* List of suspended processes. */
-    LineBuf *linebuf;            /* Buffer to hold data not ready for
-				    process to get (line oriented I/O)*/
-    Uint32 status;		 /* Status and type flags */
-    int control_flags;		 /* Flags for port_control()  */
-    erts_aint32_t snapshot;      /* Next snapshot that port should be part of */
-    struct reg_proc *reg;
-    ErlDrvPDL port_data_lock;
-
-    ErtsPrtSD *psd;		 /* Port specific data */
-};
-
-
-ERTS_GLB_INLINE ErtsRunQueue *erts_port_runq(Port *prt);
-
-#if ERTS_GLB_INLINE_INCL_FUNC_DEF
-
-ERTS_GLB_INLINE ErtsRunQueue *
-erts_port_runq(Port *prt)
-{
-#ifdef ERTS_SMP
-    ErtsRunQueue *rq1, *rq2;
-    rq1 = (ErtsRunQueue *) erts_smp_atomic_read(&prt->run_queue);
-    while (1) {
-	erts_smp_runq_lock(rq1);
-	rq2 = (ErtsRunQueue *) erts_smp_atomic_read(&prt->run_queue);
-	if (rq1 == rq2)
-	    return rq1;
-	erts_smp_runq_unlock(rq1);
-	rq1 = rq2;
-    }
-#else
-    return erts_common_run_queue;
-#endif
-}
-
-#endif
-
-
-ERTS_GLB_INLINE void *erts_prtsd_get(Port *p, int ix);
-ERTS_GLB_INLINE void *erts_prtsd_set(Port *p, int ix, void *new);
-
-#if ERTS_GLB_INLINE_INCL_FUNC_DEF
-
-ERTS_GLB_INLINE void *
-erts_prtsd_get(Port *prt, int ix)
-{
-    return prt->psd ? prt->psd->data[ix] : NULL;
-}
-
-ERTS_GLB_INLINE void *
-erts_prtsd_set(Port *prt, int ix, void *data)
-{
-    if (prt->psd) {
-	void *old = prt->psd->data[ix];
-	prt->psd->data[ix] = data;
-	return old;
-    }
-    else {
-	prt->psd = erts_alloc(ERTS_ALC_T_PRTSD, sizeof(ErtsPrtSD));
-	prt->psd->data[ix] = data;
-	return NULL;
-    }
-}
-
-#endif
 
 /* Driver handle (wrapper for old plain handle) */
 #define ERL_DE_OK      0
@@ -296,7 +111,7 @@ typedef struct {
 				         or that wait for it to change state */
     erts_refc_t  refc;                /* Number of ports/processes having
 					 references to the driver */
-    Uint         port_count;          /* Number of ports using the driver */
+    erts_smp_atomic32_t port_count;   /* Number of ports using the driver */
     Uint         flags;               /* ERL_DE_FL_KILL_PORTS */
     int          status;              /* ERL_DE_xxx */
     char         *full_path;          /* Full path of the driver */
@@ -328,12 +143,15 @@ struct erts_driver_t_ {
     void (*stop)(ErlDrvData drv_data);
     void (*finish)(void);
     void (*flush)(ErlDrvData drv_data);
-    void (*output)(ErlDrvData drv_data, char *buf, int len);
+    void (*output)(ErlDrvData drv_data, char *buf, ErlDrvSizeT len);
     void (*outputv)(ErlDrvData drv_data, ErlIOVec *ev); /* Might be NULL */
-    int (*control)(ErlDrvData drv_data, unsigned int command, char *buf, 
-		   int len, char **rbuf, int rlen); /* Might be NULL */
-    int (*call)(ErlDrvData drv_data, unsigned int command, char *buf, 
-		int len, char **rbuf, int rlen, unsigned int *flags); /* Might be NULL */ 
+    ErlDrvSSizeT (*control)(ErlDrvData drv_data, unsigned int command,
+			    char *buf, ErlDrvSizeT len,
+			    char **rbuf, ErlDrvSizeT rlen); /* Might be NULL */
+    ErlDrvSSizeT (*call)(ErlDrvData drv_data, unsigned int command,
+			 char *buf, ErlDrvSizeT len,
+			 char **rbuf, ErlDrvSizeT rlen, /* Might be NULL */
+			 unsigned int *flags);
     void (*event)(ErlDrvData drv_data, ErlDrvEvent event,
 		  ErlDrvEventData event_data);
     void (*ready_input)(ErlDrvData drv_data, ErlDrvEvent event); 
@@ -345,7 +163,7 @@ struct erts_driver_t_ {
 };
 
 extern erts_driver_t *driver_list;
-extern erts_smp_mtx_t erts_driver_list_lock;
+extern erts_smp_rwmtx_t erts_driver_list_lock;
 
 extern void erts_ddll_init(void);
 extern void erts_ddll_lock_driver(DE_Handle *dh, char *name);
@@ -368,11 +186,6 @@ extern void erts_ddll_remove_monitor(Process *p,
 extern Eterm erts_ddll_monitor_driver(Process *p,
 				      Eterm description,
 				      ErtsProcLocks plocks);
-/*
- * Max no. of drivers (linked in and dynamically loaded). Each table
- * entry uses 4 bytes.
- */
-#define DRIVER_TAB_SIZE 32
 
 /*
 ** Just like the driver binary but with initial flags
@@ -403,7 +216,7 @@ extern Eterm erts_ddll_monitor_driver(Process *p,
 
 typedef struct binary {
     ERTS_INTERNAL_BINARY_FIELDS
-    long orig_size;
+    SWord orig_size;
     char orig_bytes[1]; /* to be continued */
 } Binary;
 
@@ -412,7 +225,7 @@ typedef struct binary {
 
 typedef struct {
     ERTS_INTERNAL_BINARY_FIELDS
-    long orig_size;
+    SWord orig_size;
     void (*destructor)(Binary *);
     char magic_bin_data[1];
 } ErtsMagicBinary;
@@ -525,132 +338,15 @@ union erl_off_heap_ptr {
     void* voidp;
 };
 
-/* arrays that get malloced at startup */
-extern Port* erts_port;
-
-extern Uint erts_max_ports;
-extern Uint erts_port_tab_index_mask;
-extern erts_smp_atomic32_t erts_ports_snapshot;
-extern erts_smp_atomic_t erts_dead_ports_ptr;
-
-ERTS_GLB_INLINE void erts_may_save_closed_port(Port *prt);
-
-#if ERTS_GLB_INLINE_INCL_FUNC_DEF
-
-ERTS_GLB_INLINE void erts_may_save_closed_port(Port *prt)
-{
-    ERTS_SMP_LC_ASSERT(erts_smp_lc_spinlock_is_locked(&prt->state_lck));
-    if (prt->snapshot != erts_smp_atomic32_read_acqb(&erts_ports_snapshot)) {
-	/* Dead ports are added from the end of the snapshot buffer */
-	Eterm* tombstone = (Eterm*) erts_smp_atomic_addtest(&erts_dead_ports_ptr,
-							    -(erts_aint_t)sizeof(Eterm));
-	ASSERT(tombstone+1 != NULL);
-	ASSERT(prt->snapshot == erts_smp_atomic32_read(&erts_ports_snapshot) - 1);
-	*tombstone = prt->id;
-    }
-    /*else no ongoing snapshot or port was already included or created after snapshot */
-}
-
-#endif
-
 /* controls warning mapping in error_logger */
 
 extern Eterm node_cookie;
-extern erts_smp_atomic_t erts_bytes_out;	/* no bytes written out */
-extern erts_smp_atomic_t erts_bytes_in;		/* no bytes sent into the system */
 extern Uint display_items;	/* no of items to display in traces etc */
-extern Uint display_loads;	/* print info about loaded modules */
 
 extern int erts_backtrace_depth;
 extern erts_smp_atomic32_t erts_max_gen_gcs;
 
 extern int erts_disable_tolerant_timeofday;
-
-#ifdef HYBRID
-
-/* Message Area heap pointers */
-extern Eterm *global_heap;             /* Heap start */
-extern Eterm *global_hend;             /* Heap end */
-extern Eterm *global_htop;             /* Heap top (heap pointer) */
-extern Eterm *global_saved_htop;       /* Saved heap top (heap pointer) */
-extern Uint   global_heap_sz;          /* Heap size, in words */
-extern Eterm *global_old_heap;         /* Old generation */
-extern Eterm *global_old_hend;
-extern ErlOffHeap erts_global_offheap; /* Global MSO (OffHeap) list */
-
-extern Uint16 global_gen_gcs;
-extern Uint16 global_max_gen_gcs;
-extern Uint   global_gc_flags;
-
-#ifdef INCREMENTAL
-#define ACTIVATE(p)
-#define DEACTIVATE(p)
-#define IS_ACTIVE(p) 1
-
-#define INC_ACTIVATE(p) do {                                           \
-    if ((p)->active) {                                                 \
-        if ((p)->active_next != NULL) {                                \
-            (p)->active_next->active_prev = (p)->active_prev;          \
-            if ((p)->active_prev) {                                    \
-                (p)->active_prev->active_next = (p)->active_next;      \
-            } else {                                                   \
-                inc_active_proc = (p)->active_next;                    \
-            }                                                          \
-            inc_active_last->active_next = (p);                        \
-            (p)->active_next = NULL;                                   \
-            (p)->active_prev = inc_active_last;                        \
-            inc_active_last = (p);                                     \
-        }                                                              \
-    } else {                                                           \
-        (p)->active_next = NULL;                                       \
-        (p)->active_prev = inc_active_last;                            \
-        if (inc_active_last) {                                         \
-            inc_active_last->active_next = (p);                        \
-        } else {                                                       \
-            inc_active_proc = (p);                                     \
-        }                                                              \
-        inc_active_last = (p);                                         \
-        (p)->active = 1;                                               \
-    }                                                                  \
-} while(0);
-
-#define INC_DEACTIVATE(p) do {                                         \
-    ASSERT((p)->active == 1);                                          \
-    if ((p)->active_next == NULL) {                                    \
-        inc_active_last = (p)->active_prev;                            \
-    } else {                                                           \
-        (p)->active_next->active_prev = (p)->active_prev;              \
-    }                                                                  \
-    if ((p)->active_prev == NULL) {                                    \
-        inc_active_proc = (p)->active_next;                            \
-    } else {                                                           \
-        (p)->active_prev->active_next = (p)->active_next;              \
-    }                                                                  \
-    (p)->active = 0;                                                   \
-} while(0);
-
-#define INC_IS_ACTIVE(p)  ((p)->active != 0)
-
-#else
-extern Eterm *global_old_htop;
-extern Eterm *global_high_water;
-#define ACTIVATE(p)   (p)->active = 1;
-#define DEACTIVATE(p) (p)->active = 0;
-#define IS_ACTIVE(p)  ((p)->active != 0)
-#define INC_ACTIVATE(p)
-#define INC_IS_ACTIVE(p) 1
-#endif /* INCREMENTAL */
-
-#else
-#  define ACTIVATE(p)
-#  define DEACTIVATE(p)
-#  define IS_ACTIVE(p) 1
-#  define INC_ACTIVATE(p)
-#endif /* HYBRID */
-
-#ifdef HYBRID
-extern Uint global_heap_min_sz;
-#endif
 
 extern int bif_reductions;      /* reductions + fcalls (when doing call_bif) */
 extern int stackdump_on_exit;
@@ -674,159 +370,237 @@ extern int stackdump_on_exit;
  * DESTROY_ESTACK(Stack)
  */
 
+typedef struct {
+    Eterm* start;
+    Eterm* sp;
+    Eterm* end;
+    ErtsAlcType_t alloc_type;
+}ErtsEStack;
 
-void erl_grow_stack(Eterm** start, Eterm** sp, Eterm** end);
-#define ESTK_CONCAT(a,b) a##b
-#define ESTK_SUBSCRIPT(s,i) *((Eterm *)((byte *)ESTK_CONCAT(s,_start) + (i)))
 #define DEF_ESTACK_SIZE (16)
 
-#define DECLARE_ESTACK(s)						\
-    Eterm ESTK_CONCAT(s,_default_stack)[DEF_ESTACK_SIZE];		\
-    Eterm* ESTK_CONCAT(s,_start) = ESTK_CONCAT(s,_default_stack);	\
-    Eterm* ESTK_CONCAT(s,_sp) = ESTK_CONCAT(s,_start);			\
-    Eterm* ESTK_CONCAT(s,_end) = ESTK_CONCAT(s,_start) + DEF_ESTACK_SIZE
+void erl_grow_estack(ErtsEStack*, Eterm* def_stack);
+#define ESTK_CONCAT(a,b) a##b
+#define ESTK_DEF_STACK(s) ESTK_CONCAT(s,_default_estack)
 
-#define DESTROY_ESTACK(s)						\
+#define DECLARE_ESTACK(s)				\
+    Eterm ESTK_DEF_STACK(s)[DEF_ESTACK_SIZE];		\
+    ErtsEStack s = {					\
+        ESTK_DEF_STACK(s),  /* start */ 		\
+        ESTK_DEF_STACK(s),  /* sp */			\
+        ESTK_DEF_STACK(s) + DEF_ESTACK_SIZE, /* end */	\
+        ERTS_ALC_T_ESTACK /* alloc_type */		\
+    }
+
+#define ESTACK_CHANGE_ALLOCATOR(s,t)					\
 do {									\
-    if (ESTK_CONCAT(s,_start) != ESTK_CONCAT(s,_default_stack)) {	\
-	erts_free(ERTS_ALC_T_ESTACK, ESTK_CONCAT(s,_start));		\
+    if (s.start != ESTK_DEF_STACK(s)) {					\
+	erl_exit(1, "Internal error - trying to change allocator "	\
+		 "type of active estack\n");				\
     }									\
+    s.alloc_type = (t);							\
+ } while (0)
+
+#define DESTROY_ESTACK(s)				\
+do {							\
+    if (s.start != ESTK_DEF_STACK(s)) {			\
+	erts_free(s.alloc_type, s.start); 		\
+    }							\
 } while(0)
 
-#define ESTACK_PUSH(s, x)						\
-do {									\
-    if (ESTK_CONCAT(s,_sp) == ESTK_CONCAT(s,_end)) {			\
-	erl_grow_stack(&ESTK_CONCAT(s,_start), &ESTK_CONCAT(s,_sp),	\
-	               &ESTK_CONCAT(s,_end));				\
-    }									\
-    *ESTK_CONCAT(s,_sp)++ = (x);					\
+
+/*
+ * Do not free the stack after this, it may have pointers into what
+ * was saved in 'dst'.
+ */
+#define ESTACK_SAVE(s,dst)\
+do {\
+    if (s.start == ESTK_DEF_STACK(s)) {\
+	UWord _wsz = ESTACK_COUNT(s);\
+	(dst)->start = erts_alloc(s.alloc_type,\
+				  DEF_ESTACK_SIZE * sizeof(Eterm));\
+	memcpy((dst)->start, s.start,_wsz*sizeof(Eterm));\
+	(dst)->sp = (dst)->start + _wsz;\
+	(dst)->end = (dst)->start + DEF_ESTACK_SIZE;\
+	(dst)->alloc_type = s.alloc_type;\
+    } else\
+        *(dst) = s;\
+ } while (0)
+
+#define DESTROY_SAVED_ESTACK(estack)\
+do {\
+    if ((estack)->start) {\
+	erts_free((estack)->alloc_type, (estack)->start);\
+	(estack)->start = NULL;\
+    }\
 } while(0)
 
-#define ESTACK_PUSH2(s, x, y)						\
-do {									\
-    if (ESTK_CONCAT(s,_sp) > ESTK_CONCAT(s,_end) - 2) {			\
-	erl_grow_stack(&ESTK_CONCAT(s,_start), &ESTK_CONCAT(s,_sp),	\
-		&ESTK_CONCAT(s,_end));	\
-    }									\
-    *ESTK_CONCAT(s,_sp)++ = (x);					\
-    *ESTK_CONCAT(s,_sp)++ = (y);					\
+#define CLEAR_SAVED_ESTACK(estack) ((void) ((estack)->start = NULL))
+
+/*
+ * Use on empty stack, only the allocator can be changed before this.
+ * The src stack is reset to NULL.
+ */
+#define ESTACK_RESTORE(s, src)			\
+do {						\
+    ASSERT(s.start == ESTK_DEF_STACK(s));	\
+    s = *(src);  /* struct copy */		\
+    (src)->start = NULL;			\
+    ASSERT(s.sp >= s.start);			\
+    ASSERT(s.sp <= s.end);			\
+} while (0)
+
+#define ESTACK_IS_STATIC(s) (s.start == ESTK_DEF_STACK(s)))
+
+#define ESTACK_PUSH(s, x)				\
+do {							\
+    if (s.sp == s.end) {				\
+	erl_grow_estack(&s, ESTK_DEF_STACK(s)); 	\
+    }							\
+    *s.sp++ = (x);					\
 } while(0)
 
-#define ESTACK_PUSH3(s, x, y, z)					\
-do {									\
-    if (ESTK_CONCAT(s,_sp) > ESTK_CONCAT(s,_end) - 3) {			\
-	erl_grow_stack(&ESTK_CONCAT(s,_start), &ESTK_CONCAT(s,_sp),	\
-		&ESTK_CONCAT(s,_end));					\
-    }									\
-    *ESTK_CONCAT(s,_sp)++ = (x);					\
-    *ESTK_CONCAT(s,_sp)++ = (y);					\
-    *ESTK_CONCAT(s,_sp)++ = (z);					\
+#define ESTACK_PUSH2(s, x, y)			\
+do {						\
+    if (s.sp > s.end - 2) {			\
+	erl_grow_estack(&s, ESTK_DEF_STACK(s)); \
+    }						\
+    *s.sp++ = (x);				\
+    *s.sp++ = (y);				\
 } while(0)
 
-#define ESTACK_COUNT(s) (ESTK_CONCAT(s,_sp) - ESTK_CONCAT(s,_start))
+#define ESTACK_PUSH3(s, x, y, z)		\
+do {						\
+    if (s.sp > s.end - 3) {			\
+	erl_grow_estack(&s, ESTK_DEF_STACK(s)); \
+    }						\
+    *s.sp++ = (x);				\
+    *s.sp++ = (y);				\
+    *s.sp++ = (z);				\
+} while(0)
 
-#define ESTACK_ISEMPTY(s) (ESTK_CONCAT(s,_sp) == ESTK_CONCAT(s,_start))
-#define ESTACK_POP(s) (*(--ESTK_CONCAT(s,_sp)))
+#define ESTACK_COUNT(s) (s.sp - s.start)
+#define ESTACK_ISEMPTY(s) (s.sp == s.start)
+#define ESTACK_POP(s) (*(--s.sp))
 
 
-void erl_grow_wstack(UWord** start, UWord** sp, UWord** end);
-#define WSTK_CONCAT(a,b) a##b
-#define WSTK_SUBSCRIPT(s,i) *((UWord *)((byte *)WSTK_CONCAT(s,_start) + (i)))
+/*
+ * WSTACK: same as ESTACK but with UWord instead of Eterm
+ */
+
+typedef struct {
+    UWord* wstart;
+    UWord* wsp;
+    UWord* wend;
+    ErtsAlcType_t alloc_type;
+}ErtsWStack;
+
 #define DEF_WSTACK_SIZE (16)
 
-#define DECLARE_WSTACK(s)						\
-    UWord WSTK_CONCAT(s,_default_stack)[DEF_WSTACK_SIZE];		\
-    UWord* WSTK_CONCAT(s,_start) = WSTK_CONCAT(s,_default_stack);	\
-    UWord* WSTK_CONCAT(s,_sp) = WSTK_CONCAT(s,_start);			\
-    UWord* WSTK_CONCAT(s,_end) = WSTK_CONCAT(s,_start) + DEF_WSTACK_SIZE
+void erl_grow_wstack(ErtsWStack*, UWord* def_stack);
+#define WSTK_CONCAT(a,b) a##b
+#define WSTK_DEF_STACK(s) WSTK_CONCAT(s,_default_wstack)
 
-#define DESTROY_WSTACK(s)						\
+#define DECLARE_WSTACK(s)				\
+    UWord WSTK_DEF_STACK(s)[DEF_WSTACK_SIZE];		\
+    ErtsWStack s = {					\
+        WSTK_DEF_STACK(s),  /* wstart */ 		\
+        WSTK_DEF_STACK(s),  /* wsp */			\
+        WSTK_DEF_STACK(s) + DEF_WSTACK_SIZE, /* wend */	\
+        ERTS_ALC_T_ESTACK /* alloc_type */		\
+    }
+
+#define WSTACK_CHANGE_ALLOCATOR(s,t)					\
 do {									\
-    if (WSTK_CONCAT(s,_start) != WSTK_CONCAT(s,_default_stack)) {	\
-	erts_free(ERTS_ALC_T_ESTACK, WSTK_CONCAT(s,_start));		\
+    if (s.wstart != WSTK_DEF_STACK(s)) {				\
+	erl_exit(1, "Internal error - trying to change allocator "	\
+		 "type of active wstack\n");				\
     }									\
+    s.alloc_type = (t);							\
+ } while (0)
+
+#define DESTROY_WSTACK(s)				\
+do {							\
+    if (s.wstart != WSTK_DEF_STACK(s)) {		\
+	erts_free(s.alloc_type, s.wstart); 		\
+    }							\
 } while(0)
 
-#define WSTACK_PUSH(s, x)						\
-do {									\
-    if (WSTK_CONCAT(s,_sp) == WSTK_CONCAT(s,_end)) {			\
-	erl_grow_wstack(&WSTK_CONCAT(s,_start), &WSTK_CONCAT(s,_sp),	\
-	               &WSTK_CONCAT(s,_end));				\
-    }									\
-    *WSTK_CONCAT(s,_sp)++ = (x);					\
+
+/*
+ * Do not free the stack after this, it may have pointers into what
+ * was saved in 'dst'.
+ */
+#define WSTACK_SAVE(s,dst)\
+do {\
+    if (s.wstart == WSTK_DEF_STACK(s)) {\
+	UWord _wsz = WSTACK_COUNT(s);\
+	(dst)->wstart = erts_alloc(s.alloc_type,\
+				  DEF_WSTACK_SIZE * sizeof(UWord));\
+	memcpy((dst)->wstart, s.wstart,_wsz*sizeof(UWord));\
+	(dst)->wsp = (dst)->wstart + _wsz;\
+	(dst)->wend = (dst)->wstart + DEF_WSTACK_SIZE;\
+	(dst)->alloc_type = s.alloc_type;\
+    } else\
+        *(dst) = s;\
+ } while (0)
+
+#define DESTROY_SAVED_WSTACK(wstack)\
+do {\
+    if ((wstack)->wstart) {\
+	erts_free((wstack)->alloc_type, (wstack)->wstart);\
+	(wstack)->wstart = NULL;\
+    }\
 } while(0)
 
-#define WSTACK_PUSH2(s, x, y)						\
-do {									\
-    if (WSTK_CONCAT(s,_sp) > WSTK_CONCAT(s,_end) - 2) {			\
-	erl_grow_wstack(&WSTK_CONCAT(s,_start), &WSTK_CONCAT(s,_sp),	\
-		&WSTK_CONCAT(s,_end));	\
-    }									\
-    *WSTK_CONCAT(s,_sp)++ = (x);					\
-    *WSTK_CONCAT(s,_sp)++ = (y);					\
+#define CLEAR_SAVED_WSTACK(wstack) ((void) ((wstack)->wstart = NULL))
+
+/*
+ * Use on empty stack, only the allocator can be changed before this.
+ * The src stack is reset to NULL.
+ */
+#define WSTACK_RESTORE(s, src)			\
+do {						\
+    ASSERT(s.wstart == WSTK_DEF_STACK(s));	\
+    s = *(src);  /* struct copy */		\
+    (src)->wstart = NULL;			\
+    ASSERT(s.wsp >= s.wstart);			\
+    ASSERT(s.wsp <= s.wend);			\
+} while (0)
+
+#define WSTACK_IS_STATIC(s) (s.wstart == WSTK_DEF_STACK(s)))
+
+#define WSTACK_PUSH(s, x)				\
+do {							\
+    if (s.wsp == s.wend) {				\
+	erl_grow_wstack(&s, WSTK_DEF_STACK(s)); 	\
+    }							\
+    *s.wsp++ = (x);					\
 } while(0)
 
-#define WSTACK_PUSH3(s, x, y, z)					\
-do {									\
-    if (WSTK_CONCAT(s,_sp) > WSTK_CONCAT(s,_end) - 3) {			\
-	erl_grow_wstack(&WSTK_CONCAT(s,_start), &WSTK_CONCAT(s,_sp),	\
-		&WSTK_CONCAT(s,_end));					\
-    }									\
-    *WSTK_CONCAT(s,_sp)++ = (x);					\
-    *WSTK_CONCAT(s,_sp)++ = (y);					\
-    *WSTK_CONCAT(s,_sp)++ = (z);					\
+#define WSTACK_PUSH2(s, x, y)			\
+do {						\
+    if (s.wsp > s.wend - 2) {			\
+	erl_grow_wstack(&s, WSTK_DEF_STACK(s)); \
+    }						\
+    *s.wsp++ = (x);				\
+    *s.wsp++ = (y);				\
 } while(0)
 
-#define WSTACK_COUNT(s) (WSTK_CONCAT(s,_sp) - WSTK_CONCAT(s,_start))
+#define WSTACK_PUSH3(s, x, y, z)		\
+do {						\
+    if (s.wsp > s.wend - 3) {	\
+	erl_grow_wstack(&s, WSTK_DEF_STACK(s)); \
+    }						\
+    *s.wsp++ = (x);				\
+    *s.wsp++ = (y);				\
+    *s.wsp++ = (z);				\
+} while(0)
 
-#define WSTACK_ISEMPTY(s) (WSTK_CONCAT(s,_sp) == WSTK_CONCAT(s,_start))
-#define WSTACK_POP(s) (*(--WSTK_CONCAT(s,_sp)))
+#define WSTACK_COUNT(s) (s.wsp - s.wstart)
+#define WSTACK_ISEMPTY(s) (s.wsp == s.wstart)
+#define WSTACK_POP(s) (*(--s.wsp))
 
-
-/* port status flags */
-
-#define ERTS_PORT_SFLG_CONNECTED	((Uint32) (1 <<  0))
-/* Port have begun exiting */
-#define ERTS_PORT_SFLG_EXITING		((Uint32) (1 <<  1))
-/* Distribution port */
-#define ERTS_PORT_SFLG_DISTRIBUTION	((Uint32) (1 <<  2))
-#define ERTS_PORT_SFLG_BINARY_IO	((Uint32) (1 <<  3))
-#define ERTS_PORT_SFLG_SOFT_EOF		((Uint32) (1 <<  4))
-/* Flow control */
-#define ERTS_PORT_SFLG_PORT_BUSY	((Uint32) (1 <<  5))
-/* Port is closing (no i/o accepted) */
-#define ERTS_PORT_SFLG_CLOSING		((Uint32) (1 <<  6))
-/* Send a closed message when terminating */
-#define ERTS_PORT_SFLG_SEND_CLOSED	((Uint32) (1 <<  7))
-/* Line orinted io on port */  
-#define ERTS_PORT_SFLG_LINEBUF_IO	((Uint32) (1 <<  8))
-/* Immortal port (only certain system ports) */
-#define ERTS_PORT_SFLG_IMMORTAL		((Uint32) (1 <<  9))
-#define ERTS_PORT_SFLG_FREE		((Uint32) (1 << 10))
-#define ERTS_PORT_SFLG_FREE_SCHEDULED	((Uint32) (1 << 11))
-#define ERTS_PORT_SFLG_INITIALIZING	((Uint32) (1 << 12))
-/* Port uses port specific locking (opposed to driver specific locking) */
-#define ERTS_PORT_SFLG_PORT_SPECIFIC_LOCK ((Uint32) (1 << 13))
-#define ERTS_PORT_SFLG_INVALID		((Uint32) (1 << 14))
-#ifdef DEBUG
-/* Only debug: make sure all flags aren't cleared unintentionally */
-#define ERTS_PORT_SFLG_PORT_DEBUG	((Uint32) (1 << 31))
-#endif
-
-/* Combinations of port status flags */ 
-#define ERTS_PORT_SFLGS_DEAD						\
-  (ERTS_PORT_SFLG_FREE							\
-   | ERTS_PORT_SFLG_FREE_SCHEDULED					\
-   | ERTS_PORT_SFLG_INITIALIZING)
-#define ERTS_PORT_SFLGS_INVALID_DRIVER_LOOKUP				\
-  (ERTS_PORT_SFLGS_DEAD | ERTS_PORT_SFLG_INVALID)
-#define ERTS_PORT_SFLGS_INVALID_LOOKUP					\
-  (ERTS_PORT_SFLGS_INVALID_DRIVER_LOOKUP				\
-   | ERTS_PORT_SFLG_CLOSING)
-#define ERTS_PORT_SFLGS_INVALID_TRACER_LOOKUP				\
-  (ERTS_PORT_SFLGS_INVALID_LOOKUP					\
-   | ERTS_PORT_SFLG_PORT_BUSY						\
-   | ERTS_PORT_SFLG_DISTRIBUTION)
 
 /* binary.c */
 
@@ -838,33 +612,88 @@ Eterm erts_realloc_binary(Eterm bin, size_t size);
 
 /* erl_bif_info.c */
 
+Eterm
+erts_bld_port_info(Eterm **hpp,
+		   ErlOffHeap *ohp,
+		   Uint *szp,
+		   Port *prt,
+		   Eterm item); 
+
 void erts_bif_info_init(void);
 
 /* bif.c */
 Eterm erts_make_ref(Process *);
 Eterm erts_make_ref_in_buffer(Eterm buffer[REF_THING_SIZE]);
+void erts_make_ref_in_array(Uint32 ref[ERTS_MAX_REF_NUMBERS]);
+
+ERTS_GLB_INLINE Eterm
+erts_proc_store_ref(Process *c_p, Uint32 ref[ERTS_MAX_REF_NUMBERS]);
+
+#if ERTS_GLB_INLINE_INCL_FUNC_DEF
+
+ERTS_GLB_INLINE Eterm
+erts_proc_store_ref(Process *c_p, Uint32 ref[ERTS_MAX_REF_NUMBERS])
+{
+    Eterm *hp = HAlloc(c_p, REF_THING_SIZE);
+    write_ref_thing(hp, ref[0], ref[1], ref[2]);
+    return make_internal_ref(hp);
+}
+
+#endif
+
 void erts_queue_monitor_message(Process *,
 				ErtsProcLocks*,
 				Eterm,
 				Eterm,
 				Eterm,
 				Eterm);
+void erts_init_trap_export(Export* ep, Eterm m, Eterm f, Uint a,
+			   Eterm (*bif)(Process*,Eterm*));
 void erts_init_bif(void);
+Eterm erl_send(Process *p, Eterm to, Eterm msg);
 
-/* erl_bif_port.c */
+/* erl_bif_op.c */
 
-/* erl_bif_trace.c */
-void erts_system_monitor_clear(Process *c_p);
-void erts_system_profile_clear(Process *c_p);
+Eterm erl_is_function(Process* p, Eterm arg1, Eterm arg2);
+
+/* beam_bif_load.c */
+Eterm erts_check_process_code(Process *c_p, Eterm module, int allow_gc, int *redsp);
+
 
 /* beam_load.c */
-int erts_load_module(Process *c_p, ErtsProcLocks c_p_locks,
-		     Eterm group_leader, Eterm* mod, byte* code, int size);
+typedef struct {
+    BeamInstr* current;		/* Pointer to: Mod, Name, Arity */
+    Uint needed;		/* Heap space needed for entire tuple */
+    Uint32 loc;			/* Location in source code */
+    Eterm* fname_ptr;		/* Pointer to fname table */
+} FunctionInfo;
+
+Binary* erts_alloc_loader_state(void);
+Eterm erts_module_for_prepared_code(Binary* magic);
+Eterm erts_prepare_loading(Binary* loader_state,  Process *c_p,
+			   Eterm group_leader, Eterm* modp,
+			   byte* code, Uint size);
+Eterm erts_finish_loading(Binary* loader_state, Process* c_p,
+			  ErtsProcLocks c_p_locks, Eterm* modp);
+Eterm erts_preload_module(Process *c_p, ErtsProcLocks c_p_locks,
+			  Eterm group_leader, Eterm* mod, byte* code, Uint size);
 void init_load(void);
 BeamInstr* find_function_from_pc(BeamInstr* pc);
+Eterm* erts_build_mfa_item(FunctionInfo* fi, Eterm* hp,
+			   Eterm args, Eterm* mfa_p);
+void erts_set_current_function(FunctionInfo* fi, BeamInstr* current);
 Eterm erts_module_info_0(Process* p, Eterm module);
 Eterm erts_module_info_1(Process* p, Eterm module, Eterm what);
 Eterm erts_make_stub_module(Process* p, Eterm Mod, Eterm Beam, Eterm Info);
+
+/* beam_ranges.c */
+void erts_init_ranges(void);
+void erts_start_staging_ranges(void);
+void erts_end_staging_ranges(int commit);
+void erts_update_ranges(BeamInstr* code, Uint size);
+void erts_remove_from_ranges(BeamInstr* code);
+UWord erts_ranges_sz(void);
+void erts_lookup_function_info(FunctionInfo* fi, BeamInstr* pc, int full_info);
 
 /* break.c */
 void init_break_handler(void);
@@ -878,16 +707,10 @@ void loaded(int, void *);
 /* config.c */
 
 __decl_noreturn void __noreturn erl_exit(int n, char*, ...);
-__decl_noreturn void __noreturn erl_exit0(char *, int, int n, char*, ...);
+__decl_noreturn void __noreturn erl_exit_flush_async(int n, char*, ...);
 void erl_error(char*, va_list);
 
-#define ERL_EXIT0(n,f)		erl_exit0(__FILE__, __LINE__, n, f)
-#define ERL_EXIT1(n,f,a)	erl_exit0(__FILE__, __LINE__, n, f, a)
-#define ERL_EXIT2(n,f,a,b)	erl_exit0(__FILE__, __LINE__, n, f, a, b)
-#define ERL_EXIT3(n,f,a,b,c)	erl_exit0(__FILE__, __LINE__, n, f, a, b, c)
-
 /* copy.c */
-void init_copy(void);
 Eterm copy_object(Eterm, Process*);
 
 #if HALFWORD_HEAP
@@ -917,116 +740,6 @@ Eterm copy_shallow(Eterm*, Uint, Eterm**, ErlOffHeap*);
 void move_multi_frags(Eterm** hpp, ErlOffHeap*, ErlHeapFragment* first,
 		      Eterm* refs, unsigned nrefs);
 
-#ifdef HYBRID
-#define RRMA_DEFAULT_SIZE 256
-#define RRMA_STORE(p,ptr,src) do {                                      \
-  ASSERT((p)->rrma != NULL);                                            \
-  ASSERT((p)->rrsrc != NULL);                                           \
-  (p)->rrma[(p)->nrr] = (ptr);                                          \
-  (p)->rrsrc[(p)->nrr++] = (src);                                       \
-  if ((p)->nrr == (p)->rrsz)                                            \
-  {                                                                     \
-      (p)->rrsz *= 2;                                                   \
-      (p)->rrma = (Eterm *) erts_realloc(ERTS_ALC_T_ROOTSET,            \
-                                         (void*)(p)->rrma,              \
-                                         sizeof(Eterm) * (p)->rrsz);    \
-      (p)->rrsrc = (Eterm **) erts_realloc(ERTS_ALC_T_ROOTSET,          \
-                                           (void*)(p)->rrsrc,           \
-                                            sizeof(Eterm) * (p)->rrsz); \
-  }                                                                     \
-} while(0)
-
-/* Note that RRMA_REMOVE decreases the given index after deletion. 
- * This is done so that a loop with an increasing index can call
- * remove without having to decrease the index to see the element
- * placed in the hole after the deleted element.
- */
-#define RRMA_REMOVE(p,index) do {                                 \
-        p->rrsrc[index] = p->rrsrc[--p->nrr];                     \
-        p->rrma[index--] = p->rrma[p->nrr];                       \
-    } while(0);
-
-
-/* The MessageArea STACKs are used while copying messages to the
- * message area.
- */
-#define MA_STACK_EXTERNAL_DECLARE(type,_s_)     \
-    typedef type ma_##_s_##_type;               \
-    extern ma_##_s_##_type *ma_##_s_##_stack;   \
-    extern Uint ma_##_s_##_top;                 \
-    extern Uint ma_##_s_##_size;
-
-#define MA_STACK_DECLARE(_s_)                                           \
-    ma_##_s_##_type *ma_##_s_##_stack; Uint ma_##_s_##_top; Uint ma_##_s_##_size;
-
-#define MA_STACK_ALLOC(_s_) do {                                        \
-    ma_##_s_##_top = 0;                                                 \
-    ma_##_s_##_size = 512;                                              \
-    ma_##_s_##_stack = (ma_##_s_##_type*)erts_alloc(ERTS_ALC_T_OBJECT_STACK, \
-                       sizeof(ma_##_s_##_type) * ma_##_s_##_size);      \
-} while(0)
-
-
-#define MA_STACK_PUSH(_s_,val) do {                                     \
-    ma_##_s_##_stack[ma_##_s_##_top++] = (val);                         \
-    if (ma_##_s_##_top == ma_##_s_##_size)                              \
-    {                                                                   \
-        ma_##_s_##_size *= 2;                                           \
-        ma_##_s_##_stack =                                              \
-            (ma_##_s_##_type*) erts_realloc(ERTS_ALC_T_OBJECT_STACK,    \
-                                           (void*)ma_##_s_##_stack,     \
-                            sizeof(ma_##_s_##_type) * ma_##_s_##_size); \
-    }                                                                   \
-} while(0)
-
-#define MA_STACK_POP(_s_) (ma_##_s_##_top != 0 ? ma_##_s_##_stack[--ma_##_s_##_top] : 0)
-#define MA_STACK_TOP(_s_) (ma_##_s_##_stack[ma_##_s_##_top - 1])
-#define MA_STACK_UPDATE(_s_,offset,value)                               \
-  *(ma_##_s_##_stack[ma_##_s_##_top - 1] + (offset)) = (value)
-#define MA_STACK_SIZE(_s_) (ma_##_s_##_top)
-#define MA_STACK_ELM(_s_,i) ma_##_s_##_stack[i]
-
-MA_STACK_EXTERNAL_DECLARE(Eterm,src);
-MA_STACK_EXTERNAL_DECLARE(Eterm*,dst);
-MA_STACK_EXTERNAL_DECLARE(Uint,offset);
-
-
-#ifdef INCREMENTAL
-extern Eterm *ma_pending_stack;
-extern Uint ma_pending_top;
-extern Uint ma_pending_size;
-
-#define NO_COPY(obj) (IS_CONST(obj) ||                         \
-                      (((ptr_val(obj) >= global_heap) &&       \
-                        (ptr_val(obj) < global_htop)) ||       \
-                       ((ptr_val(obj) >= inc_fromspc) &&       \
-                        (ptr_val(obj) < inc_fromend)) ||       \
-                       ((ptr_val(obj) >= global_old_heap) &&   \
-                        (ptr_val(obj) < global_old_hend))))
-
-#else
-
-#define NO_COPY(obj) (IS_CONST(obj) ||                        \
-                      (((ptr_val(obj) >= global_heap) &&      \
-                        (ptr_val(obj) < global_htop)) ||      \
-                       ((ptr_val(obj) >= global_old_heap) &&  \
-                        (ptr_val(obj) < global_old_hend))))
-
-#endif /* INCREMENTAL */
-
-#define LAZY_COPY(from,obj) do {                     \
-  if (!NO_COPY(obj)) {                               \
-      BM_LAZY_COPY_START;                            \
-      BM_COUNT(messages_copied);                     \
-      obj = copy_struct_lazy(from,obj,0);            \
-      BM_LAZY_COPY_STOP;                             \
-  }                                                  \
-} while(0)
-
-Eterm copy_struct_lazy(Process*, Eterm, Uint);
-
-#endif /* HYBRID */
-
 /* Utilities */
 extern void erts_delete_nodes_monitors(Process *, ErtsProcLocks);
 extern Eterm erts_monitor_nodes(Process *, Eterm, Eterm);
@@ -1035,7 +748,8 @@ extern int erts_do_net_exits(DistEntry*, Eterm);
 extern int distribution_info(int, void *);
 extern int is_node_name_atom(Eterm a);
 
-extern int erts_net_message(Port *, DistEntry *, byte *, int, byte *, int);
+extern int erts_net_message(Port *, DistEntry *,
+			    byte *, ErlDrvSizeT, byte *, ErlDrvSizeT);
 
 extern void init_dist(void);
 extern int stop_dist(void);
@@ -1052,6 +766,7 @@ void init_emulator(void);
 void process_main(void);
 Eterm build_stacktrace(Process* c_p, Eterm exc);
 Eterm expand_error_value(Process* c_p, Uint freason, Eterm Value);
+void erts_save_stacktrace(Process* p, struct StackTrace* s, int depth);
 
 /* erl_init.c */
 
@@ -1073,6 +788,7 @@ extern ErtsModifiedTimings erts_modified_timings[];
 #define ERTS_MODIFIED_TIMING_INPUT_REDS \
   (erts_modified_timings[erts_modified_timing_level].input_reds)
 
+extern int erts_no_line_info;
 extern Eterm erts_error_logger_warnings;
 extern int erts_initialized;
 extern int erts_compat_rel;
@@ -1095,18 +811,14 @@ void MD5Final(unsigned char [16], MD5_CTX *);
 
 /* ggc.c */
 
-
-typedef struct {
-    Uint garbage_collections;
-    Uint reclaimed;
-} ErtsGCInfo;
-
 void erts_gc_info(ErtsGCInfo *gcip);
 void erts_init_gc(void);
 int erts_garbage_collect(Process*, int, Eterm*, int);
 void erts_garbage_collect_hibernate(Process* p);
 Eterm erts_gc_after_bif_call(Process* p, Eterm result, Eterm* regs, Uint arity);
-void erts_garbage_collect_literals(Process* p, Eterm* literals, Uint lit_size);
+void erts_garbage_collect_literals(Process* p, Eterm* literals,
+				   Uint lit_size,
+				   struct erl_off_heap_header* oh);
 Uint erts_next_heap_size(Uint, Uint);
 Eterm erts_heap_sizes(Process* p);
 
@@ -1115,16 +827,7 @@ void erts_offset_heap_ptr(Eterm*, Uint, Sint, Eterm*, Eterm*);
 void erts_offset_heap(Eterm*, Uint, Sint, Eterm*, Eterm*);
 void erts_free_heap_frags(Process* p);
 
-#ifdef HYBRID
-int erts_global_garbage_collect(Process*, int, Eterm*, int);
-#endif
-
 /* io.c */
-
-struct erl_drv_port_data_lock {
-    erts_mtx_t mtx;
-    erts_atomic_t refc;
-};
 
 typedef struct {
     char *name;
@@ -1134,405 +837,54 @@ typedef struct {
 #define ERTS_SPAWN_DRIVER 1
 #define ERTS_SPAWN_EXECUTABLE 2
 #define ERTS_SPAWN_ANY (ERTS_SPAWN_DRIVER | ERTS_SPAWN_EXECUTABLE)
-
 int erts_add_driver_entry(ErlDrvEntry *drv, DE_Handle *handle, int driver_list_locked);
 void erts_destroy_driver(erts_driver_t *drv);
-void erts_wake_process_later(Port*, Process*);
-int erts_open_driver(erts_driver_t*, Eterm, char*, SysDriverOpts*, int *);
-int erts_is_port_ioq_empty(Port *);
-void erts_terminate_port(Port *);
-void close_port(Eterm);
-void init_io(void);
-void cleanup_io(void);
-void erts_do_exit_port(Port *, Eterm, Eterm);
-void erts_port_command(Process *, Eterm, Port *, Eterm);
-Eterm erts_port_control(Process*, Port*, Uint, Eterm);
-int erts_write_to_port(Eterm caller_id, Port *p, Eterm list);
-void print_port_info(int, void *, int);
+int erts_save_suspend_process_on_port(Port*, Process*);
+Port *erts_open_driver(erts_driver_t*, Eterm, char*, SysDriverOpts*, int *, int *);
+void erts_init_io(int, int, int);
 void erts_raw_port_command(Port*, byte*, Uint);
-void driver_report_exit(int, int);
+void driver_report_exit(ErlDrvPort, int);
 LineBuf* allocate_linebuf(int);
 int async_ready(Port *, void*);
-Sint erts_test_next_port(int, Uint);
-ErtsPortNames *erts_get_port_names(Eterm);
+ErtsPortNames *erts_get_port_names(Eterm, ErlDrvPort);
 void erts_free_port_names(ErtsPortNames *);
 Uint erts_port_ioq_size(Port *pp);
-void erts_stale_drv_select(Eterm, ErlDrvEvent, int, int);
-void erts_port_cleanup(Port *);
-void erts_fire_port_monitor(Port *prt, Eterm ref);
-#ifdef ERTS_SMP
-void erts_smp_xports_unlock(Port *);
+void erts_stale_drv_select(Eterm, ErlDrvPort, ErlDrvEvent, int, int);
+
+Port *erts_get_heart_port(void);
+
+#if defined(ERTS_SMP) && defined(ERTS_ENABLE_LOCK_COUNT)
+void erts_lcnt_enable_io_lock_count(int enable);
 #endif
 
-#if defined(ERTS_SMP) && defined(ERTS_ENABLE_LOCK_CHECK)
-int erts_lc_is_port_locked(Port *);
-#endif
-
-ERTS_GLB_INLINE void erts_smp_port_state_lock(Port*);
-ERTS_GLB_INLINE void erts_smp_port_state_unlock(Port*);
-
-ERTS_GLB_INLINE int erts_smp_port_trylock(Port *prt);
-ERTS_GLB_INLINE void erts_smp_port_lock(Port *prt);
-ERTS_GLB_INLINE void erts_smp_port_unlock(Port *prt);
-
-#if ERTS_GLB_INLINE_INCL_FUNC_DEF
-
-ERTS_GLB_INLINE void
-erts_smp_port_state_lock(Port* prt)
-{
-#ifdef ERTS_SMP
-    erts_smp_spin_lock(&prt->state_lck);
-#endif
-}
-
-ERTS_GLB_INLINE void
-erts_smp_port_state_unlock(Port *prt)
-{
-#ifdef ERTS_SMP
-    erts_smp_spin_unlock(&prt->state_lck);
-#endif
-}
-
-
-ERTS_GLB_INLINE int
-erts_smp_port_trylock(Port *prt)
-{
-#ifdef ERTS_SMP
-    int res;
-
-    ASSERT(erts_smp_atomic_read(&prt->refc) > 0);
-    erts_smp_atomic_inc(&prt->refc);
-    res = erts_smp_mtx_trylock(prt->lock);
-    if (res == EBUSY) {
-	erts_smp_atomic_dec(&prt->refc);
-    }
-
-    return res;
-#else /* !ERTS_SMP */
-    return 0;
-#endif
-}
-
-ERTS_GLB_INLINE void
-erts_smp_port_lock(Port *prt)
-{
-#ifdef ERTS_SMP
-    ASSERT(erts_smp_atomic_read(&prt->refc) > 0);
-    erts_smp_atomic_inc(&prt->refc);
-    erts_smp_mtx_lock(prt->lock);
-#endif
-}
-
-ERTS_GLB_INLINE void
-erts_smp_port_unlock(Port *prt)
-{
-#ifdef ERTS_SMP
-    erts_aint_t refc;
-    erts_smp_mtx_unlock(prt->lock);
-    refc = erts_smp_atomic_dectest(&prt->refc);
-    ASSERT(refc >= 0);
-    if (refc == 0)
-	erts_port_cleanup(prt);
-#endif
-}
-
-#endif /* #if ERTS_GLB_INLINE_INCL_FUNC_DEF */
-
-
-#define ERTS_INVALID_PORT_OPT(PP, ID, FLGS) \
-  (!(PP) || ((PP)->status & (FLGS)) || (PP)->id != (ID))
-
-/* port lookup */
-
-#define INVALID_PORT(PP, ID) \
-  ERTS_INVALID_PORT_OPT((PP), (ID), ERTS_PORT_SFLGS_INVALID_LOOKUP)
-
-/* Invalidate trace port if anything suspicious, for instance
- * that the port is a distribution port or it is busy.
- */
-#define INVALID_TRACER_PORT(PP, ID)					\
-  ERTS_INVALID_PORT_OPT((PP), (ID), ERTS_PORT_SFLGS_INVALID_TRACER_LOOKUP)
-
-#define ERTS_PORT_SCHED_ID(P, ID) \
-  ((Uint) (UWord) erts_prtsd_set((P), ERTS_PSD_SCHED_ID, (void *) (UWord) (ID)))
-
-#ifdef ERTS_SMP
-Port *erts_de2port(DistEntry *, Process *, ErtsProcLocks);
-#endif
-
-#define erts_id2port(ID, P, PL) \
-  erts_id2port_sflgs((ID), (P), (PL), ERTS_PORT_SFLGS_INVALID_LOOKUP)
-
-ERTS_GLB_INLINE Port*erts_id2port_sflgs(Eterm, Process *, ErtsProcLocks, Uint32);
-ERTS_GLB_INLINE void erts_port_release(Port *);
-ERTS_GLB_INLINE Port*erts_drvport2port(ErlDrvPort);
-ERTS_GLB_INLINE Port*erts_drvportid2port(Eterm);
-ERTS_GLB_INLINE Uint32 erts_portid2status(Eterm id);
-ERTS_GLB_INLINE int erts_is_port_alive(Eterm id);
-ERTS_GLB_INLINE int erts_is_valid_tracer_port(Eterm id);
-ERTS_GLB_INLINE void erts_port_status_bandor_set(Port *, Uint32, Uint32);
-ERTS_GLB_INLINE void erts_port_status_band_set(Port *, Uint32);
-ERTS_GLB_INLINE void erts_port_status_bor_set(Port *, Uint32);
-ERTS_GLB_INLINE void erts_port_status_set(Port *, Uint32);
-ERTS_GLB_INLINE Uint32 erts_port_status_get(Port *);
-
-#if ERTS_GLB_INLINE_INCL_FUNC_DEF
-
-ERTS_GLB_INLINE Port*
-erts_id2port_sflgs(Eterm id, Process *c_p, ErtsProcLocks c_p_locks, Uint32 sflgs)
-{
-#ifdef ERTS_SMP
-    int no_proc_locks = !c_p || !c_p_locks;
-#endif
-    Port *prt;
-
-    if (is_not_internal_port(id))
-	return NULL;
-
-    prt = &erts_port[internal_port_index(id)];
-
-    erts_smp_port_state_lock(prt);
-    if (ERTS_INVALID_PORT_OPT(prt, id, sflgs)) {
-	erts_smp_port_state_unlock(prt);
-	prt = NULL;
-    }
-#ifdef ERTS_SMP
-    else {
-	erts_smp_atomic_inc(&prt->refc);
-	erts_smp_port_state_unlock(prt);
-
-	if (no_proc_locks)
-	    erts_smp_mtx_lock(prt->lock);
-	else if (erts_smp_mtx_trylock(prt->lock) == EBUSY) {
-	    /* Unlock process locks, and acquire locks in lock order... */
-	    erts_smp_proc_unlock(c_p, c_p_locks);
-	    erts_smp_mtx_lock(prt->lock);
-	    erts_smp_proc_lock(c_p, c_p_locks);
-	}
-
-	/* The id may not have changed... */
-	ERTS_SMP_LC_ASSERT(prt->id == id);
-	/* ... but status may have... */
-	if (prt->status & sflgs) {
-	    erts_smp_port_unlock(prt); /* Also decrements refc... */
-	    prt = NULL;
-	}
-    }
-#endif
-
-    return prt;
-}
-
-ERTS_GLB_INLINE void
-erts_port_release(Port *prt)
-{
-#ifdef ERTS_SMP
-    erts_smp_port_unlock(prt);
-#else
-    if (prt->status & ERTS_PORT_SFLGS_DEAD)
-	erts_port_cleanup(prt);
-#endif
-}
-
-ERTS_GLB_INLINE Port*
-erts_drvport2port(ErlDrvPort drvport)
-{
-    int ix = (int) drvport;
-    if (ix < 0 || erts_max_ports <= ix)
-	return NULL;
-    if (erts_port[ix].status & ERTS_PORT_SFLGS_INVALID_DRIVER_LOOKUP)
-	return NULL;
-    ERTS_SMP_LC_ASSERT(erts_lc_is_port_locked(&erts_port[ix]));
-    return &erts_port[ix];
-}
-
-ERTS_GLB_INLINE Port*
-erts_drvportid2port(Eterm id)
-{
-    int ix;
-    if (is_not_internal_port(id))
-	return NULL;
-    ix = (int) internal_port_index(id);
-    if (erts_max_ports <= ix)
-	return NULL;
-    if (erts_port[ix].status & ERTS_PORT_SFLGS_INVALID_DRIVER_LOOKUP)
-	return NULL;
-    if (erts_port[ix].id != id)
-	return NULL;
-    ERTS_SMP_LC_ASSERT(erts_lc_is_port_locked(&erts_port[ix]));
-    return &erts_port[ix];
-}
-
-ERTS_GLB_INLINE Uint32
-erts_portid2status(Eterm id)
-{
-    if (is_not_internal_port(id))
-	return ERTS_PORT_SFLG_INVALID;
-    else {
-	Uint32 status;
-	int ix = internal_port_index(id);
-	if (erts_max_ports <= ix)
-	    return ERTS_PORT_SFLG_INVALID;
-	erts_smp_port_state_lock(&erts_port[ix]);
-	if (erts_port[ix].id == id)
-	    status = erts_port[ix].status;
-	else
-	    status = ERTS_PORT_SFLG_INVALID;
-	erts_smp_port_state_unlock(&erts_port[ix]);
-	return status;
-    }
-}
-
-ERTS_GLB_INLINE int
-erts_is_port_alive(Eterm id)
-{
-    return !(erts_portid2status(id) & (ERTS_PORT_SFLG_INVALID
-				       | ERTS_PORT_SFLGS_DEAD));
-}
-
-ERTS_GLB_INLINE int
-erts_is_valid_tracer_port(Eterm id)
-{
-    return !(erts_portid2status(id) & ERTS_PORT_SFLGS_INVALID_TRACER_LOOKUP);
-}
-
-ERTS_GLB_INLINE void erts_port_status_bandor_set(Port *prt,
-						 Uint32 band_status,
-						 Uint32 bor_status)
-{
-    ERTS_SMP_LC_ASSERT(erts_lc_is_port_locked(prt));
-    erts_smp_port_state_lock(prt);
-    prt->status &= band_status;
-    prt->status |= bor_status;
-    erts_smp_port_state_unlock(prt);
-}
-
-ERTS_GLB_INLINE void erts_port_status_band_set(Port *prt, Uint32 status)
-{
-    ERTS_SMP_LC_ASSERT(erts_lc_is_port_locked(prt));
-    erts_smp_port_state_lock(prt);
-    prt->status &= status;
-    erts_smp_port_state_unlock(prt);
-}
-
-ERTS_GLB_INLINE void erts_port_status_bor_set(Port *prt, Uint32 status)
-{
-    ERTS_SMP_LC_ASSERT(erts_lc_is_port_locked(prt));
-    erts_smp_port_state_lock(prt);
-    prt->status |= status;
-    erts_smp_port_state_unlock(prt);
-}
-
-ERTS_GLB_INLINE void erts_port_status_set(Port *prt, Uint32 status)
-{
-    ERTS_SMP_LC_ASSERT(erts_lc_is_port_locked(prt));
-    erts_smp_port_state_lock(prt);
-    prt->status = status;
-    erts_smp_port_state_unlock(prt);
-}
-
-ERTS_GLB_INLINE Uint32 erts_port_status_get(Port *prt)
-{
-    Uint32 res;
-    erts_smp_port_state_lock(prt);
-    res = prt->status;
-    erts_smp_port_state_unlock(prt);
-    return res;
-}
-#endif /* #if ERTS_GLB_INLINE_INCL_FUNC_DEF */
+/* driver_tab.c */
+typedef void *(*ErtsStaticNifInitFPtr)(void);
+ErtsStaticNifInitFPtr erts_static_nif_get_nif_init(const char *name, int len);
+int erts_is_static_nif(void *handle);
+void erts_init_static_drivers(void);
 
 /* erl_drv_thread.c */
 void erl_drv_thr_init(void);
 
-/* time.c */
-
 /* utils.c */
-
-/*
- * To be used to silence unused result warnings, but do not abuse it.
- */
-void erts_silence_warn_unused_result(long unused);
-
 void erts_cleanup_offheap(ErlOffHeap *offheap);
 
-Uint erts_fit_in_bits(Uint);
-int list_length(Eterm);
-Export* erts_find_function(Eterm, Eterm, unsigned int);
-int erts_is_builtin(Eterm, Eterm, int);
-Uint32 make_broken_hash(Eterm);
-Uint32 block_hash(byte *, unsigned, Uint32);
-Uint32 make_hash2(Eterm);
-Uint32 make_hash(Eterm);
+Uint64 erts_timestamp_millis(void);
 
-
-Eterm erts_bld_atom(Uint **hpp, Uint *szp, char *str);
-Eterm erts_bld_uint(Uint **hpp, Uint *szp, Uint ui);
-Eterm erts_bld_uword(Uint **hpp, Uint *szp, UWord uw);
-Eterm erts_bld_uint64(Uint **hpp, Uint *szp, Uint64 ui64);
-Eterm erts_bld_sint64(Uint **hpp, Uint *szp, Sint64 si64);
-Eterm erts_bld_cons(Uint **hpp, Uint *szp, Eterm car, Eterm cdr);
-Eterm erts_bld_tuple(Uint **hpp, Uint *szp, Uint arity, ...);
-Eterm erts_bld_tuplev(Uint **hpp, Uint *szp, Uint arity, Eterm terms[]);
-Eterm erts_bld_string_n(Uint **hpp, Uint *szp, const char *str, Sint len);
-#define erts_bld_string(hpp,szp,str) erts_bld_string_n(hpp,szp,str,strlen(str))
-Eterm erts_bld_list(Uint **hpp, Uint *szp, Sint length, Eterm terms[]);
-Eterm erts_bld_2tup_list(Uint **hpp, Uint *szp,
-			 Sint length, Eterm terms1[], Uint terms2[]);
-Eterm
-erts_bld_atom_uint_2tup_list(Uint **hpp, Uint *szp,
-			     Sint length, Eterm atoms[], Uint uints[]);
-Eterm
-erts_bld_atom_2uint_3tup_list(Uint **hpp, Uint *szp, Sint length,
-			      Eterm atoms[], Uint uints1[], Uint uints2[]);
+Export* erts_find_function(Eterm, Eterm, unsigned int, ErtsCodeIndex);
 
 Eterm store_external_or_ref_in_proc_(Process *, Eterm);
 Eterm store_external_or_ref_(Uint **, ErlOffHeap*, Eterm);
 
 #define NC_HEAP_SIZE(NC) \
- (ASSERT_EXPR(is_node_container((NC))), \
+ (ASSERT(is_node_container((NC))), \
   IS_CONST((NC)) ? 0 : (thing_arityval(*boxed_val((NC))) + 1))
 #define STORE_NC(Hpp, ETpp, NC) \
- (ASSERT_EXPR(is_node_container((NC))), \
+ (ASSERT(is_node_container((NC))), \
   IS_CONST((NC)) ? (NC) : store_external_or_ref_((Hpp), (ETpp), (NC)))
 #define STORE_NC_IN_PROC(Pp, NC) \
- (ASSERT_EXPR(is_node_container((NC))), \
+ (ASSERT(is_node_container((NC))), \
   IS_CONST((NC)) ? (NC) : store_external_or_ref_in_proc_((Pp), (NC)))
-
-void erts_init_utils(void);
-void erts_init_utils_mem(void);
-
-erts_dsprintf_buf_t *erts_create_tmp_dsbuf(Uint);
-void erts_destroy_tmp_dsbuf(erts_dsprintf_buf_t *);
-
-#if HALFWORD_HEAP
-int eq_rel(Eterm a, Eterm* a_base, Eterm b, Eterm* b_base);
-#  define eq(A,B) eq_rel(A,NULL,B,NULL)
-#else
-int eq(Eterm, Eterm);
-#  define eq_rel(A,A_BASE,B,B_BASE) eq(A,B)
-#endif
-
-#define EQ(x,y) (((x) == (y)) || (is_not_both_immed((x),(y)) && eq((x),(y))))
-
-#if HALFWORD_HEAP
-Sint cmp_rel(Eterm, Eterm*, Eterm, Eterm*);
-#define CMP(A,B) cmp_rel(A,NULL,B,NULL)
-#else
-Sint cmp(Eterm, Eterm);
-#define cmp_rel(A,A_BASE,B,B_BASE) cmp(A,B)
-#define CMP(A,B) cmp(A,B)
-#endif
-#define cmp_lt(a,b)	(CMP((a),(b)) < 0)
-#define cmp_le(a,b)	(CMP((a),(b)) <= 0)
-#define cmp_eq(a,b)	(CMP((a),(b)) == 0)
-#define cmp_ne(a,b)	(CMP((a),(b)) != 0)
-#define cmp_ge(a,b)	(CMP((a),(b)) >= 0)
-#define cmp_gt(a,b)	(CMP((a),(b)) > 0)
-
-#define CMP_LT(a,b)	((a) != (b) && cmp_lt((a),(b)))
-#define CMP_GE(a,b)	((a) == (b) || cmp_ge((a),(b)))
-#define CMP_EQ(a,b)	((a) == (b) || cmp_eq((a),(b)))
-#define CMP_NE(a,b)	((a) != (b) && cmp_ne((a),(b)))
 
 /* duplicates from big.h */
 int term_to_Uint(Eterm term, Uint *up);
@@ -1550,6 +902,9 @@ Sint erts_re_set_loop_limit(Sint limit);
 void erts_init_bif_binary(void);
 Sint erts_binary_set_loop_limit(Sint limit);
 
+/* external.c */
+void erts_init_external(void);
+
 /* erl_unicode.c */
 void erts_init_unicode(void);
 Sint erts_unicode_set_loop_limit(Sint limit);
@@ -1559,88 +914,36 @@ Sint erts_native_filename_need(Eterm ioterm, int encoding);
 void erts_copy_utf8_to_utf16_little(byte *target, byte *bytes, int num_chars);
 int erts_analyze_utf8(byte *source, Uint size, 
 			byte **err_pos, Uint *num_chars, int *left);
-char *erts_convert_filename_to_native(Eterm name, ErtsAlcType_t alloc_type, int allow_empty);
-
+int erts_analyze_utf8_x(byte *source, Uint size, 
+			byte **err_pos, Uint *num_chars, int *left,
+			Sint *num_latin1_chars, Uint max_chars);
+char *erts_convert_filename_to_native(Eterm name, char *statbuf, 
+				      size_t statbuf_size, 
+				      ErtsAlcType_t alloc_type, 
+				      int allow_empty, int allow_atom,
+				      Sint *used /* out */);
+char *erts_convert_filename_to_encoding(Eterm name, char *statbuf,
+					size_t statbuf_size,
+					ErtsAlcType_t alloc_type,
+					int allow_empty, int allow_atom,
+					int encoding,
+					Sint *used /* out */,
+					Uint extra);
+char* erts_convert_filename_to_wchar(byte* bytes, Uint size,
+                                     char *statbuf, size_t statbuf_size,
+                                     ErtsAlcType_t alloc_type, Sint* used,
+                                     Uint extra_wchars);
+Eterm erts_convert_native_to_filename(Process *p, byte *bytes);
+Eterm erts_utf8_to_list(Process *p, Uint num, byte *bytes, Uint sz, Uint left,
+			Uint *num_built, Uint *num_eaten, Eterm tail);
+int erts_utf8_to_latin1(byte* dest, const byte* source, int slen);
 #define ERTS_UTF8_OK 0
 #define ERTS_UTF8_INCOMPLETE 1
 #define ERTS_UTF8_ERROR 2
 #define ERTS_UTF8_ANALYZE_MORE 3
+#define ERTS_UTF8_OK_MAX_CHARS 4
 
-/* erl_trace.c */
-void erts_init_trace(void);
-void erts_trace_check_exiting(Eterm exiting);
-Eterm erts_set_system_seq_tracer(Process *c_p,
-				 ErtsProcLocks c_p_locks,
-				 Eterm new);
-Eterm erts_get_system_seq_tracer(void);
-void erts_change_default_tracing(int setflags, Uint *flagsp, Eterm *tracerp);
-void erts_get_default_tracing(Uint *flagsp, Eterm *tracerp);
-void erts_set_system_monitor(Eterm monitor);
-Eterm erts_get_system_monitor(void);
-
-#ifdef ERTS_SMP
-void erts_check_my_tracer_proc(Process *);
-void erts_block_sys_msg_dispatcher(void);
-void erts_release_sys_msg_dispatcher(void);
-void erts_foreach_sys_msg_in_q(void (*func)(Eterm,
-					    Eterm,
-					    Eterm,
-					    ErlHeapFragment *));
-void erts_queue_error_logger_message(Eterm, Eterm, ErlHeapFragment *);
-#endif
-
-void erts_send_sys_msg_proc(Eterm, Eterm, Eterm, ErlHeapFragment *);
-void trace_send(Process*, Eterm, Eterm);
-void trace_receive(Process*, Eterm);
-Uint32 erts_call_trace(Process *p, BeamInstr mfa[], Binary *match_spec, Eterm* args,
-		       int local, Eterm *tracer_pid);
-void erts_trace_return(Process* p, BeamInstr* fi, Eterm retval, Eterm *tracer_pid);
-void erts_trace_exception(Process* p, BeamInstr mfa[], Eterm class, Eterm value,
-			  Eterm *tracer);
-void erts_trace_return_to(Process *p, BeamInstr *pc);
-void trace_sched(Process*, Eterm);
-void trace_proc(Process*, Process*, Eterm, Eterm);
-void trace_proc_spawn(Process*, Eterm pid, Eterm mod, Eterm func, Eterm args);
-void save_calls(Process *p, Export *);
-void trace_gc(Process *p, Eterm what);
-/* port tracing */
-void trace_virtual_sched(Process*, Eterm);
-void trace_sched_ports(Port *pp, Eterm);
-void trace_sched_ports_where(Port *pp, Eterm, Eterm);
-void trace_port(Port *, Eterm what, Eterm data);
-void trace_port_open(Port *, Eterm calling_pid, Eterm drv_name);
-
-/* system_profile */
-void erts_set_system_profile(Eterm profile);
-Eterm erts_get_system_profile(void);
-void profile_scheduler(Eterm scheduler_id, Eterm);
-void profile_scheduler_q(Eterm scheduler_id, Eterm state, Eterm no_schedulers, Uint Ms, Uint s, Uint us);
-void profile_runnable_proc(Process* p, Eterm status);
-void profile_runnable_port(Port* p, Eterm status);
-void erts_system_profile_setup_active_schedulers(void);
-
-/* system_monitor */
-void monitor_long_gc(Process *p, Uint time);
-void monitor_large_heap(Process *p);
-void monitor_generic(Process *p, Eterm type, Eterm spec);
-Uint erts_trace_flag2bit(Eterm flag);
-int erts_trace_flags(Eterm List, 
-		 Uint *pMask, Eterm *pTracer, int *pCpuTimestamp);
-Eterm erts_bif_trace(int bif_index, Process* p, 
-		     Eterm arg1, Eterm arg2, Eterm arg3, BeamInstr *I);
-
-#ifdef ERTS_SMP
-void erts_send_pending_trace_msgs(ErtsSchedulerData *esdp);
-#define ERTS_SMP_CHK_PEND_TRACE_MSGS(ESDP)				\
-do {									\
-    if ((ESDP)->pending_trace_msgs)					\
-	erts_send_pending_trace_msgs((ESDP));				\
-} while (0)
-#else
-#define ERTS_SMP_CHK_PEND_TRACE_MSGS(ESDP)
-#endif
-
-void bin_write(int, void*, byte*, int);
+void bin_write(int, void*, byte*, size_t);
 int intlist_to_buf(Eterm, char*, int); /* most callers pass plain char*'s */
 
 struct Sint_buf {
@@ -1652,14 +955,68 @@ struct Sint_buf {
 };	
 char* Sint_to_buf(Sint, struct Sint_buf*);
 
+#define ERTS_IOLIST_STATE_INITER(C_P, OBJ)	\
+    {(C_P), 0, 0, (OBJ), {NULL, NULL, NULL, ERTS_ALC_T_INVALID}, 0, 0}
+
+#define ERTS_IOLIST_STATE_MOVE(TO, FROM)	\
+    sys_memcpy((void *) (TO), (void *) (FROM), sizeof(ErtsIOListState))
+
+#define ERTS_IOLIST_SIZE_YIELDS_COUNT_PER_RED 8
+
+typedef struct {
+    Process *c_p;
+    ErlDrvSizeT size;
+    Uint offs;
+    Eterm obj;
+    ErtsEStack estack;
+    int reds_left;
+    int have_size;
+} ErtsIOListState;
+
+#define ERTS_IOLIST2BUF_STATE_INITER(C_P, OBJ)	\
+    {ERTS_IOLIST_STATE_INITER((C_P), (OBJ)), {NULL, 0, 0, 0}, NULL, 0, NULL, 0}
+
+#define ERTS_IOLIST2BUF_STATE_MOVE(TO, FROM)	\
+    sys_memcpy((void *) (TO), (void *) (FROM), sizeof(ErtsIOList2BufState))
+
+#define ERTS_IOLIST_TO_BUF_BYTES_PER_YIELD_COUNT 32
+#define ERTS_IOLIST_TO_BUF_YIELD_COUNT_PER_RED 8
+#define ERTS_IOLIST_TO_BUF_BYTES_PER_RED \
+    (ERTS_IOLIST_TO_BUF_YIELD_COUNT_PER_RED*ERTS_IOLIST_TO_BUF_BYTES_PER_YIELD_COUNT)
+
+typedef struct {
+    ErtsIOListState iolist;
+    struct {
+	byte *bptr;
+	size_t size;
+	Uint bitoffs;
+	Uint bitsize;
+    } bcopy;
+    char *buf;
+    ErlDrvSizeT len;
+    Eterm *objp;
+    int offset;
+} ErtsIOList2BufState;
+
 #define ERTS_IOLIST_OK 0
 #define ERTS_IOLIST_OVERFLOW 1
 #define ERTS_IOLIST_TYPE 2
+#define ERTS_IOLIST_YIELD 3
 
-Eterm buf_to_intlist(Eterm**, char*, int, Eterm); /* most callers pass plain char*'s */
-int io_list_to_buf(Eterm, char*, int);
-int io_list_to_buf2(Eterm, char*, int);
-int erts_iolist_size(Eterm, Uint *);
+Eterm buf_to_intlist(Eterm**, const char*, size_t, Eterm); /* most callers pass plain char*'s */
+
+#define ERTS_IOLIST_TO_BUF_OVERFLOW	(~((ErlDrvSizeT) 0))
+#define ERTS_IOLIST_TO_BUF_TYPE_ERROR	(~((ErlDrvSizeT) 1))
+#define ERTS_IOLIST_TO_BUF_YIELD	(~((ErlDrvSizeT) 2))
+#define ERTS_IOLIST_TO_BUF_FAILED(R) \
+    (((R) & (~((ErlDrvSizeT) 3))) == (~((ErlDrvSizeT) 3)))
+#define ERTS_IOLIST_TO_BUF_SUCCEEDED(R) \
+    (!ERTS_IOLIST_TO_BUF_FAILED((R)))
+
+ErlDrvSizeT erts_iolist_to_buf(Eterm, char*, ErlDrvSizeT);
+ErlDrvSizeT erts_iolist_to_buf_yielding(ErtsIOList2BufState *);
+int erts_iolist_size_yielding(ErtsIOListState *state);
+int erts_iolist_size(Eterm, ErlDrvSizeT *);
 int is_string(Eterm);
 void erl_at_exit(void (*) (void*), void*);
 Eterm collect_memory(Process *);
@@ -1692,6 +1049,7 @@ Eterm erts_gc_length_1(Process* p, Eterm* reg, Uint live);
 Eterm erts_gc_size_1(Process* p, Eterm* reg, Uint live);
 Eterm erts_gc_bit_size_1(Process* p, Eterm* reg, Uint live);
 Eterm erts_gc_byte_size_1(Process* p, Eterm* reg, Uint live);
+Eterm erts_gc_map_size_1(Process* p, Eterm* reg, Uint live);
 Eterm erts_gc_abs_1(Process* p, Eterm* reg, Uint live);
 Eterm erts_gc_float_1(Process* p, Eterm* reg, Uint live);
 Eterm erts_gc_round_1(Process* p, Eterm* reg, Uint live);
@@ -1704,39 +1062,6 @@ Uint erts_current_reductions(Process* current, Process *p);
 int erts_print_system_version(int to, void *arg, Process *c_p);
 
 int erts_hibernate(Process* c_p, Eterm module, Eterm function, Eterm args, Eterm* reg);
-#define seq_trace_output(token, msg, type, receiver, process) \
-seq_trace_output_generic((token), (msg), (type), (receiver), (process), NIL)
-#define seq_trace_output_exit(token, msg, type, receiver, exitfrom) \
-seq_trace_output_generic((token), (msg), (type), (receiver), NULL, (exitfrom))
-void seq_trace_output_generic(Eterm token, Eterm msg, Uint type, 
-			      Eterm receiver, Process *process, Eterm exitfrom);
-
-int seq_trace_update_send(Process *process);
-
-Eterm erts_seq_trace(Process *process, 
-		     Eterm atom_type, Eterm atom_true_or_false, 
-		     int build_result);
-
-struct trace_pattern_flags {
-    unsigned int breakpoint : 1; /* Set if any other is set */
-    unsigned int local      : 1; /* Local call trace breakpoint */
-    unsigned int meta       : 1; /* Metadata trace breakpoint */
-    unsigned int call_count : 1; /* Fast call count breakpoint */
-    unsigned int call_time  : 1; /* Fast call time breakpoint */
-};
-extern const struct trace_pattern_flags erts_trace_pattern_flags_off;
-extern int erts_call_time_breakpoint_tracing;
-int erts_set_trace_pattern(Eterm* mfa, int specified, 
-			   Binary* match_prog_set, Binary *meta_match_prog_set,
-			   int on, struct trace_pattern_flags,
-			   Eterm meta_tracer_pid);
-void
-erts_get_default_trace_pattern(int *trace_pattern_is_on,
-			       Binary **match_spec,
-			       Binary **meta_match_spec,
-			       struct trace_pattern_flags *trace_pattern_flags,
-			       Eterm *meta_tracer_pid);
-void erts_bif_trace_init(void);
 
 /*
 ** Call_trace uses this API for the parameter matching functions
@@ -1763,9 +1088,10 @@ Eterm erts_match_set_lint(Process *p, Eterm matchexpr);
 extern void erts_match_set_release_result(Process* p);
 
 enum erts_pam_run_flags {
-    ERTS_PAM_TMP_RESULT=0,
-    ERTS_PAM_COPY_RESULT=1,
-    ERTS_PAM_CONTIGUOUS_TUPLE=2
+    ERTS_PAM_TMP_RESULT=1,
+    ERTS_PAM_COPY_RESULT=2,
+    ERTS_PAM_CONTIGUOUS_TUPLE=4,
+    ERTS_PAM_IGNORE_TRACE_SILENT=8
 };
 extern Eterm erts_match_set_run(Process *p, Binary *mpsp, 
 				Eterm *args, int num_args,
@@ -1782,20 +1108,21 @@ extern void erts_match_prog_foreach_offheap(Binary *b,
 					   breakpoint functions */
 #define MATCH_SET_EXCEPTION_TRACE (0x4) /* exception trace requested */
 #define MATCH_SET_RX_TRACE (MATCH_SET_RETURN_TRACE|MATCH_SET_EXCEPTION_TRACE)
-/*
- * Flag values when tracing bif
- * Future note: flag field is 8 bits
- */
-#define BIF_TRACE_AS_LOCAL      (0x1)
-#define BIF_TRACE_AS_GLOBAL     (0x2)
-#define BIF_TRACE_AS_META       (0x4)
-#define BIF_TRACE_AS_CALL_TIME  (0x8)
 
 extern erts_driver_t vanilla_driver;
 extern erts_driver_t spawn_driver;
 extern erts_driver_t fd_driver;
 
+int erts_beam_jump_table(void);
+
 /* Should maybe be placed in erl_message.h, but then we get an include mess. */
+ERTS_GLB_INLINE Eterm *
+erts_alloc_message_heap_state(Uint size,
+			      ErlHeapFragment **bpp,
+			      ErlOffHeap **ohpp,
+			      Process *receiver,
+			      ErtsProcLocks *receiver_locks,
+			      erts_aint32_t *statep);
 
 ERTS_GLB_INLINE Eterm *
 erts_alloc_message_heap(Uint size,
@@ -1818,16 +1145,22 @@ erts_alloc_message_heap(Uint size,
  */
 
 ERTS_GLB_INLINE Eterm *
-erts_alloc_message_heap(Uint size,
-			ErlHeapFragment **bpp,
-			ErlOffHeap **ohpp,
-			Process *receiver,
-			ErtsProcLocks *receiver_locks)
+erts_alloc_message_heap_state(Uint size,
+			      ErlHeapFragment **bpp,
+			      ErlOffHeap **ohpp,
+			      Process *receiver,
+			      ErtsProcLocks *receiver_locks,
+			      erts_aint32_t *statep)
 {
     Eterm *hp;
+    erts_aint32_t state;
 #ifdef ERTS_SMP
     int locked_main = 0;
-    ErtsProcLocks ulocks = *receiver_locks & ERTS_PROC_LOCKS_MSG_SEND;
+    state = erts_smp_atomic32_read_acqb(&receiver->state);
+    if (statep)
+	*statep = state;
+    if (state & (ERTS_PSFLG_EXITING|ERTS_PSFLG_PENDING_EXIT))
+	goto allocate_in_mbuf;
 #endif
 
     if (size > (Uint) INT_MAX)
@@ -1843,20 +1176,24 @@ erts_alloc_message_heap(Uint size,
 #ifdef ERTS_SMP
     try_allocate_on_heap:
 #endif
-	if (ERTS_PROC_IS_EXITING(receiver)
+	state = erts_smp_atomic32_read_nob(&receiver->state);
+	if (statep)
+	    *statep = state;
+	if ((state & (ERTS_PSFLG_EXITING|ERTS_PSFLG_PENDING_EXIT))
+	    || (receiver->flags & F_DISABLE_GC)
 	    || HEAP_LIMIT(receiver) - HEAP_TOP(receiver) <= size) {
+	    /*
+	     * The heap is either potentially in an inconsistent
+	     * state, or not large enough.
+	     */
 #ifdef ERTS_SMP
-	    if (locked_main)
-		ulocks |= ERTS_PROC_LOCK_MAIN;
+	    if (locked_main) {
+		*receiver_locks &= ~ERTS_PROC_LOCK_MAIN;
+		erts_smp_proc_unlock(receiver, ERTS_PROC_LOCK_MAIN);
+	    }
 #endif
 	    goto allocate_in_mbuf;
 	}
-#ifdef ERTS_SMP
-	if (ulocks) {
-	    erts_smp_proc_unlock(receiver, ulocks);
-	    *receiver_locks &= ~ulocks;
-	}
-#endif
 	hp = HEAP_TOP(receiver);
 	HEAP_TOP(receiver) = hp + size;
 	*bpp = NULL;
@@ -1872,12 +1209,6 @@ erts_alloc_message_heap(Uint size,
     else {
 	ErlHeapFragment *bp;
     allocate_in_mbuf:
-#ifdef ERTS_SMP
-	if (ulocks) {
-	    *receiver_locks &= ~ulocks;
-	    erts_smp_proc_unlock(receiver, ulocks);
-	}
-#endif
 	bp = new_message_buffer(size);
 	hp = bp->mem;
 	*bpp = bp;
@@ -1885,6 +1216,17 @@ erts_alloc_message_heap(Uint size,
     }
 
     return hp;
+}
+
+ERTS_GLB_INLINE Eterm *
+erts_alloc_message_heap(Uint size,
+			ErlHeapFragment **bpp,
+			ErlOffHeap **ohpp,
+			Process *receiver,
+			ErtsProcLocks *receiver_locks)
+{
+    return erts_alloc_message_heap_state(size, bpp, ohpp, receiver,
+					 receiver_locks, NULL);
 }
 
 #endif /* #if ERTS_GLB_INLINE_INCL_FUNC_DEF */
@@ -1952,4 +1294,53 @@ erts_alloc_message_heap(Uint size,
 #  define UseTmpHeapNoproc(Size) /* Nothing */
 #  define UnUseTmpHeapNoproc(Size) /* Nothing */
 #endif /* HEAP_ON_C_STACK */
+
+ERTS_GLB_INLINE void dtrace_pid_str(Eterm pid, char *process_buf);
+ERTS_GLB_INLINE void dtrace_proc_str(Process *process, char *process_buf);
+ERTS_GLB_INLINE void dtrace_port_str(Port *port, char *port_buf);
+ERTS_GLB_INLINE void dtrace_fun_decode(Process *process,
+				       Eterm module, Eterm function, int arity,
+				       char *process_buf, char *mfa_buf);
+
+#if ERTS_GLB_INLINE_INCL_FUNC_DEF
+
+#include "dtrace-wrapper.h"
+
+ERTS_GLB_INLINE void
+dtrace_pid_str(Eterm pid, char *process_buf)
+{
+    erts_snprintf(process_buf, DTRACE_TERM_BUF_SIZE, "<%lu.%lu.%lu>",
+                  pid_channel_no(pid),
+                  pid_number(pid),
+                  pid_serial(pid));
+}
+
+ERTS_GLB_INLINE void
+dtrace_proc_str(Process *process, char *process_buf)
+{
+    dtrace_pid_str(process->common.id, process_buf);
+}
+
+ERTS_GLB_INLINE void
+dtrace_port_str(Port *port, char *port_buf)
+{
+    erts_snprintf(port_buf, DTRACE_TERM_BUF_SIZE, "#Port<%lu.%lu>",
+                  port_channel_no(port->common.id),
+                  port_number(port->common.id));
+}
+
+ERTS_GLB_INLINE void
+dtrace_fun_decode(Process *process,
+                  Eterm module, Eterm function, int arity,
+                  char *process_buf, char *mfa_buf)
+{
+    if (process_buf) {
+        dtrace_proc_str(process, process_buf);
+    }
+
+    erts_snprintf(mfa_buf, DTRACE_TERM_BUF_SIZE, "%T:%T/%d",
+                  module, function, arity);
+}
+#endif /* #if ERTS_GLB_INLINE_INCL_FUNC_DEF */
+
 #endif /* !__GLOBAL_H__ */

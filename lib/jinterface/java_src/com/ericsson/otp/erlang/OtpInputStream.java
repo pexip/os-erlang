@@ -1,7 +1,7 @@
 /*
  * %CopyrightBegin%
  * 
- * Copyright Ericsson AB 2000-2009. All Rights Reserved.
+ * Copyright Ericsson AB 2000-2013. All Rights Reserved.
  * 
  * The contents of this file are subject to the Erlang Public License,
  * Version 1.1, (the "License"); you may not use this file except in
@@ -21,6 +21,7 @@ package com.ericsson.otp.erlang;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.math.BigDecimal;
+import java.util.Arrays;
 
 /**
  * Provides a stream for decoding Erlang terms from external format.
@@ -351,26 +352,64 @@ public class OtpInputStream extends ByteArrayInputStream {
      */
     public String read_atom() throws OtpErlangDecodeException {
 	int tag;
-	int len;
+	int len = -1;
 	byte[] strbuf;
 	String atom;
 
 	tag = read1skip_version();
 
-	if (tag != OtpExternal.atomTag) {
+	switch (tag) {
+
+	case OtpExternal.atomTag:
+	    len = read2BE();
+	    strbuf = new byte[len];
+	    this.readN(strbuf);
+	    try {
+		atom = new String(strbuf, "ISO-8859-1");
+	    } catch (final java.io.UnsupportedEncodingException e) {
+		throw new OtpErlangDecodeException(
+		    "Failed to decode ISO-8859-1 atom");
+	    }
+	    if (atom.length() > OtpExternal.maxAtomLength) {
+		/*
+		 * Throwing an exception would be better I think,
+		 * but truncation seems to be the way it has
+		 * been done in other parts of OTP...
+		 */
+		atom = atom.substring(0, OtpExternal.maxAtomLength);
+	    }
+	    break;
+
+	case OtpExternal.smallAtomUtf8Tag:
+	    len = read1();
+	    /* fall through */
+	case OtpExternal.atomUtf8Tag:
+	    if (len < 0) {
+		len = read2BE();
+	    }
+	    strbuf = new byte[len];
+	    this.readN(strbuf);
+	    try {
+		atom = new String(strbuf, "UTF-8");
+	    } catch (final java.io.UnsupportedEncodingException e) {
+		throw new OtpErlangDecodeException(
+		    "Failed to decode UTF-8 atom");
+	    }
+	    if (atom.codePointCount(0, atom.length()) > OtpExternal.maxAtomLength) {
+		/*
+		 * Throwing an exception would be better I think,
+		 * but truncation seems to be the way it has
+		 * been done in other parts of OTP...
+		 */
+		final int[] cps = OtpErlangString.stringToCodePoints(atom);
+		atom = new String(cps, 0, OtpExternal.maxAtomLength);
+	    }
+	    break;
+
+	default:
 	    throw new OtpErlangDecodeException(
-		    "wrong tag encountered, expected " + OtpExternal.atomTag
-			    + ", got " + tag);
-	}
-
-	len = read2BE();
-
-	strbuf = new byte[len];
-	this.readN(strbuf);
-	atom = OtpErlangString.newString(strbuf);
-
-	if (atom.length() > OtpExternal.maxAtomLength) {
-	    atom = atom.substring(0, OtpExternal.maxAtomLength);
+		"wrong tag encountered, expected " + OtpExternal.atomTag
+		+ ", or "  + OtpExternal.atomUtf8Tag + ", got " + tag);
 	}
 
 	return atom;
@@ -781,7 +820,7 @@ public class OtpInputStream extends ByteArrayInputStream {
 	    if (unsigned) {
 		if (c < 0) {
 		    throw new OtpErlangDecodeException("Value not unsigned: "
-			    + b);
+			    + Arrays.toString(b));
 		}
 		while (b[i] == 0) {
 		    i++; // Skip leading zero sign bytes
@@ -806,7 +845,7 @@ public class OtpInputStream extends ByteArrayInputStream {
 	    if (b.length - i > 8) {
 		// More than 64 bits of value
 		throw new OtpErlangDecodeException(
-			"Value does not fit in long: " + b);
+			"Value does not fit in long: " + Arrays.toString(b));
 	    }
 	    // Convert the necessary bytes
 	    for (v = c < 0 ? -1 : 0; i < b.length; i++) {
@@ -1112,12 +1151,16 @@ public class OtpInputStream extends ByteArrayInputStream {
 	final int size = read4BE();
 	final byte[] buf = new byte[size];
 	final java.util.zip.InflaterInputStream is = 
-	    new java.util.zip.InflaterInputStream(this);
+	    new java.util.zip.InflaterInputStream(this, new java.util.zip.Inflater(), size);
+	int curPos = 0;
 	try {
-	    final int dsize = is.read(buf, 0, size);
-	    if (dsize != size) {
+	    int curRead;
+	    while(curPos < size && (curRead = is.read(buf, curPos, size - curPos)) != -1) {
+		curPos += curRead;
+	    }
+	    if (curPos != size) {
 		throw new OtpErlangDecodeException("Decompression gave "
-			+ dsize + " bytes, not " + size);
+			+ curPos + " bytes, not " + size);
 	    }
 	} catch (final IOException e) {
 	    throw new OtpErlangDecodeException("Cannot read from input stream");
@@ -1148,6 +1191,8 @@ public class OtpInputStream extends ByteArrayInputStream {
 	    return new OtpErlangLong(this);
 
 	case OtpExternal.atomTag:
+	case OtpExternal.smallAtomUtf8Tag:
+	case OtpExternal.atomUtf8Tag:
 	    return new OtpErlangAtom(this);
 
 	case OtpExternal.floatTag:
@@ -1157,6 +1202,9 @@ public class OtpInputStream extends ByteArrayInputStream {
 	case OtpExternal.refTag:
 	case OtpExternal.newRefTag:
 	    return new OtpErlangRef(this);
+
+        case OtpExternal.mapTag:
+            return new OtpErlangMap(this);
 
 	case OtpExternal.portTag:
 	    return new OtpErlangPort(this);
@@ -1199,5 +1247,22 @@ public class OtpInputStream extends ByteArrayInputStream {
 	default:
 	    throw new OtpErlangDecodeException("Uknown data type: " + tag);
 	}
+    }
+
+    public int read_map_head() throws OtpErlangDecodeException {
+        int arity = 0;
+        final int tag = read1skip_version();
+
+        // decode the map header and get arity
+        switch (tag) {
+        case OtpExternal.mapTag:
+            arity = read4BE();
+            break;
+
+        default:
+            throw new OtpErlangDecodeException("Not valid map tag: " + tag);
+        }
+
+        return arity;
     }
 }

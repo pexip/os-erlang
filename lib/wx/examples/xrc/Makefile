@@ -1,7 +1,7 @@
 #
 # %CopyrightBegin%
 # 
-# Copyright Ericsson AB 2009. All Rights Reserved.
+# Copyright Ericsson AB 2009-2012. All Rights Reserved.
 # 
 # The contents of this file are subject to the Erlang Public License,
 # Version 1.1, (the "License"); you may not use this file except in
@@ -28,7 +28,8 @@ TESTMODS = xrc
 TESTTARGETS = $(TESTMODS:%=%.beam)
 TESTSRC = $(TESTMODS:%=%.erl)
 
-RESOURCEFILES = appicon.ico basicdlg.xpm custclas.xpm fileopen.gif menu.xrc \
+RESOURCEFILES = \
+	appicon.ico basicdlg.xpm custclas.xpm fileopen.gif menu.xrc \
 	resource.xrc uncenter.xpm  variable.xrc appicon.xpm basicdlg.xrc \
 	custclas.xrc filesave.gif platform.xpm stop.xpm uncenter.xrc \
 	artprov.xpm controls.xpm derivdlg.xpm frame.xrc platform.xrc \
@@ -48,18 +49,12 @@ docs:
 run: opt
 	erl -smp -detached -pa $(TOPDIR)/ebin -s xrc 
 
-ifneq ($(INSIDE_ERLSRC),true)
-
-%.beam: %.erl
-	$(ERLC) -W -I$(ERLINC)  -bbeam -o$(BIN) $<
-
-else
-EXRELSYSDIR = $(RELSYSDIR)/examples/xrc
+EXRELSYSDIR = "$(RELSYSDIR)/examples/xrc"
 include $(ERL_TOP)/make/otp_release_targets.mk
 
 docs: 
 
-release_spec: 
+release_spec: opt
 	$(INSTALL_DIR) $(EXRELSYSDIR)
 	$(INSTALL_DATA) $(TESTSRC) $(EXRELSYSDIR)
 	$(INSTALL_DATA) $(TESTTARGETS) $(EXRELSYSDIR)
@@ -69,8 +64,6 @@ release_spec:
 release_tests_spec:
 
 release_docs_spec:
-
-endif
 
 
 

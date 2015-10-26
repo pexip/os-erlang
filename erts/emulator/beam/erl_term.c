@@ -1,7 +1,7 @@
 /*
  * %CopyrightBegin%
  *
- * Copyright Ericsson AB 2000-2011. All Rights Reserved.
+ * Copyright Ericsson AB 2000-2013. All Rights Reserved.
  *
  * The contents of this file are subject to the Erlang Public License,
  * Version 1.1, (the "License"); you may not use this file except in
@@ -23,6 +23,7 @@
 #include "sys.h"
 #include "erl_vm.h"
 #include "global.h"
+#include "erl_map.h"
 #include <stdlib.h>
 #include <stdio.h>
 
@@ -85,7 +86,10 @@ unsigned tag_val_def(Wterm x)
 	    case (_TAG_HEADER_EXTERNAL_PID >> _TAG_PRIMARY_SIZE):	return EXTERNAL_PID_DEF;
 	    case (_TAG_HEADER_EXTERNAL_PORT >> _TAG_PRIMARY_SIZE):	return EXTERNAL_PORT_DEF;
 	    case (_TAG_HEADER_EXTERNAL_REF >> _TAG_PRIMARY_SIZE):	return EXTERNAL_REF_DEF;
-	    default:						return BINARY_DEF;
+	    case (_TAG_HEADER_REFC_BIN >> _TAG_PRIMARY_SIZE):	return BINARY_DEF;
+	    case (_TAG_HEADER_HEAP_BIN >> _TAG_PRIMARY_SIZE):	return BINARY_DEF;
+	    case (_TAG_HEADER_SUB_BIN >> _TAG_PRIMARY_SIZE):	return BINARY_DEF;
+	    case (_TAG_HEADER_MAP >> _TAG_PRIMARY_SIZE):	return MAP_DEF;
 	  }
 	  break;
       }
@@ -105,7 +109,7 @@ unsigned tag_val_def(Wterm x)
 	  break;
       }
     }
-    sprintf(msg, "tag_val_def: %#lx", (unsigned long) x);
+    erts_snprintf(msg, sizeof(msg), "tag_val_def: %#lx", (unsigned long) x);
     et_abort(msg, file, line);
 #undef file
 #undef line
@@ -133,7 +137,7 @@ ET_DEFINE_CHECKED(Uint,unsigned_val,Eterm,is_small);
 ET_DEFINE_CHECKED(Sint,signed_val,Eterm,is_small);
 ET_DEFINE_CHECKED(Uint,atom_val,Eterm,is_atom);
 ET_DEFINE_CHECKED(Uint,header_arity,Eterm,is_header);
-ET_DEFINE_CHECKED(Uint,arityval,Eterm,is_arity_value);
+ET_DEFINE_CHECKED(Uint,arityval,Eterm,is_sane_arity_value);
 ET_DEFINE_CHECKED(Uint,thing_arityval,Eterm,is_thing);
 ET_DEFINE_CHECKED(Uint,thing_subtag,Eterm,is_thing);
 ET_DEFINE_CHECKED(Eterm*,binary_val,Wterm,is_binary);
@@ -144,9 +148,7 @@ ET_DEFINE_CHECKED(Uint,bignum_header_arity,Eterm,_is_bignum_header);
 ET_DEFINE_CHECKED(Eterm*,big_val,Wterm,is_big);
 ET_DEFINE_CHECKED(Eterm*,float_val,Wterm,is_float);
 ET_DEFINE_CHECKED(Eterm*,tuple_val,Wterm,is_tuple);
-ET_DEFINE_CHECKED(Uint,internal_pid_data,Eterm,is_internal_pid);
 ET_DEFINE_CHECKED(struct erl_node_*,internal_pid_node,Eterm,is_internal_pid);
-ET_DEFINE_CHECKED(Uint,internal_port_data,Eterm,is_internal_port);
 ET_DEFINE_CHECKED(struct erl_node_*,internal_port_node,Eterm,is_internal_port);
 ET_DEFINE_CHECKED(Eterm*,internal_ref_val,Wterm,is_internal_ref);
 ET_DEFINE_CHECKED(Uint,internal_ref_data_words,Wterm,is_internal_ref);

@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %% 
-%% Copyright Ericsson AB 2004-2009. All Rights Reserved.
+%% Copyright Ericsson AB 2004-2012. All Rights Reserved.
 %% 
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -24,7 +24,7 @@
 -export([start/2, stop/1]).
 
 start(_Type, _State) ->
-    supervisor:start_link({local, inets_sup}, inets_sup, []).
+    inets_sup:start_link().
 
 stop(_State) ->
     ok.

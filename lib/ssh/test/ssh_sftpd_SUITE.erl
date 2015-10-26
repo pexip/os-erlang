@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2006-2011. All Rights Reserved.
+%% Copyright Ericsson AB 2006-2013. All Rights Reserved.
 %%
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -24,13 +24,10 @@
 -compile(export_all).
 
 -include_lib("common_test/include/ct.hrl").
--include("test_server_line.hrl").
+-include_lib("kernel/include/file.hrl").
 -include("ssh_xfer.hrl").
 -include("ssh.hrl").
 
--include_lib("kernel/include/file.hrl").
-
--define(SFPD_PORT, 9999).
 -define(USER, "Alladin").
 -define(PASSWD, "Sesame").
 -define(XFER_PACKET_SIZE, 32768).
@@ -42,64 +39,89 @@
 -define(is_set(F, Bits),
 	((F) band (Bits)) == (F)).
 
-%% Test server callback functions
 %%--------------------------------------------------------------------
-%% Function: init_per_suite(Config) -> Config
-%% Config - [tuple()]
-%%   A list of key/value pairs, holding the test case configuration.
-%% Description: Initiation before the whole suite
-%%
-%% Note: This function is free to add any key/value pairs to the Config
-%% variable, but should NOT alter/remove any existing entries.
+%% Common Test interface functions -----------------------------------
 %%--------------------------------------------------------------------
+
+all() -> 
+    [open_close_file, 
+     open_close_dir, 
+     read_file, 
+     read_dir,
+     write_file, 
+     rename_file, 
+     mk_rm_dir, 
+     remove_file,
+     real_path, 
+     retrieve_attributes, 
+     set_attributes, 
+     links,
+     ver3_rename, 
+     relpath, 
+     sshd_read_file,
+     ver6_basic].
+
+groups() -> 
+    [].
+
+%%--------------------------------------------------------------------
+
 init_per_suite(Config) ->
-    case {catch ssh:stop(),catch crypto:start()} of
-	{ok,ok} ->
-	    ssh_test_lib:make_dsa_files(Config),
+    case (catch crypto:start()) of
+	ok ->
+	    DataDir = ?config(data_dir, Config),	    
+	    PrivDir = ?config(priv_dir, Config),
+	    ssh_test_lib:setup_dsa(DataDir, PrivDir),
+	    %% to make sure we don't use public-key-auth
+	    %% this should be tested by other test suites
+	    UserDir = filename:join(?config(priv_dir, Config), nopubkey), 
+	    file:make_dir(UserDir),  
 	    Config;
-	{ok,_} ->
-	    {skip,"Could not start ssh!"};
-	{_,ok} ->
-	    {skip,"Could not start crypto!"};
-	{_,_} ->
-	    {skip,"Could not start crypto and ssh!"}
+	_ ->
+	    {skip,"Could not start crypto!"}
     end.
 
-%%--------------------------------------------------------------------
-%% Function: end_per_suite(Config) -> _
-%% Config - [tuple()]
-%%   A list of key/value pairs, holding the test case configuration.
-%% Description: Cleanup after the whole suite
-%%--------------------------------------------------------------------
-end_per_suite(_Config) ->
-    crypto:stop(),
-    ok.
+end_per_suite(Config) ->
+    SysDir = ?config(priv_dir, Config),
+    ssh_test_lib:clean_dsa(SysDir),
+    UserDir = filename:join(?config(priv_dir, Config), nopubkey),
+    file:del_dir(UserDir),
+    ssh:stop(),
+    crypto:stop().
 
 %%--------------------------------------------------------------------
-%% Function: init_per_testcase(TestCase, Config) -> Config
-%% Case - atom()
-%%   Name of the test case that is about to be run.
-%% Config - [tuple()]
-%%   A list of key/value pairs, holding the test case configuration.
-%%
-%% Description: Initiation before each test case
-%%
-%% Note: This function is free to add any key/value pairs to the Config
-%% variable, but should NOT alter/remove any existing entries.
-%% Description: Initiation before each test case
+
+init_per_group(_GroupName, Config) ->
+	Config.
+
+end_per_group(_GroupName, Config) ->
+	Config.
+
 %%--------------------------------------------------------------------
+
 init_per_testcase(TestCase, Config) ->
     ssh:start(),
     prep(Config),
-    SysDir = ?config(data_dir, Config),
-    {ok, Sftpd} =
-	ssh_sftpd:listen(?SFPD_PORT, [{system_dir, SysDir},
-				      {user_passwords,[{?USER, ?PASSWD}]},
-				      {pwdfun, fun(_,_) -> true end}]),
+    PrivDir = ?config(priv_dir, Config),
+    ClientUserDir = filename:join(PrivDir, nopubkey),
+    SystemDir = filename:join(?config(priv_dir, Config), system),
+
+    Port = ssh_test_lib:inet_port(node()),
+    Options = [{system_dir, SystemDir},
+	       {user_dir, PrivDir},
+	       {user_passwords,[{?USER, ?PASSWD}]},
+	       {pwdfun, fun(_,_) -> true end}],
+    {ok, Sftpd} = case TestCase of
+		      ver6_basic ->
+			  SubSystems = [ssh_sftpd:subsystem_spec([{sftpd_vsn, 6}])],
+			  ssh:daemon(Port, [{subsystems, SubSystems}|Options]);
+		      _ ->
+			  SubSystems = [ssh_sftpd:subsystem_spec([])],
+			  ssh:daemon(Port, [{subsystems, SubSystems}|Options])
+		  end,
     
-    Cm = ssh_test_lib:connect(?SFPD_PORT,
-			      [{system_dir, SysDir},
-			       {user_dir, SysDir},
+    Cm = ssh_test_lib:connect(Port,
+			      [{user_dir, ClientUserDir},
 			       {user, ?USER}, {password, ?PASSWD},
 			       {user_interaction, false},
 			       {silently_accept_hosts, true},
@@ -127,56 +149,22 @@ init_per_testcase(TestCase, Config) ->
     {ok, <<?SSH_FXP_VERSION, ?UINT32(Version), _Ext/binary>>, _}
 	= reply(Cm, Channel),
 
-    test_server:format("Client: ~p Server ~p~n", [ProtocolVer, Version]),
+    ct:pal("Client: ~p Server ~p~n", [ProtocolVer, Version]),
 
     [{sftp, {Cm, Channel}}, {sftpd, Sftpd }| Config].
 
-%%--------------------------------------------------------------------
-%% Function: end_per_testcase(TestCase, Config) -> _
-%% Case - atom()
-%%   Name of the test case that is about to be run.
-%% Config - [tuple()]
-%%   A list of key/value pairs, holding the test case configuration.
-%% Description: Cleanup after each test case
-%%--------------------------------------------------------------------
 end_per_testcase(_TestCase, Config) ->
     ssh_sftpd:stop(?config(sftpd, Config)),
     {Cm, Channel} = ?config(sftp, Config),
     ssh_connection:close(Cm, Channel),
     ssh:close(Cm),
-    ssh:stop(),
-    ok.
+    ssh:stop().
 
 %%--------------------------------------------------------------------
-%% Function: all(Clause) -> TestCases
-%% Clause - atom() - suite | doc
-%% TestCases - [Case]
-%% Case - atom()
-%%   Name of a test case.
-%% Description: Returns a list of all test cases in this test suite
+%% Test Cases --------------------------------------------------------
 %%--------------------------------------------------------------------
-all() -> 
-    [open_close_file, open_close_dir, read_file, read_dir,
-     write_file, rename_file, mk_rm_dir, remove_file,
-     real_path, retrieve_attributes, set_attributes, links,
-     ver3_rename_OTP_6352, seq10670, sshd_read_file].
-
-groups() -> 
-    [].
-
-init_per_group(_GroupName, Config) ->
-	Config.
-
-end_per_group(_GroupName, Config) ->
-	Config.
-
-
-%% Test cases starts here.
-%%--------------------------------------------------------------------
-open_close_file(doc) ->
-    ["Test SSH_FXP_OPEN and SSH_FXP_CLOSE commands"];
-open_close_file(suite) ->
-    [];
+open_close_file() ->
+    [{doc, "Test SSH_FXP_OPEN and SSH_FXP_CLOSE commands"}].
 open_close_file(Config) when is_list(Config) ->
     PrivDir =  ?config(priv_dir, Config),
     FileName = filename:join(PrivDir, "test.txt"),
@@ -203,15 +191,11 @@ open_close_file(Config) when is_list(Config) ->
 	  ?UINT32(?SSH_FX_FAILURE), _/binary>>, _} =
 	open_file(PrivDir, Cm, Channel, NewReqId1,
 		  ?ACE4_READ_DATA  bor ?ACE4_READ_ATTRIBUTES,
-		  ?SSH_FXF_OPEN_EXISTING),
-
-    ok.
+		  ?SSH_FXF_OPEN_EXISTING).
 
 %%--------------------------------------------------------------------
-open_close_dir(doc) ->
-    ["Test SSH_FXP_OPENDIR and SSH_FXP_CLOSE commands"];
-open_close_dir(suite) ->
-    [];
+open_close_dir() ->
+    [{doc,"Test SSH_FXP_OPENDIR and SSH_FXP_CLOSE commands"}].
 open_close_dir(Config) when is_list(Config) ->
     PrivDir = ?config(priv_dir, Config),
     {Cm, Channel} = ?config(sftp, Config),
@@ -237,10 +221,8 @@ open_close_dir(Config) when is_list(Config) ->
     end.
 
 %%--------------------------------------------------------------------
-read_file(doc) ->
-    ["Test SSH_FXP_READ command"];
-read_file(suite) ->
-    [];
+read_file() ->
+    [{doc, "Test SSH_FXP_READ command"}].
 read_file(Config) when is_list(Config) ->
     PrivDir =  ?config(priv_dir, Config),
     FileName = filename:join(PrivDir, "test.txt"),
@@ -259,28 +241,22 @@ read_file(Config) when is_list(Config) ->
 	  Data/binary>>, _} =
 	read_file(Handle, 100, 0, Cm, Channel, NewReqId),
 
-    {ok, Data} = file:read_file(FileName),
+    {ok, Data} = file:read_file(FileName).
 
-    ok.
 %%--------------------------------------------------------------------
-read_dir(doc) ->
-    ["Test SSH_FXP_READDIR command"];
-read_dir(suite) ->
-    [];
+read_dir() ->
+    [{doc,"Test SSH_FXP_READDIR command"}].
 read_dir(Config) when is_list(Config) ->
     PrivDir = ?config(priv_dir, Config),
     {Cm, Channel} = ?config(sftp, Config),
     ReqId = 0,
     {ok, <<?SSH_FXP_HANDLE, ?UINT32(ReqId), Handle/binary>>, _} =
 	open_dir(PrivDir, Cm, Channel, ReqId),
-    ok = read_dir(Handle, Cm, Channel, ReqId),
-    ok.
+    ok = read_dir(Handle, Cm, Channel, ReqId).
 
 %%--------------------------------------------------------------------
-write_file(doc) ->
-    ["Test SSH_FXP_WRITE command"];
-write_file(suite) ->
-    [];
+write_file() ->
+    [{doc, "Test SSH_FXP_WRITE command"}].
 write_file(Config) when is_list(Config) ->
     PrivDir =  ?config(priv_dir, Config),
     FileName = filename:join(PrivDir, "test.txt"),
@@ -300,15 +276,11 @@ write_file(Config) when is_list(Config) ->
 	  _/binary>>, _}
 	= write_file(Handle, Data, 0, Cm, Channel, NewReqId),
 
-    {ok, Data} = file:read_file(FileName),
-
-    ok.
+    {ok, Data} = file:read_file(FileName).
 
 %%--------------------------------------------------------------------
-remove_file(doc) ->
-    ["Test SSH_FXP_REMOVE command"];
-remove_file(suite) ->
-    [];
+remove_file() ->
+    [{doc, "Test SSH_FXP_REMOVE command"}].
 remove_file(Config) when is_list(Config) ->
     PrivDir =  ?config(priv_dir, Config),
     FileName = filename:join(PrivDir, "test.txt"),
@@ -325,15 +297,11 @@ remove_file(Config) when is_list(Config) ->
 
     {ok, <<?SSH_FXP_STATUS, ?UINT32(NewReqId),
 	  ?UINT32(?SSH_FX_FAILURE), _/binary>>, _} =
-	remove(PrivDir, Cm, Channel, NewReqId),
-
-    ok.
+	remove(PrivDir, Cm, Channel, NewReqId).
 
 %%--------------------------------------------------------------------
-rename_file(doc) ->
-    ["Test SSH_FXP_RENAME command"];
-rename_file(suite) ->
-    [];
+rename_file() ->
+    [{doc, "Test SSH_FXP_RENAME command"}].
 rename_file(Config) when is_list(Config) ->
     PrivDir =  ?config(priv_dir, Config),
     FileName = filename:join(PrivDir, "test.txt"),
@@ -366,15 +334,11 @@ rename_file(Config) when is_list(Config) ->
     {ok, <<?SSH_FXP_STATUS, ?UINT32(NewReqId2),
 	  ?UINT32(?SSH_FX_OP_UNSUPPORTED), _/binary>>, _} =
 	rename(FileName, NewFileName, Cm, Channel, NewReqId2, 6,
-	       ?SSH_FXP_RENAME_ATOMIC),
-
-    ok.
+	       ?SSH_FXP_RENAME_ATOMIC).
 
 %%--------------------------------------------------------------------
-mk_rm_dir(doc) ->
-    ["Test SSH_FXP_MKDIR and SSH_FXP_RMDIR command"];
-mk_rm_dir(suite) ->
-    [];
+mk_rm_dir() ->
+    [{doc, "Test SSH_FXP_MKDIR and SSH_FXP_RMDIR command"}].
 mk_rm_dir(Config) when is_list(Config) ->
     PrivDir = ?config(priv_dir, Config),
     {Cm, Channel} = ?config(sftp, Config),
@@ -384,7 +348,7 @@ mk_rm_dir(Config) when is_list(Config) ->
 	  _/binary>>, _} = mkdir(DirName, Cm, Channel, ReqId),
 
     NewReqId = 1,
-    {ok, <<?SSH_FXP_STATUS, ?UINT32(NewReqId), ?UINT32(?SSH_FX_FAILURE),
+    {ok, <<?SSH_FXP_STATUS, ?UINT32(NewReqId), ?UINT32(?SSH_FX_FILE_ALREADY_EXISTS),
 	  _/binary>>, _} = mkdir(DirName, Cm, Channel, NewReqId),
 
     NewReqId1 = 2,
@@ -393,16 +357,13 @@ mk_rm_dir(Config) when is_list(Config) ->
 
     NewReqId2 = 3,
     {ok, <<?SSH_FXP_STATUS, ?UINT32(NewReqId2), ?UINT32(?SSH_FX_NO_SUCH_FILE),
-	    _/binary>>, _} = rmdir(DirName, Cm, Channel, NewReqId2),
+	    _/binary>>, _} = rmdir(DirName, Cm, Channel, NewReqId2).
 
-    ok.
 %%--------------------------------------------------------------------
-real_path(doc) ->
-    ["Test SSH_FXP_REALPATH command"];
-real_path(suite) ->
-    [];
+real_path() ->
+    [{doc, "Test SSH_FXP_REALPATH command"}].
 real_path(Config) when is_list(Config) ->
-    case test_server:os_type() of
+    case os:type() of
 	{win32, _} ->
 	    {skip,  "Not a relevant test on windows"};
 	_ ->
@@ -421,20 +382,14 @@ real_path(Config) when is_list(Config) ->
 	    RealPath = filename:absname(binary_to_list(Path)),
 	    AbsPrivDir = filename:absname(PrivDir),
 
-	    test_server:format("Path: ~p PrivDir: ~p~n", [RealPath, AbsPrivDir]),
+	    ct:pal("Path: ~p PrivDir: ~p~n", [RealPath, AbsPrivDir]),
 
-	    true = RealPath == AbsPrivDir,
-
-	    ok
+	    true = RealPath == AbsPrivDir
     end.
 
 %%--------------------------------------------------------------------
-links(doc) ->
-    [];
-links(suite) ->
-    [];
 links(Config) when is_list(Config) ->
-    case test_server:os_type() of
+    case os:type() of
 	{win32, _} ->
 	    {skip, "Links are not fully supported by windows"};
 	_ ->
@@ -456,15 +411,12 @@ links(Config) when is_list(Config) ->
 
 	    true = binary_to_list(Path) == FileName,
 
-	    test_server:format("Path: ~p~n", [binary_to_list(Path)]),
-	    ok
+	    ct:pal("Path: ~p~n", [binary_to_list(Path)])
     end.
 
 %%--------------------------------------------------------------------
-retrieve_attributes(doc) ->
-    ["Test SSH_FXP_STAT, SSH_FXP_LSTAT AND SSH_FXP_FSTAT commands"];
-retrieve_attributes(suite) ->
-    [];
+retrieve_attributes() ->
+    [{"Test SSH_FXP_STAT, SSH_FXP_LSTAT AND SSH_FXP_FSTAT commands"}].
 retrieve_attributes(Config) when is_list(Config) ->
     PrivDir =  ?config(priv_dir, Config),
     FileName = filename:join(PrivDir, "test.txt"),
@@ -525,74 +477,70 @@ retrieve_attributes(Config) when is_list(Config) ->
 
 			  Owner = list_to_integer(binary_to_list(BinOwner)),
 			  Group =  list_to_integer(binary_to_list(BinGroup))
-		  end, AttrValues),
+		  end, AttrValues).
 
-    ok.
 %%--------------------------------------------------------------------
-set_attributes(doc) ->
-    ["Test SSH_FXP_SETSTAT AND SSH_FXP_FSETSTAT commands"];
-set_attributes(suite) ->
-    [];
+set_attributes() ->
+    [{doc, "Test SSH_FXP_SETSTAT AND SSH_FXP_FSETSTAT commands"}].
 set_attributes(Config) when is_list(Config) ->
-    PrivDir =  ?config(priv_dir, Config),
-    FileName = filename:join(PrivDir, "test.txt"),
-    ReqId = 0,
-    {Cm, Channel} = ?config(sftp, Config),
+    case os:type() of
+	{win32, _} ->
+	    {skip,  "Known error bug in erts file:read_file_info"};
+	_ ->
+	    PrivDir =  ?config(priv_dir, Config),
+	    FileName = filename:join(PrivDir, "test.txt"),
+	    ReqId = 0,
+	    {Cm, Channel} = ?config(sftp, Config),
 
-    {ok, FileInfo} = file:read_file_info(FileName),
+	    {ok, FileInfo} = file:read_file_info(FileName),
 
-    OrigPermissions = FileInfo#file_info.mode,
-    Permissions = 8#400, %% User read-only
+	    OrigPermissions = FileInfo#file_info.mode,
+	    Permissions = not_default_permissions(),
 
-    Flags = ?SSH_FILEXFER_ATTR_PERMISSIONS,
+	    Flags = ?SSH_FILEXFER_ATTR_PERMISSIONS,
 
-    Atters = [?uint32(Flags), ?byte(?SSH_FILEXFER_TYPE_REGULAR),
-	      ?uint32(Permissions)],
+	    Atters = [?uint32(Flags), ?byte(?SSH_FILEXFER_TYPE_REGULAR),
+		      ?uint32(Permissions)],
 
-    {ok, <<?SSH_FXP_STATUS, ?UINT32(ReqId),
-	  ?UINT32(?SSH_FX_OK), _/binary>>, _} =
-	set_attributes_file(FileName, Atters, Cm, Channel, ReqId),
+	    {ok, <<?SSH_FXP_STATUS, ?UINT32(ReqId),
+		   ?UINT32(?SSH_FX_OK), _/binary>>, _} =
+		set_attributes_file(FileName, Atters, Cm, Channel, ReqId),
 
-    {ok, NewFileInfo} = file:read_file_info(FileName),
-    NewPermissions = NewFileInfo#file_info.mode,
+	    {ok, NewFileInfo} = file:read_file_info(FileName),
+	    NewPermissions = NewFileInfo#file_info.mode,
 
-    %% Can not test that NewPermissions = Permissions as
-    %% on Unix platforms, other bits than those listed in the
-    %% API may be set.
-    test_server:format("Org: ~p New: ~p~n", [OrigPermissions, NewPermissions]),
-    true = OrigPermissions =/= NewPermissions,
+	    %% Can not test that NewPermissions = Permissions as
+	    %% on Unix platforms, other bits than those listed in the
+	    %% API may be set.
+	    ct:pal("Org: ~p New: ~p~n", [OrigPermissions, NewPermissions]),
+	    true = OrigPermissions =/= NewPermissions,
 
-    test_server:format("Try to open the file"),
-    NewReqId = 2,
-    {ok, <<?SSH_FXP_HANDLE, ?UINT32(NewReqId), Handle/binary>>, _} =
-	open_file(FileName, Cm, Channel, NewReqId,
-		  ?ACE4_READ_DATA bor ?ACE4_WRITE_ATTRIBUTES,
-		  ?SSH_FXF_OPEN_EXISTING),
+	    ct:pal("Try to open the file"),
+	    NewReqId = 2,
+	    {ok, <<?SSH_FXP_HANDLE, ?UINT32(NewReqId), Handle/binary>>, _} =
+		open_file(FileName, Cm, Channel, NewReqId,
+			  ?ACE4_READ_DATA bor ?ACE4_WRITE_ATTRIBUTES,
+			  ?SSH_FXF_OPEN_EXISTING),
 
-    NewAtters = [?uint32(Flags), ?byte(?SSH_FILEXFER_TYPE_REGULAR),
-		 ?uint32(OrigPermissions)],
+	    NewAtters = [?uint32(Flags), ?byte(?SSH_FILEXFER_TYPE_REGULAR),
+			 ?uint32(OrigPermissions)],
 
-    NewReqId1 = 3,
+	    NewReqId1 = 3,
 
-    test_server:format("Set original permissions on the now open file"),
+	    ct:pal("Set original permissions on the now open file"),
 
-     {ok, <<?SSH_FXP_STATUS, ?UINT32(NewReqId1),
-	  ?UINT32(?SSH_FX_OK), _/binary>>, _} =
-	set_attributes_open_file(Handle, NewAtters, Cm, Channel, NewReqId1),
+	    {ok, <<?SSH_FXP_STATUS, ?UINT32(NewReqId1),
+		   ?UINT32(?SSH_FX_OK), _/binary>>, _} =
+		set_attributes_open_file(Handle, NewAtters, Cm, Channel, NewReqId1),
 
-    {ok, NewFileInfo1} = file:read_file_info(FileName),
-    OrigPermissions = NewFileInfo1#file_info.mode,
-
-    ok.
+	    {ok, NewFileInfo1} = file:read_file_info(FileName),
+	    OrigPermissions = NewFileInfo1#file_info.mode
+    end.
 
 %%--------------------------------------------------------------------
-ver3_rename_OTP_6352(doc) ->
-    ["Test that ver3 rename message is handled"];
-
-ver3_rename_OTP_6352(suite) ->
-    [];
-
-ver3_rename_OTP_6352(Config) when is_list(Config) ->
+ver3_rename() ->
+    [{doc, "Test that ver3 rename message is handled OTP 6352"}].
+ver3_rename(Config) when is_list(Config) ->
     PrivDir =  ?config(priv_dir, Config),
     FileName = filename:join(PrivDir, "test.txt"),
     NewFileName = filename:join(PrivDir, "test1.txt"),
@@ -601,22 +549,16 @@ ver3_rename_OTP_6352(Config) when is_list(Config) ->
 
     {ok, <<?SSH_FXP_STATUS, ?UINT32(ReqId),
 	  ?UINT32(?SSH_FX_OK), _/binary>>, _} =
-	rename(FileName, NewFileName, Cm, Channel, ReqId, 3, 0),
-
-    ok.
+	rename(FileName, NewFileName, Cm, Channel, ReqId, 3, 0).
 
 %%--------------------------------------------------------------------
-seq10670(doc) ->
-    ["Check that realpath works ok"];
-
-seq10670(suite) ->
-    [];
-
-seq10670(Config) when is_list(Config) ->
+relpath() ->
+    [{doc, "Check that realpath works ok seq10670"}].
+relpath(Config) when is_list(Config) ->
     ReqId = 0,
     {Cm, Channel} = ?config(sftp, Config),
 
-    case test_server:os_type() of
+    case os:type() of
 	{win32, _} ->
 	    {skip,  "Not a relevant test on windows"};
 	_ ->
@@ -629,11 +571,46 @@ seq10670(Config) when is_list(Config) ->
 	    {ok, <<?SSH_FXP_NAME, ?UINT32(ReqId), ?UINT32(_), ?UINT32(Len),
 		  Path:Len/binary, _/binary>>, _}
 		= real_path("/usr/bin/../..", Cm, Channel, ReqId),
-
 	    Root = Path
     end.
 
-%% Internal functions
+%%--------------------------------------------------------------------
+sshd_read_file() ->
+    [{doc,"Test SSH_FXP_READ command, using sshd-server"}].
+sshd_read_file(Config) when is_list(Config) ->
+    PrivDir =  ?config(priv_dir, Config),
+    FileName = filename:join(PrivDir, "test.txt"),
+
+    ReqId = 0,
+    {Cm, Channel} = ?config(sftp, Config),
+
+    {ok, <<?SSH_FXP_HANDLE, ?UINT32(ReqId), Handle/binary>>, _} =
+	open_file(FileName, Cm, Channel, ReqId,
+		  ?ACE4_READ_DATA  bor ?ACE4_READ_ATTRIBUTES,
+		  ?SSH_FXF_OPEN_EXISTING),
+
+    NewReqId = 1,
+
+    {ok, <<?SSH_FXP_DATA, ?UINT32(NewReqId), ?UINT32(_Length),
+	  Data/binary>>, _} =
+	read_file(Handle, 100, 0, Cm, Channel, NewReqId),
+
+    {ok, Data} = file:read_file(FileName).
+%%--------------------------------------------------------------------
+ver6_basic() ->
+    [{doc, "Test SFTP Version 6"}].
+ver6_basic(Config) when is_list(Config) ->
+    PrivDir =  ?config(priv_dir, Config),
+    %FileName = filename:join(PrivDir, "test.txt"),
+    {Cm, Channel} = ?config(sftp, Config),
+    ReqId = 0,
+    {ok, <<?SSH_FXP_STATUS, ?UINT32(ReqId),  % Ver 6 we have 5
+	   ?UINT32(?SSH_FX_FILE_IS_A_DIRECTORY), _/binary>>, _} =
+	open_file(PrivDir, Cm, Channel, ReqId,
+		  ?ACE4_READ_DATA  bor ?ACE4_READ_ATTRIBUTES,
+		  ?SSH_FXF_OPEN_EXISTING).
+%%--------------------------------------------------------------------
+%% Internal functions ------------------------------------------------
 %%--------------------------------------------------------------------
 prep(Config) ->
     PrivDir =  ?config(priv_dir, Config),
@@ -669,7 +646,7 @@ reply(Cm, Channel, RBuf) ->
 	{ssh_cm, Cm, {closed, Channel}} ->
 	    closed;
 	{ssh_cm, Cm, Msg} ->
-	    test_server:fail(Msg)
+	    ct:fail(Msg)
     end.
 
 
@@ -763,7 +740,7 @@ read_dir(Handle, Cm, Channel, ReqId) ->
     case reply(Cm, Channel) of
 	{ok, <<?SSH_FXP_NAME, ?UINT32(ReqId), ?UINT32(Count),
 	       ?UINT32(Len), Listing:Len/binary, _/binary>>, _} ->
-	    test_server:format("Count: ~p Listing: ~p~n",
+	    ct:pal("Count: ~p Listing: ~p~n",
 			       [Count, binary_to_list(Listing)]),
 	    read_dir(Handle, Cm, Channel, ReqId);
 	{ok, <<?SSH_FXP_STATUS, ?UINT32(ReqId),
@@ -906,29 +883,5 @@ encode_file_type(Type) ->
 	undefined -> ?SSH_FILEXFER_TYPE_UNKNOWN
     end.
 
-%%--------------------------------------------------------------------
-sshd_read_file(doc) ->
-    ["Test SSH_FXP_READ command, using sshd-server"];
-sshd_read_file(suite) ->
-    [];
-sshd_read_file(Config) when is_list(Config) ->
-    PrivDir =  ?config(priv_dir, Config),
-    FileName = filename:join(PrivDir, "test.txt"),
-
-    ReqId = 0,
-    {Cm, Channel} = ?config(sftp, Config),
-
-    {ok, <<?SSH_FXP_HANDLE, ?UINT32(ReqId), Handle/binary>>, _} =
-	open_file(FileName, Cm, Channel, ReqId,
-		  ?ACE4_READ_DATA  bor ?ACE4_READ_ATTRIBUTES,
-		  ?SSH_FXF_OPEN_EXISTING),
-
-    NewReqId = 1,
-
-    {ok, <<?SSH_FXP_DATA, ?UINT32(NewReqId), ?UINT32(_Length),
-	  Data/binary>>, _} =
-	read_file(Handle, 100, 0, Cm, Channel, NewReqId),
-
-    {ok, Data} = file:read_file(FileName),
-
-    ok.
+not_default_permissions() ->
+    8#600. %% User read-write-only

@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2002-2011. All Rights Reserved.
+%% Copyright Ericsson AB 2002-2013. All Rights Reserved.
 %%
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -43,7 +43,7 @@ suite() -> [{ct_hooks,[ts_install_cth]}].
 all() -> 
     case odbc_test_lib:odbc_check() of
 	ok ->
-	    [sql_query, next, {group, scrollable_cursors}, select_count,
+	    [stored_proc, sql_query, next, {group, scrollable_cursors}, select_count,
 	     select_next, select_relative, select_absolute,
 	     create_table_twice, delete_table_twice, duplicate_key,
 	     not_connection_owner, no_result_set, query_error,
@@ -63,7 +63,8 @@ groups() ->
        param_insert_numeric, {group, param_insert_string},
        param_insert_float, param_insert_real,
        param_insert_double, param_insert_mix, param_update,
-       param_delete, param_select]},
+       param_delete, param_select,
+       param_select_empty_params, param_delete_empty_params]},
      {param_integers, [],
       [param_insert_tiny_int, param_insert_small_int,
        param_insert_int, param_insert_integer]},
@@ -171,6 +172,26 @@ end_per_testcase(_Case, Config) ->
 %%-------------------------------------------------------------------------
 %% Test cases starts here.
 %%-------------------------------------------------------------------------
+stored_proc(doc)->
+    ["Test stored proc with OUT param"];
+stored_proc(suite) -> [];
+stored_proc(Config) when is_list(Config) ->
+    case ?RDBMS of
+        X when X == oracle; X == postgres->
+            Ref = ?config(connection_ref, Config),
+            {updated, _} =
+                odbc:sql_query(Ref,
+                               ?RDBMS:stored_proc_integer_out()),
+            Result = ?RDBMS:query_result(),
+            Result =
+                ?RDBMS:param_query(Ref),
+            {updated, _} =
+                odbc:sql_query(Ref, ?RDBMS:drop_proc()),
+            ok;
+        _ ->
+	    {skip, "stored proc not yet supported"}
+    end.
+
 sql_query(doc)->
     ["Test the common cases"];
 sql_query(suite) -> [];
@@ -1342,6 +1363,70 @@ param_select(Config) when is_list(Config) ->
     SelectResult = odbc:param_query(Ref, "SELECT * FROM " ++ Table ++
 				    " WHERE DATA = ?",
 				    [{{sql_varchar, 10}, ["foo"]}]), 
+    ok.
+
+%%-------------------------------------------------------------------------
+param_select_empty_params(doc) ->
+    ["Test parameterized select query with no parameters."];
+param_select_empty_params(suite) ->
+    [];
+param_select_empty_params(Config) when is_list(Config) ->
+    Ref = ?config(connection_ref, Config),   
+    Table = ?config(tableName, Config),
+
+    {updated, _} = 
+	odbc:sql_query(Ref, 
+		       "CREATE TABLE " ++ Table ++
+		       " (ID INTEGER, DATA CHARACTER VARYING(10),"
+		       " PRIMARY KEY(ID))"),
+
+    {updated, Count}  = odbc:param_query(Ref, "INSERT INTO " ++ Table ++ 
+				    "(ID, DATA) VALUES(?, ?)",
+				    [{sql_integer, [1, 2, 3]}, 
+				     {{sql_varchar, 10}, 
+				      ["foo", "bar", "foo"]}]),
+
+    true = odbc_test_lib:check_row_count(3, Count),
+
+    SelectResult = ?RDBMS:param_select(),
+
+    SelectResult = odbc:param_query(Ref, "SELECT * FROM " ++ Table ++
+				    " WHERE DATA = \'foo\'",
+				    []), 
+    ok.
+
+%%-------------------------------------------------------------------------
+param_delete_empty_params(doc) ->
+    ["Test parameterized delete query with no parameters."];
+param_delete_empty_params(suite) ->
+    [];
+param_delete_empty_params(Config) when is_list(Config) ->
+    Ref = ?config(connection_ref, Config),   
+    Table = ?config(tableName, Config),
+
+    {updated, _} = 
+	odbc:sql_query(Ref, 
+		       "CREATE TABLE " ++ Table ++
+		       " (ID INTEGER, DATA CHARACTER VARYING(10),"
+		       " PRIMARY KEY(ID))"),
+
+    {updated, Count}  = odbc:param_query(Ref, "INSERT INTO " ++ Table ++ 
+				    "(ID, DATA) VALUES(?, ?)",
+				    [{sql_integer, [1, 2, 3]}, 
+				     {{sql_varchar, 10}, 
+				      ["foo", "bar", "baz"]}]),
+    true = odbc_test_lib:check_row_count(3, Count),
+
+    {updated, NewCount}  = odbc:param_query(Ref, "DELETE FROM " ++ Table ++
+				    " WHERE ID = 1 OR ID = 2",
+				    []), 
+
+    true = odbc_test_lib:check_row_count(2, NewCount),
+
+    UpdateResult = ?RDBMS:param_delete(),
+
+    UpdateResult = 
+	odbc:sql_query(Ref, "SELECT * FROM " ++ Table),
     ok.
 
 %%-------------------------------------------------------------------------

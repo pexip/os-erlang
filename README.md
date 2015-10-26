@@ -12,13 +12,22 @@ middle-ware to develop these systems. It includes its own distributed
 database, applications to interface towards other languages, debugging
 and release handling tools.
 
+ERTS and BEAM
+-------------
+**BEAM** is the name of the virtual machine where all Erlang code is executed.
+Every compiled Erlang file has the suffix .beam. The virtual machine
+is sometimes referred to as the emulator.
+
+**ERTS** is the Erlang Runtime System where the BEAM, kernel and
+standard libraries amongst others are included.
+
 More information can be found at [erlang.org] [1].
 
 Building and Installing
 -----------------------
 
 Information on building and installing Erlang/OTP can be found
-in the `INSTALL.md` document.
+in the [$ERL_TOP/HOWTO/INSTALL.md] [5] document.
 
 Contributing to Erlang/OTP
 --------------------------
@@ -28,10 +37,13 @@ Here are the [instructions for submitting patches] [2].
 In short:
 
 *   We prefer to receive proposed updates via email on the
-    [`erlang-patches`] [3] mailing list rather than through a pull request.
-    Pull requests are not practical because we have a strict policy never to
-    merge any untested changes to the development branch (the only exception
-    being **obviously** correct changes, such as corrections of typos).
+    [`erlang-patches`] [3] mailing list or through a pull request.
+
+*   Pull requests will be handled once everyday and there will be 
+    essential testing before we will take a decision on the outcome
+    of the request. If the essential testings fails, the pull request
+    will be closed and you will have to fix the problem and submit another
+    pull request when this is done.
 
 *   We merge all proposed updates to the `pu` (*proposed updates*) branch,
     typically within one working day.
@@ -46,7 +58,7 @@ In short:
     may suggest improvements that are needed before the change can be accepted
     and merged.
 
-*   Once or twice a week, a status email called "What's cooking in Erlang/OTP"
+*   Once or twice a week, a status email called ["What's cooking in Erlang/OTP"] [4]
     will be sent to the [`erlang-patches`] [3] mailing list.
 
 Copyright and License
@@ -54,7 +66,7 @@ Copyright and License
 
 > %CopyrightBegin%
 >
-> Copyright Ericsson AB 2010. All Rights Reserved.
+> Copyright Ericsson AB 2010-2014. All Rights Reserved.
 >
 > The contents of this file are subject to the Erlang Public License,
 > Version 1.1, (the "License"); you may not use this file except in
@@ -73,4 +85,6 @@ Copyright and License
 
    [1]: http://www.erlang.org
    [2]: http://wiki.github.com/erlang/otp/submitting-patches
-   [3]: http://www.erlang.org/faq.html
+   [3]: http://www.erlang.org/static/doc/mailinglist.html
+   [4]: http://erlang.github.com/otp/
+   [5]: HOWTO/INSTALL.md

@@ -1,7 +1,7 @@
 /*
  * %CopyrightBegin%
  *
- * Copyright Ericsson AB 2009-2011. All Rights Reserved.
+ * Copyright Ericsson AB 2009-2014. All Rights Reserved.
  *
  * The contents of this file are subject to the Erlang Public License,
  * Version 1.1, (the "License"); you may not use this file except in
@@ -31,7 +31,14 @@
 #include "bif.h"
 #include "error.h"
 #include "big.h"
+#include "erl_map.h"
 #include "beam_bp.h"
+#include "erl_thr_progress.h"
+#include "dtrace-wrapper.h"
+#include "erl_process.h"
+#if defined(USE_DYNAMIC_TRACE) && (defined(USE_DTRACE) || defined(USE_SYSTEMTAP))
+#define HAVE_USE_DTRACE 1
+#endif
 
 #include <limits.h>
 #include <stddef.h> /* offsetof */
@@ -65,6 +72,9 @@ static void add_readonly_check(ErlNifEnv*, unsigned char* ptr, unsigned sz);
 static int is_offheap(const ErlOffHeap* off_heap);
 #endif
 
+#ifdef USE_VM_PROBES
+void dtrace_nifenv_str(ErlNifEnv *, char *);
+#endif
 
 #define MIN_HEAP_FRAG_SZ 200
 static Eterm* alloc_heap_heavy(ErlNifEnv* env, unsigned need, Eterm* hp);
@@ -130,10 +140,13 @@ static void pre_nif_noproc(ErlNifEnv* env, struct erl_module_nif* mod_nif)
     env->tmp_obj_list = NULL;
 }
 
-/* Temporary object header, auto-deallocated when NIF returns. */
+/* Temporary object header, auto-deallocated when NIF returns
+ * or when independent environment is cleared.
+ */
 struct enif_tmp_obj_t {
     struct enif_tmp_obj_t* next;
     void (*dtor)(struct enif_tmp_obj_t*);
+    ErtsAlcType_t allocator;
     /*char data[];*/
 };
 
@@ -244,7 +257,7 @@ ErlNifEnv* enif_alloc_env(void)
     msg_env->env.hp_end = phony_heap;
     msg_env->env.heap_frag = NULL;
     msg_env->env.mod_nif = NULL;
-    msg_env->env.tmp_obj_list = (struct enif_tmp_obj_t*) 1; /* invalid non-NULL */
+    msg_env->env.tmp_obj_list = NULL;
     msg_env->env.proc = &msg_env->phony_proc;
     memset(&msg_env->phony_proc, 0, sizeof(Process));
     HEAP_START(&msg_env->phony_proc) = phony_heap;
@@ -252,7 +265,7 @@ ErlNifEnv* enif_alloc_env(void)
     HEAP_LIMIT(&msg_env->phony_proc) = phony_heap;
     HEAP_END(&msg_env->phony_proc) = phony_heap;
     MBUF(&msg_env->phony_proc) = NULL;
-    msg_env->phony_proc.id = ERTS_INVALID_PID;
+    msg_env->phony_proc.common.id = ERTS_INVALID_PID;
 #ifdef FORCE_HEAP_FRAGS
     msg_env->phony_proc.space_verified = 0;
     msg_env->phony_proc.space_verified_from = NULL;
@@ -276,7 +289,7 @@ void enif_clear_env(ErlNifEnv* env)
     struct enif_msg_environment_t* menv = (struct enif_msg_environment_t*)env;
     Process* p = &menv->phony_proc;
     ASSERT(p == menv->env.proc);
-    ASSERT(p->id == ERTS_INVALID_PID);
+    ASSERT(p->common.id == ERTS_INVALID_PID);
     ASSERT(MBUF(p) == menv->env.heap_frag);
     if (MBUF(p) != NULL) {
 	erts_cleanup_offheap(&MSO(p));
@@ -289,6 +302,7 @@ void enif_clear_env(ErlNifEnv* env)
     menv->env.hp = menv->env.hp_end = HEAP_TOP(p);
     
     ASSERT(!is_offheap(&MSO(p)));
+    free_tmp_objs(env);
 }
 int enif_send(ErlNifEnv* env, const ErlNifPid* to_pid,
 	      ErlNifEnv* msg_env, ERL_NIF_TERM msg)
@@ -298,15 +312,13 @@ int enif_send(ErlNifEnv* env, const ErlNifPid* to_pid,
     Process* rp;
     Process* c_p;
     ErlHeapFragment* frags;
-#if defined(ERTS_ENABLE_LOCK_CHECK) && defined(ERTS_SMP)
-    ErtsProcLocks rp_had_locks;
-#endif
     Eterm receiver = to_pid->pid;
     int flush_me = 0;
+    int scheduler = erts_get_scheduler_id() != 0;
 
     if (env != NULL) {
 	c_p = env->proc;
-	if (receiver == c_p->id) {
+	if (receiver == c_p->common.id) {
 	    rp_locks = ERTS_PROC_LOCK_MAIN;
 	    flush_me = 1;
 	}
@@ -319,13 +331,12 @@ int enif_send(ErlNifEnv* env, const ErlNifPid* to_pid,
 #endif
     }    
 
-#if defined(ERTS_ENABLE_LOCK_CHECK) && defined(ERTS_SMP)
-    rp_had_locks = rp_locks;
-#endif
-    rp = erts_pid2proc_opt(c_p, ERTS_PROC_LOCK_MAIN,
-			   receiver, rp_locks, ERTS_P2P_FLG_SMP_INC_REFC);
+    rp = (scheduler
+	  ? erts_proc_lookup(receiver)
+	  : erts_pid2proc_opt(c_p, ERTS_PROC_LOCK_MAIN,
+			      receiver, rp_locks, ERTS_P2P_FLG_SMP_INC_REFC));
     if (rp == NULL) {
-	ASSERT(env == NULL || receiver != c_p->id);
+	ASSERT(env == NULL || receiver != c_p->common.id);
 	return 0;
     }
     flush_env(msg_env);
@@ -345,13 +356,17 @@ int enif_send(ErlNifEnv* env, const ErlNifPid* to_pid,
     if (flush_me) {	
 	flush_env(env); /* Needed for ERTS_HOLE_CHECK */ 
     }
-    erts_queue_message(rp, &rp_locks, frags, msg, am_undefined);
-    if (rp_locks) {	
-	ERTS_SMP_LC_ASSERT(rp_locks == (rp_had_locks | (ERTS_PROC_LOCK_MSGQ | 
-							ERTS_PROC_LOCK_STATUS)));
-	erts_smp_proc_unlock(rp, (ERTS_PROC_LOCK_MSGQ | ERTS_PROC_LOCK_STATUS));
-    }
-    erts_smp_proc_dec_refc(rp);
+    erts_queue_message(rp, &rp_locks, frags, msg, am_undefined
+#ifdef USE_VM_PROBES
+		       , NIL
+#endif
+		       );
+    if (c_p == rp)
+	rp_locks &= ~ERTS_PROC_LOCK_MAIN;
+    if (rp_locks)
+	erts_smp_proc_unlock(rp, rp_locks);
+    if (!scheduler)
+	erts_smp_proc_dec_refc(rp);
     if (flush_me) {
 	cache_env(env);
     }
@@ -377,7 +392,7 @@ static int is_offheap(const ErlOffHeap* oh)
 
 ErlNifPid* enif_self(ErlNifEnv* caller_env, ErlNifPid* pid)
 {
-    pid->pid = caller_env->proc->id;
+    pid->pid = caller_env->proc->common.id;
     return pid;
 }
 int enif_get_local_pid(ErlNifEnv* env, ERL_NIF_TERM term, ErlNifPid* pid)
@@ -435,24 +450,48 @@ int enif_is_exception(ErlNifEnv* env, ERL_NIF_TERM term)
     return term == THE_NON_VALUE;
 }
 
+int enif_is_number(ErlNifEnv* env, ERL_NIF_TERM term)
+{
+    return is_number(term);
+}
+
+static ERTS_INLINE int is_proc_bound(ErlNifEnv* env)
+{
+    return env->mod_nif != NULL;
+}
+
 static void aligned_binary_dtor(struct enif_tmp_obj_t* obj)
 {
-    erts_free_aligned_binary_bytes_extra((byte*)obj,ERTS_ALC_T_TMP);
+    erts_free_aligned_binary_bytes_extra((byte*)obj, obj->allocator);
 }
 
 int enif_inspect_binary(ErlNifEnv* env, Eterm bin_term, ErlNifBinary* bin)
 {
+    ErtsAlcType_t allocator = is_proc_bound(env) ? ERTS_ALC_T_TMP : ERTS_ALC_T_NIF;
     union {
 	struct enif_tmp_obj_t* tmp;
 	byte* raw_ptr;
     }u;
+
+    if (is_boxed(bin_term) && *binary_val(bin_term) == HEADER_SUB_BIN) {
+	ErlSubBin* sb = (ErlSubBin*) binary_val(bin_term);
+	if (sb->is_writable) {
+	    ProcBin* pb = (ProcBin*) binary_val(sb->orig);
+	    ASSERT(pb->thing_word == HEADER_PROC_BIN);
+	    if (pb->flags) {
+		erts_emasculate_writable_binary(pb);
+		sb->is_writable = 0;
+	    }
+	}
+    }
     u.tmp = NULL;
-    bin->data = erts_get_aligned_binary_bytes_extra(bin_term, &u.raw_ptr, ERTS_ALC_T_TMP,
+    bin->data = erts_get_aligned_binary_bytes_extra(bin_term, &u.raw_ptr, allocator,
 						    sizeof(struct enif_tmp_obj_t));
     if (bin->data == NULL) {
 	return 0;
     }
     if (u.tmp != NULL) {
+	u.tmp->allocator = allocator;
 	u.tmp->next = env->tmp_obj_list;
 	u.tmp->dtor = &aligned_binary_dtor;
 	env->tmp_obj_list = u.tmp;
@@ -466,13 +505,14 @@ int enif_inspect_binary(ErlNifEnv* env, Eterm bin_term, ErlNifBinary* bin)
 
 static void tmp_alloc_dtor(struct enif_tmp_obj_t* obj)
 {
-    erts_free(ERTS_ALC_T_TMP,  obj);
+    erts_free(obj->allocator,  obj);
 }
 
 int enif_inspect_iolist_as_binary(ErlNifEnv* env, Eterm term, ErlNifBinary* bin)
 {
     struct enif_tmp_obj_t* tobj;
-    Uint sz;
+    ErtsAlcType_t allocator;
+    ErlDrvSizeT sz;
     if (is_binary(term)) {
 	return enif_inspect_binary(env,term,bin);
     }
@@ -486,8 +526,10 @@ int enif_inspect_iolist_as_binary(ErlNifEnv* env, Eterm term, ErlNifBinary* bin)
     if (erts_iolist_size(term, &sz)) {
 	return 0;
     }
-    
-    tobj = erts_alloc(ERTS_ALC_T_TMP, sz + sizeof(struct enif_tmp_obj_t));
+
+    allocator = is_proc_bound(env) ? ERTS_ALC_T_TMP : ERTS_ALC_T_NIF;
+    tobj = erts_alloc(allocator, sz + sizeof(struct enif_tmp_obj_t));
+    tobj->allocator = allocator;
     tobj->next = env->tmp_obj_list;
     tobj->dtor = &tmp_alloc_dtor;
     env->tmp_obj_list = tobj;
@@ -496,7 +538,7 @@ int enif_inspect_iolist_as_binary(ErlNifEnv* env, Eterm term, ErlNifBinary* bin)
     bin->size = sz;
     bin->bin_term = THE_NON_VALUE;
     bin->ref_bin = NULL;
-    io_list_to_buf(term, (char*) bin->data, sz);
+    erts_iolist_to_buf(term, (char*) bin->data, sz);
     ADD_READONLY_CHECK(env, bin->data, bin->size); 
     return 1;
 }
@@ -511,7 +553,7 @@ int enif_alloc_binary(size_t size, ErlNifBinary* bin)
     }
     refbin->flags = BIN_FLAG_DRV; /* BUGBUG: Flag? */
     erts_refc_init(&refbin->refc, 1);
-    refbin->orig_size = (long) size;
+    refbin->orig_size = (SWord) size;
 
     bin->size = size;
     bin->data = (unsigned char*) refbin->orig_bytes;
@@ -676,6 +718,7 @@ Eterm enif_make_sub_binary(ErlNifEnv* env, ERL_NIF_TERM bin_term,
     ErlSubBin* sb;
     Eterm orig;
     Uint offset, bit_offset, bit_size; 
+#ifdef DEBUG
     unsigned src_size;
 
     ASSERT(is_binary(bin_term));
@@ -683,6 +726,7 @@ Eterm enif_make_sub_binary(ErlNifEnv* env, ERL_NIF_TERM bin_term,
     ASSERT(pos <= src_size);
     ASSERT(size <= src_size);
     ASSERT(pos + size <= src_size);   
+#endif
     sb = (ErlSubBin*) alloc_heap(env, ERL_SUB_BIN_SIZE);
     ERTS_GET_REAL_BIN(bin_term, orig, offset, bit_offset, bit_size);
     sb->thing_word = HEADER_SUB_BIN;
@@ -706,23 +750,31 @@ int enif_get_atom(ErlNifEnv* env, Eterm atom, char* buf, unsigned len,
 {
     Atom* ap;
     ASSERT(encoding == ERL_NIF_LATIN1);
-    if (is_not_atom(atom)) {
+    if (is_not_atom(atom) || len==0) {
 	return 0;
     }
     ap = atom_tab(atom_val(atom));
-    if (ap->len+1 > len) {
+
+    if (ap->latin1_chars < 0 || ap->latin1_chars >= len) {
 	return 0;
     }
-    sys_memcpy(buf, ap->name, ap->len);
-    buf[ap->len] = '\0';
-    return ap->len + 1;
+    if (ap->latin1_chars == ap->len) {
+	sys_memcpy(buf, ap->name, ap->len);
+    }
+    else {
+	int dlen = erts_utf8_to_latin1((byte*)buf, ap->name, ap->len);
+	ASSERT(dlen == ap->latin1_chars); (void)dlen;
+    }
+    buf[ap->latin1_chars] = '\0';
+    return ap->latin1_chars + 1;
 }
 
 int enif_get_int(ErlNifEnv* env, Eterm term, int* ip)
 {
 #if SIZEOF_INT ==  ERTS_SIZEOF_ETERM
     return term_to_Sint(term, (Sint*)ip);
-#elif SIZEOF_LONG ==  ERTS_SIZEOF_ETERM
+#elif (SIZEOF_LONG ==  ERTS_SIZEOF_ETERM) || \
+  (SIZEOF_LONG_LONG ==  ERTS_SIZEOF_ETERM)
     Sint i;
     if (!term_to_Sint(term, &i) || i < INT_MIN || i > INT_MAX) {
 	return 0;
@@ -738,7 +790,8 @@ int enif_get_uint(ErlNifEnv* env, Eterm term, unsigned* ip)
 {
 #if SIZEOF_INT == ERTS_SIZEOF_ETERM
     return term_to_Uint(term, (Uint*)ip);
-#elif SIZEOF_LONG == ERTS_SIZEOF_ETERM
+#elif (SIZEOF_LONG == ERTS_SIZEOF_ETERM) || \
+  (SIZEOF_LONG_LONG ==  ERTS_SIZEOF_ETERM)
     Uint i;
     if (!term_to_Uint(term, &i) || i > UINT_MAX) {
 	return 0;
@@ -754,6 +807,13 @@ int enif_get_long(ErlNifEnv* env, Eterm term, long* ip)
     return term_to_Sint(term, ip);
 #elif SIZEOF_LONG == 8
     return term_to_Sint64(term, ip);
+#elif SIZEOF_LONG == SIZEOF_INT
+    int tmp,ret;
+    ret = enif_get_int(env,term,&tmp);
+    if (ret) {
+      *ip = (long) tmp;
+    }
+    return ret;
 #else
 #  error Unknown long word size 
 #endif     
@@ -765,6 +825,14 @@ int enif_get_ulong(ErlNifEnv* env, Eterm term, unsigned long* ip)
     return term_to_Uint(term, ip);
 #elif SIZEOF_LONG == 8
     return term_to_Uint64(term, ip);
+#elif SIZEOF_LONG == SIZEOF_INT
+    int ret;
+    unsigned int tmp;
+    ret = enif_get_uint(env,term,&tmp);
+    if (ret) {
+      *ip = (unsigned long) tmp;
+    }
+    return ret;
 #else
 #  error Unknown long word size 
 #endif     
@@ -800,7 +868,10 @@ int enif_get_atom_length(ErlNifEnv* env, Eterm atom, unsigned* len,
     ASSERT(enc == ERL_NIF_LATIN1);
     if (is_not_atom(atom)) return 0;
     ap = atom_tab(atom_val(atom));
-    *len = ap->len;
+    if (ap->latin1_chars < 0) {
+	return 0;
+    }
+    *len = ap->latin1_chars;
     return 1;
 }
 
@@ -817,7 +888,7 @@ int enif_get_list_cell(ErlNifEnv* env, Eterm term, Eterm* head, Eterm* tail)
 int enif_get_list_length(ErlNifEnv* env, Eterm term, unsigned* len)
 {
     if (is_not_list(term) && is_not_nil(term)) return 0;
-    *len = list_length(term);
+    *len = erts_list_length(term);
     return 1;
 }
 
@@ -825,7 +896,8 @@ ERL_NIF_TERM enif_make_int(ErlNifEnv* env, int i)
 {
 #if SIZEOF_INT == ERTS_SIZEOF_ETERM
     return IS_SSMALL(i) ? make_small(i) : small_to_big(i,alloc_heap(env,2));
-#elif SIZEOF_LONG == ERTS_SIZEOF_ETERM
+#elif (SIZEOF_LONG == ERTS_SIZEOF_ETERM) || \
+  (SIZEOF_LONG_LONG == ERTS_SIZEOF_ETERM)
     return make_small(i);
 #endif
 }
@@ -834,7 +906,8 @@ ERL_NIF_TERM enif_make_uint(ErlNifEnv* env, unsigned i)
 {
 #if SIZEOF_INT == ERTS_SIZEOF_ETERM
     return IS_USMALL(0,i) ? make_small(i) : uint_to_big(i,alloc_heap(env,2));
-#elif SIZEOF_LONG == ERTS_SIZEOF_ETERM
+#elif (SIZEOF_LONG ==  ERTS_SIZEOF_ETERM) || \
+  (SIZEOF_LONG_LONG ==  ERTS_SIZEOF_ETERM)
     return make_small(i);
 #endif
 }
@@ -846,6 +919,8 @@ ERL_NIF_TERM enif_make_long(ErlNifEnv* env, long i)
     }
 #if SIZEOF_LONG == ERTS_SIZEOF_ETERM
     return small_to_big(i, alloc_heap(env,2));
+#elif SIZEOF_LONG_LONG ==  ERTS_SIZEOF_ETERM
+    return make_small(i);
 #elif SIZEOF_LONG == 8
     ensure_heap(env,3);
     return erts_sint64_to_big(i, &env->hp);
@@ -859,6 +934,8 @@ ERL_NIF_TERM enif_make_ulong(ErlNifEnv* env, unsigned long i)
     }
 #if SIZEOF_LONG == ERTS_SIZEOF_ETERM
     return uint_to_big(i,alloc_heap(env,2));
+#elif SIZEOF_LONG_LONG ==  ERTS_SIZEOF_ETERM
+    return make_small(i);
 #elif SIZEOF_LONG == 8
     ensure_heap(env,3);
     return erts_uint64_to_big(i, &env->hp);    
@@ -901,7 +978,7 @@ ERL_NIF_TERM enif_make_atom(ErlNifEnv* env, const char* name)
 
 ERL_NIF_TERM enif_make_atom_len(ErlNifEnv* env, const char* name, size_t len)
 {
-    return am_atom_put(name, len);
+    return erts_atom_put((byte*)name, len, ERTS_ATOM_ENC_LATIN1, 1);
 }
 
 int enif_make_existing_atom(ErlNifEnv* env, const char* name, ERL_NIF_TERM* atom,
@@ -914,7 +991,7 @@ int enif_make_existing_atom_len(ErlNifEnv* env, const char* name, size_t len,
 				ERL_NIF_TERM* atom, ErlNifCharEncoding encoding)
 {
     ASSERT(encoding == ERL_NIF_LATIN1);
-    return erts_atom_get(name, len, atom);
+    return erts_atom_get(name, len, atom, ERTS_ATOM_ENC_LATIN1);
 }
 
 ERL_NIF_TERM enif_make_tuple(ErlNifEnv* env, unsigned cnt, ...)
@@ -1021,6 +1098,29 @@ void enif_system_info(ErlNifSysInfo *sip, size_t si_size)
     driver_system_info(sip, si_size);
 }
 
+int enif_make_reverse_list(ErlNifEnv* env, ERL_NIF_TERM term, ERL_NIF_TERM *list) {
+    Eterm *listptr, ret = NIL, *hp;
+
+    if (is_nil(term)) {
+	*list = term;
+        return 1;
+    }
+
+    ret = NIL;
+
+    while (is_not_nil(term)) {
+	if (is_not_list(term)) {
+	    return 0;
+	}
+	hp = alloc_heap(env, 2);
+	listptr = list_val(term);
+	ret = CONS(hp, CAR(listptr), ret);
+	term = CDR(listptr);
+    }
+    *list = ret;
+    return 1;
+}
+
 
 ErlNifMutex* enif_mutex_create(char *name) { return erl_drv_mutex_create(name); }
 void enif_mutex_destroy(ErlNifMutex *mtx) {  erl_drv_mutex_destroy(mtx); }
@@ -1112,7 +1212,7 @@ static ErlNifResourceType* find_resource_type(Eterm module, Eterm name)
 }
 
 #define in_area(ptr,start,nbytes) \
-    ((unsigned long)((char*)(ptr) - (char*)(start)) < (nbytes))
+    ((UWord)((char*)(ptr) - (char*)(start)) < (nbytes))
 
 
 static void close_lib(struct erl_module_nif* lib)
@@ -1127,7 +1227,8 @@ static void close_lib(struct erl_module_nif* lib)
 	lib->entry->unload(&env, lib->priv_data);
 	post_nif_noproc(&env);
     }
-    erts_sys_ddll_close(lib->handle);
+    if (!erts_is_static_nif(lib->handle))
+      erts_sys_ddll_close(lib->handle);
     lib->handle = NULL;
 }
 
@@ -1148,6 +1249,19 @@ static void steal_resource_type(ErlNifResourceType* type)
     }
 }
 
+/* The opened_rt_list is used by enif_open_resource_type()
+ * in order to rollback "creates" and "take-overs" in case the load fails.
+ */
+struct opened_resource_type
+{
+    struct opened_resource_type* next;
+
+    ErlNifResourceFlags op;
+    ErlNifResourceType* type;
+    ErlNifResourceDtor* new_dtor;
+};
+static struct opened_resource_type* opened_rt_list = NULL;
+
 ErlNifResourceType*
 enif_open_resource_type(ErlNifEnv* env,
 			const char* module_str, 
@@ -1160,7 +1274,7 @@ enif_open_resource_type(ErlNifEnv* env,
     ErlNifResourceFlags op = flags;
     Eterm module_am, name_am;
 
-    ASSERT(erts_smp_is_system_blocked(0));
+    ASSERT(erts_smp_thr_progress_is_blocking());
     ASSERT(module_str == NULL); /* for now... */
     module_am = make_atom(env->mod_nif->mod->module);
     name_am = enif_make_atom(env, name_str);
@@ -1169,22 +1283,21 @@ enif_open_resource_type(ErlNifEnv* env,
     if (type == NULL) {
 	if (flags & ERL_NIF_RT_CREATE) {
 	    type = erts_alloc(ERTS_ALC_T_NIF,
-			      sizeof(struct enif_resource_type_t)); 
-	    type->dtor = dtor;
+			      sizeof(struct enif_resource_type_t));
 	    type->module = module_am;
 	    type->name = name_am;
 	    erts_refc_init(&type->refc, 1);
-	    type->owner = env->mod_nif;
-	    type->prev = &resource_type_list;
-	    type->next = resource_type_list.next;
-	    type->next->prev = type;
-	    type->prev->next = type;
 	    op = ERL_NIF_RT_CREATE;
+	#ifdef DEBUG
+	    type->dtor = (void*)1;
+	    type->owner = (void*)2;
+	    type->prev = (void*)3;
+	    type->next = (void*)4;
+	#endif
 	}
     }
     else {
-	if (flags & ERL_NIF_RT_TAKEOVER) {	
-	    steal_resource_type(type);
+	if (flags & ERL_NIF_RT_TAKEOVER) {
 	    op = ERL_NIF_RT_TAKEOVER;
 	}
 	else {
@@ -1192,18 +1305,64 @@ enif_open_resource_type(ErlNifEnv* env,
 	}
     }
     if (type != NULL) {
-	type->owner = env->mod_nif;
-	type->dtor = dtor;
-	if (type->dtor != NULL) {
-	    erts_refc_inc(&type->owner->rt_dtor_cnt, 1);
-	}
-	erts_refc_inc(&type->owner->rt_cnt, 1);    
+	struct opened_resource_type* ort = erts_alloc(ERTS_ALC_T_TMP,
+						sizeof(struct opened_resource_type));
+	ort->op = op;
+	ort->type = type;
+	ort->new_dtor = dtor;
+	ort->next = opened_rt_list;
+	opened_rt_list = ort;
     }
     if (tried != NULL) {
 	*tried = op;
     }
     return type;
 }
+
+static void commit_opened_resource_types(struct erl_module_nif* lib)
+{
+    while (opened_rt_list) {
+	struct opened_resource_type* ort = opened_rt_list;
+
+	ErlNifResourceType* type = ort->type;
+
+	if (ort->op == ERL_NIF_RT_CREATE) {
+	    type->prev = &resource_type_list;
+	    type->next = resource_type_list.next;
+	    type->next->prev = type;
+	    type->prev->next = type;
+	}
+	else { /* ERL_NIF_RT_TAKEOVER */
+	    steal_resource_type(type);
+	}
+
+	type->owner = lib;
+	type->dtor = ort->new_dtor;
+
+	if (type->dtor != NULL) {
+	    erts_refc_inc(&lib->rt_dtor_cnt, 1);
+	}
+	erts_refc_inc(&lib->rt_cnt, 1);
+
+	opened_rt_list = ort->next;
+	erts_free(ERTS_ALC_T_TMP, ort);
+    }
+}
+
+static void rollback_opened_resource_types(void)
+{
+    while (opened_rt_list) {
+	struct opened_resource_type* ort = opened_rt_list;
+
+	if (ort->op == ERL_NIF_RT_CREATE) {
+	    erts_free(ERTS_ALC_T_NIF, ort->type);
+	}
+
+	opened_rt_list = ort->next;
+	erts_free(ERTS_ALC_T_TMP, ort);
+    }
+}
+
 
 static void nif_resource_dtor(Binary* bin)
 {
@@ -1230,6 +1389,8 @@ void* enif_alloc_resource(ErlNifResourceType* type, size_t size)
 {
     Binary* bin = erts_create_magic_binary(SIZEOF_ErlNifResource(size), &nif_resource_dtor);
     ErlNifResource* resource = ERTS_MAGIC_BIN_DATA(bin);
+
+    ASSERT(type->owner && type->next && type->prev); /* not allowed in load/upgrade */
     resource->type = type;
     erts_refc_inc(&bin->refc, 1);
 #ifdef DEBUG
@@ -1311,6 +1472,626 @@ size_t enif_sizeof_resource(void* obj)
     ErlNifResource* resource = DATA_TO_RESOURCE(obj);
     Binary* bin = &ERTS_MAGIC_BIN_FROM_DATA(resource)->binary;
     return ERTS_MAGIC_BIN_DATA_SIZE(bin) - offsetof(ErlNifResource,data);
+}
+
+
+void* enif_dlopen(const char* lib,
+		  void (*err_handler)(void*,const char*), void* err_arg)
+{
+    ErtsSysDdllError errdesc = ERTS_SYS_DDLL_ERROR_INIT;
+    void* handle;
+    void* init_func;
+    if (erts_sys_ddll_open(lib, &handle, &errdesc) == ERL_DE_NO_ERROR) {
+	if (erts_sys_ddll_load_nif_init(handle, &init_func, &errdesc) == ERL_DE_NO_ERROR) {
+	    erts_sys_ddll_call_nif_init(init_func);
+	}
+    }
+    else {
+	if (err_handler != NULL) {
+	    (*err_handler)(err_arg, errdesc.str);
+	}
+	handle = NULL;
+    }
+    erts_sys_ddll_free_error(&errdesc);
+    return handle;
+}
+
+void* enif_dlsym(void* handle, const char* symbol,
+		 void (*err_handler)(void*,const char*), void* err_arg)
+{
+    ErtsSysDdllError errdesc = ERTS_SYS_DDLL_ERROR_INIT;
+    void* ret;
+    if (erts_sys_ddll_sym2(handle, symbol, &ret, &errdesc) != ERL_DE_NO_ERROR) {
+	if (err_handler != NULL) {
+	    (*err_handler)(err_arg, errdesc.str);
+	}
+	erts_sys_ddll_free_error(&errdesc);
+	return NULL;
+    }
+    return ret;
+}
+
+int enif_consume_timeslice(ErlNifEnv* env, int percent)
+{
+    Sint reds;
+
+    ASSERT(is_proc_bound(env) && percent >= 1 && percent <= 100);
+    if (percent < 1) percent = 1;
+    else if (percent > 100) percent = 100;
+
+    reds = ((CONTEXT_REDS+99) / 100) * percent;
+    ASSERT(reds > 0 && reds <= CONTEXT_REDS);
+    BUMP_REDS(env->proc, reds);
+    return ERTS_BIF_REDS_LEFT(env->proc) == 0;
+}
+
+/*
+ * NIF exports need a few more items than the Export struct provides,
+ * including the erl_module_nif* and a NIF function pointer, so the
+ * NifExport below adds those. The Export member must be first in the
+ * struct. The saved_mfa, saved_argc, nif_level, alloced_argv_sz and argv
+ * members are used to track the MFA and arguments of the top NIF in case a
+ * chain of one or more enif_schedule_nif() calls results in an exception,
+ * since in that case the original MFA and registers have to be restored
+ * before returning to Erlang to ensure stacktrace information associated
+ * with the exception is correct.
+ */
+typedef ERL_NIF_TERM (*NativeFunPtr)(ErlNifEnv*, int, const ERL_NIF_TERM[]);
+
+typedef struct {
+    Export exp;
+    struct erl_module_nif* m;
+    NativeFunPtr fp;
+    Eterm saved_mfa[3];
+    int saved_argc;
+    int alloced_argv_sz;
+    Eterm argv[1];
+} NifExport;
+
+/*
+ * If a process has saved arguments, they need to be part of the GC
+ * rootset. The function below is called from setup_rootset() in
+ * erl_gc.c. This function is declared in erl_process.h.
+ */
+int
+erts_setup_nif_gc(Process* proc, Eterm** objv, int* nobj)
+{
+    NifExport* ep = (NifExport*) ERTS_PROC_GET_NIF_TRAP_EXPORT(proc);
+    int gc = (ep && ep->saved_argc > 0);
+
+    if (gc) {
+	*objv = ep->argv;
+	*nobj = ep->saved_argc;
+    }
+    return gc;
+}
+
+/*
+ * Allocate a NifExport and set it in proc specific data
+ */
+static NifExport*
+allocate_nif_sched_data(Process* proc, int argc)
+{
+    NifExport* ep;
+    size_t argv_extra, total;
+    int i;
+
+    argv_extra = argc > 1 ? sizeof(Eterm)*(argc-1) : 0;
+    total = sizeof(NifExport) + argv_extra;
+    ep = erts_alloc(ERTS_ALC_T_NIF_TRAP_EXPORT, total);
+    sys_memset((void*) ep, 0, total);
+    ep->alloced_argv_sz = argc;
+    for (i=0; i<ERTS_NUM_CODE_IX; i++) {
+	ep->exp.addressv[i] = &ep->exp.code[3];
+    }
+    ep->exp.code[3] = (BeamInstr) em_call_nif;
+    (void) ERTS_PROC_SET_NIF_TRAP_EXPORT(proc, ERTS_PROC_LOCK_MAIN, ep);
+    return ep;
+}
+
+static ERTS_INLINE void
+destroy_nif_export(NifExport *nif_export)
+{
+    erts_free(ERTS_ALC_T_NIF_TRAP_EXPORT, (void *) nif_export);
+}
+
+void
+erts_destroy_nif_export(void *nif_export)
+{
+    destroy_nif_export((NifExport *) nif_export);
+}
+
+/*
+ * Initialize a NifExport struct. Create it if needed and store it in the
+ * proc. The direct_fp function is what will be invoked by op_call_nif, and
+ * the indirect_fp function, if not NULL, is what the direct_fp function
+ * will call. If the allocated NifExport isn't enough to hold all of argv,
+ * allocate a larger one. Save MFA and registers only if the need_save
+ * parameter is true.
+ */
+static ERL_NIF_TERM
+init_nif_sched_data(ErlNifEnv* env, NativeFunPtr direct_fp, NativeFunPtr indirect_fp,
+		    int need_save, int argc, const ERL_NIF_TERM argv[])
+{
+    Process* proc = env->proc;
+    Eterm* reg = ERTS_PROC_GET_SCHDATA(proc)->x_reg_array;
+    NifExport* ep;
+    int i;
+
+    ep = (NifExport*) ERTS_PROC_GET_NIF_TRAP_EXPORT(proc);
+    if (!ep)
+	ep = allocate_nif_sched_data(proc, argc);
+    else if (need_save && ep->alloced_argv_sz < argc) {
+	NifExport* new_ep = allocate_nif_sched_data(proc, argc);
+	destroy_nif_export(ep);
+	ep = new_ep;
+    }
+    ERTS_VBUMP_ALL_REDS(proc);
+    for (i = 0; i < argc; i++) {
+	if (need_save)
+	    ep->argv[i] = reg[i];
+	reg[i] = (Eterm) argv[i];
+    }
+    if (need_save) {
+	ep->saved_mfa[0] = proc->current[0];
+	ep->saved_mfa[1] = proc->current[1];
+	ep->saved_mfa[2] = proc->current[2];
+	ep->saved_argc = argc;
+    }
+    proc->i = (BeamInstr*) ep->exp.addressv[0];
+    ep->exp.code[0] = (BeamInstr) proc->current[0];
+    ep->exp.code[1] = (BeamInstr) proc->current[1];
+    ep->exp.code[2] = argc;
+    ep->exp.code[4] = (BeamInstr) direct_fp;
+    ep->m = env->mod_nif;
+    ep->fp = indirect_fp;
+    proc->freason = TRAP;
+    return THE_NON_VALUE;
+}
+
+/*
+ * Restore saved MFA and registers. Registers are restored only when the
+ * exception flag is true.
+ */
+static void
+restore_nif_mfa(Process* proc, NifExport* ep, int exception)
+{
+    int i;
+    Eterm* reg = ERTS_PROC_GET_SCHDATA(proc)->x_reg_array;
+
+    proc->current[0] = ep->saved_mfa[0];
+    proc->current[1] = ep->saved_mfa[1];
+    proc->current[2] = ep->saved_mfa[2];
+    if (exception)
+	for (i = 0; i < ep->saved_argc; i++)
+	    reg[i] = ep->argv[i];
+    ep->saved_argc = 0;
+    ep->saved_mfa[0] = THE_NON_VALUE;
+}
+
+#ifdef ERTS_DIRTY_SCHEDULERS
+
+/*
+ * Finalize a dirty NIF call. This function is scheduled to cause the VM to
+ * switch the process off a dirty scheduler thread and back onto a regular
+ * scheduler thread, and then return the result from the dirty NIF. It also
+ * restores the original NIF MFA when necessary based on the value of
+ * ep->fp set by execute_dirty_nif via init_nif_sched_data -- non-NULL
+ * means restore, NULL means do not restore.
+ */
+static ERL_NIF_TERM
+dirty_nif_finalizer(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[])
+{
+    Process* proc = env->proc;
+    NifExport* ep;
+
+    ASSERT(argc == 1);
+    ASSERT(!ERTS_SCHEDULER_IS_DIRTY(env->proc->scheduler_data));
+    ep = (NifExport*) ERTS_PROC_GET_NIF_TRAP_EXPORT(proc);
+    ASSERT(ep);
+    if (ep->fp)
+	restore_nif_mfa(proc, ep, 0);
+    return argv[0];
+}
+
+/* Finalize a dirty NIF call that raised an exception.  Otherwise same as
+ * the dirty_nif_finalizer() function.
+ */
+static ERL_NIF_TERM
+dirty_nif_exception(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[])
+{
+    Process* proc = env->proc;
+    NifExport* ep;
+
+    ASSERT(!ERTS_SCHEDULER_IS_DIRTY(env->proc->scheduler_data));
+    ep = (NifExport*) ERTS_PROC_GET_NIF_TRAP_EXPORT(proc);
+    ASSERT(ep);
+    if (ep->fp)
+	restore_nif_mfa(proc, ep, 1);
+    return enif_make_badarg(env);
+}
+
+/*
+ * Dirty NIF execution wrapper function. Invoke an application's dirty NIF,
+ * then check the result and schedule the appropriate finalizer function
+ * where needed. Also restore the original NIF MFA when appropriate.
+ */
+static ERL_NIF_TERM
+execute_dirty_nif(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[])
+{
+    Process* proc = env->proc;
+    NativeFunPtr fp = (NativeFunPtr) proc->current[6];
+    NifExport* ep;
+    ERL_NIF_TERM result;
+
+    ASSERT(ERTS_SCHEDULER_IS_DIRTY(env->proc->scheduler_data));
+
+    /*
+     * Set ep->fp to NULL before the native call so we know later whether it scheduled another NIF for execution
+     */
+    ep = (NifExport*) ERTS_PROC_GET_NIF_TRAP_EXPORT(proc);
+    ASSERT(ep);
+    ep->fp = NULL;
+    result = (*fp)(env, argc, argv);
+    erts_smp_atomic32_read_band_mb(&proc->state,
+				   ~(ERTS_PSFLG_DIRTY_CPU_PROC
+				     |ERTS_PSFLG_DIRTY_IO_PROC
+				     |ERTS_PSFLG_DIRTY_CPU_PROC_IN_Q
+				     |ERTS_PSFLG_DIRTY_IO_PROC_IN_Q));
+    if (erts_refc_dectest(&env->mod_nif->rt_dtor_cnt, 0) == 0 && env->mod_nif->mod == NULL)
+	close_lib(env->mod_nif);
+    /*
+     * If no more NIFs were scheduled by the native call via
+     * enif_schedule_nif(), then ep->fp will still be NULL as set above, in
+     * which case we need to restore the original NIF calling
+     * context. Reuse fp essentially as a boolean for this, passing it to
+     * init_nif_sched_data below. Both dirty_nif_exception and
+     * dirty_nif_finalizer then check ep->fp to decide whether or not to
+     * restore the original calling context.
+     */
+    ep = (NifExport*) ERTS_PROC_GET_NIF_TRAP_EXPORT(proc);
+    ASSERT(ep);
+    if (ep->fp)
+	fp = NULL;
+    if (is_non_value(result)) {
+	if (proc->freason != TRAP) {
+	    ASSERT(proc->freason == BADARG);
+	    return init_nif_sched_data(env, dirty_nif_exception, fp, 0, argc, argv);
+	} else {
+	    if (ep->fp == NULL)
+		restore_nif_mfa(proc, ep, 1);
+	    return result;
+	}
+    }
+    else
+	return init_nif_sched_data(env, dirty_nif_finalizer, fp, 0, 1, &result);
+}
+
+/*
+ * Dirty NIF scheduling wrapper function. Schedule a dirty NIF to execute
+ * via the execute_dirty_nif() wrapper function. The dirty scheduler thread
+ * type (CPU or I/O) is indicated in flags parameter.
+ */
+static ERTS_INLINE ERL_NIF_TERM
+schedule_dirty_nif(ErlNifEnv* env, int flags, int argc, const ERL_NIF_TERM argv[])
+{
+    erts_aint32_t state, n, a;
+    Process* proc = env->proc;
+    NativeFunPtr fp = (NativeFunPtr) proc->current[6];
+    NifExport* ep;
+    int need_save;
+
+    ASSERT(flags==ERL_NIF_DIRTY_JOB_IO_BOUND || flags==ERL_NIF_DIRTY_JOB_CPU_BOUND);
+
+    a = erts_smp_atomic32_read_acqb(&proc->state);
+    while (1) {
+	n = state = a;
+	/*
+	 * clear any current dirty flags and dirty queue indicators,
+	 * in case the application is shifting a job from one type
+	 * of dirty scheduler to the other
+	 */
+	n &= ~(ERTS_PSFLG_DIRTY_CPU_PROC|ERTS_PSFLG_DIRTY_IO_PROC
+	       |ERTS_PSFLG_DIRTY_CPU_PROC_IN_Q|ERTS_PSFLG_DIRTY_IO_PROC_IN_Q);
+	if (flags == ERL_NIF_DIRTY_JOB_CPU_BOUND)
+	    n |= ERTS_PSFLG_DIRTY_CPU_PROC;
+	else
+	    n |= ERTS_PSFLG_DIRTY_IO_PROC;
+	a = erts_smp_atomic32_cmpxchg_mb(&proc->state, n, state);
+	if (a == state)
+	    break;
+    }
+    erts_refc_inc(&env->mod_nif->rt_dtor_cnt, 1);
+    ep = (NifExport*) ERTS_PROC_GET_NIF_TRAP_EXPORT(proc);
+    need_save = (ep == NULL || is_non_value(ep->saved_mfa[0]));
+    return init_nif_sched_data(env, execute_dirty_nif, fp, need_save, argc, argv);
+}
+
+static ERL_NIF_TERM
+schedule_dirty_io_nif(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[])
+{
+    return schedule_dirty_nif(env, ERL_NIF_DIRTY_JOB_IO_BOUND, argc, argv);
+}
+
+static ERL_NIF_TERM
+schedule_dirty_cpu_nif(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[])
+{
+    return schedule_dirty_nif(env, ERL_NIF_DIRTY_JOB_CPU_BOUND, argc, argv);
+}
+
+#endif /* ERTS_DIRTY_SCHEDULERS */
+
+/*
+ * NIF execution wrapper used by enif_schedule_nif() for regular NIFs. It
+ * calls the actual NIF, restores original NIF MFA if necessary, and
+ * then returns the NIF result.
+ */
+static ERL_NIF_TERM
+execute_nif(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[])
+{
+    Process* proc = env->proc;
+    NativeFunPtr fp = (NativeFunPtr) proc->current[6];
+    NifExport* ep;
+    ERL_NIF_TERM result;
+
+    ep = (NifExport*) ERTS_PROC_GET_NIF_TRAP_EXPORT(proc);
+    ASSERT(ep);
+    ep->fp = NULL;
+    result = (*fp)(env, argc, argv);
+    ep = (NifExport*) ERTS_PROC_GET_NIF_TRAP_EXPORT(proc);
+    ASSERT(ep);
+    /*
+     * If no NIFs were scheduled by the native call via
+     * enif_schedule_nif(), then ep->fp will still be NULL as set above, in
+     * which case we need to restore the original NIF MFA.
+     */
+    if (ep->fp == NULL)
+	restore_nif_mfa(proc, ep, is_non_value(result) && proc->freason != TRAP);
+    return result;
+}
+
+ERL_NIF_TERM
+enif_schedule_nif(ErlNifEnv* env, const char* fun_name, int flags,
+		  ERL_NIF_TERM (*fp)(ErlNifEnv*, int, const ERL_NIF_TERM[]),
+		  int argc, const ERL_NIF_TERM argv[])
+{
+    Process* proc = env->proc;
+    NifExport* ep;
+    ERL_NIF_TERM fun_name_atom, result;
+    int need_save;
+
+    if (argc > MAX_ARG)
+	return enif_make_badarg(env);
+    fun_name_atom = enif_make_atom(env, fun_name);
+    if (enif_is_exception(env, fun_name_atom))
+	return fun_name_atom;
+
+    ep = (NifExport*) ERTS_PROC_GET_NIF_TRAP_EXPORT(proc);
+    need_save = (ep == NULL || is_non_value(ep->saved_mfa[0]));
+
+    if (flags) {
+#ifdef ERTS_DIRTY_SCHEDULERS
+	NativeFunPtr sched_fun;
+	int chkflgs = (flags & (ERL_NIF_DIRTY_JOB_IO_BOUND|ERL_NIF_DIRTY_JOB_CPU_BOUND));
+	if (chkflgs == ERL_NIF_DIRTY_JOB_IO_BOUND)
+	    sched_fun = schedule_dirty_io_nif;
+	else if (chkflgs == ERL_NIF_DIRTY_JOB_CPU_BOUND)
+	    sched_fun = schedule_dirty_cpu_nif;
+	else
+	    return enif_make_badarg(env);
+	result = init_nif_sched_data(env, sched_fun, fp, need_save, argc, argv);
+#else
+	return enif_make_badarg(env);
+#endif
+    }
+    else
+	result = init_nif_sched_data(env, execute_nif, fp, need_save, argc, argv);
+
+    ep = (NifExport*) ERTS_PROC_GET_NIF_TRAP_EXPORT(proc);
+    ASSERT(ep);
+    ep->exp.code[1] = (BeamInstr) fun_name_atom;
+    return result;
+}
+
+#ifdef ERL_NIF_DIRTY_SCHEDULER_SUPPORT
+
+int
+enif_is_on_dirty_scheduler(ErlNifEnv* env)
+{
+    return ERTS_SCHEDULER_IS_DIRTY(env->proc->scheduler_data);
+}
+
+#endif /* ERL_NIF_DIRTY_SCHEDULER_SUPPORT */
+
+/* Maps */
+
+int enif_is_map(ErlNifEnv* env, ERL_NIF_TERM term)
+{
+    return is_map(term);
+}
+
+int enif_get_map_size(ErlNifEnv* env, ERL_NIF_TERM term, size_t *size)
+{
+    if (is_map(term)) {
+	map_t *mp;
+	mp    = (map_t*)map_val(term);
+	*size = map_get_size(mp);
+	return 1;
+    }
+    return 0;
+}
+
+ERL_NIF_TERM enif_make_new_map(ErlNifEnv* env)
+{
+    Eterm* hp = alloc_heap(env,MAP_HEADER_SIZE+1);
+    Eterm tup;
+    map_t *mp;
+
+    tup   = make_tuple(hp);
+    *hp++ = make_arityval(0);
+    mp    = (map_t*)hp;
+    mp->thing_word = MAP_HEADER;
+    mp->size = 0;
+    mp->keys = tup;
+
+    return make_map(mp);
+}
+
+int enif_make_map_put(ErlNifEnv* env,
+	              Eterm map_in,
+		      Eterm key,
+		      Eterm value,
+		      Eterm *map_out)
+{
+    if (is_not_map(map_in)) {
+	return 0;
+    }
+    flush_env(env);
+    *map_out = erts_maps_put(env->proc, key, value, map_in);
+    cache_env(env);
+    return 1;
+}
+
+int enif_get_map_value(ErlNifEnv* env,
+	               Eterm map,
+		       Eterm key,
+		       Eterm *value)
+{
+    if (is_not_map(map)) {
+	return 0;
+    }
+    return erts_maps_get(key, map, value);
+}
+
+int enif_make_map_update(ErlNifEnv* env,
+	                 Eterm map_in,
+			 Eterm key,
+			 Eterm value,
+			 Eterm *map_out)
+{
+    int res;
+    if (is_not_map(map_in)) {
+	return 0;
+    }
+
+    flush_env(env);
+    res = erts_maps_update(env->proc, key, value, map_in, map_out);
+    cache_env(env);
+    return res;
+}
+
+int enif_make_map_remove(ErlNifEnv* env,
+	                 Eterm map_in,
+			 Eterm key,
+			 Eterm *map_out)
+{
+    int res;
+    if (is_not_map(map_in)) {
+	return 0;
+    }
+    flush_env(env);
+    res = erts_maps_remove(env->proc, key, map_in, map_out);
+    cache_env(env);
+    return res;
+}
+
+int enif_map_iterator_create(ErlNifEnv *env,
+	                     Eterm map,
+			     ErlNifMapIterator *iter,
+			     ErlNifMapIteratorEntry entry)
+{
+    if (is_map(map)) {
+	map_t *mp = (map_t*)map_val(map);
+	size_t offset;
+
+	switch (entry) {
+	    case ERL_NIF_MAP_ITERATOR_HEAD: offset = 0; break;
+	    case ERL_NIF_MAP_ITERATOR_TAIL: offset = map_get_size(mp) - 1; break;
+	    default: goto error;
+	}
+
+	/* empty maps are ok but will leave the iterator
+	 * in bad shape.
+	 */
+
+	iter->map     = map;
+	iter->ks      = ((Eterm *)map_get_keys(mp)) + offset;
+	iter->vs      = ((Eterm *)map_get_values(mp)) + offset;
+	iter->t_limit = map_get_size(mp) + 1;
+	iter->idx     = offset + 1;
+
+	return 1;
+    }
+
+error:
+#ifdef DEBUG
+    iter->map = THE_NON_VALUE;
+#endif
+    return 0;
+}
+
+void enif_map_iterator_destroy(ErlNifEnv *env, ErlNifMapIterator *iter)
+{
+    /* not used */
+#ifdef DEBUG
+    iter->map = THE_NON_VALUE;
+#endif
+
+}
+
+int enif_map_iterator_is_tail(ErlNifEnv *env, ErlNifMapIterator *iter)
+{
+    ASSERT(iter && is_map(iter->map));
+    ASSERT(iter->idx >= 0 && (iter->idx <= map_get_size(map_val(iter->map)) + 1));
+    return (iter->t_limit == 1 || iter->idx == iter->t_limit);
+}
+
+int enif_map_iterator_is_head(ErlNifEnv *env, ErlNifMapIterator *iter)
+{
+    ASSERT(iter && is_map(iter->map));
+    ASSERT(iter->idx >= 0 && (iter->idx <= map_get_size(map_val(iter->map)) + 1));
+    return (iter->t_limit == 1 || iter->idx == 0);
+}
+
+
+int enif_map_iterator_next(ErlNifEnv *env, ErlNifMapIterator *iter)
+{
+    ASSERT(iter && is_map(iter->map));
+    if (iter->idx < iter->t_limit) {
+	iter->idx++;
+	iter->ks++;
+	iter->vs++;
+    }
+    return (iter->idx != iter->t_limit);
+}
+
+int enif_map_iterator_prev(ErlNifEnv *env, ErlNifMapIterator *iter)
+{
+    ASSERT(iter && is_map(iter->map));
+    if (iter->idx > 0) {
+	iter->idx--;
+	iter->ks--;
+	iter->vs--;
+    }
+    return (iter->idx > 0);
+}
+
+int enif_map_iterator_get_pair(ErlNifEnv *env,
+			       ErlNifMapIterator *iter,
+			       Eterm *key,
+			       Eterm *value)
+{
+    ASSERT(iter && is_map(iter->map));
+    if (iter->idx > 0 && iter->idx < iter->t_limit) {
+	ASSERT(iter->ks >= map_get_keys(map_val(iter->map)) &&
+	       iter->ks  < (map_get_keys(map_val(iter->map)) + map_get_size(map_val(iter->map))));
+	ASSERT(iter->vs >= map_get_values(map_val(iter->map)) &&
+	       iter->vs  < (map_get_values(map_val(iter->map)) + map_get_size(map_val(iter->map))));
+	*key   = *(iter->ks);
+	*value = *(iter->vs);
+	return 1;
+    }
+    return 0;
 }
 
 /***************************************************************************
@@ -1420,6 +2201,35 @@ static Eterm load_nif_error(Process* p, const char* atom, const char* format, ..
     return ret;
 }
 
+/*
+ * The function below is for looping through ErlNifFunc arrays, helping
+ * provide backwards compatibility across the version 2.7 change that added
+ * the "flags" field to ErlNifFunc.
+ */
+static ErlNifFunc* next_func(ErlNifEntry* entry, int* incrp, ErlNifFunc* func)
+{
+    ASSERT(incrp);
+    if (!*incrp) {
+	if (entry->major > 2 || (entry->major == 2 && entry->minor >= 7))
+	    *incrp = sizeof(ErlNifFunc);
+	else {
+	    /*
+	     * ErlNifFuncV1 below is what ErlNifFunc was before the
+	     * addition of the flags field for 2.7, and is needed to handle
+	     * backward compatibility.
+	     */
+	    typedef struct {
+		const char* name;
+		unsigned arity;
+		ERL_NIF_TERM (*fptr)(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[]);
+	    }ErlNifFuncV1;
+	    *incrp = sizeof(ErlNifFuncV1);
+	}
+    }
+    return (ErlNifFunc*) ((char*)func + *incrp);
+}
+
+
 BIF_RETTYPE load_nif_2(BIF_ALIST_2)
 {
     static const char bad_lib[] = "bad_lib";
@@ -1427,34 +2237,43 @@ BIF_RETTYPE load_nif_2(BIF_ALIST_2)
     static const char upgrade[] = "upgrade";
     char* lib_name = NULL;
     void* handle = NULL;
-    void* init_func;
+    void* init_func = NULL;
     ErlNifEntry* entry = NULL;
     ErlNifEnv env;
-    int len, i, err;
+    int i, err, encoding;
     Module* mod;
     Eterm mod_atom;
+    const Atom* mod_atomp;
     Eterm f_atom;
     BeamInstr* caller;
     ErtsSysDdllError errdesc = ERTS_SYS_DDLL_ERROR_INIT;
     Eterm ret = am_ok;
     int veto;
     struct erl_module_nif* lib = NULL;
+    int reload_warning = 0;
 
-    len = list_length(BIF_ARG_1);
-    if (len < 0) {
+    encoding = erts_get_native_filename_encoding();
+    if (encoding == ERL_FILENAME_WIN_WCHAR) {
+        /* Do not convert the lib name to utf-16le yet, do that in win32 specific code */
+        /* since lib_name is used in error messages */
+        encoding = ERL_FILENAME_UTF8;
+    }
+    lib_name = erts_convert_filename_to_encoding(BIF_ARG_1, NULL, 0,
+                                                 ERTS_ALC_T_TMP, 1, 0, encoding,
+						 NULL, 0);
+    if (!lib_name) {
 	BIF_ERROR(BIF_P, BADARG);
     }
-    lib_name = (char *) erts_alloc(ERTS_ALC_T_TMP, len + 1);
 
-    if (intlist_to_buf(BIF_ARG_1, lib_name, len) != len) {
+    if (!erts_try_seize_code_write_permission(BIF_P)) {
 	erts_free(ERTS_ALC_T_TMP, lib_name);
-	BIF_ERROR(BIF_P, BADARG);
+	ERTS_BIF_YIELD2(bif_export[BIF_load_nif_2],
+			BIF_P, BIF_ARG_1, BIF_ARG_2);
     }
-    lib_name[len] = '\0';
 
     /* Block system (is this the right place to do it?) */
     erts_smp_proc_unlock(BIF_P, ERTS_PROC_LOCK_MAIN);
-    erts_smp_block_system(0);
+    erts_smp_thr_progress_block();
 
     /* Find calling module */
     ASSERT(BIF_P->current != NULL);
@@ -1465,16 +2284,22 @@ BIF_RETTYPE load_nif_2(BIF_ALIST_2)
     ASSERT(caller != NULL);
     mod_atom = caller[0];
     ASSERT(is_atom(mod_atom));
-    mod=erts_get_module(mod_atom);
+    mod=erts_get_module(mod_atom, erts_active_code_ix());
     ASSERT(mod != NULL);
 
-    if (!in_area(caller, mod->code, mod->code_length)) {
-	ASSERT(in_area(caller, mod->old_code, mod->old_code_length));
+    mod_atomp = atom_tab(atom_val(mod_atom));
+    init_func = erts_static_nif_get_nif_init((char*)mod_atomp->name, mod_atomp->len);
+    if (init_func != NULL)
+      handle = init_func;
+
+    if (!in_area(caller, mod->curr.code, mod->curr.code_length)) {
+	ASSERT(in_area(caller, mod->old.code, mod->old.code_length));
 
 	ret = load_nif_error(BIF_P, "old_code", "Calling load_nif from old "
 			     "module '%T' not allowed", mod_atom);
     }    
-    else if ((err=erts_sys_ddll_open2(lib_name, &handle, &errdesc)) != ERL_DE_NO_ERROR) {
+    else if (init_func == NULL &&
+	     (err=erts_sys_ddll_open(lib_name, &handle, &errdesc)) != ERL_DE_NO_ERROR) {
 	const char slogan[] = "Failed to load NIF library";
 	if (strstr(errdesc.str, lib_name) != NULL) {
 	    ret = load_nif_error(BIF_P, "load_failed", "%s: '%s'", slogan, errdesc.str);
@@ -1483,7 +2308,8 @@ BIF_RETTYPE load_nif_2(BIF_ALIST_2)
 	    ret = load_nif_error(BIF_P, "load_failed", "%s %s: '%s'", slogan, lib_name, errdesc.str);
 	}
     }
-    else if (erts_sys_ddll_load_nif_init(handle, &init_func, &errdesc) != ERL_DE_NO_ERROR) {
+    else if (init_func == NULL &&
+	     erts_sys_ddll_load_nif_init(handle, &init_func, &errdesc) != ERL_DE_NO_ERROR) {
 	ret  = load_nif_error(BIF_P, bad_lib, "Failed to find library init"
 			      " function: '%s'", errdesc.str);
 	
@@ -1492,8 +2318,11 @@ BIF_RETTYPE load_nif_2(BIF_ALIST_2)
 	      (entry = erts_sys_ddll_call_nif_init(init_func)) == NULL)) {
 	ret = load_nif_error(BIF_P, bad_lib, "Library init-call unsuccessful");
     }
-    else if (entry->major != ERL_NIF_MAJOR_VERSION
-	     || entry->minor > ERL_NIF_MINOR_VERSION) {
+    else if (entry->major < ERL_NIF_MIN_REQUIRED_MAJOR_VERSION_ON_LOAD
+	     || (ERL_NIF_MAJOR_VERSION < entry->major
+		 || (ERL_NIF_MAJOR_VERSION == entry->major
+		     && ERL_NIF_MINOR_VERSION < entry->minor))
+	     || (entry->major==2 && entry->minor == 5)) { /* experimental maps */
 	
 	ret = load_nif_error(BIF_P, bad_lib, "Library version (%d.%d) not compatible (with %d.%d).",
 			     entry->major, entry->minor, ERL_NIF_MAJOR_VERSION, ERL_NIF_MINOR_VERSION);
@@ -1504,28 +2333,54 @@ BIF_RETTYPE load_nif_2(BIF_ALIST_2)
 			     "this vm variant (%s).",
 			     entry->vm_variant, ERL_NIF_VM_VARIANT);
     }
-    else if (!erts_is_atom_str((char*)entry->name, mod_atom)) {
+    else if (!erts_is_atom_str((char*)entry->name, mod_atom, 1)) {
 	ret = load_nif_error(BIF_P, bad_lib, "Library module name '%s' does not"
 			     " match calling module '%T'", entry->name, mod_atom);
     }
     else {
 	/*erts_fprintf(stderr, "Found module %T\r\n", mod_atom);*/
-    
+
+	int maybe_dirty_nifs = ((entry->major > 2 || (entry->major == 2 && entry->minor >= 7))
+				&& (entry->options & ERL_NIF_DIRTY_NIF_OPTION));
+	int incr = 0;
+	ErlNifFunc* f = entry->funcs;
 	for (i=0; i < entry->num_of_funcs && ret==am_ok; i++) {
 	    BeamInstr** code_pp;
-	    ErlNifFunc* f = &entry->funcs[i];
-	    if (!erts_atom_get(f->name, sys_strlen(f->name), &f_atom)
-		|| (code_pp = get_func_pp(mod->code, f_atom, f->arity))==NULL) { 
+	    if (!erts_atom_get(f->name, sys_strlen(f->name), &f_atom, ERTS_ATOM_ENC_LATIN1)
+		|| (code_pp = get_func_pp(mod->curr.code, f_atom, f->arity))==NULL) {
 		ret = load_nif_error(BIF_P,bad_lib,"Function not found %T:%s/%u",
 				     mod_atom, f->name, f->arity);
-	    }    
-	    else if (code_pp[1] - code_pp[0] < (5+3)) {
+	    }
+	    else if (maybe_dirty_nifs && f->flags) {
+		/*
+		 * If the flags field is non-zero and this emulator was
+		 * built with dirty scheduler support, check that the flags
+		 * value is legal. But if this emulator was built without
+		 * dirty scheduler support, treat a non-zero flags field as
+		 * a load error.
+		 */
+#ifdef ERTS_DIRTY_SCHEDULERS
+		if (f->flags != ERL_NIF_DIRTY_JOB_IO_BOUND && f->flags != ERL_NIF_DIRTY_JOB_CPU_BOUND)
+		    ret = load_nif_error(BIF_P, bad_lib, "Illegal flags field value %d for NIF %T:%s/%u",
+					 f->flags, mod_atom, f->name, f->arity);
+#else
+		ret = load_nif_error(BIF_P, bad_lib, "NIF %T:%s/%u requires a runtime with dirty scheduler support.",
+				     mod_atom, f->name, f->arity);
+#endif
+	    }
+#ifdef ERTS_DIRTY_SCHEDULERS
+	    else if (code_pp[1] - code_pp[0] < (5+4))
+#else
+	    else if (code_pp[1] - code_pp[0] < (5+3))
+#endif
+	    {
 		ret = load_nif_error(BIF_P,bad_lib,"No explicit call to load_nif"
-				     " in module (%T:%s/%u to small)",
-				     mod_atom, entry->funcs[i].name, entry->funcs[i].arity);
+				     " in module (%T:%s/%u too small)",
+				     mod_atom, f->name, f->arity);
 	    }
 	    /*erts_fprintf(stderr, "Found NIF %T:%s/%u\r\n",
-			 mod_atom, entry->funcs[i].name, entry->funcs[i].arity);*/
+	      mod_atom, f->name, f->arity);*/
+	    f = next_func(entry, &incr, f);
 	}
     }
 
@@ -1542,25 +2397,35 @@ BIF_RETTYPE load_nif_2(BIF_ALIST_2)
     lib->entry = entry;
     erts_refc_init(&lib->rt_cnt, 0);
     erts_refc_init(&lib->rt_dtor_cnt, 0);
+    ASSERT(opened_rt_list == NULL);
     lib->mod = mod;
     env.mod_nif = lib;
-    if (mod->nif != NULL) { /* Reload */
-	int k;
-        lib->priv_data = mod->nif->priv_data;
+    if (mod->curr.nif != NULL) { /*************** Reload ******************/
+	/*
+	 * Repeated load_nif calls from same Erlang module instance ("reload")
+	 * is deprecated and was only ment as a development feature not to
+	 * be used in production systems. (See warning below)
+	 */
+	int k, old_incr = 0;
+	ErlNifFunc* old_func;
+        lib->priv_data = mod->curr.nif->priv_data;
 
-	ASSERT(mod->nif->entry != NULL);
+	ASSERT(mod->curr.nif->entry != NULL);
 	if (entry->reload == NULL) {
 	    ret = load_nif_error(BIF_P,reload,"Reload not supported by this NIF library.");
 	    goto error;
 	}
 	/* Check that no NIF is removed */
-	for (k=0; k < mod->nif->entry->num_of_funcs; k++) {
-	    ErlNifFunc* old_func = &mod->nif->entry->funcs[k];
+	old_func = mod->curr.nif->entry->funcs;
+	for (k=0; k < mod->curr.nif->entry->num_of_funcs; k++) {
+	    int incr = 0;
+	    ErlNifFunc* f = entry->funcs;
 	    for (i=0; i < entry->num_of_funcs; i++) {
-		if (old_func->arity == entry->funcs[i].arity
-		    && sys_strcmp(old_func->name, entry->funcs[i].name) == 0) {			   
+		if (old_func->arity == f->arity
+		    && sys_strcmp(old_func->name, f->name) == 0) {
 		    break;
 		}
+		f = next_func(entry, &incr, f);
 	    }
 	    if (i == entry->num_of_funcs) {
 		ret = load_nif_error(BIF_P,reload,"Reloaded library missing "
@@ -1568,7 +2433,8 @@ BIF_RETTYPE load_nif_2(BIF_ALIST_2)
 				     old_func->name, old_func->arity);
 		goto error;
 	    }
-	}       
+	    old_func = next_func(mod->curr.nif->entry, &old_incr, old_func);
+	}
 	erts_pre_nif(&env, BIF_P, lib);
 	veto = entry->reload(&env, &lib->priv_data, BIF_ARG_2);
 	erts_post_nif(&env);
@@ -1576,76 +2442,106 @@ BIF_RETTYPE load_nif_2(BIF_ALIST_2)
 	    ret = load_nif_error(BIF_P, reload, "Library reload-call unsuccessful.");
 	}
 	else {
-	    mod->nif->entry = NULL; /* to prevent 'unload' callback */
-	    erts_unload_nif(mod->nif);
+	    commit_opened_resource_types(lib);
+	    mod->curr.nif->entry = NULL; /* to prevent 'unload' callback */
+	    erts_unload_nif(mod->curr.nif);
+	    reload_warning = 1;
 	}
     }
     else {
 	lib->priv_data = NULL;
-	if (mod->old_nif != NULL) { /* Upgrade */
-	    void* prev_old_data = mod->old_nif->priv_data;
+	if (mod->old.nif != NULL) { /**************** Upgrade ***************/
+	    void* prev_old_data = mod->old.nif->priv_data;
 	    if (entry->upgrade == NULL) {
 		ret = load_nif_error(BIF_P, upgrade, "Upgrade not supported by this NIF library.");
 		goto error;
 	    }
 	    erts_pre_nif(&env, BIF_P, lib);
-	    veto = entry->upgrade(&env, &lib->priv_data, &mod->old_nif->priv_data, BIF_ARG_2);
+	    veto = entry->upgrade(&env, &lib->priv_data, &mod->old.nif->priv_data, BIF_ARG_2);
 	    erts_post_nif(&env);
 	    if (veto) {
-		mod->old_nif->priv_data = prev_old_data;
+		mod->old.nif->priv_data = prev_old_data;
 		ret = load_nif_error(BIF_P, upgrade, "Library upgrade-call unsuccessful.");
 	    }
-	    /*else if (mod->old_nif->priv_data != prev_old_data) {
-		refresh_cached_nif_data(mod->old_code, mod->old_nif);
-	    }*/
+	    else
+		commit_opened_resource_types(lib);
 	}
-	else if (entry->load != NULL) { /* Initial load */
+	else if (entry->load != NULL) { /********* Initial load ***********/
 	    erts_pre_nif(&env, BIF_P, lib);
 	    veto = entry->load(&env, &lib->priv_data, BIF_ARG_2);
 	    erts_post_nif(&env);
 	    if (veto) {
 		ret = load_nif_error(BIF_P, "load", "Library load-call unsuccessful.");
 	    }
+	    else
+		commit_opened_resource_types(lib);
 	}
     }
     if (ret == am_ok) {
 	/*
 	** Everything ok, patch the beam code with op_call_nif
 	*/
-        mod->nif = lib; 
+
+	int incr = 0;
+	ErlNifFunc* f = entry->funcs;
+
+	mod->curr.nif = lib;
 	for (i=0; i < entry->num_of_funcs; i++)
 	{
 	    BeamInstr* code_ptr;
-	    erts_atom_get(entry->funcs[i].name, sys_strlen(entry->funcs[i].name), &f_atom); 
-	    code_ptr = *get_func_pp(mod->code, f_atom, entry->funcs[i].arity); 
-	    
+	    erts_atom_get(f->name, sys_strlen(f->name), &f_atom, ERTS_ATOM_ENC_LATIN1);
+	    code_ptr = *get_func_pp(mod->curr.code, f_atom, f->arity);
+
 	    if (code_ptr[1] == 0) {
 		code_ptr[5+0] = (BeamInstr) BeamOp(op_call_nif);
 	    }
 	    else { /* Function traced, patch the original instruction word */
-		BpData** bps = (BpData**) code_ptr[1];
-		BpData*  bp  = (BpData*) bps[bp_sched2ix()];
-	        bp->orig_instr = (BeamInstr) BeamOp(op_call_nif);
-	    }	    
-	    code_ptr[5+1] = (BeamInstr) entry->funcs[i].fptr;
+		GenericBp* g = (GenericBp *) code_ptr[1];
+		ASSERT(code_ptr[5+0] ==
+		       (BeamInstr) BeamOp(op_i_generic_breakpoint));
+		g->orig_instr = (BeamInstr) BeamOp(op_call_nif);
+	    }
+	    if ((entry->major > 2 || (entry->major == 2 && entry->minor >= 7))
+		&& (entry->options & ERL_NIF_DIRTY_NIF_OPTION) && f->flags) {
+#ifdef ERL_NIF_DIRTY_SCHEDULER_SUPPORT
+		code_ptr[5+3] = (BeamInstr) f->fptr;
+		code_ptr[5+1] = (f->flags == ERL_NIF_DIRTY_JOB_IO_BOUND) ?
+		    (BeamInstr) schedule_dirty_io_nif :
+		    (BeamInstr) schedule_dirty_cpu_nif;
+#endif
+	    }
+	    else
+		code_ptr[5+1] = (BeamInstr) f->fptr;
 	    code_ptr[5+2] = (BeamInstr) lib;
+	    f = next_func(entry, &incr, f);
 	}
     }
     else {
     error:
+	rollback_opened_resource_types();
 	ASSERT(ret != am_ok);
         if (lib != NULL) {
 	    erts_free(ERTS_ALC_T_NIF, lib);
 	}
-	if (handle != NULL) {
+	if (handle != NULL && !erts_is_static_nif(handle)) {
 	    erts_sys_ddll_close(handle);
 	}
 	erts_sys_ddll_free_error(&errdesc);
     }
 
-    erts_smp_release_system();
+    erts_smp_thr_progress_unblock();
     erts_smp_proc_lock(BIF_P, ERTS_PROC_LOCK_MAIN);
+    erts_release_code_write_permission();
     erts_free(ERTS_ALC_T_TMP, lib_name);
+
+    if (reload_warning) {
+	erts_dsprintf_buf_t* dsbufp = erts_create_logger_dsbuf();
+	erts_dsprintf(dsbufp,
+		      "Repeated calls to erlang:load_nif from module '%T'.\n\n"
+		      "The NIF reload mechanism is deprecated and must not "
+		      "be used in production systems.\n", mod_atom);
+	erts_send_warning_to_logger(BIF_P->group_leader, dsbufp);
+    }
     BIF_RET(ret);
 }
 
@@ -1655,7 +2551,7 @@ erts_unload_nif(struct erl_module_nif* lib)
 {
     ErlNifResourceType* rt;
     ErlNifResourceType* next;
-    ASSERT(erts_smp_is_system_blocked(0));
+    ASSERT(erts_smp_thr_progress_is_blocking());
     ASSERT(lib != NULL);
     ASSERT(lib->mod != NULL);
     for (rt = resource_type_list.next;
@@ -1700,6 +2596,13 @@ void erl_nif_init()
     resource_type_list.name = THE_NON_VALUE;
 }
 
+#ifdef USE_VM_PROBES
+void dtrace_nifenv_str(ErlNifEnv *env, char *process_buf)
+{
+    dtrace_pid_str(env->proc->common.id, process_buf);
+}
+#endif
+
 #ifdef READONLY_CHECK
 /* Use checksums to assert that NIFs do not write into inspected binaries
 */
@@ -1715,8 +2618,10 @@ struct readonly_check_t
 };
 static void add_readonly_check(ErlNifEnv* env, unsigned char* ptr, unsigned sz)
 {
-    struct readonly_check_t* obj = erts_alloc(ERTS_ALC_T_TMP, 
+    ErtsAlcType_t allocator = is_proc_bound(env) ? ERTS_ALC_T_TMP : ERTS_ALC_T_NIF;
+    struct readonly_check_t* obj = erts_alloc(allocator, 
 					      sizeof(struct readonly_check_t));
+    obj->hdr.allocator = allocator;
     obj->hdr.next = env->tmp_obj_list;
     env->tmp_obj_list = &obj->hdr;
     obj->hdr.dtor = &readonly_check_dtor;
@@ -1733,7 +2638,7 @@ static void readonly_check_dtor(struct enif_tmp_obj_t* o)
 		" %x != %x\r\nABORTING\r\n", chksum, obj->checksum);
 	abort();
     }
-    erts_free(ERTS_ALC_T_TMP,  obj);
+    erts_free(obj->hdr.allocator,  obj);
 }
 static unsigned calc_checksum(unsigned char* ptr, unsigned size)
 {
@@ -1746,3 +2651,1079 @@ static unsigned calc_checksum(unsigned char* ptr, unsigned size)
 
 #endif /* READONLY_CHECK */
 
+#ifdef HAVE_USE_DTRACE
+
+#define MESSAGE_BUFSIZ 1024
+
+static void get_string_maybe(ErlNifEnv *env, const ERL_NIF_TERM term,
+		      char **ptr, char *buf, int bufsiz)
+{
+    ErlNifBinary str_bin;
+
+    if (!enif_inspect_iolist_as_binary(env, term, &str_bin) ||
+        str_bin.size > bufsiz) {
+        *ptr = NULL;
+    } else {
+        memcpy(buf, (char *) str_bin.data, str_bin.size);
+        buf[str_bin.size] = '\0';
+        *ptr = buf;
+    }
+}
+
+ERL_NIF_TERM erl_nif_user_trace_s1(ErlNifEnv* env, int argc,
+                                   const ERL_NIF_TERM argv[])
+{
+    ErlNifBinary message_bin;
+    DTRACE_CHARBUF(messagebuf, MESSAGE_BUFSIZ + 1);
+
+    if (DTRACE_ENABLED(user_trace_s1)) {
+	if (!enif_inspect_iolist_as_binary(env, argv[0], &message_bin) ||
+	    message_bin.size > MESSAGE_BUFSIZ) {
+	    return am_badarg;
+	}
+	memcpy(messagebuf, (char *) message_bin.data, message_bin.size);
+        messagebuf[message_bin.size] = '\0';
+	DTRACE1(user_trace_s1, messagebuf);
+	return am_true;
+    } else {
+	return am_false;
+    }
+}
+
+ERL_NIF_TERM erl_nif_user_trace_i4s4(ErlNifEnv* env, int argc,
+                                     const ERL_NIF_TERM argv[])
+{
+    DTRACE_CHARBUF(procbuf, 32 + 1);
+    DTRACE_CHARBUF(user_tagbuf, MESSAGE_BUFSIZ + 1);
+    char *utbuf = NULL;
+    ErlNifSInt64 i1, i2, i3, i4;
+    DTRACE_CHARBUF(messagebuf1, MESSAGE_BUFSIZ + 1);
+    DTRACE_CHARBUF(messagebuf2, MESSAGE_BUFSIZ + 1);
+    DTRACE_CHARBUF(messagebuf3, MESSAGE_BUFSIZ + 1);
+    DTRACE_CHARBUF(messagebuf4, MESSAGE_BUFSIZ + 1);
+    char *mbuf1 = NULL, *mbuf2 = NULL, *mbuf3 = NULL, *mbuf4 = NULL;
+    
+    if (DTRACE_ENABLED(user_trace_i4s4)) {
+	dtrace_nifenv_str(env, procbuf);
+        get_string_maybe(env, argv[0], &utbuf, user_tagbuf, MESSAGE_BUFSIZ);
+        if (! enif_get_int64(env, argv[1], &i1))
+            i1 = 0;
+        if (! enif_get_int64(env, argv[2], &i2))
+            i2 = 0;
+        if (! enif_get_int64(env, argv[3], &i3))
+            i3 = 0;
+        if (! enif_get_int64(env, argv[4], &i4))
+            i4 = 0;
+        get_string_maybe(env, argv[5], &mbuf1, messagebuf1, MESSAGE_BUFSIZ);
+        get_string_maybe(env, argv[6], &mbuf2, messagebuf2, MESSAGE_BUFSIZ);
+        get_string_maybe(env, argv[7], &mbuf3, messagebuf3, MESSAGE_BUFSIZ);
+        get_string_maybe(env, argv[8], &mbuf4, messagebuf4, MESSAGE_BUFSIZ);
+	DTRACE10(user_trace_i4s4, procbuf, utbuf,
+		 i1, i2, i3, i4, mbuf1, mbuf2, mbuf3, mbuf4);
+	return am_true;
+    } else {
+	return am_false;
+    }
+}
+
+#define DTRACE10_LABEL(name, label, a0, a1, a2, a3, a4, a5, a6, a7, a8, a9) \
+    erlang_##name##label((a0), (a1), (a2), (a3), (a4), (a5), (a6), (a7), (a8), (a9))
+#define N_STATEMENT(the_label) \
+   case the_label: \
+      if (DTRACE_ENABLED(user_trace_n##the_label)) { \
+          dtrace_nifenv_str(env, procbuf); \
+          get_string_maybe(env, argv[1], &utbuf, user_tagbuf, MESSAGE_BUFSIZ); \
+          if (! enif_get_int64(env, argv[2], &i1)) \
+              i1 = 0; \
+          if (! enif_get_int64(env, argv[3], &i2)) \
+              i2 = 0; \
+          if (! enif_get_int64(env, argv[4], &i3)) \
+              i3 = 0; \
+          if (! enif_get_int64(env, argv[5], &i4)) \
+              i4 = 0; \
+          get_string_maybe(env, argv[6], &mbuf1, messagebuf1, MESSAGE_BUFSIZ); \
+          get_string_maybe(env, argv[7], &mbuf2, messagebuf2, MESSAGE_BUFSIZ); \
+          get_string_maybe(env, argv[8], &mbuf3, messagebuf3, MESSAGE_BUFSIZ); \
+          get_string_maybe(env, argv[9], &mbuf4, messagebuf4, MESSAGE_BUFSIZ); \
+          DTRACE10_LABEL(user_trace_n, the_label, procbuf, utbuf,    \
+                         i1, i2, i3, i4, mbuf1, mbuf2, mbuf3, mbuf4); \
+          return am_true; \
+      } else { \
+          return am_false; \
+      } \
+      break
+
+ERL_NIF_TERM erl_nif_user_trace_n(ErlNifEnv* env, int argc,
+				  const ERL_NIF_TERM argv[])
+{
+    DTRACE_CHARBUF(procbuf, 32 + 1);
+    DTRACE_CHARBUF(user_tagbuf, MESSAGE_BUFSIZ + 1);
+    char *utbuf = NULL;
+    ErlNifSInt64 i1, i2, i3, i4;
+    DTRACE_CHARBUF(messagebuf1, MESSAGE_BUFSIZ + 1);
+    DTRACE_CHARBUF(messagebuf2, MESSAGE_BUFSIZ + 1);
+    DTRACE_CHARBUF(messagebuf3, MESSAGE_BUFSIZ + 1);
+    DTRACE_CHARBUF(messagebuf4, MESSAGE_BUFSIZ + 1);
+    char *mbuf1 = NULL, *mbuf2 = NULL, *mbuf3 = NULL, *mbuf4 = NULL;
+    ErlNifSInt64 label = 0;
+
+    if (! enif_get_int64(env, argv[0], &label) || label < 0 || label > 1023) {
+	return am_badarg;
+    }
+    switch (label) {
+        N_STATEMENT(0);
+        N_STATEMENT(1);
+        N_STATEMENT(2);
+        N_STATEMENT(3);
+        N_STATEMENT(4);
+        N_STATEMENT(5);
+        N_STATEMENT(6);
+        N_STATEMENT(7);
+        N_STATEMENT(8);
+        N_STATEMENT(9);
+        N_STATEMENT(10);
+        N_STATEMENT(11);
+        N_STATEMENT(12);
+        N_STATEMENT(13);
+        N_STATEMENT(14);
+        N_STATEMENT(15);
+        N_STATEMENT(16);
+        N_STATEMENT(17);
+        N_STATEMENT(18);
+        N_STATEMENT(19);
+        N_STATEMENT(20);
+        N_STATEMENT(21);
+        N_STATEMENT(22);
+        N_STATEMENT(23);
+        N_STATEMENT(24);
+        N_STATEMENT(25);
+        N_STATEMENT(26);
+        N_STATEMENT(27);
+        N_STATEMENT(28);
+        N_STATEMENT(29);
+        N_STATEMENT(30);
+        N_STATEMENT(31);
+        N_STATEMENT(32);
+        N_STATEMENT(33);
+        N_STATEMENT(34);
+        N_STATEMENT(35);
+        N_STATEMENT(36);
+        N_STATEMENT(37);
+        N_STATEMENT(38);
+        N_STATEMENT(39);
+        N_STATEMENT(40);
+        N_STATEMENT(41);
+        N_STATEMENT(42);
+        N_STATEMENT(43);
+        N_STATEMENT(44);
+        N_STATEMENT(45);
+        N_STATEMENT(46);
+        N_STATEMENT(47);
+        N_STATEMENT(48);
+        N_STATEMENT(49);
+        N_STATEMENT(50);
+        N_STATEMENT(51);
+        N_STATEMENT(52);
+        N_STATEMENT(53);
+        N_STATEMENT(54);
+        N_STATEMENT(55);
+        N_STATEMENT(56);
+        N_STATEMENT(57);
+        N_STATEMENT(58);
+        N_STATEMENT(59);
+        N_STATEMENT(60);
+        N_STATEMENT(61);
+        N_STATEMENT(62);
+        N_STATEMENT(63);
+        N_STATEMENT(64);
+        N_STATEMENT(65);
+        N_STATEMENT(66);
+        N_STATEMENT(67);
+        N_STATEMENT(68);
+        N_STATEMENT(69);
+        N_STATEMENT(70);
+        N_STATEMENT(71);
+        N_STATEMENT(72);
+        N_STATEMENT(73);
+        N_STATEMENT(74);
+        N_STATEMENT(75);
+        N_STATEMENT(76);
+        N_STATEMENT(77);
+        N_STATEMENT(78);
+        N_STATEMENT(79);
+        N_STATEMENT(80);
+        N_STATEMENT(81);
+        N_STATEMENT(82);
+        N_STATEMENT(83);
+        N_STATEMENT(84);
+        N_STATEMENT(85);
+        N_STATEMENT(86);
+        N_STATEMENT(87);
+        N_STATEMENT(88);
+        N_STATEMENT(89);
+        N_STATEMENT(90);
+        N_STATEMENT(91);
+        N_STATEMENT(92);
+        N_STATEMENT(93);
+        N_STATEMENT(94);
+        N_STATEMENT(95);
+        N_STATEMENT(96);
+        N_STATEMENT(97);
+        N_STATEMENT(98);
+        N_STATEMENT(99);
+        N_STATEMENT(100);
+        N_STATEMENT(101);
+        N_STATEMENT(102);
+        N_STATEMENT(103);
+        N_STATEMENT(104);
+        N_STATEMENT(105);
+        N_STATEMENT(106);
+        N_STATEMENT(107);
+        N_STATEMENT(108);
+        N_STATEMENT(109);
+        N_STATEMENT(110);
+        N_STATEMENT(111);
+        N_STATEMENT(112);
+        N_STATEMENT(113);
+        N_STATEMENT(114);
+        N_STATEMENT(115);
+        N_STATEMENT(116);
+        N_STATEMENT(117);
+        N_STATEMENT(118);
+        N_STATEMENT(119);
+        N_STATEMENT(120);
+        N_STATEMENT(121);
+        N_STATEMENT(122);
+        N_STATEMENT(123);
+        N_STATEMENT(124);
+        N_STATEMENT(125);
+        N_STATEMENT(126);
+        N_STATEMENT(127);
+        N_STATEMENT(128);
+        N_STATEMENT(129);
+        N_STATEMENT(130);
+        N_STATEMENT(131);
+        N_STATEMENT(132);
+        N_STATEMENT(133);
+        N_STATEMENT(134);
+        N_STATEMENT(135);
+        N_STATEMENT(136);
+        N_STATEMENT(137);
+        N_STATEMENT(138);
+        N_STATEMENT(139);
+        N_STATEMENT(140);
+        N_STATEMENT(141);
+        N_STATEMENT(142);
+        N_STATEMENT(143);
+        N_STATEMENT(144);
+        N_STATEMENT(145);
+        N_STATEMENT(146);
+        N_STATEMENT(147);
+        N_STATEMENT(148);
+        N_STATEMENT(149);
+        N_STATEMENT(150);
+        N_STATEMENT(151);
+        N_STATEMENT(152);
+        N_STATEMENT(153);
+        N_STATEMENT(154);
+        N_STATEMENT(155);
+        N_STATEMENT(156);
+        N_STATEMENT(157);
+        N_STATEMENT(158);
+        N_STATEMENT(159);
+        N_STATEMENT(160);
+        N_STATEMENT(161);
+        N_STATEMENT(162);
+        N_STATEMENT(163);
+        N_STATEMENT(164);
+        N_STATEMENT(165);
+        N_STATEMENT(166);
+        N_STATEMENT(167);
+        N_STATEMENT(168);
+        N_STATEMENT(169);
+        N_STATEMENT(170);
+        N_STATEMENT(171);
+        N_STATEMENT(172);
+        N_STATEMENT(173);
+        N_STATEMENT(174);
+        N_STATEMENT(175);
+        N_STATEMENT(176);
+        N_STATEMENT(177);
+        N_STATEMENT(178);
+        N_STATEMENT(179);
+        N_STATEMENT(180);
+        N_STATEMENT(181);
+        N_STATEMENT(182);
+        N_STATEMENT(183);
+        N_STATEMENT(184);
+        N_STATEMENT(185);
+        N_STATEMENT(186);
+        N_STATEMENT(187);
+        N_STATEMENT(188);
+        N_STATEMENT(189);
+        N_STATEMENT(190);
+        N_STATEMENT(191);
+        N_STATEMENT(192);
+        N_STATEMENT(193);
+        N_STATEMENT(194);
+        N_STATEMENT(195);
+        N_STATEMENT(196);
+        N_STATEMENT(197);
+        N_STATEMENT(198);
+        N_STATEMENT(199);
+        N_STATEMENT(200);
+        N_STATEMENT(201);
+        N_STATEMENT(202);
+        N_STATEMENT(203);
+        N_STATEMENT(204);
+        N_STATEMENT(205);
+        N_STATEMENT(206);
+        N_STATEMENT(207);
+        N_STATEMENT(208);
+        N_STATEMENT(209);
+        N_STATEMENT(210);
+        N_STATEMENT(211);
+        N_STATEMENT(212);
+        N_STATEMENT(213);
+        N_STATEMENT(214);
+        N_STATEMENT(215);
+        N_STATEMENT(216);
+        N_STATEMENT(217);
+        N_STATEMENT(218);
+        N_STATEMENT(219);
+        N_STATEMENT(220);
+        N_STATEMENT(221);
+        N_STATEMENT(222);
+        N_STATEMENT(223);
+        N_STATEMENT(224);
+        N_STATEMENT(225);
+        N_STATEMENT(226);
+        N_STATEMENT(227);
+        N_STATEMENT(228);
+        N_STATEMENT(229);
+        N_STATEMENT(230);
+        N_STATEMENT(231);
+        N_STATEMENT(232);
+        N_STATEMENT(233);
+        N_STATEMENT(234);
+        N_STATEMENT(235);
+        N_STATEMENT(236);
+        N_STATEMENT(237);
+        N_STATEMENT(238);
+        N_STATEMENT(239);
+        N_STATEMENT(240);
+        N_STATEMENT(241);
+        N_STATEMENT(242);
+        N_STATEMENT(243);
+        N_STATEMENT(244);
+        N_STATEMENT(245);
+        N_STATEMENT(246);
+        N_STATEMENT(247);
+        N_STATEMENT(248);
+        N_STATEMENT(249);
+        N_STATEMENT(250);
+        N_STATEMENT(251);
+        N_STATEMENT(252);
+        N_STATEMENT(253);
+        N_STATEMENT(254);
+        N_STATEMENT(255);
+        N_STATEMENT(256);
+        N_STATEMENT(257);
+        N_STATEMENT(258);
+        N_STATEMENT(259);
+        N_STATEMENT(260);
+        N_STATEMENT(261);
+        N_STATEMENT(262);
+        N_STATEMENT(263);
+        N_STATEMENT(264);
+        N_STATEMENT(265);
+        N_STATEMENT(266);
+        N_STATEMENT(267);
+        N_STATEMENT(268);
+        N_STATEMENT(269);
+        N_STATEMENT(270);
+        N_STATEMENT(271);
+        N_STATEMENT(272);
+        N_STATEMENT(273);
+        N_STATEMENT(274);
+        N_STATEMENT(275);
+        N_STATEMENT(276);
+        N_STATEMENT(277);
+        N_STATEMENT(278);
+        N_STATEMENT(279);
+        N_STATEMENT(280);
+        N_STATEMENT(281);
+        N_STATEMENT(282);
+        N_STATEMENT(283);
+        N_STATEMENT(284);
+        N_STATEMENT(285);
+        N_STATEMENT(286);
+        N_STATEMENT(287);
+        N_STATEMENT(288);
+        N_STATEMENT(289);
+        N_STATEMENT(290);
+        N_STATEMENT(291);
+        N_STATEMENT(292);
+        N_STATEMENT(293);
+        N_STATEMENT(294);
+        N_STATEMENT(295);
+        N_STATEMENT(296);
+        N_STATEMENT(297);
+        N_STATEMENT(298);
+        N_STATEMENT(299);
+        N_STATEMENT(300);
+        N_STATEMENT(301);
+        N_STATEMENT(302);
+        N_STATEMENT(303);
+        N_STATEMENT(304);
+        N_STATEMENT(305);
+        N_STATEMENT(306);
+        N_STATEMENT(307);
+        N_STATEMENT(308);
+        N_STATEMENT(309);
+        N_STATEMENT(310);
+        N_STATEMENT(311);
+        N_STATEMENT(312);
+        N_STATEMENT(313);
+        N_STATEMENT(314);
+        N_STATEMENT(315);
+        N_STATEMENT(316);
+        N_STATEMENT(317);
+        N_STATEMENT(318);
+        N_STATEMENT(319);
+        N_STATEMENT(320);
+        N_STATEMENT(321);
+        N_STATEMENT(322);
+        N_STATEMENT(323);
+        N_STATEMENT(324);
+        N_STATEMENT(325);
+        N_STATEMENT(326);
+        N_STATEMENT(327);
+        N_STATEMENT(328);
+        N_STATEMENT(329);
+        N_STATEMENT(330);
+        N_STATEMENT(331);
+        N_STATEMENT(332);
+        N_STATEMENT(333);
+        N_STATEMENT(334);
+        N_STATEMENT(335);
+        N_STATEMENT(336);
+        N_STATEMENT(337);
+        N_STATEMENT(338);
+        N_STATEMENT(339);
+        N_STATEMENT(340);
+        N_STATEMENT(341);
+        N_STATEMENT(342);
+        N_STATEMENT(343);
+        N_STATEMENT(344);
+        N_STATEMENT(345);
+        N_STATEMENT(346);
+        N_STATEMENT(347);
+        N_STATEMENT(348);
+        N_STATEMENT(349);
+        N_STATEMENT(350);
+        N_STATEMENT(351);
+        N_STATEMENT(352);
+        N_STATEMENT(353);
+        N_STATEMENT(354);
+        N_STATEMENT(355);
+        N_STATEMENT(356);
+        N_STATEMENT(357);
+        N_STATEMENT(358);
+        N_STATEMENT(359);
+        N_STATEMENT(360);
+        N_STATEMENT(361);
+        N_STATEMENT(362);
+        N_STATEMENT(363);
+        N_STATEMENT(364);
+        N_STATEMENT(365);
+        N_STATEMENT(366);
+        N_STATEMENT(367);
+        N_STATEMENT(368);
+        N_STATEMENT(369);
+        N_STATEMENT(370);
+        N_STATEMENT(371);
+        N_STATEMENT(372);
+        N_STATEMENT(373);
+        N_STATEMENT(374);
+        N_STATEMENT(375);
+        N_STATEMENT(376);
+        N_STATEMENT(377);
+        N_STATEMENT(378);
+        N_STATEMENT(379);
+        N_STATEMENT(380);
+        N_STATEMENT(381);
+        N_STATEMENT(382);
+        N_STATEMENT(383);
+        N_STATEMENT(384);
+        N_STATEMENT(385);
+        N_STATEMENT(386);
+        N_STATEMENT(387);
+        N_STATEMENT(388);
+        N_STATEMENT(389);
+        N_STATEMENT(390);
+        N_STATEMENT(391);
+        N_STATEMENT(392);
+        N_STATEMENT(393);
+        N_STATEMENT(394);
+        N_STATEMENT(395);
+        N_STATEMENT(396);
+        N_STATEMENT(397);
+        N_STATEMENT(398);
+        N_STATEMENT(399);
+        N_STATEMENT(400);
+        N_STATEMENT(401);
+        N_STATEMENT(402);
+        N_STATEMENT(403);
+        N_STATEMENT(404);
+        N_STATEMENT(405);
+        N_STATEMENT(406);
+        N_STATEMENT(407);
+        N_STATEMENT(408);
+        N_STATEMENT(409);
+        N_STATEMENT(410);
+        N_STATEMENT(411);
+        N_STATEMENT(412);
+        N_STATEMENT(413);
+        N_STATEMENT(414);
+        N_STATEMENT(415);
+        N_STATEMENT(416);
+        N_STATEMENT(417);
+        N_STATEMENT(418);
+        N_STATEMENT(419);
+        N_STATEMENT(420);
+        N_STATEMENT(421);
+        N_STATEMENT(422);
+        N_STATEMENT(423);
+        N_STATEMENT(424);
+        N_STATEMENT(425);
+        N_STATEMENT(426);
+        N_STATEMENT(427);
+        N_STATEMENT(428);
+        N_STATEMENT(429);
+        N_STATEMENT(430);
+        N_STATEMENT(431);
+        N_STATEMENT(432);
+        N_STATEMENT(433);
+        N_STATEMENT(434);
+        N_STATEMENT(435);
+        N_STATEMENT(436);
+        N_STATEMENT(437);
+        N_STATEMENT(438);
+        N_STATEMENT(439);
+        N_STATEMENT(440);
+        N_STATEMENT(441);
+        N_STATEMENT(442);
+        N_STATEMENT(443);
+        N_STATEMENT(444);
+        N_STATEMENT(445);
+        N_STATEMENT(446);
+        N_STATEMENT(447);
+        N_STATEMENT(448);
+        N_STATEMENT(449);
+        N_STATEMENT(450);
+        N_STATEMENT(451);
+        N_STATEMENT(452);
+        N_STATEMENT(453);
+        N_STATEMENT(454);
+        N_STATEMENT(455);
+        N_STATEMENT(456);
+        N_STATEMENT(457);
+        N_STATEMENT(458);
+        N_STATEMENT(459);
+        N_STATEMENT(460);
+        N_STATEMENT(461);
+        N_STATEMENT(462);
+        N_STATEMENT(463);
+        N_STATEMENT(464);
+        N_STATEMENT(465);
+        N_STATEMENT(466);
+        N_STATEMENT(467);
+        N_STATEMENT(468);
+        N_STATEMENT(469);
+        N_STATEMENT(470);
+        N_STATEMENT(471);
+        N_STATEMENT(472);
+        N_STATEMENT(473);
+        N_STATEMENT(474);
+        N_STATEMENT(475);
+        N_STATEMENT(476);
+        N_STATEMENT(477);
+        N_STATEMENT(478);
+        N_STATEMENT(479);
+        N_STATEMENT(480);
+        N_STATEMENT(481);
+        N_STATEMENT(482);
+        N_STATEMENT(483);
+        N_STATEMENT(484);
+        N_STATEMENT(485);
+        N_STATEMENT(486);
+        N_STATEMENT(487);
+        N_STATEMENT(488);
+        N_STATEMENT(489);
+        N_STATEMENT(490);
+        N_STATEMENT(491);
+        N_STATEMENT(492);
+        N_STATEMENT(493);
+        N_STATEMENT(494);
+        N_STATEMENT(495);
+        N_STATEMENT(496);
+        N_STATEMENT(497);
+        N_STATEMENT(498);
+        N_STATEMENT(499);
+        N_STATEMENT(500);
+        N_STATEMENT(501);
+        N_STATEMENT(502);
+        N_STATEMENT(503);
+        N_STATEMENT(504);
+        N_STATEMENT(505);
+        N_STATEMENT(506);
+        N_STATEMENT(507);
+        N_STATEMENT(508);
+        N_STATEMENT(509);
+        N_STATEMENT(510);
+        N_STATEMENT(511);
+        N_STATEMENT(512);
+        N_STATEMENT(513);
+        N_STATEMENT(514);
+        N_STATEMENT(515);
+        N_STATEMENT(516);
+        N_STATEMENT(517);
+        N_STATEMENT(518);
+        N_STATEMENT(519);
+        N_STATEMENT(520);
+        N_STATEMENT(521);
+        N_STATEMENT(522);
+        N_STATEMENT(523);
+        N_STATEMENT(524);
+        N_STATEMENT(525);
+        N_STATEMENT(526);
+        N_STATEMENT(527);
+        N_STATEMENT(528);
+        N_STATEMENT(529);
+        N_STATEMENT(530);
+        N_STATEMENT(531);
+        N_STATEMENT(532);
+        N_STATEMENT(533);
+        N_STATEMENT(534);
+        N_STATEMENT(535);
+        N_STATEMENT(536);
+        N_STATEMENT(537);
+        N_STATEMENT(538);
+        N_STATEMENT(539);
+        N_STATEMENT(540);
+        N_STATEMENT(541);
+        N_STATEMENT(542);
+        N_STATEMENT(543);
+        N_STATEMENT(544);
+        N_STATEMENT(545);
+        N_STATEMENT(546);
+        N_STATEMENT(547);
+        N_STATEMENT(548);
+        N_STATEMENT(549);
+        N_STATEMENT(550);
+        N_STATEMENT(551);
+        N_STATEMENT(552);
+        N_STATEMENT(553);
+        N_STATEMENT(554);
+        N_STATEMENT(555);
+        N_STATEMENT(556);
+        N_STATEMENT(557);
+        N_STATEMENT(558);
+        N_STATEMENT(559);
+        N_STATEMENT(560);
+        N_STATEMENT(561);
+        N_STATEMENT(562);
+        N_STATEMENT(563);
+        N_STATEMENT(564);
+        N_STATEMENT(565);
+        N_STATEMENT(566);
+        N_STATEMENT(567);
+        N_STATEMENT(568);
+        N_STATEMENT(569);
+        N_STATEMENT(570);
+        N_STATEMENT(571);
+        N_STATEMENT(572);
+        N_STATEMENT(573);
+        N_STATEMENT(574);
+        N_STATEMENT(575);
+        N_STATEMENT(576);
+        N_STATEMENT(577);
+        N_STATEMENT(578);
+        N_STATEMENT(579);
+        N_STATEMENT(580);
+        N_STATEMENT(581);
+        N_STATEMENT(582);
+        N_STATEMENT(583);
+        N_STATEMENT(584);
+        N_STATEMENT(585);
+        N_STATEMENT(586);
+        N_STATEMENT(587);
+        N_STATEMENT(588);
+        N_STATEMENT(589);
+        N_STATEMENT(590);
+        N_STATEMENT(591);
+        N_STATEMENT(592);
+        N_STATEMENT(593);
+        N_STATEMENT(594);
+        N_STATEMENT(595);
+        N_STATEMENT(596);
+        N_STATEMENT(597);
+        N_STATEMENT(598);
+        N_STATEMENT(599);
+        N_STATEMENT(600);
+        N_STATEMENT(601);
+        N_STATEMENT(602);
+        N_STATEMENT(603);
+        N_STATEMENT(604);
+        N_STATEMENT(605);
+        N_STATEMENT(606);
+        N_STATEMENT(607);
+        N_STATEMENT(608);
+        N_STATEMENT(609);
+        N_STATEMENT(610);
+        N_STATEMENT(611);
+        N_STATEMENT(612);
+        N_STATEMENT(613);
+        N_STATEMENT(614);
+        N_STATEMENT(615);
+        N_STATEMENT(616);
+        N_STATEMENT(617);
+        N_STATEMENT(618);
+        N_STATEMENT(619);
+        N_STATEMENT(620);
+        N_STATEMENT(621);
+        N_STATEMENT(622);
+        N_STATEMENT(623);
+        N_STATEMENT(624);
+        N_STATEMENT(625);
+        N_STATEMENT(626);
+        N_STATEMENT(627);
+        N_STATEMENT(628);
+        N_STATEMENT(629);
+        N_STATEMENT(630);
+        N_STATEMENT(631);
+        N_STATEMENT(632);
+        N_STATEMENT(633);
+        N_STATEMENT(634);
+        N_STATEMENT(635);
+        N_STATEMENT(636);
+        N_STATEMENT(637);
+        N_STATEMENT(638);
+        N_STATEMENT(639);
+        N_STATEMENT(640);
+        N_STATEMENT(641);
+        N_STATEMENT(642);
+        N_STATEMENT(643);
+        N_STATEMENT(644);
+        N_STATEMENT(645);
+        N_STATEMENT(646);
+        N_STATEMENT(647);
+        N_STATEMENT(648);
+        N_STATEMENT(649);
+        N_STATEMENT(650);
+        N_STATEMENT(651);
+        N_STATEMENT(652);
+        N_STATEMENT(653);
+        N_STATEMENT(654);
+        N_STATEMENT(655);
+        N_STATEMENT(656);
+        N_STATEMENT(657);
+        N_STATEMENT(658);
+        N_STATEMENT(659);
+        N_STATEMENT(660);
+        N_STATEMENT(661);
+        N_STATEMENT(662);
+        N_STATEMENT(663);
+        N_STATEMENT(664);
+        N_STATEMENT(665);
+        N_STATEMENT(666);
+        N_STATEMENT(667);
+        N_STATEMENT(668);
+        N_STATEMENT(669);
+        N_STATEMENT(670);
+        N_STATEMENT(671);
+        N_STATEMENT(672);
+        N_STATEMENT(673);
+        N_STATEMENT(674);
+        N_STATEMENT(675);
+        N_STATEMENT(676);
+        N_STATEMENT(677);
+        N_STATEMENT(678);
+        N_STATEMENT(679);
+        N_STATEMENT(680);
+        N_STATEMENT(681);
+        N_STATEMENT(682);
+        N_STATEMENT(683);
+        N_STATEMENT(684);
+        N_STATEMENT(685);
+        N_STATEMENT(686);
+        N_STATEMENT(687);
+        N_STATEMENT(688);
+        N_STATEMENT(689);
+        N_STATEMENT(690);
+        N_STATEMENT(691);
+        N_STATEMENT(692);
+        N_STATEMENT(693);
+        N_STATEMENT(694);
+        N_STATEMENT(695);
+        N_STATEMENT(696);
+        N_STATEMENT(697);
+        N_STATEMENT(698);
+        N_STATEMENT(699);
+        N_STATEMENT(700);
+        N_STATEMENT(701);
+        N_STATEMENT(702);
+        N_STATEMENT(703);
+        N_STATEMENT(704);
+        N_STATEMENT(705);
+        N_STATEMENT(706);
+        N_STATEMENT(707);
+        N_STATEMENT(708);
+        N_STATEMENT(709);
+        N_STATEMENT(710);
+        N_STATEMENT(711);
+        N_STATEMENT(712);
+        N_STATEMENT(713);
+        N_STATEMENT(714);
+        N_STATEMENT(715);
+        N_STATEMENT(716);
+        N_STATEMENT(717);
+        N_STATEMENT(718);
+        N_STATEMENT(719);
+        N_STATEMENT(720);
+        N_STATEMENT(721);
+        N_STATEMENT(722);
+        N_STATEMENT(723);
+        N_STATEMENT(724);
+        N_STATEMENT(725);
+        N_STATEMENT(726);
+        N_STATEMENT(727);
+        N_STATEMENT(728);
+        N_STATEMENT(729);
+        N_STATEMENT(730);
+        N_STATEMENT(731);
+        N_STATEMENT(732);
+        N_STATEMENT(733);
+        N_STATEMENT(734);
+        N_STATEMENT(735);
+        N_STATEMENT(736);
+        N_STATEMENT(737);
+        N_STATEMENT(738);
+        N_STATEMENT(739);
+        N_STATEMENT(740);
+        N_STATEMENT(741);
+        N_STATEMENT(742);
+        N_STATEMENT(743);
+        N_STATEMENT(744);
+        N_STATEMENT(745);
+        N_STATEMENT(746);
+        N_STATEMENT(747);
+        N_STATEMENT(748);
+        N_STATEMENT(749);
+        N_STATEMENT(750);
+        N_STATEMENT(751);
+        N_STATEMENT(752);
+        N_STATEMENT(753);
+        N_STATEMENT(754);
+        N_STATEMENT(755);
+        N_STATEMENT(756);
+        N_STATEMENT(757);
+        N_STATEMENT(758);
+        N_STATEMENT(759);
+        N_STATEMENT(760);
+        N_STATEMENT(761);
+        N_STATEMENT(762);
+        N_STATEMENT(763);
+        N_STATEMENT(764);
+        N_STATEMENT(765);
+        N_STATEMENT(766);
+        N_STATEMENT(767);
+        N_STATEMENT(768);
+        N_STATEMENT(769);
+        N_STATEMENT(770);
+        N_STATEMENT(771);
+        N_STATEMENT(772);
+        N_STATEMENT(773);
+        N_STATEMENT(774);
+        N_STATEMENT(775);
+        N_STATEMENT(776);
+        N_STATEMENT(777);
+        N_STATEMENT(778);
+        N_STATEMENT(779);
+        N_STATEMENT(780);
+        N_STATEMENT(781);
+        N_STATEMENT(782);
+        N_STATEMENT(783);
+        N_STATEMENT(784);
+        N_STATEMENT(785);
+        N_STATEMENT(786);
+        N_STATEMENT(787);
+        N_STATEMENT(788);
+        N_STATEMENT(789);
+        N_STATEMENT(790);
+        N_STATEMENT(791);
+        N_STATEMENT(792);
+        N_STATEMENT(793);
+        N_STATEMENT(794);
+        N_STATEMENT(795);
+        N_STATEMENT(796);
+        N_STATEMENT(797);
+        N_STATEMENT(798);
+        N_STATEMENT(799);
+        N_STATEMENT(800);
+        N_STATEMENT(801);
+        N_STATEMENT(802);
+        N_STATEMENT(803);
+        N_STATEMENT(804);
+        N_STATEMENT(805);
+        N_STATEMENT(806);
+        N_STATEMENT(807);
+        N_STATEMENT(808);
+        N_STATEMENT(809);
+        N_STATEMENT(810);
+        N_STATEMENT(811);
+        N_STATEMENT(812);
+        N_STATEMENT(813);
+        N_STATEMENT(814);
+        N_STATEMENT(815);
+        N_STATEMENT(816);
+        N_STATEMENT(817);
+        N_STATEMENT(818);
+        N_STATEMENT(819);
+        N_STATEMENT(820);
+        N_STATEMENT(821);
+        N_STATEMENT(822);
+        N_STATEMENT(823);
+        N_STATEMENT(824);
+        N_STATEMENT(825);
+        N_STATEMENT(826);
+        N_STATEMENT(827);
+        N_STATEMENT(828);
+        N_STATEMENT(829);
+        N_STATEMENT(830);
+        N_STATEMENT(831);
+        N_STATEMENT(832);
+        N_STATEMENT(833);
+        N_STATEMENT(834);
+        N_STATEMENT(835);
+        N_STATEMENT(836);
+        N_STATEMENT(837);
+        N_STATEMENT(838);
+        N_STATEMENT(839);
+        N_STATEMENT(840);
+        N_STATEMENT(841);
+        N_STATEMENT(842);
+        N_STATEMENT(843);
+        N_STATEMENT(844);
+        N_STATEMENT(845);
+        N_STATEMENT(846);
+        N_STATEMENT(847);
+        N_STATEMENT(848);
+        N_STATEMENT(849);
+        N_STATEMENT(850);
+        N_STATEMENT(851);
+        N_STATEMENT(852);
+        N_STATEMENT(853);
+        N_STATEMENT(854);
+        N_STATEMENT(855);
+        N_STATEMENT(856);
+        N_STATEMENT(857);
+        N_STATEMENT(858);
+        N_STATEMENT(859);
+        N_STATEMENT(860);
+        N_STATEMENT(861);
+        N_STATEMENT(862);
+        N_STATEMENT(863);
+        N_STATEMENT(864);
+        N_STATEMENT(865);
+        N_STATEMENT(866);
+        N_STATEMENT(867);
+        N_STATEMENT(868);
+        N_STATEMENT(869);
+        N_STATEMENT(870);
+        N_STATEMENT(871);
+        N_STATEMENT(872);
+        N_STATEMENT(873);
+        N_STATEMENT(874);
+        N_STATEMENT(875);
+        N_STATEMENT(876);
+        N_STATEMENT(877);
+        N_STATEMENT(878);
+        N_STATEMENT(879);
+        N_STATEMENT(880);
+        N_STATEMENT(881);
+        N_STATEMENT(882);
+        N_STATEMENT(883);
+        N_STATEMENT(884);
+        N_STATEMENT(885);
+        N_STATEMENT(886);
+        N_STATEMENT(887);
+        N_STATEMENT(888);
+        N_STATEMENT(889);
+        N_STATEMENT(890);
+        N_STATEMENT(891);
+        N_STATEMENT(892);
+        N_STATEMENT(893);
+        N_STATEMENT(894);
+        N_STATEMENT(895);
+        N_STATEMENT(896);
+        N_STATEMENT(897);
+        N_STATEMENT(898);
+        N_STATEMENT(899);
+        N_STATEMENT(900);
+        N_STATEMENT(901);
+        N_STATEMENT(902);
+        N_STATEMENT(903);
+        N_STATEMENT(904);
+        N_STATEMENT(905);
+        N_STATEMENT(906);
+        N_STATEMENT(907);
+        N_STATEMENT(908);
+        N_STATEMENT(909);
+        N_STATEMENT(910);
+        N_STATEMENT(911);
+        N_STATEMENT(912);
+        N_STATEMENT(913);
+        N_STATEMENT(914);
+        N_STATEMENT(915);
+        N_STATEMENT(916);
+        N_STATEMENT(917);
+        N_STATEMENT(918);
+        N_STATEMENT(919);
+        N_STATEMENT(920);
+        N_STATEMENT(921);
+        N_STATEMENT(922);
+        N_STATEMENT(923);
+        N_STATEMENT(924);
+        N_STATEMENT(925);
+        N_STATEMENT(926);
+        N_STATEMENT(927);
+        N_STATEMENT(928);
+        N_STATEMENT(929);
+        N_STATEMENT(930);
+        N_STATEMENT(931);
+        N_STATEMENT(932);
+        N_STATEMENT(933);
+        N_STATEMENT(934);
+        N_STATEMENT(935);
+        N_STATEMENT(936);
+        N_STATEMENT(937);
+        N_STATEMENT(938);
+        N_STATEMENT(939);
+        N_STATEMENT(940);
+        N_STATEMENT(941);
+        N_STATEMENT(942);
+        N_STATEMENT(943);
+        N_STATEMENT(944);
+        N_STATEMENT(945);
+        N_STATEMENT(946);
+        N_STATEMENT(947);
+        N_STATEMENT(948);
+        N_STATEMENT(949);
+        N_STATEMENT(950);
+    }
+    return am_error;          /* NOTREACHED, shut up the compiler */
+}
+
+#endif /* HAVE_USE_DTRACE */

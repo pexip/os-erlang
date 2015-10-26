@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %% 
-%% Copyright Ericsson AB 1997-2011. All Rights Reserved.
+%% Copyright Ericsson AB 1997-2013. All Rights Reserved.
 %% 
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -45,10 +45,7 @@ open(Name, Mode) ->
 open1({binary,Bin}, read, _Raw, Opts) ->
     case file:open(Bin, [ram,binary,read]) of
 	{ok,File} ->
-	    case Opts of
-		[compressed] -> ram_file:uncompress(File);
-		[] -> ok
-	    end,
+            _ = [ram_file:uncompress(File) || Opts =:= [compressed]],
 	    {ok,{read,File}};
 	Error ->
 	    Error
@@ -154,7 +151,7 @@ table(Name, Opts) ->
 t(Name) ->
     case table(Name) of
 	{ok, List} ->
-	    lists:foreach(fun(N) -> ok = io:format("~s\n", [N]) end, List);
+	    lists:foreach(fun(N) -> ok = io:format("~ts\n", [N]) end, List);
 	Error ->
 	    Error
     end.
@@ -216,13 +213,13 @@ format_error(bad_header) -> "Bad directory header";
 format_error(eof) -> "Unexpected end of file";
 format_error(symbolic_link_too_long) -> "Symbolic link too long";
 format_error({Name,Reason}) ->
-    lists:flatten(io_lib:format("~s: ~s", [Name,format_error(Reason)]));
+    lists:flatten(io_lib:format("~ts: ~ts", [Name,format_error(Reason)]));
 format_error(Atom) when is_atom(Atom) ->
     file:format_error(Atom);
 format_error(Term) ->
-    lists:flatten(io_lib:format("~p", [Term])).
+    lists:flatten(io_lib:format("~tp", [Term])).
 
-
+
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %%%
 %%%	Useful definitions (also start of implementation).
@@ -325,13 +322,13 @@ add1(TarFile, Name, NameInArchive, Opts) ->
     end.
 
 add1(Tar, Name, Header, Bin, Options) ->
-    add_verbose(Options, "a ~s~n", [Name]),
+    add_verbose(Options, "a ~ts~n", [Name]),
     file:write(Tar, [Header, Bin, padding(byte_size(Bin), ?record_size)]).
 
 add_directory(TarFile, DirName, NameInArchive, Info, Options) ->
     case file:list_dir(DirName) of
 	{ok, []} ->
-	    add_verbose(Options, "a ~s~n", [DirName]),
+	    add_verbose(Options, "a ~ts~n", [DirName]),
 	    Header = create_header(NameInArchive, Info),
 	    file:write(TarFile, Header);
 	{ok, Files} ->
@@ -384,7 +381,12 @@ to_octal(Int, Count, Result) ->
     to_octal(Int div 8, Count-1, [Int rem 8 + $0|Result]).
 
 to_string(Str0, Count) ->
-    Str = list_to_binary(Str0),
+    Str = case file:native_name_encoding() of
+	      utf8 ->
+		  unicode:characters_to_binary(Str0);
+	      latin1 ->
+		  list_to_binary(Str0)
+	  end,
     case byte_size(Str) of
 	Size when Size < Count ->
 	    [Str|zeroes(Count-Size)];
@@ -395,9 +397,17 @@ to_string(Str0, Count) ->
 
 pad_file(File) ->
     {ok,Position} = file:position(File, {cur,0}),
-    %% There must be at least one empty record at the end of the file.
-    Zeros = zeroes(?block_size - (Position rem ?block_size)),
-    file:write(File, Zeros).
+    %% There must be at least two zero records at the end.
+    Fill = case ?block_size - (Position rem ?block_size) of
+	       Fill0 when Fill0 < 2*?record_size ->
+		   %% We need to another block here to ensure that there
+		   %% are at least two zero records at the end.
+		   Fill0 + ?block_size;
+	       Fill0 ->
+		   %% Large enough.
+		   Fill0
+	   end,
+    file:write(File, zeroes(Fill)).
 
 split_filename(Name) when length(Name) =< ?th_name_len ->
     {"", Name};
@@ -412,7 +422,7 @@ split_filename([Comp|Rest], Prefix, Suffix, Len) ->
 split_filename([], Prefix, Suffix, _) ->
     {filename:join(Prefix),filename:join(Suffix)}.
 
-
+
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %%%
 %%% 	Retrieving files from a tape archive.
@@ -611,7 +621,22 @@ typeflag(Bin) ->
 %% Get the name of the file from the prefix and name fields of the
 %% tar header.
 
-get_name(Bin) ->
+get_name(Bin0) ->
+    List0 = get_name_raw(Bin0),
+    case file:native_name_encoding() of
+	utf8 ->
+	    Bin = list_to_binary(List0),
+	    case unicode:characters_to_list(Bin) of
+		{error,_,_} ->
+		    List0;
+		List when is_list(List) ->
+		    List
+	    end;
+	latin1 ->
+	    List0
+    end.
+
+get_name_raw(Bin) ->
     Name = from_string(Bin, ?th_name, ?th_name_len),
     case binary_to_list(Bin, ?th_prefix+1, ?th_prefix+1) of
 	[0] ->
@@ -731,7 +756,7 @@ write_extracted_element(Header, Bin, Opts) ->
 	    symlink ->
 		create_symlink(Name, Header, Opts);
 	    Other ->				% Ignore.
-		read_verbose(Opts, "x ~s - unsupported type ~p~n",
+		read_verbose(Opts, "x ~ts - unsupported type ~p~n",
 			     [Name, Other]),
 		not_written
 	end,
@@ -757,7 +782,7 @@ create_symlink(Name, #tar_header{linkname=Linkname}=Header, Opts) ->
 	    create_symlink(Name, Header, Opts);
 	{error,eexist} -> not_written;
 	{error,enotsup} ->
-	    read_verbose(Opts, "x ~s - symbolic links not supported~n", [Name]),
+	    read_verbose(Opts, "x ~ts - symbolic links not supported~n", [Name]),
 	    not_written;
 	{error,Reason} -> throw({error, Reason})
     end.
@@ -774,10 +799,10 @@ write_extracted_file(Name, Bin, Opts) ->
 	end,
     case Write of
 	true ->
-	    read_verbose(Opts, "x ~s~n", [Name]),
+	    read_verbose(Opts, "x ~ts~n", [Name]),
 	    write_file(Name, Bin);
 	false ->
-	    read_verbose(Opts, "x ~s - exists, not created~n", [Name]),
+	    read_verbose(Opts, "x ~ts - exists, not created~n", [Name]),
 	    not_written
     end.
 

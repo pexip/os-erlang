@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 1996-2011. All Rights Reserved.
+%% Copyright Ericsson AB 1996-2014. All Rights Reserved.
 %%
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -44,6 +44,7 @@
 	 set_env/2,
 	 start/0,
 	 start_proc/4,
+	 sync_log/1,
 	 terminate_proc/3,
 	 unsafe_close_dets/1,
 	 unsafe_close_log/1,
@@ -78,11 +79,11 @@
 
 -record(state, {supervisor, pending_negotiators = [],
 		going_down = [], tm_started = false, early_connects = [],
-		connecting, mq = []}).
+		connecting, mq = [], remote_node_status = []}).
 
--define(current_protocol_version,  {8,0}).
+-define(current_protocol_version,  {8,1}).
 
--define(previous_protocol_version, {7,6}).
+-define(previous_protocol_version, {8,0}).
 
 start() ->
     gen_server:start_link({local, ?MODULE}, ?MODULE,
@@ -117,6 +118,9 @@ open_log(Args) ->
 
 reopen_log(Name, Fname, Head) ->
     unsafe_call({reopen_log, Name, Fname, Head}).
+
+sync_log(Name) ->
+    unsafe_call({sync_log, Name}).
 
 close_log(Name) ->
     unsafe_call({close_log, Name}).
@@ -188,7 +192,7 @@ protocol_version() ->
 %% A sorted list of acceptable protocols the
 %% preferred protocols are first in the list
 acceptable_protocol_versions() ->
-    [protocol_version(), ?previous_protocol_version].
+    [protocol_version(), ?previous_protocol_version, {7,6}].
 
 needs_protocol_conversion(Node) ->
     case {?catch_val({protocol, Node}), protocol_version()} of
@@ -202,7 +206,7 @@ needs_protocol_conversion(Node) ->
 
 cast(Msg) ->
     case whereis(?MODULE) of
-	undefined -> ignore;
+	undefined -> ok;
 	Pid ->  gen_server:cast(Pid, Msg)
     end.
 
@@ -382,6 +386,9 @@ handle_call({reopen_log, Name, Fname, Head}, _From, State) ->
  	    {noreply, State}
     end;
 
+handle_call({sync_log, Name}, _From, State) ->
+    {reply, disk_log:sync(Name), State};
+
 handle_call({close_log, Name}, _From, State) ->
     case disk_log:close(Name) of
 	ok ->
@@ -395,7 +402,7 @@ handle_call({close_log, Name}, _From, State) ->
     end;
 
 handle_call({unsafe_close_log, Name}, _From, State) ->
-    disk_log:close(Name),
+    _ = disk_log:close(Name),
     {reply, ok, State};
 
 handle_call({negotiate_protocol, Mon, _Version, _Protocols}, _From, State)
@@ -417,6 +424,8 @@ handle_call({negotiate_protocol, Mon, Version, Protocols}, From, State)
 	    case hd(Protocols) of
 		?previous_protocol_version ->
 		    accept_protocol(Mon, MyVersion, ?previous_protocol_version, From, State);
+		{7,6} ->
+		    accept_protocol(Mon, MyVersion, {7,6}, From, State);
 		_ ->
 		    verbose("Connection with ~p rejected. "
 			    "version = ~p, protocols = ~p, "
@@ -437,7 +446,7 @@ handle_call({negotiate_protocol, Nodes}, From, State) ->
     end;
 
 handle_call(init, _From, State) ->
-    net_kernel:monitor_nodes(true),
+    _ = net_kernel:monitor_nodes(true),
     EarlyNodes = State#state.early_connects,
     State2 = State#state{tm_started = true},
     {reply, EarlyNodes, State2};
@@ -480,27 +489,24 @@ handle_cast({mnesia_down, mnesia_controller, Node}, State) ->
     mnesia_tm:mnesia_down(Node),
     {noreply, State};
 
-handle_cast({mnesia_down, mnesia_tm, {Node, Pending}}, State) ->
-    mnesia_locker:mnesia_down(Node, Pending),
-    {noreply, State};
-
-handle_cast({mnesia_down, mnesia_locker, Node}, State) ->
+handle_cast({mnesia_down, mnesia_tm, Node}, State) ->
     Down = {mnesia_down, Node},
     mnesia_lib:report_system_event(Down),
     GoingDown = lists:delete(Node, State#state.going_down),
     State2 = State#state{going_down = GoingDown},
     Pending = State#state.pending_negotiators,
+    State3 = check_raise_conditon_nodeup(Node, State2),
     case lists:keysearch(Node, 1, Pending) of
 	{value, {Node, Mon, ReplyTo, Reply}} ->
 	    %% Late reply to remote monitor
 	    link(Mon),  %% link to remote Monitor
 	    gen_server:reply(ReplyTo, Reply),
 	    P2 = lists:keydelete(Node, 1,Pending),
-	    State3 = State2#state{pending_negotiators = P2},
-	    process_q(State3);
+	    State4 = State3#state{pending_negotiators = P2},
+	    process_q(State4);
 	false ->
 	    %% No pending remote monitors
-	    process_q(State2)
+	    process_q(State3)
     end;
 
 handle_cast({disconnect, Node}, State) ->
@@ -536,7 +542,11 @@ handle_info({'EXIT', Pid, R}, State) when Pid == State#state.supervisor ->
 
 handle_info({'EXIT', Pid, fatal}, State) when node(Pid) == node() ->
     dbg_out("~p got FATAL ERROR from: ~p~n",[?MODULE, Pid]),
-    exit(State#state.supervisor, shutdown),
+    %% This may hang supervisor if a shutdown happens at the same time as an fatal
+    %% is in progress
+    %% exit(State#state.supervisor, shutdown),
+    %% It is better to kill an innocent process
+    catch exit(whereis(mnesia_locker), kill),
     {noreply, State};
 
 handle_info(Msg = {'EXIT',Pid,_}, State) ->
@@ -562,27 +572,18 @@ handle_info({protocol_negotiated, From,Res}, State) ->
     gen_server:reply(From, Res),
     process_q(State#state{connecting = undefined});
 
+handle_info({check_nodeup, Node}, State) ->
+    State2 = check_mnesia_down(Node, State),
+    {noreply, State2};
+
 handle_info({nodeup, Node}, State) ->
-    %% Ok, we are connected to yet another Erlang node
-    %% Let's check if Mnesia is running there in order
-    %% to detect if the network has been partitioned
-    %% due to communication failure.
+    State2 = remote_node_status(Node, up, State),
+    State3 = check_mnesia_down(Node, State2),
+    {noreply, State3};
 
-    HasDown   = mnesia_recover:has_mnesia_down(Node),
-    ImRunning = mnesia_lib:is_running(),
-
-    if
-	%% If I'm not running the test will be made later.
-	HasDown == true, ImRunning == yes ->
-	    spawn_link(?MODULE, detect_partitioned_network, [self(), Node]);
-	true ->
-	    ignore
-    end,
-    {noreply, State};
-
-handle_info({nodedown, _Node}, State) ->
-    %% Ignore, we are only caring about nodeup's
-    {noreply, State};
+handle_info({nodedown, Node}, State) ->
+    State2 = remote_node_status(Node, down, State),
+    {noreply, State2};
 
 handle_info({disk_log, _Node, Log, Info}, State) ->
     case Info of
@@ -667,7 +668,6 @@ env() ->
      dump_log_time_threshold,
      dump_log_update_in_place,
      dump_log_write_threshold,
-     embedded_mnemosyne,
      event_module,
      extra_db_nodes,
      ignore_fallback_at_startup,
@@ -700,8 +700,6 @@ default_env(dump_log_update_in_place) ->
     true;
 default_env(dump_log_write_threshold) ->
     1000;
-default_env(embedded_mnemosyne) ->
-    false;
 default_env(event_module) ->
     mnesia_event;
 default_env(extra_db_nodes) ->
@@ -751,7 +749,6 @@ do_check_type(event_module, A) when is_atom(A) -> A;
 do_check_type(ignore_fallback_at_startup, B) -> bool(B);
 do_check_type(fallback_error_function, {Mod, Func})
   when is_atom(Mod), is_atom(Func) -> {Mod, Func};
-do_check_type(embedded_mnemosyne, B) -> bool(B);
 do_check_type(extra_db_nodes, L) when is_list(L) ->
     Fun = fun(N) when N == node() -> false;
 	     (A) when is_atom(A) -> true
@@ -828,3 +825,48 @@ report_inconsistency([{badrpc, _Reason} | Replies], Context, Status) ->
     report_inconsistency(Replies, Context, Status);
 report_inconsistency([], _Context, Status) ->
     Status.
+
+remote_node_status(Node, Status, State) ->
+    {ok, Nodes} = mnesia_schema:read_nodes(),
+    case lists:member(Node, Nodes) of
+	true ->
+	    update_node_status({Node, Status}, State);
+	_ ->
+	    State
+    end.
+
+update_node_status({Node, down}, State = #state{remote_node_status = RNodeS}) ->
+    RNodeS2 = lists:ukeymerge(1, [{Node, down}], RNodeS),
+    State#state{remote_node_status = RNodeS2};
+update_node_status({Node, up}, State = #state{remote_node_status = RNodeS}) ->
+    case lists:keyfind(Node, 1, RNodeS) of
+	{Node, down} ->
+	    RNodeS2 = lists:ukeymerge(1, [{Node, up}], RNodeS),
+	    State#state{remote_node_status = RNodeS2};
+	_ ->
+	    State
+    end.
+
+check_raise_conditon_nodeup(Node, State = #state{remote_node_status = RNodeS}) ->
+    case lists:keyfind(Node, 1, RNodeS) of
+	{Node, up} ->
+	    self() ! {check_nodeup, Node};
+	_ ->
+	    ignore
+    end,
+    State#state{remote_node_status = lists:keydelete(Node, 1, RNodeS)}.
+
+check_mnesia_down(Node, State = #state{remote_node_status = RNodeS}) ->
+    %% Check if the network has been partitioned
+    %% due to communication failure.
+
+    HasDown   = mnesia_recover:has_mnesia_down(Node),
+    ImRunning = mnesia_lib:is_running(),
+    if
+	%% If I'm not running the test will be made later.
+	HasDown == true, ImRunning == yes ->
+	    spawn_link(?MODULE, detect_partitioned_network, [self(), Node]),
+	    State#state{remote_node_status = lists:keydelete(Node, 1, RNodeS)};
+	true ->
+	    State
+    end.

@@ -1,7 +1,7 @@
 #
 # %CopyrightBegin%
 #
-# Copyright Ericsson AB 1997-2011. All Rights Reserved.
+# Copyright Ericsson AB 1997-2012. All Rights Reserved.
 #
 # The contents of this file are subject to the Erlang Public License,
 # Version 1.1, (the "License"); you may not use this file except in
@@ -31,6 +31,7 @@ MODULES= \
 	a_SUITE \
 	after_SUITE \
 	alloc_SUITE \
+	async_ports_SUITE \
 	beam_SUITE \
 	beam_literals_SUITE \
 	bif_SUITE \
@@ -47,6 +48,7 @@ MODULES= \
 	busy_port_SUITE \
 	call_trace_SUITE \
 	code_SUITE \
+	code_parallel_load_SUITE \
 	crypto_SUITE \
 	ddll_SUITE \
 	decode_packet_SUITE \
@@ -61,12 +63,13 @@ MODULES= \
 	exception_SUITE \
 	float_SUITE \
 	fun_SUITE \
-	fun_r12_SUITE \
+	fun_r13_SUITE \
 	gc_SUITE \
 	guard_SUITE \
 	hash_SUITE \
 	hibernate_SUITE \
 	list_bif_SUITE \
+	map_SUITE \
 	match_spec_SUITE \
 	module_info_SUITE \
 	monitor_SUITE \
@@ -88,6 +91,7 @@ MODULES= \
 	send_term_SUITE \
 	sensitive_SUITE \
 	signal_SUITE \
+	smoke_test_SUITE \
 	statistics_SUITE \
 	system_info_SUITE \
 	system_profile_SUITE \
@@ -136,10 +140,11 @@ TARGET_FILES = $(MODULES:%=$(EBIN)/%.$(EMULATOR))
 
 EMAKEFILE=Emakefile
 
-TEST_SPEC_FILES =	emulator.spec \
-			emulator.spec.win \
-			emulator.spec.vxworks \
-			emulator.spec.ose
+TEST_SPEC_FILES= emulator.spec \
+		 emulator.spec.win \
+		 emulator_bench.spec \
+		 emulator_smoke.spec
+
 # ----------------------------------------------------
 # Release directory specification
 # ----------------------------------------------------
@@ -195,13 +200,13 @@ include $(ERL_TOP)/make/otp_release_targets.mk
 release_spec:
 
 release_tests_spec: make_emakefile
-	$(INSTALL_DIR) $(RELSYSDIR)
+	$(INSTALL_DIR) "$(RELSYSDIR)"
 	$(INSTALL_DATA) $(EMAKEFILE) $(TEST_SPEC_FILES) \
-		$(ERL_FILES) $(RELSYSDIR)
-	$(INSTALL_DATA) $(NO_OPT_ERL_FILES) $(RELSYSDIR)
-	$(INSTALL_DATA) $(NATIVE_ERL_FILES) $(RELSYSDIR)
-	chmod -R u+w $(RELSYSDIR)
-	tar cf - *_SUITE_data | (cd $(RELSYSDIR); tar xf -)
+		$(ERL_FILES) "$(RELSYSDIR)"
+	$(INSTALL_DATA) $(NO_OPT_ERL_FILES) "$(RELSYSDIR)"
+	$(INSTALL_DATA) $(NATIVE_ERL_FILES) "$(RELSYSDIR)"
+	chmod -R u+w "$(RELSYSDIR)"
+	tar cf - *_SUITE_data | (cd "$(RELSYSDIR)"; tar xf -)
 
 release_docs_spec:
 

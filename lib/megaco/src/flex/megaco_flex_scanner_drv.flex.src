@@ -1,8 +1,8 @@
   /*
    * %CopyrightBegin%
-   *
-   * Copyright Ericsson AB 2001-2010. All Rights Reserved.
-   *
+   * 
+   * Copyright Ericsson AB 2001-2013. All Rights Reserved.
+   * 
    * The contents of this file are subject to the Erlang Public License,
    * Version 1.1, (the "License"); you may not use this file except in
    * compliance with the License. You should have received a copy of the
@@ -60,17 +60,10 @@
 #define NUL        0x0
 
 #if defined(MEGACO_REENTRANT_FLEX_SCANNER)
-  #define MEGACO_EXTENDED_MARKER        ERL_DRV_EXTENDED_MARKER
-  #define MEGACO_DRIVER_FLAGS           ERL_DRV_FLAG_USE_PORT_LOCKING
-  #define MEGACO_EXTENDED_MAJOR_VERSION ERL_DRV_EXTENDED_MAJOR_VERSION
-  #define MEGACO_EXTENDED_MINOR_VERSION ERL_DRV_EXTENDED_MINOR_VERSION
-#else
-  #define MEGACO_EXTENDED_MARKER        0
-  #define MEGACO_DRIVER_FLAGS           0
-  #define MEGACO_EXTENDED_MAJOR_VERSION 0
-  #define MEGACO_EXTENDED_MINOR_VERSION 0
+#  define MEGACO_DRIVER_FLAGS           ERL_DRV_FLAG_USE_PORT_LOCKING
+#else 
+#  define MEGACO_DRIVER_FLAGS           0
 #endif
-
 
 #define FREE(bufP)        driver_free(bufP)
 #define ALLOC(sz)         driver_alloc(sz)
@@ -83,6 +76,7 @@
 
 typedef struct {
     ErlDrvPort      port;
+    ErlDrvTermData  port_id;
     char*           digit_map_name_ptr;
     int             digit_map_name_len;
     char*           digit_map_value_ptr;
@@ -100,6 +94,13 @@ typedef struct {
     int             term_spec_index;
     int             token_counter;
 } MfsErlDrvData;
+
+/* IBL = In Buffer Length - the raw (un-decoded) message buffer length */
+#define TERM_SPEC_SIZE_INITIAL(IBL) (1024 + 2*(IBL))
+
+/* CTSS = Current term spec size - the current term spec length */
+/* S    = Size - how many positions we need */
+#define TERM_SPEC_SIZE_NEXT(CTSS,S)   ((CTSS) + 1024 + (S))
 
 #if !defined(MEGACO_REENTRANT_FLEX_SCANNER)
 static MfsErlDrvData mfs_drv_data;
@@ -320,11 +321,11 @@ static void mfs_load_map_token();
 static ErlDrvData mfs_start(ErlDrvPort port, char *buf);
 static void 	  mfs_stop(ErlDrvData handle);
 static void 	  mfs_command(ErlDrvData handle, 
-                              char *buf, int buf_len);
-static int 	  mfs_control(ErlDrvData handle, 
+                              char *buf, ErlDrvSizeT buf_len);
+static ErlDrvSSizeT mfs_control(ErlDrvData handle,
                               unsigned int command,
-                              char *buf, int buf_len, 
-      			      char **res_buf, int res_buf_len);
+                              char *buf, ErlDrvSizeT buf_len, 
+      			      char **res_buf, ErlDrvSizeT res_buf_len);
 static void 	  mfs_finish(void);
 
 /* 
@@ -348,10 +349,10 @@ static ErlDrvEntry mfs_entry = {
     NULL,              /* flush, port is about to be closed */
     NULL,              /* call, a syncronous call into the driver */
     NULL,              /* event, event selected by driver_event() has occurred */
-    MEGACO_EXTENDED_MARKER,         /* extended_marker, which we use if reentrant */
-    MEGACO_EXTENDED_MAJOR_VERSION,  /* major_version, ... */
-    MEGACO_EXTENDED_MINOR_VERSION,  /* minor_version, ... */
-    MEGACO_DRIVER_FLAGS,            /* driver_flags, used for port lock indication */
+    ERL_DRV_EXTENDED_MARKER,
+    ERL_DRV_EXTENDED_MAJOR_VERSION,
+    ERL_DRV_EXTENDED_MINOR_VERSION,
+    MEGACO_DRIVER_FLAGS, /* driver_flags, used for port lock indication */
     NULL,              /* handle2, emulator internal use */
     NULL               /* process_exit, Called when a process monitor fires */
 };    
@@ -743,7 +744,7 @@ v                                       LOAD_TOKEN(mfs_VersionToken);
 #endif
 
 
-/* #define MFS_DEBUG true */    /* temporary */
+// #define MFS_DEBUG true 
 #if defined(MFS_DEBUG)
 #  define DBG( proto ) printf proto
 #  define DBG_BUF(func, bufName, buf, bufSz) mfs_dbg_buf_print(func, bufName, buf, bufSz)
@@ -848,14 +849,19 @@ static void mfs_ensure_term_spec(MfsErlDrvData* dataP, int size)
 	  "\n   term_spec_size:  %d\n", 
 	  dataP->term_spec_index, dataP->term_spec_size) );
 
-    dataP->term_spec_size = (dataP->term_spec_size * 2) + size;
+    dataP->term_spec_size = TERM_SPEC_SIZE_NEXT(dataP->term_spec_size, size);
 
     DBG( ("mfs_ensure_term_spec -> "
-	  "term_spec is at 0x%X, new term_spec_size is %d\n", 
-	  (unsigned int) dataP->term_spec, dataP->term_spec_size) );
+	  "term_spec is at 0x%X, new term_spec_size is %d (%lu)\n", 
+	  (unsigned int) dataP->term_spec, 
+	  dataP->term_spec_size, 
+	  dataP->term_spec_size * sizeof(ErlDrvTermData)) );
 
     tmp = REALLOC(dataP->term_spec, 
                   dataP->term_spec_size * sizeof(ErlDrvTermData));
+
+    DBG( ("mfs_ensure_term_spec -> "
+	  "realloc result: 0x%X\n", (unsigned int) tmp) );
 
     if (tmp == NULL) {
       /*
@@ -948,6 +954,9 @@ static void mfs_octet_load_token(ErlDrvTermData TokenTag, int is_empty)
 
   ASSIGN_TERM_SPEC(dataP, ERL_DRV_TUPLE);
   ASSIGN_TERM_SPEC(dataP, 3);
+
+  DBG( ("mfs_octet_load_token -> done\n") );
+
 }
 
 #if defined(MEGACO_REENTRANT_FLEX_SCANNER)
@@ -1247,7 +1256,7 @@ static void mfs_load_property_groups(MfsErlDrvData* dataP)
     } // if ((yytext[i] != SP)...
   } // while ...      
       
-  mfs_ensure_term_spec(dataP, 4); // 2 + 2 just in case
+  mfs_ensure_term_spec(dataP, 6); // 3 + 3 just in case
 
   /* Make sure we actually have some groups */
 
@@ -1504,6 +1513,7 @@ static ErlDrvData mfs_start(ErlDrvPort port, char *buf)
   DBG( ("mfs_start -> entry\n") );
 
   dataP->port                   = port;
+  dataP->port_id                = driver_mk_port(port);
   dataP->digit_map_name_ptr     = NULL;
   dataP->digit_map_name_len     = 0;
   dataP->digit_map_value_ptr    = NULL;
@@ -1685,17 +1695,17 @@ static void mfs_stop(ErlDrvData handle)
 }
 
 static void mfs_command(ErlDrvData handle, 
-			char *buf, int buf_len)
+			char *buf, ErlDrvSizeT buf_len)
 {
   driver_failure_atom(((MfsErlDrvData*) handle)->port, "bad_usage");
 
   return;
 }
 
-static int mfs_control(ErlDrvData          handle, 
+static ErlDrvSSizeT mfs_control(ErlDrvData          handle,
 		       unsigned int        command,
-		       char  *buf,     int buf_len, 
-		       char **res_buf, int res_buf_len)
+		       char  *buf,     ErlDrvSizeT buf_len, 
+		       char **res_buf, ErlDrvSizeT res_buf_len)
 {
   MfsErlDrvData*  dataP = (MfsErlDrvData*) handle;
   char*           tmp;
@@ -1732,7 +1742,7 @@ static int mfs_control(ErlDrvData          handle,
   dataP->text_buf = tmp;
   dataP->text_ptr = tmp;
 
-  dataP->term_spec_size = 1000 + buf_len;       /* OTP-4237 */
+  dataP->term_spec_size = TERM_SPEC_SIZE_INITIAL(buf_len); 
 
   DBG( ("mfs_control -> allocate term-spec buffer: "
 	"\n   term_spec_size: %d\n", dataP->term_spec_size) );
@@ -1848,10 +1858,10 @@ static int mfs_control(ErlDrvData          handle,
 	  "\n   term_spec_size:  %d\n", 
 	  dataP->term_spec_index, dataP->term_spec_size) );
 
-    driver_send_term(dataP->port, 
-                     driver_caller(dataP->port),
-                     dataP->term_spec, 
-                     dataP->term_spec_index);
+    erl_drv_send_term(dataP->port_id, 
+                      driver_caller(dataP->port),
+                      dataP->term_spec, 
+                      dataP->term_spec_index);
     
     if (dataP->text_buf  != NULL) FREE(dataP->text_buf);
     if (dataP->term_spec != NULL) FREE(dataP->term_spec);

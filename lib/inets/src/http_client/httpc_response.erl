@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2004-2010. All Rights Reserved.
+%% Copyright Ericsson AB 2004-2013. All Rights Reserved.
 %%
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -124,6 +124,11 @@ result(Response = {{_, Code, _}, _, _},
 					      (Code =:= 303) orelse 
 					      (Code =:= 307) ->
     redirect(Response, Request);
+result(Response = {{_, 303, _}, _, _},
+       Request = #request{settings =
+			  #http_options{autoredirect = true},
+			  method = post}) ->
+    redirect(Response, Request#request{method = get});
 
 
 result(Response = {{_,503,_}, _, _}, Request) ->
@@ -340,7 +345,9 @@ redirect(Response = {StatusLine, Headers, Body}, Request) ->
 	undefined ->
 	    transparent(Response, Request);
 	RedirUrl ->
-	    case http_uri:parse(RedirUrl) of
+	    UrlParseOpts = [{ipv6_host_with_brackets, 
+			     Request#request.ipv6_host_with_brackets}], 
+	    case uri_parse(RedirUrl, UrlParseOpts) of
 		{error, no_scheme} when
 		(Request#request.settings)#http_options.relaxed ->
 		    NewLocation = fix_relative_uri(Request, RedirUrl),
@@ -350,10 +357,9 @@ redirect(Response = {StatusLine, Headers, Body}, Request) ->
 		{error, Reason} ->
 		    {ok, error(Request, Reason), Data};
 		%% Automatic redirection
-		{Scheme, _, Host, Port, Path,  Query} -> 
+		{ok, {Scheme, _, Host, Port, Path,  Query}} -> 
 		    NewHeaders = 
-			(Request#request.headers)#http_request_h{host = 
-								 Host},
+			(Request#request.headers)#http_request_h{host = Host},
 		    NewRequest = 
 			Request#request{redircount = 
 					Request#request.redircount+1,
@@ -424,8 +430,6 @@ format_response({StatusLine, Headers, Body}) ->
     Length = list_to_integer(Headers#http_response_h.'content-length'),
     {NewBody, Data} = 
 	case Length of
-	    0 ->
-		{Body, <<>>};
 	    -1 -> % When no lenght indicator is provided
 		{Body, <<>>};
 	    Length when (Length =< size(Body)) ->
@@ -435,4 +439,18 @@ format_response({StatusLine, Headers, Body}) ->
 		{Body, <<>>}
 	end,
     {{StatusLine, http_response:header_list(Headers), NewBody}, Data}.
+
+%%--------------------------------------------------------------------------
+%% These functions is just simple wrappers to parse specifically HTTP URIs
+%%--------------------------------------------------------------------------
+
+scheme_defaults() ->
+    [{http, 80}, {https, 443}].
+
+uri_parse(URI, Opts) ->
+    http_uri:parse(URI, [{scheme_defaults, scheme_defaults()} | Opts]).
+
+
+%%--------------------------------------------------------------------------
+
 

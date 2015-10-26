@@ -1,10 +1,10 @@
-<?xml version="1.0" encoding="latin1" ?>
+<?xml version="1.0" encoding="utf-8" ?>
 <!DOCTYPE chapter SYSTEM "chapter.dtd">
 
 <chapter>
   <header>
     <copyright>
-      <year>2004</year><year>2009</year>
+      <year>2004</year><year>2014</year>
       <holder>Ericsson AB. All Rights Reserved.</holder>
     </copyright>
     <legalnotice>
@@ -35,31 +35,35 @@
   <image file="snmp_manager_netif_1.gif">
     <icaption>The Purpose of Manager Net if</icaption>
   </image>
+
   <p>The Network Interface (Net if) process delivers SNMP PDUs to the
-    manager server, and receives SNMP PDUs from the manager server. 
-    The most common behaviour of a Net if process is that is receives 
-    request PDU from the manager server, encodes the PDU into bytes
-    and transmits the bytes onto the network to an agent. When the 
-    reply from the agent is received by the Net if process, which it
-    decodes into an SNMP PDU, which it sends to the manager server.
-    </p>
+  manager server, and receives SNMP PDUs from the manager server. 
+  The most common behaviour of a Net if process is that is receives 
+  request PDU from the manager server, encodes the PDU into bytes
+  and transmits the bytes onto the network to an agent. When the 
+  reply from the agent is received by the Net if process, which it
+  decodes into an SNMP PDU, which it sends to the manager server. </p>
+
   <p>However, that simple behaviour can be modified in numerous
-    ways. For example, the Net if process can apply some kind of
-    encrypting/decrypting scheme on the bytes.
-    </p>
-  <p>It is also possible to write your own Net if process. The default
-    Net if process is implemented in the module <c>snmpm_net_if</c> and
-    it uses UDP as the transport protocol.
-    </p>
-  <p>This section describes how to write a Net if process.
-    </p>
+  ways. For example, the Net if process can apply some kind of
+  encrypting/decrypting scheme on the bytes. </p>
+
+  <p>The snmp application provides two different modules, 
+  <c>snmpm_net_if</c> (the default) and <c>snmpm_net_if_mt</c>, 
+  both uses UDP as the transport protocol i.e the transport domains
+  <c>transportDomainUdpIpv4</c> and/or <c>transportDomainUdpIpv6</c>.
+  The difference between the two modules is that the latter is
+  "multi-threaded",  i.e. for each message/request a new process
+  is created that processes the message/request and then exits. </p>
+
+  <p>It is also possible to write your own Net if process and
+  this section describes how to do that.</p>
 
   <section>
     <marker id="mandatory_functions"></marker>
     <title>Mandatory Functions</title>
     <p>A Net if process must implement the SNMP manager 
-      <seealso marker="snmpm_network_interface">network interface behaviour</seealso>.
-      </p>
+    <seealso marker="snmpm_network_interface">network interface behaviour</seealso>. </p>
   </section>
 
   <section>
@@ -67,11 +71,17 @@
     <p>The section <em>Messages</em> describes mandatory messages, which
       Net if must send to the manager server process.     
       </p>
+    <p>In this section a <c>Domain</c> field is the transport domain i.e
+    one of <c>transportDomainUdpIpv4</c> or <c>transportDomainUdpIpv6</c>,
+    and an <c>Addr</c> field is an
+    <c>{<seealso marker="kernel:inet#type-ip_address">IpAddr</seealso>,
+    IpPort}</c> tuple.</p>
+
     <p>Net if must send the following message when it receives an
       SNMP PDU from the network that is aimed for the MasterAgent:
       </p>
     <pre>
-Server ! {snmp_pdu, Pdu, Addr, Port}
+Server ! {snmp_pdu, Pdu, Domain, Addr}
     </pre>
     <list type="bulleted">
       <item>
@@ -79,14 +89,14 @@ Server ! {snmp_pdu, Pdu, Addr, Port}
           <c>snmp_types.hrl</c>, with the SNMP request.</p>
       </item>
       <item>
-        <p><c>Addr</c> is the source address. </p>
+        <p><c>Domain</c> is the source transport domain. </p>
       </item>
       <item>
-        <p><c>Port</c> is port number of the sender.</p>
+        <p><c>Addr</c> is the source address. </p>
       </item>
     </list>
     <pre>
-Server ! {snmp_trap, Trap, Addr, Port}
+Server ! {snmp_trap, Trap, Domain, Addr}
     </pre>
     <list type="bulleted">
       <item>
@@ -94,14 +104,14 @@ Server ! {snmp_trap, Trap, Addr, Port}
           as defined in <c>snmp_types.hrl</c>, with the SNMP request.</p>
       </item>
       <item>
-        <p><c>Addr</c> is the source address. </p>
+        <p><c>Domain</c> is the source transport domain. </p>
       </item>
       <item>
-        <p><c>Port</c> is port number of the sender.</p>
+        <p><c>Addr</c> is the source address. </p>
       </item>
     </list>
     <pre>
-Server ! {snmp_inform, Ref, Pdu, PduMS, Addr, Port}
+Server ! {snmp_inform, Ref, Pdu, PduMS, Domain, Addr}
     </pre>
     <list type="bulleted">
       <item>
@@ -120,14 +130,14 @@ Server ! {snmp_inform, Ref, Pdu, PduMS, Addr, Port}
           <c>snmp_types.hrl</c>, with the SNMP request.</p>
       </item>
       <item>
-        <p><c>Addr</c> is the source address. </p>
+        <p><c>Domain</c> is the source transport domain. </p>
       </item>
       <item>
-        <p><c>Port</c> is port number of the sender.</p>
+        <p><c>Addr</c> is the source address. </p>
       </item>
     </list>
     <pre>
-Server ! {snmp_report, Data, Addr, Port}
+Server ! {snmp_report, Data, Domain, Addr}
     </pre>
     <list type="bulleted">
       <item>
@@ -149,10 +159,10 @@ Server ! {snmp_report, Data, Addr, Port}
         <p><c>ReasonInfo</c> is a term().</p>
       </item>
       <item>
-        <p><c>Addr</c> is the source address. </p>
+        <p><c>Domain</c> is the source transport domain. </p>
       </item>
       <item>
-        <p><c>Port</c> is port number of the sender.</p>
+        <p><c>Addr</c> is the source address. </p>
       </item>
     </list>
 

@@ -2,7 +2,7 @@
 %%
 %% %CopyrightBegin%
 %% 
-%% Copyright Ericsson AB 2005-2009. All Rights Reserved.
+%% Copyright Ericsson AB 2005-2013. All Rights Reserved.
 %% 
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -19,9 +19,9 @@
 %%
 %%----------------------------------------------------------------------
 %% File    : hipe_icode_mulret.erl
-%% Author  : Christoffer Vikström <chvi3471@it.uu.se>
+%% Author  : Christoffer VikstrÃ¶m <chvi3471@it.uu.se>
 %% Purpose : 
-%% Created : 23 Jun 2004 by Christoffer Vikström <chvi3471@it.uu.se>
+%% Created : 23 Jun 2004 by Christoffer VikstrÃ¶m <chvi3471@it.uu.se>
 %%----------------------------------------------------------------------
 
 -module(hipe_icode_mulret).
@@ -595,9 +595,9 @@ optimizeDefine([I|Code], Dsts, DstLst, Res) ->
   [Ds] = Dsts,
   case isCallPrimop(I, mktuple) andalso DstLst =:= [] of
     true ->
-      case (hipe_icode:call_dstlist(I) =:= Dsts) of
+      case hipe_icode:call_dstlist(I) =:= Dsts of
 	true ->
-	  case (hipe_icode:call_args(I) > 1) of 
+	  case length(hipe_icode:call_args(I)) > 1 of
 	    true ->
 	      optimizeDefine(Code, Dsts, hipe_icode:call_args(I), Res);
 	    false ->
@@ -890,7 +890,7 @@ removeUnElems([I|Code], [OldVar] = OldVars, DstLst, Res, Def, Lab)  ->
 	      %%			  [I|Res], Def, Lab)
 	      %% end;
 	    false ->
-	      io:format("Borde aldrig kunna hamna här!", []),
+	      io:format("Borde aldrig kunna hamna hÃ¤r!", []),
 	      removeUnElems(Code, OldVars, DstLst, [I|Res], Def, Lab)
 	  end
       end;
@@ -1159,16 +1159,16 @@ printCallList([]) -> io:format("~n").
 %% %  Purpose   : 
 %% %  Arguments : 
 %% %  Return    : 
-%% %  Notes     : Fixa så att funktionen använder defines(I) istället och 
-%% %              selektorer istället för att matcha på #call{}. Lätt gjort.  
+%% %  Notes     : Fixa sÃ¥ att funktionen anvÃ¤nder defines(I) istÃ¤llet och
+%% %              selektorer istÃ¤llet fÃ¶r att matcha pÃ¥ #call{}. LÃ¤tt gjort.
 %% %%>----------------------------------------------------------------------<
 %% removeUnElems(List, Var) -> removeUnElems(List, Var, []).
 %% removeUnElems([#icode_call{'fun'={unsafe_element,_}, args=Var}|List], Var, Res) ->
 %%     removeUnElems(List, Var, Res);
 %% removeUnElems([I=#icode_move{dst=Var}|List], [Var], Res) ->
-%%     lists:reverse(Res) ++ [I|List];
+%%     lists:reverse(Res, [I|List]);
 %% removeUnElems([I=#icode_call{dstlist=Var}|List], Var, Res) ->
-%%     lists:reverse(Res) ++ [I|List];
+%%     lists:reverse(Res, [I|List]);
 %% removeUnElems([I|List], Var, Res) ->
 %%     removeUnElems(List, Var, [I|Res]);
 %% removeUnElems([], _, Res) -> lists:reverse(Res).
@@ -1187,7 +1187,7 @@ printCallList([]) -> io:format("~n").
 %% 			false ->
 %% 			    case lists:member(Var, Defs) of
 %% 				true ->
-%% 				    lists:reverse(Res) ++ [I|List];
+%% 				    lists:reverse(Res, [I|List]);
 %% 				false ->
 %% 				    removeUnElems(List, Var, [I|Res])
 %% 			    end 
@@ -1195,7 +1195,7 @@ printCallList([]) -> io:format("~n").
 %% 		false ->
 %% 		    case lists:member(Var, Defs) of
 %% 			true ->
-%% 			    lists:reverse(Res) ++ [I|List];
+%% 			    lists:reverse(Res, [I|List]);
 %% 			false ->
 %% 			    removeUnElems(List, Var, [I|Res])
 %% 		    end
@@ -1203,7 +1203,7 @@ printCallList([]) -> io:format("~n").
 %% 	false ->
 %% 	    case lists:member(Var, Defs) of
 %% 		true ->
-%% 		    lists:reverse(Res) ++ [I|List];
+%% 		    lists:reverse(Res, [I|List]);
 %% 		false ->
 %% 		    removeUnElems(List, Var, [I|Res])
 %% 	    end
@@ -1248,16 +1248,16 @@ printCallList([]) -> io:format("~n").
 %% modifyCode([I|Code], Var, Res) ->
 %%     case scanInstr(I, Var) of
 %% 	{move, Arity, VarLst} ->
-%% 	    Code2 = [#icode_return{vars=VarLst}, I |lists:reverse(Res) ++ Code],
+%% 	    Code2 = [#icode_return{vars=VarLst}, I |lists:reverse(Res, Code)],
 %% 	    {Arity, lists:reverse(Code2)};
 %% 	{mktuple, Arity, VarLst} ->
-%% 	    Code2 = [#icode_return{vars=VarLst}|lists:reverse(Res) ++ Code],
+%% 	    Code2 = [#icode_return{vars=VarLst}|lists:reverse(Res, Code)],
 %% 	    {Arity, lists:reverse(Code2)};
 %% 	other ->
 %% 	    modifyCode(Code, Var, [I|Res])
 %%     end;
 %% modifyCode([], Var, Res) ->
-%%     {1, lists:reverse(Res) ++ [#icode_return{vars=Var}]}.
+%%     {1, lists:reverse(Res, [#icode_return{vars=Var}]}.
     
 %% scanInstr(#icode_call{dstlist=Var, 'fun'=mktuple, args=Lst}, Var) ->
 %%     {mktuple, length(Lst), Lst};

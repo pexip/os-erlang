@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %% 
-%% Copyright Ericsson AB 2006-2009. All Rights Reserved.
+%% Copyright Ericsson AB 2006-2012. All Rights Reserved.
 %% 
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -24,7 +24,7 @@
 
 -module(ct_cover).
 
--export([get_spec/1, add_nodes/1, remove_nodes/1]).
+-export([get_spec/1, add_nodes/1, remove_nodes/1, cross_cover_analyse/2]).
 
 -include("ct_util.hrl").
 
@@ -47,18 +47,21 @@ add_nodes(Nodes) ->
 	undefined ->
 	    {error,cover_not_running};
 	_ ->
-	    {File,Nodes0,Import,Export,AppInfo} = ct_util:get_testdata(cover),
+	    Nodes0 = cover:which_nodes(),
 	    Nodes1 = [Node || Node <- Nodes,
 			      lists:member(Node,Nodes0) == false],
 	    ct_logs:log("COVER INFO",
 			"Adding nodes to cover test: ~w", [Nodes1]),
 	    case cover:start(Nodes1) of
-		Result = {ok,_} ->
-		    ct_util:set_testdata({cover,{File,Nodes1++Nodes0,
-						 Import,Export,AppInfo}}),
-		    
+		Result = {ok,StartedNodes} ->
+		    ct_logs:log("COVER INFO",
+				"Successfully added nodes to cover test: ~w",
+				[StartedNodes]),
 		    Result;
 		Error ->
+		    ct_logs:log("COVER INFO",
+				"Failed to add nodes to cover test: ~tp",
+				[Error]),
 		    Error
 	    end
     end.
@@ -81,24 +84,41 @@ remove_nodes(Nodes) ->
 	undefined ->
 	    {error,cover_not_running};
 	_ ->
-	    {File,Nodes0,Import,Export,AppInfo} = ct_util:get_testdata(cover),
+	    Nodes0 = cover:which_nodes(),
 	    ToRemove = [Node || Node <- Nodes, lists:member(Node,Nodes0)],
 	    ct_logs:log("COVER INFO",
-			"Removing nodes from cover test: ~w", [ToRemove]),	    
+			"Removing nodes from cover test: ~w", [ToRemove]),
 	    case cover:stop(ToRemove) of
 		ok ->
-		    Nodes1 = lists:foldl(fun(N,Deleted) -> 
-						 lists:delete(N,Deleted) 
-					 end, Nodes0, ToRemove),
-		    ct_util:set_testdata({cover,{File,Nodes1,
-						 Import,Export,AppInfo}}),
+		    ct_logs:log("COVER INFO",
+				"Successfully removed nodes from cover test.",
+				[]),
 		    ok;
 		Error ->
+		    ct_logs:log("COVER INFO",
+				"Failed to remove nodes from cover test: ~tp",
+				[Error]),
 		    Error
 	    end
     end.
     
     
+%%%-----------------------------------------------------------------
+%%% @spec cross_cover_analyse(Level,Tests) -> ok
+%%%    Level = overview | details
+%%%    Tests = [{Tag,Dir}]
+%%%    Tag = atom()
+%%%    Dir = string()
+%%%
+%%% @doc Accumulate cover results over multiple tests.
+%%%      See the chapter about <seealso
+%%%      marker="cover_chapter#cross_cover">cross cover
+%%%      analysis</seealso> in the users's guide.
+%%%
+cross_cover_analyse(Level,Tests) ->
+    test_server_ctrl:cross_cover_analyse(Level,Tests).
+
+
 %%%-----------------------------------------------------------------
 %%% @hidden 
 
@@ -133,7 +153,7 @@ get_spec_test(File) ->
 			    {value,{_,[Exp]}} ->
 				filename:absname(Exp);
 			    _ -> 
-				[]
+				undefined
 			end,
 		    Nodes = 
 			case lists:keysearch(nodes, 1, Terms) of
@@ -249,9 +269,11 @@ get_app_info(App=#cover{app=Name}, [{excl_mods,Name,Mods1}|Terms]) ->
     Mods = App#cover.excl_mods,
     get_app_info(App#cover{excl_mods=Mods++Mods1},Terms);
 
-get_app_info(App=#cover{app=Name}, [{cross_apps,Name,AppMods1}|Terms]) ->
-    AppMods = App#cover.cross,
-    get_app_info(App#cover{cross=AppMods++AppMods1},Terms);
+get_app_info(App=#cover{app=none}, [{cross,Cross}|Terms]) ->
+    get_app_info(App, [{cross,none,Cross}|Terms]);
+get_app_info(App=#cover{app=Name}, [{cross,Name,Cross1}|Terms]) ->
+    Cross = App#cover.cross,
+    get_app_info(App#cover{cross=Cross++Cross1},Terms);
 
 get_app_info(App=#cover{app=none}, [{src_dirs,Dirs}|Terms]) ->
     get_app_info(App, [{src_dirs,none,Dirs}|Terms]);
@@ -354,10 +376,10 @@ remove_excludes_and_dups(CoverData=#cover{excl_mods=Excl,incl_mods=Incl}) ->
     
 files2mods(Info=#cover{excl_mods=ExclFs,
 		       incl_mods=InclFs,
-		       cross=CrossFs}) ->
+		       cross=Cross}) ->
     Info#cover{excl_mods=files2mods1(ExclFs),
 	       incl_mods=files2mods1(InclFs),
-	       cross=files2mods1(CrossFs)}.
+	       cross=[{Tag,files2mods1(Fs)} || {Tag,Fs} <- Cross]}.
 
 files2mods1([M|Fs]) when is_atom(M) ->
     [M|files2mods1(Fs)];

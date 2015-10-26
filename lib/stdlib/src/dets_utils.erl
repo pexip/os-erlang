@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %% 
-%% Copyright Ericsson AB 2001-2009. All Rights Reserved.
+%% Copyright Ericsson AB 2001-2013. All Rights Reserved.
 %% 
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -230,8 +230,12 @@ write_file(Head, Bin) ->
 	    {ok, Fd} ->
 		R1 = file:write(Fd, Bin),
 		R2 = file:sync(Fd),
-		file:close(Fd),
-		if R1 =:= ok -> R2; true -> R1 end;
+		R3 = file:close(Fd),
+                case {R1, R2, R3} of
+                    {ok, ok, R3} -> R3;
+                    {ok, R2, _} -> R2;
+                    {R1, _, _} -> R1
+                end;
 	    Else ->
 		Else
 	end,
@@ -277,12 +281,7 @@ open(FileSpec, Args) ->
     end.
 
 truncate(Fd, FileName, Pos) ->
-    if
-	Pos =:= cur ->
-	    ok;
-	true ->
-	    position(Fd, FileName, Pos)
-    end,
+    _ = [position(Fd, FileName, Pos) || Pos =/= cur],
     case file:truncate(Fd) of
 	ok    -> 
 	    ok;
@@ -327,10 +326,10 @@ pread_close(Fd, FileName, Pos, Size) ->
 	{error, Error} ->
 	    file_error_close(Fd, FileName, {error, Error});
 	{ok, Bin} when byte_size(Bin) < Size ->
-	    file:close(Fd),
+	    _ = file:close(Fd),
 	    throw({error, {tooshort, FileName}});
 	eof ->
-	    file:close(Fd),
+	    _ = file:close(Fd),
 	    throw({error, {tooshort, FileName}});
 	OK -> OK
     end.
@@ -339,7 +338,7 @@ file_error(FileName, {error, Reason}) ->
     throw({error, {file_error, FileName, Reason}}).
 
 file_error_close(Fd, FileName, {error, Reason}) ->
-    file:close(Fd),
+    _ = file:close(Fd),
     throw({error, {file_error, FileName, Reason}}).
 	    
 debug_mode() ->
@@ -395,7 +394,7 @@ corrupt_reason(Head, Reason0) ->
 corrupt(Head, Error) ->
     case get(verbose) of
 	yes -> 
-	    error_logger:format("** dets: Corrupt table ~p: ~p\n", 
+	    error_logger:format("** dets: Corrupt table ~p: ~tp\n", 
 				[Head#head.name, Error]);
 	_ -> ok
     end,
@@ -977,7 +976,8 @@ dm([{P,<<Sz:32,X:32>>} | Bs], T) ->
     true = ets:insert(T, {P,{pointer,X,Sz}}),
     if 
         Sz =:= 0 -> 
-            X = 0; 
+            X = 0,
+            true;
         true -> 
             true = ets:insert(T, {{pointer,X}, P})
     end,

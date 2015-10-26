@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2000-2011. All Rights Reserved.
+%% Copyright Ericsson AB 2000-2013. All Rights Reserved.
 %%
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -46,13 +46,14 @@
 -export([
 	 add/1, default/1, info/1, lib/1, read/1, read2/1, remove/1,
 	 replace/1, update/1, deprecated/1, trycatch/1,
-         abstract_modules/1, fun_mfa/1, qlc/1]).
+         fun_mfa/1, fun_mfa_r14/1,
+	 fun_mfa_vars/1, qlc/1]).
 
 -export([
 	 analyze/1, basic/1, md/1, q/1, variables/1, unused_locals/1]).
 
 -export([
-	 format_error/1, otp_7423/1, otp_7831/1]).
+	 format_error/1, otp_7423/1, otp_7831/1, otp_10192/1]).
 
 -import(lists, [append/2, flatten/1, keysearch/3, member/2, sort/1, usort/1]).
 
@@ -81,11 +82,11 @@ groups() ->
        modules]},
      {files, [],
       [add, default, info, lib, read, read2, remove, replace,
-       update, deprecated, trycatch, abstract_modules, fun_mfa,
-       qlc]},
+       update, deprecated, trycatch, fun_mfa,
+       fun_mfa_r14, fun_mfa_vars, qlc]},
      {analyses, [],
       [analyze, basic, md, q, variables, unused_locals]},
-     {misc, [], [format_error, otp_7423, otp_7831]}].
+     {misc, [], [format_error, otp_7423, otp_7831, otp_10192]}].
 
 init_per_suite(Config) ->
     init(Config).
@@ -1046,7 +1047,7 @@ read_expected(Version) ->
     POS1 = 28, POS2 = POS1+10, POS3 = POS2+6, POS4 = POS3+6, POS5 = POS4+10,
     POS6 = POS5+5, POS7 = POS6+6, POS8 = POS7+6, POS9 = POS8+8,
     POS10 = POS9+10, POS11 = POS10+7, POS12 = POS11+8, POS13 = POS12+10,
-    POS14 = POS13+18, % POS15 = POS14+23,
+    POS14 = POS13+18, POS15 = POS14+23,
 
     FF = {read,funfuns,0},
     U = [{POS1+5,{FF,{dist,'$F_EXPR',0}}},
@@ -1195,11 +1196,6 @@ read_expected(Version) ->
                   {0,{FF,{modul,'$F_EXPR',179}}}]
                  ++ O1;
 	     _ ->
-%                 [{POS15+2,{{read,bi,0},{foo,t,0}}},
-%                  {POS15+3,{{read,bi,0},{bar,t,0}}},
-%                  {POS15+6,{{read,bi,0},{read,local,0}}},
-%                  {POS15+8,{{read,bi,0},{foo,t,0}}},
-%                  {POS15+10,{{read,bi,0},{bar,t,0}}}] ++
                  [{16,{FF,{read,'$F_EXPR',178}}},
                   {17,{FF,{modul,'$F_EXPR',179}}}]
                  ++
@@ -1210,7 +1206,7 @@ read_expected(Version) ->
     OKB1 = [{POS13+1,{FF,{erts_debug,apply,4}}},
             {POS13+2,{FF,{erts_debug,apply,4}}},
             {POS13+3,{FF,{erts_debug,apply,4}}},
-            {POS1+3, {FF,{erlang,binary_to_term,1}}},
+	    {POS1+3, {FF,{erlang,binary_to_term,1}}},
             {POS3+1, {FF,{erlang,spawn,3}}},
             {POS3+2, {FF,{erlang,spawn,3}}},
             {POS3+3,  {FF,{erlang,spawn_link,3}}},
@@ -1226,7 +1222,11 @@ read_expected(Version) ->
               _ ->
                   [{POS13+16, {{read,bi,0},{erlang,'!',2}}},
                    {POS13+16, {{read,bi,0},{erlang,'-',1}}},
-                   {POS13+16, {{read,bi,0},{erlang,self,0}}}]
+                   {POS13+16, {{read,bi,0},{erlang,self,0}}},
+                   {POS15+1,  {{read,bi,0},{erlang,'>',2}}},
+                   {POS15+2,  {{read,bi,0},{erlang,'-',2}}},
+                   {POS15+2,  {{read,bi,0},{erlang,'*',2}}},
+                   {POS15+8,  {{read,bi,0},{erlang,'/',2}}}]
           end
         ++ [{POS14+19, {{read,bi,0},{erlang,'+',2}}},
             {POS14+21, {{read,bi,0},{erlang,'+',2}}},
@@ -1667,64 +1667,6 @@ trycatch(Conf) when is_list(Conf) ->
     ok.
 
 
-abstract_modules(suite) -> [];
-abstract_modules(doc) -> ["OTP-5520: Abstract (parameterized) modules."];
-abstract_modules(Conf) when is_list(Conf) ->
-    Dir = ?copydir,
-    File = fname(Dir, "absmod.erl"),
-    MFile = fname(Dir, "absmod"),
-    Beam = fname(Dir, "absmod.beam"),
-    Test = <<"-module(param, [A, B]).
-
-              -export([args/1]).
-
-              args(C) ->
-                  X = local(C),
-                  Y = THIS:new(), % undef
-                  Z = new(A, B),
-                  {X, Y, Z}.
-
-              local(C) ->
-                  module_info(C).
-             ">>,
-
-    ?line ok = file:write_file(File, Test),
-
-    %% The compiler will no longer allow us to have a mismatch between
-    %% the module name and the output file, so we must use a trick.
-    ?line {ok, param, BeamCode} = compile:file(File, [binary,debug_info]),
-    ?line ok = file:write_file(Beam, BeamCode),
-
-    ?line {ok, _} = xref:start(s),
-    ?line {ok, param} = xref:add_module(s, MFile, {warnings,false}),
-    A = param,
-    ?line {ok, [{{{A,args,1},{'$M_EXPR',new,0}},[7]},
-                {{{A,args,1},{A,local,1}},[6]},
-                {{{A,args,1},{A,new,2}},[8]},
-                {{{A,local,1},{A,module_info,1}},[12]},
-                {{{param,new,2},{param,instance,2}},[0]}]} =
-        xref:q(s, "(Lin) E"),
-    ?line {ok,[{param,args,1},
-               {param,instance,2},
-               {param,local,1},
-               {param,module_info,1},
-               {param,new,2}]} = xref:q(s, "F"),
-
-    ?line ok = check_state(s),
-    ?line xref:stop(s),
-
-    ?line {ok, _} = xref:start(s, {xref_mode, modules}),
-    ?line {ok, param} = xref:add_module(s, MFile),
-    ?line {ok,[{param,args,1},
-               {param,instance,2},
-               {param,new,2}]} = xref:q(s, "X"),
-    ?line ok = check_state(s),
-    ?line xref:stop(s),
-
-    ?line ok = file:delete(File),
-    ?line ok = file:delete(Beam),
-    ok.
-
 fun_mfa(suite) -> [];
 fun_mfa(doc) -> ["OTP-5653: fun M:F/A."];
 fun_mfa(Conf) when is_list(Conf) ->
@@ -1769,6 +1711,88 @@ fun_mfa(Conf) when is_list(Conf) ->
 
     ?line ok = file:delete(File),
     ?line ok = file:delete(Beam),
+    ok.
+
+%% Same as the previous test case, except that we use a BEAM file
+%% that was compiled by an R14 compiler to test backward compatibility.
+fun_mfa_r14(Conf) when is_list(Conf) ->
+    Dir = ?config(data_dir, Conf),
+    MFile = fname(Dir, "fun_mfa_r14"),
+
+    A = fun_mfa_r14,
+    {ok, _} = xref:start(s),
+    {ok, A} = xref:add_module(s, MFile, {warnings,false}),
+    {ok, [{{{A,t,0},{'$M_EXPR','$F_EXPR',0}},[7]},
+	  {{{A,t,0},{A,t,0}},[6]},
+	  {{{A,t1,0},{'$M_EXPR','$F_EXPR',0}},[11]},
+	  {{{A,t1,0},{A,t,0}},[10]},
+	  {{{A,t2,0},{A,t,0}},[14]},
+	  {{{A,t3,0},{A,t3,0}},[17]}]} =
+        xref:q(s, "(Lin) E"),
+
+    ok = check_state(s),
+    xref:stop(s),
+
+    ok.
+
+%% fun M:F/A with varibles.
+fun_mfa_vars(Conf) when is_list(Conf) ->
+    Dir = ?copydir,
+    File = fname(Dir, "fun_mfa_vars.erl"),
+    MFile = fname(Dir, "fun_mfa_vars"),
+    Beam = fname(Dir, "fun_mfa_vars.beam"),
+    Test = <<"-module(fun_mfa_vars).
+
+              -export([t/1, t1/1, t2/3]).
+
+              t(Mod) ->
+                  F = fun Mod:bar/2,
+                  (F)(a, b).
+
+              t1(Name) ->
+                  F = fun ?MODULE:Name/1,
+                  (F)(a).
+
+              t2(Mod, Name, Arity) ->
+                  F = fun Mod:Name/Arity,
+                  (F)(a).
+
+              t3(Arity) ->
+                  F = fun ?MODULE:t/Arity,
+                  (F)(1, 2, 3).
+
+              t4(Mod, Name) ->
+                  F = fun Mod:Name/3,
+                  (F)(a, b, c).
+
+              t5(Mod, Arity) ->
+                  F = fun Mod:t/Arity,
+                  (F)().
+             ">>,
+
+    ok = file:write_file(File, Test),
+    A = fun_mfa_vars,
+    {ok, A} = compile:file(File, [report,debug_info,{outdir,Dir}]),
+    {ok, _} = xref:start(s),
+    {ok, A} = xref:add_module(s, MFile, {warnings,false}),
+    {ok, [{{{A,t,1},{'$M_EXPR','$F_EXPR',2}},[7]},
+	  {{{A,t,1},{'$M_EXPR',bar,2}},[6]},
+	  {{{A,t1,1},{'$M_EXPR','$F_EXPR',1}},[11]},
+	  {{{A,t1,1},{A,'$F_EXPR',1}},[10]},
+	  {{{A,t2,3},{'$M_EXPR','$F_EXPR',-1}},[14]},
+	  {{{A,t2,3},{'$M_EXPR','$F_EXPR',1}},[15]},
+	  {{{A,t3,1},{'$M_EXPR','$F_EXPR',3}},[19]},
+	  {{{A,t3,1},{fun_mfa_vars,t,-1}},[18]},
+	  {{{A,t4,2},{'$M_EXPR','$F_EXPR',3}},[22,23]},
+	  {{{A,t5,2},{'$M_EXPR','$F_EXPR',0}},[27]},
+	  {{{A,t5,2},{'$M_EXPR',t,-1}},[26]}]} =
+	xref:q(s, "(Lin) E"),
+
+    ok = check_state(s),
+    xref:stop(s),
+
+    ok = file:delete(File),
+    ok = file:delete(Beam),
     ok.
 
 qlc(suite) -> [];
@@ -2058,17 +2082,17 @@ basic(Conf) when is_list(Conf) ->
     ?line {ok, _} = eval("components (Mod) E", [[m1,m2,m3]], S),
     ?line {ok, _} = eval("components closure (Mod) E", [[m1,m2,m3]], S),
     ?line {ok, _} = eval("condensation (Mod) E",
-			 [{[m1,m2,m3],[m1,m2,m3]},{[m1,m2,m3],[m17]}], S),
+			 [{[m1,m2,m3],[m17]}], S),
     ?line {ok, _} = eval("condensation closure (Mod) E",
-			 [{[m1,m2,m3],[m1,m2,m3]},{[m1,m2,m3],[m17]}], S),
+			 [{[m1,m2,m3],[m17]}], S),
     ?line {ok, _} = eval("condensation closure closure closure (Mod) E",
-			 [{[m1,m2,m3],[m1,m2,m3]},{[m1,m2,m3],[m17]}], S),
+			 [{[m1,m2,m3],[m17]}], S),
     ?line {ok, _} = eval("weak condensation (Mod) E",
 	 [{[m1,m2,m3],[m1,m2,m3]},{[m1,m2,m3],[m17]},{[m17],[m17]}], S),
     ?line {ok, _} = eval("strict condensation (Mod) E",
 			 [{[m1,m2,m3],[m17]}], S),
     ?line {ok, _} = eval("range condensation (Mod) E",
-			 [[m1,m2,m3],[m17]], S),
+			 [[m17]], S),
     ?line {ok, _} = eval("domain condensation (Mod) E",
 			 [[m1,m2,m3]], S),
 
@@ -2430,6 +2454,18 @@ otp_7831(Conf) when is_list(Conf) ->
     ?line xref:stop(Pid1),
     ?line {ok, Pid2} = xref:start([{xref_mode, modules}]),
     ?line xref:stop(Pid2),
+    ok.
+
+otp_10192(suite) -> [];
+otp_10192(doc) ->
+    ["OTP-10192. Allow filenames with character codes greater than 126."];
+otp_10192(Conf) when is_list(Conf) ->
+    PrivDir = ?privdir,
+    {ok, _Pid} = xref:start(s),
+    Dir = filename:join(PrivDir, "ä"),
+    ok = file:make_dir(Dir),
+    {ok, []} = xref:add_directory(s, Dir),
+    xref:stop(s),
     ok.
 
 %%%

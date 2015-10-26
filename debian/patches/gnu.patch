@@ -11,9 +11,9 @@ Author: Pino Toscano <pino@debian.org>
 
 (4) Switch some PATH_MAX occurrences to MAXPATHLEN;
 
---- erlang-14.b.4-dfsg.orig/erts/configure.in
-+++ erlang-14.b.4-dfsg/erts/configure.in
-@@ -385,7 +385,7 @@
+--- a/erts/configure.in
++++ b/erts/configure.in
+@@ -481,7 +481,7 @@
  
  dnl NOTE: CPPFLAGS will be included in CFLAGS at the end
  case $host_os in
@@ -22,7 +22,7 @@ Author: Pino Toscano <pino@debian.org>
      win32)
  	# The ethread library requires _WIN32_WINNT of at least 0x0403.
  	# -D_WIN32_WINNT=* from CPPFLAGS is saved in ETHR_DEFS.
-@@ -1190,7 +1190,7 @@
+@@ -1334,7 +1334,7 @@
  	    solaris*)
  		enable_child_waiter_thread=yes
  		;;
@@ -31,11 +31,11 @@ Author: Pino Toscano <pino@debian.org>
  		AC_MSG_CHECKING([whether dlopen() needs to be called before first call to dlerror()])
  		if test "x$ETHR_THR_LIB_BASE_TYPE" != "xposix_nptl"; then
  		    AC_DEFINE(ERTS_NEED_DLOPEN_BEFORE_DLERROR,[1],
---- erlang-14.b.4-dfsg.orig/lib/os_mon/c_src/memsup.c
-+++ erlang-14.b.4-dfsg/lib/os_mon/c_src/memsup.c
-@@ -110,6 +110,11 @@
- #include <memLib.h>
- #endif
+--- a/lib/os_mon/c_src/memsup.c
++++ b/lib/os_mon/c_src/memsup.c
+@@ -98,6 +98,11 @@
+ #include <time.h>
+ #include <errno.h>
  
 +#ifdef __GNU__
 +#warning "Undefined BSD4_4 for GNU/Hurd"
@@ -45,9 +45,9 @@ Author: Pino Toscano <pino@debian.org>
  #ifdef BSD4_4
  #include <sys/types.h>
  #include <sys/sysctl.h>
---- erlang-14.b.4-dfsg.orig/erts/emulator/drivers/common/inet_drv.c
-+++ erlang-14.b.4-dfsg/erts/emulator/drivers/common/inet_drv.c
-@@ -401,6 +401,11 @@
+--- a/erts/emulator/drivers/common/inet_drv.c
++++ b/erts/emulator/drivers/common/inet_drv.c
+@@ -692,6 +692,11 @@
          inet_driver_select((d)->port, (ErlDrvEvent)(long)(d)->event, (flags), (onoff)); \
     } while(0)
  
@@ -57,11 +57,11 @@ Author: Pino Toscano <pino@debian.org>
 +#endif
 +
  
- #endif /* __WIN32__ */
+ #endif /* !__WIN32__ && !__OSE__ */
  
---- erlang-14.b.4-dfsg.orig/erts/etc/common/erlexec.c
-+++ erlang-14.b.4-dfsg/erts/etc/common/erlexec.c
-@@ -1536,7 +1536,7 @@
+--- a/erts/etc/common/erlexec.c
++++ b/erts/etc/common/erlexec.c
+@@ -1561,7 +1561,7 @@
      if (!bindir) {
  	/* Determine bindir from absolute path to executable */
  	char *p;
@@ -70,7 +70,7 @@ Author: Pino Toscano <pino@debian.org>
  	strncpy(buffer, argv[0], sizeof(buffer));
  	buffer[sizeof(buffer)-1] = '\0';
  	
-@@ -1550,7 +1550,7 @@
+@@ -1575,7 +1575,7 @@
      if (!rootdir) {
  	/* Determine rootdir from absolute path to bindir */
  	char *p;
@@ -79,9 +79,9 @@ Author: Pino Toscano <pino@debian.org>
  	strncpy(buffer, bindir, sizeof(buffer));
  	buffer[sizeof(buffer)-1] = '\0';
  	
---- erlang-14.b.4-dfsg.orig/erts/etc/common/escript.c
-+++ erlang-14.b.4-dfsg/erts/etc/common/escript.c
-@@ -53,7 +53,7 @@
+--- a/erts/etc/common/escript.c
++++ b/erts/etc/common/escript.c
+@@ -54,7 +54,7 @@
  #  define IS_DIRSEP(c) ((c) == '/')
  #  define DIRSEPSTR "/"
  #  define PATHSEPSTR ":"
@@ -90,8 +90,8 @@ Author: Pino Toscano <pino@debian.org>
  #  define ERL_NAME "erl"
  #endif
  
---- erlang-14.b.4-dfsg.orig/erts/etc/unix/dyn_erl.c
-+++ erlang-14.b.4-dfsg/erts/etc/unix/dyn_erl.c
+--- a/erts/etc/unix/dyn_erl.c
++++ b/erts/etc/unix/dyn_erl.c
 @@ -149,8 +149,8 @@
  static char *
  find_prog(char *origpath)

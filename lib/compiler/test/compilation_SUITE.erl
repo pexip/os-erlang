@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %% 
-%% Copyright Ericsson AB 1997-2011. All Rights Reserved.
+%% Copyright Ericsson AB 1997-2013. All Rights Reserved.
 %% 
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -28,26 +28,30 @@ suite() -> [{ct_hooks,[ts_install_cth]}].
 
 all() -> 
     test_lib:recompile(?MODULE),
-    [self_compile_old_inliner, self_compile, compiler_1,
-     compiler_3, compiler_5, beam_compiler_1,
-     beam_compiler_2, beam_compiler_3, beam_compiler_4,
-     beam_compiler_5, beam_compiler_6, beam_compiler_7,
-     beam_compiler_8, beam_compiler_9, beam_compiler_10,
-     beam_compiler_11, beam_compiler_12,
-     nested_tuples_in_case_expr, otp_2330, guards,
-     {group, vsn}, otp_2380, otp_2141, otp_2173, otp_4790,
-     const_list_256, bin_syntax_1, bin_syntax_2,
-     bin_syntax_3, bin_syntax_4, bin_syntax_5, bin_syntax_6,
-     live_var, convopts, bad_functional_value,
-     catch_in_catch, redundant_case, long_string, otp_5076,
-     complex_guard, otp_5092, otp_5151, otp_5235, otp_5244,
-     trycatch_4, opt_crash, otp_5404, otp_5436, otp_5481,
-     otp_5553, otp_5632, otp_5714, otp_5872, otp_6121,
-     otp_6121a, otp_6121b, otp_7202, otp_7345, on_load,
-     string_table,otp_8949_a,otp_8949_a].
+    [self_compile_old_inliner,self_compile,
+     {group,p}].
 
 groups() -> 
-    [{vsn, [], [vsn_1, vsn_2, vsn_3]}].
+    [{vsn,[parallel],[vsn_1,vsn_2,vsn_3]},
+     {p,test_lib:parallel(),
+      [compiler_1,
+       compiler_3,compiler_5,beam_compiler_1,
+       beam_compiler_2,beam_compiler_3,beam_compiler_4,
+       beam_compiler_5,beam_compiler_6,beam_compiler_7,
+       beam_compiler_8,beam_compiler_9,beam_compiler_10,
+       beam_compiler_11,beam_compiler_12,
+       nested_tuples_in_case_expr,otp_2330,guards,
+       {group,vsn},otp_2380,otp_2141,otp_2173,otp_4790,
+       const_list_256,bin_syntax_1,bin_syntax_2,
+       bin_syntax_3,bin_syntax_4,bin_syntax_5,bin_syntax_6,
+       live_var,convopts,
+       catch_in_catch,redundant_case,long_string,otp_5076,
+       complex_guard,otp_5092,otp_5151,otp_5235,otp_5244,
+       trycatch_4,opt_crash,otp_5404,otp_5436,otp_5481,
+       otp_5553,otp_5632,otp_5714,otp_5872,otp_6121,
+       otp_6121a,otp_6121b,otp_7202,otp_7345,on_load,
+       string_table,otp_8949_a,otp_8949_b,split_cases,
+       beam_utils_liveopt]}].
 
 init_per_suite(Config) ->
     Config.
@@ -140,7 +144,6 @@ split({int, N}, <<N:16,B:N/binary,T/binary>>) ->
 ?comp(live_var).
 
 ?comp(trycatch_4).
-?comp(bad_functional_value).
 
 ?comp(catch_in_catch).
 
@@ -159,6 +162,7 @@ split({int, N}, <<N:16,B:N/binary,T/binary>>) ->
 ?comp(convopts).
 ?comp(otp_7202).
 ?comp(on_load).
+?comp(on_load_inline).
 
 beam_compiler_7(doc) ->
     "Code snippet submitted from Ulf Wiger which fails in R3 Beam.";
@@ -192,7 +196,7 @@ redundant_case_1(_) -> d.
 failure(Module, Conf) ->
     ?line Src = filename:join(?config(data_dir, Conf), atom_to_list(Module)),
     ?line Out = ?config(priv_dir,Conf),
-    ?line io:format("Compiling: ~s\n", [Src]),
+    ?line io:format("Compiling: ~ts\n", [Src]),
     ?line CompRc = compile:file(Src, [{outdir,Out},return,time]),
     ?line io:format("Result: ~p\n",[CompRc]),
     ?line case CompRc of
@@ -273,6 +277,16 @@ try_it(StartNode, Module, Conf) ->
     ?line {ok,_Mod} = CompRc2,
     ?line ok = rpc:call(Node, ?MODULE, load_and_call, [Out, Module]),
     ?line test_server:timetrap_cancel(LastDog),
+
+    AsmDog = test_server:timetrap(test_server:minutes(10)),
+    io:format("Compiling (from assembly): ~s\n", [Src]),
+    {ok,_} = compile:file(Src, [to_asm,{outdir,Out},report|OtherOpts]),
+    Asm = filename:join(Out, lists:concat([Module, ".S"])),
+    CompRc3 = compile:file(Asm, [from_asm,{outdir,Out},report|OtherOpts]),
+    io:format("Result: ~p\n",[CompRc3]),
+    {ok,_} = CompRc3,
+    ok = rpc:call(Node, ?MODULE, load_and_call, [Out, Module]),
+    test_server:timetrap_cancel(AsmDog),
 
     case StartNode of
 	false -> ok;
@@ -427,9 +441,9 @@ self_compile_1(Config, Prefix, Opts) ->
     %% Compile the compiler again using the newly compiled compiler.
     %% (In another node because reloading the compiler would disturb cover.)
     CompilerB = Prefix++"compiler_b",
-    ?line CompB = make_compiler_dir(Priv, Prefix++"compiler_b"),
+    CompB = make_compiler_dir(Priv, CompilerB),
     ?line VsnB = VsnA ++ ".0",
-    ?line self_compile_node(CompilerB, CompA, CompB, VsnB, Opts),
+    self_compile_node(CompA, CompB, VsnB, Opts),
 
     %% Compare compiler directories.
     ?line compare_compilers(CompA, CompB),
@@ -438,36 +452,44 @@ self_compile_1(Config, Prefix, Opts) ->
     ?line CompilerC = Prefix++"compiler_c",
     ?line CompC = make_compiler_dir(Priv, CompilerC),
     ?line VsnC = VsnB ++ ".0",
-    ?line self_compile_node(CompilerC, CompB, CompC, VsnC, Opts),
+    self_compile_node(CompB, CompC, VsnC, Opts),
     ?line compare_compilers(CompB, CompC),
 
     ?line test_server:timetrap_cancel(Dog),
     ok.
 
-self_compile_node(NodeName0, CompilerDir, OutDir, Version, Opts) ->
-    ?line NodeName = list_to_atom(NodeName0),
-    ?line Dog = test_server:timetrap(test_server:minutes(10)),
+self_compile_node(CompilerDir, OutDir, Version, Opts) ->
+    ?line Dog = test_server:timetrap(test_server:minutes(15)),
     ?line Pa = "-pa " ++ filename:dirname(code:which(?MODULE)) ++
 	" -pa " ++ CompilerDir,
-    ?line {ok,Node} = start_node(NodeName, Pa),
     ?line Files = compiler_src(),
-    ?line ok = rpc:call(Node, ?MODULE, compile_compiler, [Files,OutDir,Version,Opts]),
-    ?line test_server:stop_node(Node),
+
+    %% We don't want the cover server started on the other node,
+    %% because it will load the same cover-compiled code as on this
+    %% node. Use a shielded node to prevent the cover server from
+    %% being started.
+    ?t:run_on_shielded_node(
+       fun() ->
+	       compile_compiler(Files, OutDir, Version, Opts)
+       end, Pa),
     ?line test_server:timetrap_cancel(Dog),
     ok.
 
 compile_compiler(Files, OutDir, Version, InlineOpts) ->
-    io:format("~s", [code:which(compile)]),
-    io:format("Compiling ~s into ~s", [Version,OutDir]),
+    io:format("~ts", [code:which(compile)]),
+    io:format("Compiling ~s into ~ts", [Version,OutDir]),
     Opts = [report,
 	    bin_opt_info,
 	    {outdir,OutDir},
 	    {d,'COMPILER_VSN',"\""++Version++"\""},
 	    nowarn_shadow_vars,
 	    {i,filename:join(code:lib_dir(stdlib), "include")}|InlineOpts],
-    lists:foreach(fun(File) ->
-			  {ok,_} = compile:file(File, Opts)
-		  end, Files).
+    test_lib:p_run(fun(File) ->
+			   case compile:file(File, Opts) of
+			       {ok,_} -> ok;
+			       _ -> error
+			   end
+		   end, Files).
 
 compiler_src() ->
     filelib:wildcard(filename:join([code:lib_dir(compiler), "src", "*.erl"])).
@@ -614,17 +636,17 @@ string_table(Config) when is_list(Config) ->
     ?line File = filename:join(DataDir, "string_table.erl"),
     ?line {ok,string_table,Beam,[]} = compile:file(File, [return, binary]),
     ?line {ok,{string_table,[StringTableChunk]}} = beam_lib:chunks(Beam, ["StrT"]),
-    ?line {"StrT", <<"stringabletringtable">>} = StringTableChunk,
+    ?line {"StrT", <<"stringtable">>} = StringTableChunk,
     ok.
 
 otp_8949_a(Config) when is_list(Config) ->
-    value = otp_8949_a(),
+    value = do_otp_8949_a(),
     ok.
 
 -record(cs, {exs,keys = [],flags = 1}).
 -record(exs, {children = []}).
 
-otp_8949_a() ->
+do_otp_8949_a() ->
     case id([#cs{}]) of
         [#cs{}=Cs] ->
             SomeVar = id(value),
@@ -657,5 +679,36 @@ otp_8949_b(A, B) ->
 	    id(Var)
     end.
     
+split_cases(_) ->
+    dummy1 = do_split_cases(x),
+    {'EXIT',{{badmatch,b},_}} = (catch do_split_cases(y)),
+    ok.
+
+do_split_cases(A) ->
+    case A of
+        x ->
+	    Z = dummy1;
+        _ ->
+	    Z = dummy2,
+	    a=b
+    end,
+    Z.
+
+-record(alarmInfo, {type,cause,origin}).
+
+beam_utils_liveopt(Config) ->
+    F = beam_utils_liveopt_fun(42, pebkac, user),
+    void = F(42, #alarmInfo{type=sctp,cause=pebkac,origin=user}),
+    ok.
+    
+beam_utils_liveopt_fun(Peer, Cause, Origin) ->
+    fun(PeerNo, AlarmInfo)
+	  when PeerNo == Peer andalso
+	       AlarmInfo == #alarmInfo{type=sctp,
+				       cause=Cause,
+				       origin=Origin} ->
+	    void
+    end.
+
 
 id(I) -> I.

@@ -1,7 +1,7 @@
 /*
  * %CopyrightBegin%
  *
- * Copyright Ericsson AB 1999-2011. All Rights Reserved.
+ * Copyright Ericsson AB 1999-2013. All Rights Reserved.
  *
  * The contents of this file are subject to the Erlang Public License,
  * Version 1.1, (the "License"); you may not use this file except in
@@ -76,14 +76,12 @@ struct erl_bits_state ErlBitsState;
 #define byte_buf	(ErlBitsState.byte_buf_)
 #define byte_buf_len	(ErlBitsState.byte_buf_len_)
 
-#ifdef ERTS_SMP
 static erts_smp_atomic_t bits_bufs_size;
-#endif
 
 Uint
 erts_bits_bufs_size(void)
 {
-    return 0;
+    return (Uint) erts_smp_atomic_read_nob(&bits_bufs_size);
 }
 
 #if !defined(ERTS_SMP)
@@ -109,8 +107,8 @@ erts_bits_destroy_state(ERL_BITS_PROTO_0)
 void
 erts_init_bits(void)
 {
+    erts_smp_atomic_init_nob(&bits_bufs_size, 0);
 #if defined(ERTS_SMP)
-    erts_smp_atomic_init(&bits_bufs_size, 0);
     /* erl_process.c calls erts_bits_init_state() on all state instances */
 #else
     ERL_BITS_DECLARE_STATEP;
@@ -486,8 +484,16 @@ erts_bs_get_float_2(Process *p, Uint num_bits, unsigned flags, ErlBinMatchBuffer
 	ERTS_FP_ERROR_THOROUGH(p, f32, return THE_NON_VALUE);
 	f.fd = f32;
     } else {
+#ifdef DOUBLE_MIDDLE_ENDIAN
+	FloatDef ftmp;
+	ftmp.fd = f64;
+	f.fw[0] = ftmp.fw[1];
+	f.fw[1] = ftmp.fw[0];
+	ERTS_FP_ERROR_THOROUGH(p, f.fd, return THE_NON_VALUE);
+#else
 	ERTS_FP_ERROR_THOROUGH(p, f64, return THE_NON_VALUE);
 	f.fd = f64;
+#endif
     }
     mb->offset += num_bits;
     hp = HeapOnlyAlloc(p, FLOAT_SIZE_OBJECT);
@@ -713,9 +719,7 @@ static void
 ERTS_INLINE need_byte_buf(ERL_BITS_PROTO_1(int need))
 {
     if (byte_buf_len < need) {
-#ifdef ERTS_SMP
-	erts_smp_atomic_add(&bits_bufs_size, need - byte_buf_len);
-#endif
+	erts_smp_atomic_add_nob(&bits_bufs_size, need - byte_buf_len);
 	byte_buf_len = need;
 	byte_buf = erts_realloc(ERTS_ALC_T_BITS_BUF, byte_buf, byte_buf_len);
     }
@@ -849,8 +853,7 @@ erts_bs_put_utf8(ERL_BITS_PROTO_1(Eterm arg))
 	dst[1] = 0x80 | (val & 0x3F);
 	num_bits = 16;
     } else if (val < 0x10000UL) {
-	if ((0xD800 <= val && val <= 0xDFFF) ||
-	    val == 0xFFFE || val == 0xFFFF) {
+	if (0xD800 <= val && val <= 0xDFFF) {
 	    return 0;
 	}
 	dst[0] = 0xE0 | (val >> 12);
@@ -890,8 +893,7 @@ erts_bs_put_utf16(ERL_BITS_PROTO_2(Eterm arg, Uint flags))
 	return 0;
     }
     val = unsigned_val(arg);
-    if (val > 0x10FFFF || (0xD800 <= val && val <= 0xDFFF) ||
-	val == 0xFFFE || val == 0xFFFF) {
+    if (val > 0x10FFFF || (0xD800 <= val && val <= 0xDFFF)) {
 	return 0;
     }
 
@@ -1011,18 +1013,33 @@ erts_new_bs_put_float(Process *c_p, Eterm arg, Uint num_bits, int flags)
 
 	    if (is_float(arg)) {
 		FloatDef *fdp = (FloatDef*)(float_val(arg) + 1);
+#ifdef DOUBLE_MIDDLE_ENDIAN
+		a = fdp->fw[1];
+		b = fdp->fw[0];
+#else
 		a = fdp->fw[0];
 		b = fdp->fw[1];
+#endif
 	    } else if (is_small(arg)) {
 		u.f64 = (double) signed_val(arg);
+#ifdef DOUBLE_MIDDLE_ENDIAN
+		a = u.i32[1];
+		b = u.i32[0];
+#else
 		a = u.i32[0];
 		b = u.i32[1];
+#endif
 	    } else if (is_big(arg)) {
 		if (big_to_double(arg, &u.f64) < 0) {
 		    return 0;
 		}
+#ifdef DOUBLE_MIDDLE_ENDIAN
+		a = u.i32[1];
+		b = u.i32[0];
+#else
 		a = u.i32[0];
 		b = u.i32[1];
+#endif
 	    } else {
 		return 0;
 	    }
@@ -1114,21 +1131,42 @@ erts_new_bs_put_float(Process *c_p, Eterm arg, Uint num_bits, int flags)
 	byte *bptr;
 	double f64;
 	float f32;
+#ifdef DOUBLE_MIDDLE_ENDIAN
+	FloatDef fbuf, ftmp;
+#endif
 	
 	if (num_bits == 64) {
 	    if (is_float(arg)) {
+#ifdef DOUBLE_MIDDLE_ENDIAN
+		FloatDef *fdp = (FloatDef*)(float_val(arg) + 1);
+		ftmp = *fdp;
+#else
 		bptr = (byte *) (float_val(arg) + 1);
+#endif
 	    } else if (is_small(arg)) {
 		f64 = (double) signed_val(arg);
+#ifdef DOUBLE_MIDDLE_ENDIAN
+		ftmp.fd = f64;
+#else
 		bptr = (byte *) &f64;
+#endif
 	    } else if (is_big(arg)) {
 		if (big_to_double(arg, &f64) < 0) {
 		    return 0;
 		}
+#ifdef DOUBLE_MIDDLE_ENDIAN
+		ftmp.fd = f64;
+#else
 		bptr = (byte *) &f64;
+#endif
 	    } else {
 		return 0;
 	    }
+#ifdef DOUBLE_MIDDLE_ENDIAN
+	    fbuf.fw[0] = ftmp.fw[1];
+	    fbuf.fw[1] = ftmp.fw[0];
+	    bptr = fbuf.fb;
+#endif
 	} else if (num_bits == 32) {
 	    if (is_float(arg)) {
 		FloatDef f;
@@ -1243,6 +1281,12 @@ erts_bs_append(Process* c_p, Eterm* reg, Uint live, Eterm build_size_term,
      */
 
     erts_bin_offset = 8*sb->size + sb->bitsize;
+    if (unit > 1) {
+	if ((unit == 8 && (erts_bin_offset & 7) != 0) ||
+	    (erts_bin_offset % unit) != 0) {
+	    goto badarg;
+	}
+    }
     used_size_in_bits = erts_bin_offset + build_size_in_bits;
     sb->is_writable = 0;	/* Make sure that no one else can write. */
     pb->size = NBYTES(used_size_in_bits);
@@ -1312,6 +1356,12 @@ erts_bs_append(Process* c_p, Eterm* reg, Uint live, Eterm build_size_term,
 	 */
 	ERTS_GET_BINARY_BYTES(bin, src_bytes, bitoffs, bitsize);
 	erts_bin_offset = 8*binary_size(bin) + bitsize;
+	if (unit > 1) {
+	    if ((unit == 8 && (erts_bin_offset & 7) != 0) ||
+		(erts_bin_offset % unit) != 0) {
+		goto badarg;
+	    }
+	}
 	used_size_in_bits = erts_bin_offset + build_size_in_bits;
 	used_size_in_bytes = NBYTES(used_size_in_bits);
 	bin_size = 2*used_size_in_bytes;
@@ -1359,12 +1409,6 @@ erts_bs_append(Process* c_p, Eterm* reg, Uint live, Eterm build_size_term,
 	/*
 	 * Now copy the data into the binary.
 	 */
-	if (unit > 1) {
-	    if ((unit == 8 && (erts_bin_offset & 7) != 0) ||
-		(erts_bin_offset % unit) != 0) {
-		return THE_NON_VALUE;
-	    }
-	}
 	copy_binary_to_buffer(erts_current_bin, 0, src_bytes, bitoffs, erts_bin_offset);
 
 	return make_binary(sb);
@@ -1447,7 +1491,7 @@ erts_bs_private_append(Process* p, Eterm bin, Eterm build_size_term, Uint unit)
 	    bptr->flags = 0;
 	    bptr->orig_size = new_size;
 	    erts_refc_init(&bptr->refc, 1);
-	    sys_memcpy(bptr->orig_bytes, binp->orig_bytes, pb->size);
+	    sys_memcpy(bptr->orig_bytes, binp->orig_bytes, binp->orig_size);
 	    pb->flags |= PB_IS_WRITABLE | PB_ACTIVE_WRITER;
 	    pb->val = bptr;
 	    pb->bytes = (byte *) bptr->orig_bytes;
@@ -1656,8 +1700,7 @@ erts_bs_get_utf8(ErlBinMatchBuffer* mb)
 	    return THE_NON_VALUE;
 	}
 	result = (((result << 6) + a) << 6) + b - (Eterm) 0x000E2080UL;
-	if ((0xD800 <= result && result <= 0xDFFF) ||
-	    result == 0xFFFE || result == 0xFFFF) {
+	if (0xD800 <= result && result <= 0xDFFF) {
 	    return THE_NON_VALUE;
 	}
 	mb->offset += 24;
@@ -1727,9 +1770,6 @@ erts_bs_get_utf16(ErlBinMatchBuffer* mb, Uint flags)
 	w1 = (src[0] << 8) | src[1];
     }
     if (w1 < 0xD800 || w1 > 0xDFFF) {
-	if (w1 == 0xFFFE || w1 == 0xFFFF) {
-	    return THE_NON_VALUE;
-	}
 	mb->offset += 16;
 	return make_small(w1);
     } else if (w1 > 0xDBFF) {
@@ -1770,6 +1810,11 @@ erts_cmp_bits(byte* a_ptr, size_t a_offs, byte* b_ptr, size_t b_offs, size_t siz
     Uint rshift;
     int cmp;
     
+    ASSERT(a_offs < 8 && b_offs < 8);
+
+    if (size == 0)
+        return 0;
+
     if (((a_offs | b_offs | size) & 7) == 0) {
 	int byte_size = size >> 3;
 	return sys_memcmp(a_ptr, b_ptr, byte_size);
@@ -1778,58 +1823,72 @@ erts_cmp_bits(byte* a_ptr, size_t a_offs, byte* b_ptr, size_t b_offs, size_t siz
     /* Compare bit by bit until a_ptr is aligned on byte boundary */
     a = *a_ptr++;
     b = *b_ptr++;
-    while (size > 0) {
-	a_bit = get_bit(a, a_offs);
-	b_bit = get_bit(b, b_offs);
-	if ((cmp = (a_bit-b_bit)) != 0) {
-	    return cmp;
-	}
-	size--;
-	b_offs++;
-	if (b_offs == 8) {
-	    b_offs = 0;
-	    b = *b_ptr++;
-	}
-	a_offs++;
-	if (a_offs == 8) {
-	    a_offs = 0;
-	    a = *a_ptr++;
-	    break;
+    if (a_offs) {
+	for (;;) {
+	    a_bit = get_bit(a, a_offs);
+	    b_bit = get_bit(b, b_offs);
+	    if ((cmp = (a_bit-b_bit)) != 0) {
+		return cmp;
+	    }
+	    if (--size == 0)
+		return 0;
+
+	    b_offs++;
+	    if (b_offs == 8) {
+		b_offs = 0;
+		b = *b_ptr++;
+	    }
+	    a_offs++;
+	    if (a_offs == 8) {
+		a_offs = 0;
+		a = *a_ptr++;
+		break;
+	    }
 	}
     }
 
     /* Compare byte by byte as long as at least 8 bits remain */
-    lshift = b_offs;
-    rshift = 8 - lshift;
-    while (size >= 8) {
-	byte b_cmp = (b << lshift);
-	b = *b_ptr++;
-	b_cmp |= b >> rshift;
-	if ((cmp = (a - b_cmp)) != 0) {
-	    return cmp;
-	}
+    if (size >= 8) {
+        lshift = b_offs;
+        rshift = 8 - lshift;
+        for (;;) {
+            byte b_cmp = (b << lshift);
+            b = *b_ptr++;
+            b_cmp |= b >> rshift;
+            if ((cmp = (a - b_cmp)) != 0) {
+                return cmp;
+            }
+            size -= 8;
+	    if (size < 8)
+		break;
+            a = *a_ptr++;
+        }
+
+	if (size == 0)
+	    return 0;
 	a = *a_ptr++;
-	size -= 8;
     }
 
     /* Compare the remaining bits bit by bit */
-    while (size > 0) {
-	a_bit = get_bit(a, a_offs);
-	b_bit = get_bit(b, b_offs);
-	if ((cmp = (a_bit-b_bit)) != 0) {
-	    return cmp;
-	}
-	a_offs++;
-	if (a_offs == 8) {
-	    a_offs = 0;
-	    a = *a_ptr++;
-	}
-	b_offs++;
-	if (b_offs == 8) {
-	    b_offs = 0;
-	    b = *b_ptr++;
-	}
-	size--;
+    if (size > 0) {
+        for (;;) {
+            a_bit = get_bit(a, a_offs);
+            b_bit = get_bit(b, b_offs);
+            if ((cmp = (a_bit-b_bit)) != 0) {
+                return cmp;
+            }
+            if (--size == 0)
+                return 0;
+
+            a_offs++;
+	    ASSERT(a_offs < 8);
+
+            b_offs++;
+            if (b_offs == 8) {
+                b_offs = 0;
+                b = *b_ptr++;
+            }
+        }
     }
 
     return 0;

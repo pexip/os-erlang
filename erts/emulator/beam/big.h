@@ -1,7 +1,7 @@
 /*
  * %CopyrightBegin%
  *
- * Copyright Ericsson AB 1996-2011. All Rights Reserved.
+ * Copyright Ericsson AB 1996-2014. All Rights Reserved.
  *
  * The contents of this file are subject to the Erlang Public License,
  * Version 1.1, (the "License"); you may not use this file except in
@@ -101,7 +101,7 @@ typedef Uint  dsize_t;	 /* Vector size type */
 #define ERTS_SINT64_HEAP_SIZE(X)				\
   (IS_SSMALL((X))						\
    ? 0								\
-   : ERTS_UINT64_BIG_HEAP_SIZE__((X) >= 0 ? (X) : -(X)))
+   : ERTS_UINT64_BIG_HEAP_SIZE__((X) >= 0 ? (X) : -(Uint64)(X)))
 #define ERTS_UINT64_HEAP_SIZE(X)				\
   (IS_USMALL(0, (X)) ? 0 : ERTS_UINT64_BIG_HEAP_SIZE__((X)))
 
@@ -117,6 +117,7 @@ typedef Uint  dsize_t;	 /* Vector size type */
 int big_decimal_estimate(Wterm);
 Eterm erts_big_to_list(Eterm, Eterm**);
 char *erts_big_to_string(Wterm x, char *buf, Uint buf_sz);
+Uint erts_big_to_binary_bytes(Eterm x, char *buf, Uint buf_sz);
 
 Eterm small_times(Sint, Sint, Eterm*);
 
@@ -140,10 +141,12 @@ Eterm big_lshift(Eterm, Sint, Eterm*);
 int big_comp (Wterm, Wterm);
 int big_ucomp (Eterm, Eterm);
 int big_to_double(Wterm x, double* resp);
+Eterm double_to_big(double, Eterm*, Uint hsz);
 Eterm small_to_big(Sint, Eterm*);
 Eterm uint_to_big(Uint, Eterm*);
 Eterm uword_to_big(UWord, Eterm*);
 Eterm erts_make_integer(Uint, Process *);
+Eterm erts_make_integer_from_uword(UWord x, Process *p);
 
 dsize_t big_bytes(Eterm);
 Eterm bytes_to_big(byte*, dsize_t, int, Eterm*);
@@ -162,6 +165,8 @@ int term_equals_2pow32(Eterm);
 
 Eterm erts_uint64_to_big(Uint64, Eterm **);
 Eterm erts_sint64_to_big(Sint64, Eterm **);
+
+Eterm erts_chars_to_integer(Process *, char*, Uint, const int);
 
 #endif
 

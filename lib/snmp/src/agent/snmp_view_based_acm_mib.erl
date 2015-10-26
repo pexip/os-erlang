@@ -1,7 +1,7 @@
 %% 
 %% %CopyrightBegin%
 %% 
-%% Copyright Ericsson AB 1999-2011. All Rights Reserved.
+%% Copyright Ericsson AB 1999-2014. All Rights Reserved.
 %% 
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -47,6 +47,14 @@
 -ifndef(default_verbosity).
 -define(default_verbosity,silence).
 -endif.
+
+
+-type internal_view_mask()         :: null | [internal_view_mask_element()].
+-type internal_view_mask_element() :: 0 | 1.
+
+-type external_view_mask() :: octet_string(). % At most length of 16 octet
+-type octet_string()       :: [octet()].
+-type octet()              :: byte().
 
 
 %%-----------------------------------------------------------------
@@ -115,15 +123,18 @@ do_reconfigure(Dir) ->
 
 read_vacm_config_files(Dir) ->
     ?vdebug("read vacm config file",[]),
-    Gen    = fun(_) -> ok end,
-    Filter = fun(Vacms) -> 
-                     Sec2Group = [X || {vacmSecurityToGroup, X} <- Vacms],
-                     Access = [X || {vacmAccess, X} <- Vacms],
-                     View = [X || {vacmViewTreeFamily, X} <- Vacms],
-                     {Sec2Group, Access, View}
-             end,
-    Check  = fun(Entry) -> check_vacm(Entry) end,
-    [Vacms] = snmp_conf:read_files(Dir, [{Gen, Filter, Check, "vacm.conf"}]),
+    Gen    = fun snmp_conf:no_gen/2,
+    Order  = fun snmp_conf:no_order/2,
+    Check  = fun (Entry, State) -> {check_vacm(Entry), State} end,
+    Filter =
+	fun (Vacms) ->
+		Sec2Group = [X || {vacmSecurityToGroup, X} <- Vacms],
+		Access = [X || {vacmAccess, X} <- Vacms],
+		View = [X || {vacmViewTreeFamily, X} <- Vacms],
+		{Sec2Group, Access, View}
+	end,
+    [Vacms] =
+	snmp_conf:read_files(Dir, [{"vacm.conf", Gen, Order, Check, Filter}]),
     Vacms.
 
 %%-----------------------------------------------------------------
@@ -160,14 +171,7 @@ check_vacm({vacmViewTreeFamily, ViewName, Tree, Type, Mask}) ->
     {ok, TypeVal} =
         snmp_conf:check_atom(Type, [{included, ?view_included},
 				    {excluded, ?view_excluded}]),
-    MaskVal = 
-        case (catch snmp_conf:check_atom(Mask, [{null, []}])) of
-            {error, _}  -> 
-                snmp_conf:check_oid(Mask),
-                Mask;
-	    {ok, X} ->
-		X
-	end,
+    {ok, MaskVal} = snmp_conf:check_imask(Mask), 
     Vacm = {ViewName, Tree, MaskVal, TypeVal, 
 	    ?'StorageType_nonVolatile', ?'RowStatus_active'},
     {ok, {vacmViewTreeFamily, Vacm}};
@@ -194,8 +198,8 @@ init_tabs(Sec2Group, Access, View) ->
     ok.
     
 init_sec2group_table([Row | T]) ->
-%%      ?vtrace("init security-to-group table: "
-%%  	    "~n   Row: ~p",[Row]),    
+    %% ?vtrace("init security-to-group table: "
+    %%         "~n   Row: ~p",[Row]),    
     Key1 = element(1, Row),
     Key2 = element(2, Row),
     Key = [Key1, length(Key2) | Key2],
@@ -203,18 +207,16 @@ init_sec2group_table([Row | T]) ->
     init_sec2group_table(T);
 init_sec2group_table([]) -> true.
 
-init_access_table([{GN, Prefix, Model, Level, Row} | T]) ->
-%%     ?vtrace("init access table: "
-%%  	    "~n   GN:     ~p"
-%%  	    "~n   Prefix: ~p"
-%%  	    "~n   Model:  ~p"
-%%  	    "~n   Level:  ~p"
-%%  	    "~n   Row:    ~p",[GN, Prefix, Model, Level, Row]),    
-    Key = [length(GN) | GN] ++ [length(Prefix) | Prefix] ++ [Model, Level],
-    snmpa_vacm:insert([{Key, Row}], false),
-    init_access_table(T);
-init_access_table([]) ->
-    snmpa_vacm:dump_table().
+make_access_key(GN, Prefix, Model, Level) ->
+    [length(GN) | GN] ++ [length(Prefix) | Prefix] ++ [Model, Level].
+
+make_access_entry({GN, Prefix, Model, Level, Row}) ->
+    Key = make_access_key(GN, Prefix, Model, Level),
+    {Key, Row}.
+       
+init_access_table(TableData) ->
+    TableData2 = [make_access_entry(E) || E <- TableData],
+    snmpa_vacm:insert(TableData2, true).
 
 init_view_table([Row | T]) ->
 %%     ?vtrace("init view table: "
@@ -276,10 +278,7 @@ add_access(GroupName, Prefix, SecModel, SecLevel, Match, RV, WV, NV) ->
 	      Match, RV, WV, NV},
     case (catch check_vacm(Access)) of
 	{ok, {vacmAccess, {GN, Pref, SM, SL, Row}}} ->
-	    Key1 = [length(GN) | GN],
-	    Key2 = [length(Pref) | Pref],
-	    Key3 = [SM, SL],
-	    Key  = Key1 ++ Key2 ++ Key3, 
+	    Key = make_access_key(GN, Pref, SM, SL),
 	    snmpa_vacm:insert([{Key, Row}], false),
             snmpa_agent:invalidate_ca_cache(),
 	    {ok, Key};
@@ -501,7 +500,7 @@ verify_vacmSecurityToGroupTable_col(_, Val) ->
 %%
 %%-----------------------------------------------------------------
 vacmAccessTable(print) ->
-    %% Måste jag göra om alla entrien till {RowIdx, Row}?
+    %% Do I need to turn all entries into {RowIdx, Row}?
     TableInfo = get_table(vacmAccessTable), 
     PrintRow = 
 	fun(Prefix, Row) ->
@@ -570,45 +569,85 @@ vacmAccessTable(is_set_ok, RowIndex, Cols0) ->
     case (catch verify_vacmAccessTable_cols(Cols0, [])) of
 	{ok, Cols} ->
 	    IsValidKey = is_valid_key(RowIndex),
-	    case lists:keysearch(?vacmAccessStatus, 1, Cols) of
-		%% Ok, if contextMatch is init
-		{value, {Col, ?'RowStatus_active'}} -> 
-	            {ok, Row} = snmpa_vacm:get_row(RowIndex),
-	            case element(?vacmAContextMatch, Row) of
-			noinit -> {inconsistentValue, Col};
-			_ -> {noError, 0}
-		    end;
-		{value, {Col, ?'RowStatus_notInService'}} -> % Ok, if not notReady
-		    {ok, Row} = snmpa_vacm:get_row(RowIndex),
-		    case element(?vacmAStatus, Row) of
-			?'RowStatus_notReady' -> {inconsistentValue, Col};
-			_ -> {noError, 0}
-		    end;
-		{value, {Col, ?'RowStatus_notReady'}} -> % never ok!
+	    StatusCol  = lists:keyfind(?vacmAccessStatus, 1, Cols),
+	    MaybeRow   = snmpa_vacm:get_row(RowIndex),
+	    case {StatusCol, MaybeRow} of
+		{{Col, ?'RowStatus_active'}, false} ->
+		    %% row does not yet exist => inconsistentValue
+		    %% (see SNMPv2-TC.mib, RowStatus textual convention)
 		    {inconsistentValue, Col};
-		{value, {Col, ?'RowStatus_createAndGo'}} -> % ok, if it doesn't exist
+		{{Col, ?'RowStatus_active'}, {ok, Row}} ->
+		    %% Ok, if contextMatch is init
+		    case element(?vacmAContextMatch, Row) of
+			noinit ->
+			    %% check whether ContextMatch is being set in
+			    %% the same operation
+			    case proplists:get_value(?vacmAccessContextMatch, 
+						     Cols) of
+				undefined ->
+				    %% no, we can't make this row active yet
+				    {inconsistentValue, Col};
+				_ ->
+				    %% ok, activate the row
+				    {noError, 0}
+			    end;
+			_ ->
+			    {noError, 0}
+		    end;
+		{{Col, ?'RowStatus_notInService'}, false} ->
+		    %% row does not yet exist => inconsistentValue
+		    %% (see SNMPv2-TC.mib, RowStatus textual convention)
+		    {inconsistentValue, Col};
+		{{Col, ?'RowStatus_notInService'}, {ok, Row}} ->
+		    %% Ok, if not notReady
+		    case element(?vacmAStatus, Row) of
+			?'RowStatus_notReady' ->
+			    {inconsistentValue, Col};
+			_ ->
+			    {noError, 0}
+		    end;
+		{{Col, ?'RowStatus_notReady'}, _} ->
+		    %% never ok!
+		    {inconsistentValue, Col};
+		{{Col, ?'RowStatus_createAndGo'}, false} ->
+		    %% ok, if it doesn't exist
 		    Res = lists:keysearch(?vacmAccessContextMatch, 1, Cols),
-		    case snmpa_vacm:get_row(RowIndex) of
-			false when (IsValidKey =:= true) andalso 
-				   is_tuple(Res) -> {noError, 0};
-			false -> {noCreation, Col}; % Bad RowIndex
-			_ -> {inconsistentValue, Col}
-		    end;
-		{value, {Col, ?'RowStatus_createAndWait'}} -> % ok, if it doesn't exist
-		    case snmpa_vacm:get_row(RowIndex) of
-			false when (IsValidKey =:= true) -> {noError, 0};
-			false -> {noCreation, Col}; % Bad RowIndex
-			_ -> {inconsistentValue, Col}
-		    end;
-		{value, {_Col, ?'RowStatus_destroy'}} -> % always ok!
-		    {noError, 0};
-		_ -> % otherwise, it's a change; it must exist
-		    case snmpa_vacm:get_row(RowIndex) of
-			{ok, _} ->
+		    if
+			IsValidKey =/= true ->
+			    %% bad RowIndex => noCreation
+			    {noCreation, Col};
+			is_tuple(Res) ->
+			    %% required field is present => noError
 			    {noError, 0};
-			false ->
-			    {inconsistentName, element(1, hd(Cols))}
-		    end
+			true ->
+			    %% required field is missing => inconsistentValue
+			    {inconsistentValue, Col}
+		    end;
+		{{Col, ?'RowStatus_createAndGo'}, _} ->
+		    %% row already exists => inconsistentValue
+		    {inconsistentValue, Col};
+		{{Col, ?'RowStatus_createAndWait'}, false} ->
+		    %% ok, if it doesn't exist
+		    if
+			IsValidKey =:= true ->
+			    %% RowIndex is valid => noError
+			    {noError, 0};
+			true ->
+			    {noCreation, Col}
+		    end;
+		{{Col, ?'RowStatus_createAndWait'}, _} ->
+		    %% Row already exists => inconsistentValue
+		    {inconsistentValue, Col};
+		{value, {_Col, ?'RowStatus_destroy'}} ->
+		    %% always ok!
+		    {noError, 0};
+		{_, false} ->
+		    %% otherwise, it's a row change; 
+		    %% row does not exist => inconsistentName
+		    {inconsistentName, element(1, hd(Cols))};
+		_ ->
+		    %% row change and row exists => noError
+		    {noError, 0}
 	    end;
 	Error ->
 	    Error
@@ -739,10 +778,15 @@ do_vacmAccessTable_set(RowIndex, Cols) ->
 	    
 	    
 %% Cols are sorted, and all columns are > 3.
+do_get_next(_RowIndex, []) ->
+    % Cols can be empty because we're called for each
+    % output of split_cols(); and one of that may well
+    % be empty.
+    [];
 do_get_next(RowIndex, Cols) ->
     case snmpa_vacm:get_next_row(RowIndex) of
 	{NextIndex, Row} ->
-	    F1 = fun(Col) when Col < ?vacmAccessStatus -> 
+	    F1 = fun(Col) when Col =< ?vacmAccessStatus ->
 			 {[Col | NextIndex], element(Col-3, Row)};
 		    (_) -> 
 			 endOfTable
@@ -750,9 +794,9 @@ do_get_next(RowIndex, Cols) ->
 	    lists:map(F1, Cols);
 	false ->
 	    case snmpa_vacm:get_next_row([]) of
-		{_NextIndex, Row} ->
+		{NextIndex2, Row} ->
 		    F2 = fun(Col) when Col < ?vacmAccessStatus -> 
-				 {[Col+1 | RowIndex], element(Col-2, Row)};
+				 {[Col+1 | NextIndex2], element(Col-2, Row)};
 			    (_) ->
 				 endOfTable
 			 end,
@@ -913,13 +957,23 @@ verify_vacmViewTreeFamilyTable_col(?vacmViewTreeFamilySubtree, Tree) ->
 	    wrongValue(?vacmViewTreeFamilySubtree)
     end;
 verify_vacmViewTreeFamilyTable_col(?vacmViewTreeFamilyMask, Mask) ->
+    %% Mask here is in the "external" format. That is, according 
+    %% to the MIB, which means that its an OCTET STRING of max 16 
+    %% octets. 
+    %% We however store the mask as a list of 1's (exact) and 
+    %% 0's (wildcard), which means we have to convert the mask. 
     case Mask of
-	null -> [];
-	[]   -> [];
+	%% The Mask can only have this value if the vacmViewTreeFamilyTable
+	%% is called locally!
+	null -> 
+	    []; 
+	[] -> 
+	    [];
 	_ ->
-	    case (catch snmp_conf:check_oid(Mask)) of
-		ok ->
-		    Mask;
+	    %% Check and convert to our internal format
+	    case check_mask(Mask) of
+		{ok, IMask} ->
+		    IMask;
 	        _ ->
 		    wrongValue(?vacmViewTreeFamilyMask)
 	    end
@@ -936,6 +990,60 @@ verify_vacmViewTreeFamilyTable_col(?vacmViewTreeFamilyType, Type) ->
 verify_vacmViewTreeFamilyTable_col(_, Val) ->
     Val.
 	    
+
+check_mask(Mask) when is_list(Mask) andalso (length(Mask) =< 16) ->
+    try
+	begin
+	    {ok, emask2imask(Mask)}
+	end
+    catch
+	throw:{error, _} ->
+	    {error, {bad_mask, Mask}};
+	T:E ->
+	    {error, {bad_mask, Mask, T, E}}
+    end;
+check_mask(BadMask) ->
+    {error, {bad_mask, BadMask}}.
+
+-spec emask2imask(EMask :: external_view_mask()) ->
+    IMask :: internal_view_mask().
+
+%% Convert an External Mask (OCTET STRING) to Internal Mask (list of 0 or 1)
+emask2imask(EMask) ->
+    lists:flatten([octet2bits(Octet) || Octet <- EMask]).
+
+octet2bits(Octet) 
+  when is_integer(Octet) andalso (Octet >= 16#00) andalso (16#FF >= Octet) ->
+    <<A:1, B:1, C:1, D:1, E:1, F:1, G:1, H:1>> = <<Octet>>,
+    [A, B, C, D, E, F, G, H];
+octet2bits(BadOctet) ->
+    throw({error, {bad_octet, BadOctet}}).
+
+-spec imask2emask(IMask :: internal_view_mask()) ->
+    EMask :: external_view_mask().
+
+%% Convert an Internal Mask (list of 0 or 1) to External Mask (OCTET STRING) 
+imask2emask(IMask) ->
+    imask2emask(IMask, []).
+
+imask2emask([], EMask) ->
+    lists:reverse(EMask);
+imask2emask(IMask, EMask) ->
+    %% Make sure we have atleast 8 bits
+    %% (maybe extend with 1's)
+    IMask2 = 
+	case length(IMask) of
+	    Small when Small < 8 ->
+		IMask ++ lists:duplicate(8-Small, 1);
+	    _ ->
+		IMask
+	end, 
+    %% Extract 8 bits
+    [A, B, C, D, E, F, G, H | IMaskRest] = IMask2,
+    <<Octet:8>> = <<A:1, B:1, C:1, D:1, E:1, F:1, G:1, H:1>>,
+    imask2emask(IMaskRest, [Octet | EMask]). 
+
+
 
 table_next(Name, RestOid) ->
     snmp_generic:table_next(db(Name), RestOid).
@@ -974,11 +1082,41 @@ stc(vacmSecurityToGroupTable) -> ?vacmSecurityToGroupStorageType;
 stc(vacmViewTreeFamilyTable) -> ?vacmViewTreeFamilyStorageType.
  
 next(Name, RowIndex, Cols) ->
-    snmp_generic:handle_table_next(db(Name), RowIndex, Cols,
-                                   fa(Name), foi(Name), noc(Name)).
+    Result = snmp_generic:handle_table_next(db(Name), RowIndex, Cols,
+					    fa(Name), foi(Name), noc(Name)),
+    externalize_next(Name, Result).
  
 get(Name, RowIndex, Cols) ->
-    snmp_generic:handle_table_get(db(Name), RowIndex, Cols, foi(Name)).
+    Result = snmp_generic:handle_table_get(db(Name), RowIndex, Cols, 
+					   foi(Name)),
+    externalize_get(Name, Cols, Result).
+
+
+externalize_next(Name, Result) when is_list(Result) ->
+    F = fun({[Col | _] = Idx, Val}) -> {Idx, externalize(Name, Col, Val)};
+	   (Other)                  -> Other
+	end,
+    [F(R) || R <- Result];
+externalize_next(_, Result) ->
+    Result.
+
+
+externalize_get(Name, Cols, Result) when is_list(Result) ->
+    %% Patch returned values
+    F = fun({Col, {value, Val}}) -> {value, externalize(Name, Col, Val)};
+	   ({_, Other}) ->          Other
+	end,
+    %% Merge column numbers and return values. there must be as much
+    %% return values as there are columns requested. And then patch all values
+    [F(R) || R <- lists:zip(Cols, Result)];
+externalize_get(_, _, Result) ->
+    Result. 
+
+externalize(vacmViewTreeFamilyTable, ?vacmViewTreeFamilyMask, Val) ->
+    imask2emask(Val);
+externalize(_, _, Val) ->
+    Val. 
+
 
 wrongValue(V) -> throw({wrongValue, V}).
 

@@ -2,7 +2,7 @@
 %%-----------------------------------------------------------------------
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2006-2011. All Rights Reserved.
+%% Copyright Ericsson AB 2006-2014. All Rights Reserved.
 %%
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -62,18 +62,18 @@ plain_cl() ->
       cl_halt(cl_check_init(Opts), Opts);
     {plt_info, Opts} ->
       cl_halt(cl_print_plt_info(Opts), Opts);
-    {{gui, Type}, Opts} ->
+    {gui, Opts} ->
       try check_gui_options(Opts)
       catch throw:{dialyzer_error, Msg} -> cl_error(Msg)
       end,
       case Opts#options.check_plt of
 	true ->
 	  case cl_check_init(Opts#options{get_warnings = false}) of
-	    {ok, _} -> gui_halt(internal_gui(Type, Opts), Opts);
+	    {ok, _} -> gui_halt(internal_gui(Opts), Opts);
 	    {error, _} = Error -> cl_halt(Error, Opts)
 	  end;
 	false ->
-	  gui_halt(internal_gui(Type, Opts), Opts)
+	  gui_halt(internal_gui(Opts), Opts)
       end;
     {cl, Opts} ->
       case Opts#options.check_plt of
@@ -162,26 +162,26 @@ run(Opts) ->
     {error, Msg} ->
       throw({dialyzer_error, Msg});
     OptsRecord ->
-      case cl_check_init(OptsRecord) of
-	{ok, ?RET_NOTHING_SUSPICIOUS} ->
-	  case dialyzer_cl:start(OptsRecord) of
-	    {?RET_DISCREPANCIES, Warnings} -> Warnings;
-	    {?RET_NOTHING_SUSPICIOUS, []}  -> []
-	  end;
-	{error, ErrorMsg1} ->
-	  throw({dialyzer_error, ErrorMsg1})
+      case OptsRecord#options.check_plt of
+        true ->
+          case cl_check_init(OptsRecord) of
+            {ok, ?RET_NOTHING_SUSPICIOUS} -> ok;
+            {error, ErrorMsg1} -> throw({dialyzer_error, ErrorMsg1})
+          end;
+        false -> ok
+      end,
+      case dialyzer_cl:start(OptsRecord) of
+        {?RET_DISCREPANCIES, Warnings} -> Warnings;
+        {?RET_NOTHING_SUSPICIOUS, _}  -> []
       end
   catch
     throw:{dialyzer_error, ErrorMsg} ->
       erlang:error({dialyzer_error, lists:flatten(ErrorMsg)})
   end.
 
-internal_gui(Type, OptsRecord) ->
+internal_gui(OptsRecord) ->
   F = fun() ->
-	  case Type of
-	    gs -> dialyzer_gui:start(OptsRecord);
-	    wx -> dialyzer_gui_wx:start(OptsRecord)
-	  end,
+	  dialyzer_gui_wx:start(OptsRecord),
 	  ?RET_NOTHING_SUSPICIOUS
       end,
   doit(F).
@@ -202,7 +202,7 @@ gui(Opts) ->
       case cl_check_init(OptsRecord) of
 	{ok, ?RET_NOTHING_SUSPICIOUS} ->
 	  F = fun() ->
-		  dialyzer_gui:start(OptsRecord)
+		  dialyzer_gui_wx:start(OptsRecord)
 	      end,
 	  case doit(F) of
 	    {ok, _} -> ok;
@@ -380,8 +380,6 @@ message_to_string({pattern_match_cov, [Pat, Type]}) ->
 message_to_string({unmatched_return, [Type]}) ->
   io_lib:format("Expression produces a value of type ~s,"
 		" but this value is unmatched\n", [Type]);
-message_to_string({unused_fun, []}) ->
-  io_lib:format("Function will never be called\n", []);
 message_to_string({unused_fun, [F, A]}) ->
   io_lib:format("Function ~w/~w will never be called\n", [F, A]);
 %%----- Warnings for specs and contracts -------------------
@@ -408,9 +406,10 @@ message_to_string({extra_range, [M, F, A, ExtraRanges, SigRange]}) ->
   io_lib:format("The specification for ~w:~w/~w states that the function"
 		" might also return ~s but the inferred return is ~s\n",
 		[M, F, A, ExtraRanges, SigRange]);
-message_to_string({overlapping_contract, []}) ->
-  "Overloaded contract has overlapping domains;"
-    " such contracts are currently unsupported and are simply ignored\n";
+message_to_string({overlapping_contract, [M, F, A]}) ->
+  io_lib:format("Overloaded contract for ~w:~w/~w has overlapping domains;"
+		" such contracts are currently unsupported and are simply ignored\n",
+		[M, F, A]);
 message_to_string({spec_missing_fun, [M, F, A]}) ->
   io_lib:format("Contract for function that does not exist: ~w:~w/~w\n",
 		[M, F, A]);
@@ -424,6 +423,9 @@ message_to_string({call_without_opaque, [M, F, Args, ExpectedTriples]}) ->
 message_to_string({opaque_eq, [Type, _Op, OpaqueType]}) ->
   io_lib:format("Attempt to test for equality between a term of type ~s"
 		" and a term of opaque type ~s\n", [Type, OpaqueType]);
+message_to_string({opaque_guard, [Arg1, Infix, Arg2, ArgNs]}) ->
+  io_lib:format("Guard test ~s ~s ~s contains ~s\n",
+		[Arg1, Infix, Arg2, form_positions(ArgNs)]);
 message_to_string({opaque_guard, [Guard, Args]}) ->
   io_lib:format("Guard test ~w~s breaks the opaqueness of its argument\n",
 		[Guard, Args]);
@@ -436,29 +438,49 @@ message_to_string({opaque_match, [Pat, OpaqueType, OpaqueTerm]}) ->
 message_to_string({opaque_neq, [Type, _Op, OpaqueType]}) ->
   io_lib:format("Attempt to test for inequality between a term of type ~s"
 		" and a term of opaque type ~s\n", [Type, OpaqueType]);
-message_to_string({opaque_type_test, [Fun, Opaque]}) ->
-  io_lib:format("The type test ~s(~s) breaks the opaqueness of the term ~s\n", [Fun, Opaque, Opaque]);
+message_to_string({opaque_type_test, [Fun, Args, Arg, ArgType]}) ->
+  io_lib:format("The type test ~s~s breaks the opaqueness of the term ~s~s\n",
+                [Fun, Args, Arg, ArgType]);
+message_to_string({opaque_size, [SizeType, Size]}) ->
+  io_lib:format("The size ~s breaks the opaqueness of ~s\n",
+                [SizeType, Size]);
+message_to_string({opaque_call, [M, F, Args, Culprit, OpaqueType]}) ->
+  io_lib:format("The call ~s:~s~s breaks the opaqueness of the term ~s :: ~s\n",
+                [M, F, Args, Culprit, OpaqueType]);
 %%----- Warnings for concurrency errors --------------------
 message_to_string({race_condition, [M, F, Args, Reason]}) ->
   io_lib:format("The call ~w:~w~s ~s\n", [M, F, Args, Reason]);
 %%----- Warnings for behaviour errors --------------------
-message_to_string({callback_type_mismatch, [B, F, A, O]}) ->
-  io_lib:format("The inferred return type of the ~w/~w callback includes the"
-		" type ~s which is not a valid return for the ~w behaviour\n",
-		[F, A, erl_types:t_to_string(O), B]);
-message_to_string({callback_arg_type_mismatch, [B, F, A, N, O]}) ->
-  io_lib:format("The inferred type of the ~s argument of ~w/~w callback"
-		" includes the type ~s which is not valid for the ~w behaviour"
-		"\n", [ordinal(N), F, A, erl_types:t_to_string(O), B]);
+message_to_string({callback_type_mismatch, [B, F, A, ST, CT]}) ->
+  io_lib:format("The inferred return type of ~w/~w (~s) has nothing in common"
+		" with ~s, which is the expected return type for the callback of"
+		" ~w behaviour\n", [F, A, ST, CT, B]);
+message_to_string({callback_arg_type_mismatch, [B, F, A, N, ST, CT]}) ->
+  io_lib:format("The inferred type for the ~s argument of ~w/~w (~s) is"
+		" not a supertype of ~s, which is expected type for this"
+		" argument in the callback of the ~w behaviour\n",
+		[ordinal(N), F, A, ST, CT, B]);
+message_to_string({callback_spec_type_mismatch, [B, F, A, ST, CT]}) ->
+  io_lib:format("The return type ~s in the specification of ~w/~w is not a"
+		" subtype of ~s, which is the expected return type for the"
+		" callback of ~w behaviour\n", [ST, F, A, CT, B]);
+message_to_string({callback_spec_arg_type_mismatch, [B, F, A, N, ST, CT]}) ->
+  io_lib:format("The specified type for the ~s argument of ~w/~w (~s) is"
+		" not a supertype of ~s, which is expected type for this"
+		" argument in the callback of the ~w behaviour\n",
+		[ordinal(N), F, A, ST, CT, B]);
 message_to_string({callback_missing, [B, F, A]}) ->
   io_lib:format("Undefined callback function ~w/~w (behaviour '~w')\n",
 		[F, A, B]);
-message_to_string({invalid_spec, [B, F, A, R]}) ->
-  io_lib:format("The spec for the ~w:~w/~w callback is not correct: ~s\n",
-		[B, F, A, R]);
-message_to_string({spec_missing, [B, F, A]}) ->
-  io_lib:format("Type info about ~w:~w/~w callback is not available\n",
-		[B, F, A]).
+message_to_string({callback_info_missing, [B]}) ->
+  io_lib:format("Callback info about the ~w behaviour is not available\n", [B]);
+%%----- Warnings for unknown functions, types, and behaviours -------------
+message_to_string({unknown_type, {M, F, A}}) ->
+  io_lib:format("Unknown type ~w:~w/~w", [M, F, A]);
+message_to_string({unknown_function, {M, F, A}}) ->
+  io_lib:format("Unknown function ~w:~w/~w", [M, F, A]);
+message_to_string({unknown_behaviour, B}) ->
+  io_lib:format("Unknown behaviour ~w", [B]).
 
 %%-----------------------------------------------------------------------------
 %% Auxiliary functions below
@@ -541,4 +563,4 @@ form_position_string(ArgNs) ->
 ordinal(1) -> "1st";
 ordinal(2) -> "2nd";
 ordinal(3) -> "3rd";
-ordinal(N) when is_integer(N) -> io_lib:format("~wth",[N]).
+ordinal(N) when is_integer(N) -> io_lib:format("~wth", [N]).

@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 1996-2011. All Rights Reserved.
+%% Copyright Ericsson AB 1996-2014. All Rights Reserved.
 %%
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -33,7 +33,7 @@
 -export([ match1/1, match2/1, match_object/1, match_object2/1]).
 -export([ dups/1, misc1/1, safe_fixtable/1, info/1, tab2list/1]).
 -export([ tab2file/1, tab2file2/1, tabfile_ext1/1,
-	tabfile_ext2/1, tabfile_ext3/1, tabfile_ext4/1]).
+	tabfile_ext2/1, tabfile_ext3/1, tabfile_ext4/1, badfile/1]).
 -export([ heavy_lookup/1, heavy_lookup_element/1, heavy_concurrent/1]).
 -export([ lookup_element_mult/1]).
 -export([]).
@@ -72,7 +72,11 @@
 	 exit_many_many_tables_owner/1]).
 -export([write_concurrency/1, heir/1, give_away/1, setopts/1]).
 -export([bad_table/1, types/1]).
+-export([otp_9932/1]).
 -export([otp_9423/1]).
+-export([otp_10182/1]).
+-export([ets_all/1]).
+-export([memory_check_summary/1]).
 
 -export([init_per_testcase/2, end_per_testcase/2]).
 %% Convenience for manual testing
@@ -94,7 +98,7 @@
 	 misc1_do/1, safe_fixtable_do/1, info_do/1, dups_do/1, heavy_lookup_do/1,
 	 heavy_lookup_element_do/1, member_do/1, otp_5340_do/1, otp_7665_do/1, meta_wb_do/1,
 	 do_heavy_concurrent/1, tab2file2_do/2, exit_large_table_owner_do/2,
-         types_do/1, sleeper/0, rpc_externals/0, memory_do/1,
+         types_do/1, sleeper/0, memory_do/1,
 	 ms_tracee_dummy/1, ms_tracee_dummy/2, ms_tracee_dummy/3, ms_tracee_dummy/4
 	]).
 
@@ -145,7 +149,12 @@ all() ->
      exit_many_large_table_owner, exit_many_tables_owner,
      exit_many_many_tables_owner, write_concurrency, heir,
      give_away, setopts, bad_table, types,
-     otp_9423].
+     otp_10182,
+     otp_9932,
+     otp_9423,
+     ets_all,
+     
+     memory_check_summary]. % MUST BE LAST
 
 groups() -> 
     [{new, [],
@@ -164,7 +173,7 @@ groups() ->
       [misc1, safe_fixtable, info, dups, tab2list]},
      {files, [],
       [tab2file, tab2file2, tabfile_ext1,
-       tabfile_ext2, tabfile_ext3, tabfile_ext4]},
+       tabfile_ext2, tabfile_ext3, tabfile_ext4, badfile]},
      {heavy, [],
       [heavy_lookup, heavy_lookup_element, heavy_concurrent]},
      {fold, [],
@@ -176,17 +185,39 @@ groups() ->
        meta_newdel_unnamed, meta_newdel_named]}].
 
 init_per_suite(Config) ->
+    erts_debug:set_internal_state(available_internal_state, true),
     Config.
 
 end_per_suite(_Config) ->
     stop_spawn_logger(),
-    catch erts_debug:set_internal_state(available_internal_state, false).
+    catch erts_debug:set_internal_state(available_internal_state, false),
+    ok.
 
 init_per_group(_GroupName, Config) ->
 	Config.
 
 end_per_group(_GroupName, Config) ->
 	Config.
+
+%% Test that we did not have "too many" failed verify_etsmem()'s
+%% in the test suite.
+%% verify_etsmem() may give a low number of false positives
+%% as concurrent activities, such as lingering processes
+%% from earlier test suites, may do unrelated ets (de)allocations.
+memory_check_summary(_Config) ->
+    case whereis(ets_test_spawn_logger) of
+	undefined ->
+	    ?t:fail("No spawn logger exist");
+	_ ->
+	    ets_test_spawn_logger ! {self(), get_failed_memchecks},
+	    receive {get_failed_memchecks, FailedMemchecks} -> ok end,
+	    io:format("Failed memchecks: ~p\n",[FailedMemchecks]),
+	    if FailedMemchecks > 3 ->
+		    ct:fail("Too many failed (~p) memchecks", [FailedMemchecks]);
+	       true ->
+		    ok
+	    end
+    end.
 
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -304,7 +335,6 @@ t_match_spec_run(Config) when is_list(Config) ->
 		      end,
 		  repeat_for_permutations(F, N_MS)
 	  end,
-
     test_terms(Fun, skip_refc_check),
 
     ?line verify_etsmem(EtsMem).
@@ -324,7 +354,7 @@ t_match_spec_run_test(List, MS, Result) ->
 
     %% Check that tracing agree
     Self = self(),
-    {Tracee, MonRef} = spawn_monitor(fun() -> ms_tracee(Self, List) end),
+    {Tracee, MonRef} = my_spawn_monitor(fun() -> ms_tracee(Self, List) end),
     receive {Tracee, ready} -> ok end,
 
     MST = lists:map(fun(Clause) -> ms_clause_ets_to_trace(Clause) end, MS),
@@ -585,7 +615,6 @@ select_fail_do(Opts) ->
 memory(doc) -> ["Whitebox test of ets:info(X,memory)"];
 memory(suite) -> [];
 memory(Config) when is_list(Config) ->
-    ?line erts_debug:set_internal_state(available_internal_state, true),
     ?line ok = chk_normal_tab_struct_size(),
     repeat_for_opts(memory_do,[compressed]),
     ?line catch erts_debug:set_internal_state(available_internal_state, false).
@@ -714,30 +743,17 @@ adjust_xmem([T1,T2,T3,T4], {A0,B0,C0,D0} = _Mem0) ->
     TabDiff = ?TAB_STRUCT_SZ,
     Mem1 = {A0+TabDiff, B0+TabDiff, C0+TabDiff, D0+TabDiff},
 
-    Mem2 = case {erlang:system_info({wordsize,internal}),erlang:system_info({wordsize,external})} of
-	         %% Halfword, corrections for regular pointers occupying two internal words.
-		 {4,8} ->
-			{A1,B1,C1,D1} = Mem1,
-			{A1+4*ets:info(T1, size)+?DB_TREE_STACK_NEED,
-			 B1+3*ets:info(T2, size)+?DB_HASH_SIZEOF_EXTSEG,
-			 C1+3*ets:info(T3, size)+?DB_HASH_SIZEOF_EXTSEG,
-			 D1+3*ets:info(T4, size)+?DB_HASH_SIZEOF_EXTSEG};
-		 _ ->
-			Mem1
-		end,
-
-    %% Adjust for hybrid and shared heaps:
-    %%   Each record is one word smaller.
-    %%Mem2 = case erlang:system_info(heap_type) of
-    %%    	   private ->
-    %%    	       Mem1;
-    %%    	   _ ->
-    %%    	       {A1,B1,C1,D1} = Mem1,
-    %%    	       {A1-ets:info(T1, size),B1-ets:info(T2, size),
-    %%    		C1-ets:info(T3, size),D1-ets:info(T4, size)}
-    %%          end,
-    %%{Mem2,{ets:info(T1,stats),ets:info(T2,stats),ets:info(T3,stats),ets:info(T4,stats)}}.
-    Mem2.
+    case {erlang:system_info({wordsize,internal}),erlang:system_info({wordsize,external})} of
+	%% Halfword, corrections for regular pointers occupying two internal words.
+	{4,8} ->
+	    {A1,B1,C1,D1} = Mem1,
+	    {A1+4*ets:info(T1, size)+?DB_TREE_STACK_NEED,
+	     B1+3*ets:info(T2, size)+?DB_HASH_SIZEOF_EXTSEG,
+	     C1+3*ets:info(T3, size)+?DB_HASH_SIZEOF_EXTSEG,
+	     D1+3*ets:info(T4, size)+?DB_HASH_SIZEOF_EXTSEG};
+	_ ->
+	    Mem1
+    end.
 
 t_whitebox(doc) ->
     ["Diverse whitebox testes"];
@@ -795,20 +811,25 @@ t_ets_dets(Config, Opts) ->
     ?line true = ets:from_dets(ETab,DTab),
     ?line 3000 = ets:info(ETab,size),
     ?line ets:delete(ETab),
-    ?line {'EXIT',{badarg,[{ets,to_dets,[ETab,DTab]}|_]}} =
-	(catch ets:to_dets(ETab,DTab)),
-    ?line {'EXIT',{badarg,[{ets,from_dets,[ETab,DTab]}|_]}} =
-	(catch ets:from_dets(ETab,DTab)),
+    ?line check_badarg(catch ets:to_dets(ETab,DTab),
+		       ets, to_dets, [ETab,DTab]),
+    ?line check_badarg(catch ets:from_dets(ETab,DTab),
+		       ets, from_dets, [ETab,DTab]),
     ?line ETab2 = ets_new(x,Opts),
     ?line filltabint(ETab2,3000),
     ?line dets:close(DTab),
-    ?line {'EXIT',{badarg,[{ets,to_dets,[ETab2,DTab]}|_]}} =
-	(catch ets:to_dets(ETab2,DTab)),
-    ?line {'EXIT',{badarg,[{ets,from_dets,[ETab2,DTab]}|_]}} =
-	(catch ets:from_dets(ETab2,DTab)),
+    ?line check_badarg(catch ets:to_dets(ETab2,DTab),
+		       ets, to_dets, [ETab2,DTab]),
+    ?line check_badarg(catch ets:from_dets(ETab2,DTab),
+		       ets, from_dets, [ETab2,DTab]),
     ?line ets:delete(ETab2),
     ?line (catch file:delete(Fname)),
     ok.
+
+check_badarg({'EXIT', {badarg, [{M,F,Args,_} | _]}}, M, F, Args) ->
+    true;
+check_badarg({'EXIT', {badarg, [{M,F,A,_} | _]}}, M, F, Args)  ->
+    true = test_server:is_native(M) andalso length(Args) =:= A.
 
 t_delete_all_objects(doc) ->
     ["Test ets:delete_all_objects/1"];
@@ -1031,6 +1052,8 @@ t_test_ms(Config) when is_list(Config) ->
 				   [{{'$1','$2'},[{'<','$1','$2'}],['$$']}]),
     ?line {ok,false} = ets:test_ms({a,b},
 				   [{{'$1','$2'},[{'>','$1','$2'}],['$$']}]),
+    Tpl = {a,gb_sets:new()},
+    ?line {ok,Tpl} = ets:test_ms(Tpl, [{{'_','_'},  [], ['$_']}]), % OTP-10190
     ?line {error,[{error,String}]} = ets:test_ms({a,b},
 						 [{{'$1','$2'},
 						   [{'flurp','$1','$2'}],
@@ -1942,7 +1965,7 @@ evil_update_counter(Config) when is_list(Config) ->
 evil_update_counter_do(Opts) ->
     ?line EtsMem = etsmem(),
     ?line process_flag(trap_exit, true),
-    ?line Pids = [spawn_link(fun() -> evil_counter(I,Opts) end)  || I <- lists:seq(1, 40)],
+    ?line Pids = [my_spawn_link(fun() -> evil_counter(I,Opts) end)  || I <- lists:seq(1, 40)],
     ?line wait_for_all(gb_sets:from_list(Pids)),
     ?line verify_etsmem(EtsMem),
     ok.
@@ -2148,24 +2171,24 @@ heir_do(Opts) ->
 			Combos),    			
 			 
     %% No heir
-    {Founder1,MrefF1} = spawn_monitor(fun()->heir_founder(Master,foo_data,Opts)end),
+    {Founder1,MrefF1} = my_spawn_monitor(fun()->heir_founder(Master,foo_data,Opts)end),
     Founder1 ! {go, none},
     ?line {"No heir",Founder1} = receive_any(),
     ?line {'DOWN', MrefF1, process, Founder1, normal} = receive_any(),
     ?line undefined = ets:info(foo),
 
     %% An already dead heir
-    {Heir2,MrefH2} = spawn_monitor(fun()->die end),
+    {Heir2,MrefH2} = my_spawn_monitor(fun()->die end),
     ?line {'DOWN', MrefH2, process, Heir2, normal} = receive_any(),
-    {Founder2,MrefF2} = spawn_monitor(fun()->heir_founder(Master,foo_data,Opts)end),
+    {Founder2,MrefF2} = my_spawn_monitor(fun()->heir_founder(Master,foo_data,Opts)end),
     Founder2 ! {go, Heir2},
     ?line {"No heir",Founder2} = receive_any(),
     ?line {'DOWN', MrefF2, process, Founder2, normal} = receive_any(),
     ?line undefined = ets:info(foo),
 
     %% When heir dies before founder
-    {Founder3,MrefF3} = spawn_monitor(fun()->heir_founder(Master,"The dying heir",Opts)end),
-    {Heir3,MrefH3} = spawn_monitor(fun()->heir_heir(Founder3)end),
+    {Founder3,MrefF3} = my_spawn_monitor(fun()->heir_founder(Master,"The dying heir",Opts)end),
+    {Heir3,MrefH3} = my_spawn_monitor(fun()->heir_heir(Founder3)end),
     Founder3 ! {go, Heir3},
     ?line {'DOWN', MrefH3, process, Heir3, normal} = receive_any(),
     Founder3 ! die_please,
@@ -2173,22 +2196,29 @@ heir_do(Opts) ->
     ?line undefined = ets:info(foo),
 
     %% When heir dies and pid reused before founder dies
-    erts_debug:set_internal_state(available_internal_state,true),
-    NextPidIx = erts_debug:get_internal_state(next_pid),
-    {Founder4,MrefF4} = spawn_monitor(fun()->heir_founder(Master,"The dying heir",Opts)end),
-    {Heir4,MrefH4} = spawn_monitor(fun()->heir_heir(Founder4)end),
-    Founder4 ! {go, Heir4},
-    ?line {'DOWN', MrefH4, process, Heir4, normal} = receive_any(),
-    erts_debug:set_internal_state(next_pid, NextPidIx),
-    erts_debug:set_internal_state(available_internal_state,false),
-    {Heir4,MrefH4_B} = spawn_monitor_with_pid(Heir4, 
-					      fun()-> ?line die_please = receive_any() end),
-    Founder4 ! die_please,
-    ?line {'DOWN', MrefF4, process, Founder4, normal} = receive_any(),
-    Heir4 ! die_please,
-    ?line {'DOWN', MrefH4_B, process, Heir4, normal} = receive_any(),
-    ?line undefined = ets:info(foo), 
-
+    repeat_while(fun() ->
+			 NextPidIx = erts_debug:get_internal_state(next_pid),
+			 {Founder4,MrefF4} = my_spawn_monitor(fun()->heir_founder(Master,"The dying heir",Opts)end),
+			 {Heir4,MrefH4} = my_spawn_monitor(fun()->heir_heir(Founder4)end),
+			 Founder4 ! {go, Heir4},
+			 ?line {'DOWN', MrefH4, process, Heir4, normal} = receive_any(),
+			 erts_debug:set_internal_state(next_pid, NextPidIx),
+			 DoppelGanger = spawn_monitor_with_pid(Heir4, 
+							       fun()-> ?line die_please = receive_any() end),
+			 Founder4 ! die_please,
+			 ?line {'DOWN', MrefF4, process, Founder4, normal} = receive_any(),
+			 case DoppelGanger of
+			     {Heir4,MrefH4_B} ->
+				 Heir4 ! die_please,
+				 ?line {'DOWN', MrefH4_B, process, Heir4, normal} = receive_any(),
+				 ?line undefined = ets:info(foo),
+				 false;
+			     failed ->
+				 io:format("Failed to spawn process with pid ~p\n", [Heir4]),
+				 true % try again
+			 end			  
+		 end),
+	    
     ?line verify_etsmem(EtsMem).
 
 heir_founder(Master, HeirData, Opts) ->    
@@ -2256,9 +2286,9 @@ heir_heir(Founder, Mode) ->
 heir_1(HeirData,Mode,Opts) ->
     io:format("test with heir_data = ~p\n", [HeirData]),
     Master = self(),
-    ?line Founder = spawn_link(fun() -> heir_founder(Master,HeirData,Opts) end),
+    ?line Founder = my_spawn_link(fun() -> heir_founder(Master,HeirData,Opts) end),
     io:format("founder spawned = ~p\n", [Founder]),
-    ?line {Heir,Mref} = spawn_monitor(fun() -> heir_heir(Founder,Mode) end),
+    ?line {Heir,Mref} = my_spawn_monitor(fun() -> heir_heir(Founder,Mode) end),
     io:format("heir spawned = ~p\n", [{Heir,Mref}]),
     ?line Founder ! {go, Heir},
     ?line {'DOWN', Mref, process, Heir, normal} = receive_any().
@@ -2275,7 +2305,7 @@ give_away_do(Opts) ->
     Parent = self(),
 
     %% Give and then give back
-    ?line {Receiver,Mref} = spawn_monitor(fun()-> give_away_receiver(T,Parent) end),
+    ?line {Receiver,Mref} = my_spawn_monitor(fun()-> give_away_receiver(T,Parent) end),
     ?line give_me = receive_any(),
     ?line true = ets:give_away(T,Receiver,here_you_are),
     ?line {'EXIT',{badarg,_}} = (catch ets:lookup(T,key)),
@@ -2286,7 +2316,7 @@ give_away_do(Opts) ->
 
     %% Give and then let receiver keep it
     ?line true = ets:insert(T,{key,1}),
-    ?line {Receiver3,Mref3} = spawn_monitor(fun()-> give_away_receiver(T,Parent) end),
+    ?line {Receiver3,Mref3} = my_spawn_monitor(fun()-> give_away_receiver(T,Parent) end),
     ?line give_me = receive_any(),
     ?line true = ets:give_away(T,Receiver3,here_you_are),
     ?line {'EXIT',{badarg,_}} = (catch ets:lookup(T,key)),
@@ -2298,7 +2328,7 @@ give_away_do(Opts) ->
     ?line T2 = ets_new(foo,[private | Opts]),
     ?line true = ets:insert(T2,{key,1}),
     ?line ets:setopts(T2,{heir,self(),"Som en gummiboll..."}),
-    ?line {Receiver2,Mref2} = spawn_monitor(fun()-> give_away_receiver(T2,Parent) end),
+    ?line {Receiver2,Mref2} = my_spawn_monitor(fun()-> give_away_receiver(T2,Parent) end),
     ?line give_me = receive_any(),
     ?line true = ets:give_away(T2,Receiver2,here_you_are),
     ?line {'EXIT',{badarg,_}} = (catch ets:lookup(T2,key)),
@@ -2313,12 +2343,12 @@ give_away_do(Opts) ->
     ?line {'EXIT',{badarg,_}} = (catch ets:give_away(T2,"not a pid","To wrong type")),
 
     ?line true = ets:delete(T2),
-    ?line {ReceiverNeg,MrefNeg} = spawn_monitor(fun()-> give_away_receiver(T2,Parent) end),
+    ?line {ReceiverNeg,MrefNeg} = my_spawn_monitor(fun()-> give_away_receiver(T2,Parent) end),
     ?line give_me = receive_any(),
     ?line {'EXIT',{badarg,_}} = (catch ets:give_away(T2,ReceiverNeg,"A deleted table")),
 
     ?line T3 = ets_new(foo,[public | Opts]),
-    spawn_link(fun()-> {'EXIT',{badarg,_}} = (catch ets:give_away(T3,ReceiverNeg,"From non owner")),
+    my_spawn_link(fun()-> {'EXIT',{badarg,_}} = (catch ets:give_away(T3,ReceiverNeg,"From non owner")),
 		       Parent ! done
 	       end),
     ?line done = receive_any(),
@@ -2354,7 +2384,7 @@ setopts_do(Opts) ->
     Self = self(),
     ?line T = ets_new(foo,[named_table, private | Opts]),
     ?line none = ets:info(T,heir),
-    Heir = spawn_link(fun()->heir_heir(Self) end),
+    Heir = my_spawn_link(fun()->heir_heir(Self) end),
     ?line ets:setopts(T,{heir,Heir,"Data"}),
     ?line Heir = ets:info(T,heir),
     ?line ets:setopts(T,{heir,self(),"Data"}),
@@ -2383,6 +2413,8 @@ setopts_do(Opts) ->
     ?line {'EXIT',{badarg,_}} = (catch ets:setopts(T,{protection,private,false})),
     ?line {'EXIT',{badarg,_}} = (catch ets:setopts(T,protection)),
     ?line ets:delete(T),
+    unlink(Heir),
+    exit(Heir, bang),
     ok.
 
 bad_table(doc) -> ["All kinds of operations with bad table argument"];
@@ -2405,14 +2437,14 @@ bad_table(Config) when is_list(Config) ->
 
 bad_table_do(Opts, DummyFile) ->
     Parent = self(),    
-    {Pid,Mref} = spawn_opt(fun()-> ets_new(priv,[private,named_table | Opts]),
-				   Priv = ets_new(priv,[private | Opts]),
-				   ets_new(prot,[protected,named_table | Opts]),
-				   Prot = ets_new(prot,[protected | Opts]),
-				   Parent ! {self(),Priv,Prot},
-				   die_please = receive_any()
-			   end,
-			   [link, monitor]),
+    {Pid,Mref} = my_spawn_opt(fun()-> ets_new(priv,[private,named_table | Opts]),
+				      Priv = ets_new(priv,[private | Opts]),
+				      ets_new(prot,[protected,named_table | Opts]),
+				      Prot = ets_new(prot,[protected | Opts]),
+				      Parent ! {self(),Priv,Prot},
+				      die_please = receive_any()
+			      end,
+			      [link, monitor]),
     {Pid,Priv,Prot} = receive_any(),
     MatchSpec = {{key,'_'}, [], ['$$']},
     Fun = fun(X,_) -> X end,
@@ -2652,7 +2684,7 @@ maybe_sort(L) when is_list(L) ->
 %maybe_sort({'EXIT',{Reason, [{Module, Function, _}|_]}}) ->
 %    {'EXIT',{Reason, [{Module, Function, '_'}]}};
 maybe_sort({'EXIT',{Reason, List}}) when is_list(List) ->
-    {'EXIT',{Reason, lists:map(fun({Module, Function, _}) ->
+    {'EXIT',{Reason, lists:map(fun({Module, Function, _, _}) ->
 				       {Module, Function, '_'}
 			       end,
 			       List)}};
@@ -3212,6 +3244,7 @@ delete_large_tab_1(Name, Flags, Data, Fix) ->
 				end
 			end,
 			0),
+    SchedTracerMon = monitor(process, SchedTracer),
     ?line Loopers = start_loopers(erlang:system_info(schedulers),
 				  Prio,
 				  fun (_) -> erlang:yield() end,
@@ -3231,12 +3264,14 @@ delete_large_tab_1(Name, Flags, Data, Fix) ->
 		      N >= 5 -> ?line ok;
 		      true -> ?line ?t:fail()
 		  end
-	  end.
+	  end,
+    receive {'DOWN',SchedTracerMon,process,SchedTracer,_} -> ok end,
+    ok.
 
 delete_large_named_table(doc) ->
     "Delete a large name table and try to create a new table with the same name in another process.";
 delete_large_named_table(Config) when is_list(Config) ->    
-    ?line Data = [{erlang:phash2(I, 16#ffffff),I} || I <- lists:seq(1, 500000)],
+    ?line Data = [{erlang:phash2(I, 16#ffffff),I} || I <- lists:seq(1, 200000)],
     ?line EtsMem = etsmem(),
     repeat_for_opts(fun(Opts) -> delete_large_named_table_do(Opts,Data) end),
     ?line verify_etsmem(EtsMem),
@@ -3258,16 +3293,16 @@ delete_large_named_table_1(Name, Flags, Data, Fix) ->
 	    ?line lists:foreach(fun({K,_}) -> ets:delete(Tab, K) end, Data)
     end,
     Parent = self(),
-    Pid = spawn_link(fun() ->
-			     receive
-				 {trace,Parent,call,_} ->
-				     ets_new(Name, [named_table])
-			     end
-		     end),
-    ?line erlang:trace(self(), true, [call,{tracer,Pid}]),
-    ?line erlang:trace_pattern({ets,delete,1}, true, [global]),
-    ?line erlang:yield(), true = ets:delete(Tab),
-    ?line erlang:trace_pattern({ets,delete,1}, false, [global]),
+    {Pid, MRef} = my_spawn_opt(fun() ->
+				      receive
+					  ets_new ->
+					      ets_new(Name, [named_table])				      
+				      end
+			       end,
+			       [link, monitor]),
+    true = ets:delete(Tab),
+    Pid ! ets_new,
+    receive {'DOWN',MRef,process,Pid,_} -> ok end,
     ok.
 
 evil_delete(doc) ->
@@ -3620,7 +3655,7 @@ cycle(Tab, L) ->
     ets:insert(Tab,list_to_tuple(L)),
     cycle(Tab, tl(L)++[hd(L)]).
 
-dynamic_go() -> spawn_link(fun dynamic_init/0).
+dynamic_go() -> my_spawn_link(fun dynamic_init/0).
 
 dynamic_init() -> [dyn_lookup(?MODULE) || _ <- lists:seq(1, 10)].
 
@@ -3847,7 +3882,7 @@ safe_fixtable_do(Opts) ->
     Self = self(),
     ?line {{_,_,_},[{Self,1}]} = ets:info(Tab,safe_fixed),
     %% Test that an unjustified 'unfix' is a no-op.
-    {Pid,MRef} = spawn_monitor(fun() -> true = ets:safe_fixtable(Tab,false) end),
+    {Pid,MRef} = my_spawn_monitor(fun() -> true = ets:safe_fixtable(Tab,false) end),
     {'DOWN', MRef, process, Pid, normal} = receive M -> M end,
     ?line true = ets:info(Tab,fixed),
     ?line {{_,_,_},[{Self,1}]} = ets:info(Tab,safe_fixed),
@@ -4169,7 +4204,56 @@ tabfile_ext4(Config) when is_list(Config) ->
     file:delete(FName),
     ok.
 
+badfile(suite) ->
+    [];
+badfile(doc) ->
+    ["Tests that no disk_log is left open when file has been corrupted"];
+badfile(Config) when is_list(Config) ->
+    PrivDir = ?config(priv_dir,Config),
+    File = filename:join(PrivDir, "badfile"),
+    _ = file:delete(File),
+    T = ets:new(table, []),
+    true = ets:insert(T, [{a,1},{b,2}]),
+    ok = ets:tab2file(T, File, []),
+    true = ets:delete(T),
+    [H0 | Ts ] = get_all_terms(l, File),
+    H1 = tuple_to_list(H0),
+    H2 = [{K,V} || {K,V} <- H1, K =/= protection],
+    H = list_to_tuple(H2),
+    ok = file:delete(File),
+    write_terms(l, File, [H | Ts]),
+    %% All mandatory keys are no longer members of the header
+    {error, badfile} = ets:file2tab(File),
+    {error, badfile} = ets:tabfile_info(File),
+    file:delete(File),
+    {[],[]} = disk_log:accessible_logs(),
+    ok.
 
+get_all_terms(Log, File) ->
+    {ok, Log} = disk_log:open([{name,Log},
+                               {file, File},
+                               {mode, read_only}]),
+    Ts = get_all_terms(Log),
+    ok = disk_log:close(Log),
+    Ts.
+
+get_all_terms(Log) ->
+    get_all_terms1(Log, start, []).
+
+get_all_terms1(Log, Cont, Res) ->
+    case disk_log:chunk(Log, Cont) of
+	{error, _R} ->
+            throw(fel);
+	{Cont2, Terms} ->
+	    get_all_terms1(Log, Cont2, Res ++ Terms);
+	eof ->
+	    Res
+    end.
+
+write_terms(Log, File, Terms) ->
+    {ok, Log} = disk_log:open([{name,Log},{file, File},{mode,read_write}]),
+    ok = disk_log:log(Log, Terms),
+    ok = disk_log:close(Log).
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
@@ -4211,21 +4295,13 @@ heavy_lookup_element(Config) when is_list(Config) ->
     repeat_for_opts(heavy_lookup_element_do).
 
 heavy_lookup_element_do(Opts) ->
-    ?line EtsMem = etsmem(),
-    ?line Tab = ets_new(foobar_table, [set, protected, {keypos, 2} | Opts]),
-    ?line ok = fill_tab2(Tab, 0, 7000),
-    case os:type() of
-	vxworks ->
-	    ?line ?t:do_times(5, ?MODULE, do_lookup_element,
-				       [Tab, 6999, 1]);
-						% lookup ALL elements 5 times.
-	_ ->
-	    ?line ?t:do_times(50, ?MODULE, do_lookup_element,
-				       [Tab, 6999, 1])
-						% lookup ALL elements 50 times.
-    end,
-    ?line true = ets:delete(Tab),
-    ?line verify_etsmem(EtsMem).
+    EtsMem = etsmem(),
+    Tab = ets_new(foobar_table, [set, protected, {keypos, 2} | Opts]),
+    ok = fill_tab2(Tab, 0, 7000),
+    % lookup ALL elements 50 times
+    ?t:do_times(50, ?MODULE, do_lookup_element, [Tab, 6999, 1]),
+    true = ets:delete(Tab),
+    verify_etsmem(EtsMem).
 
 do_lookup_element(_Tab, 0, _) -> ok;
 do_lookup_element(Tab, N, M) ->
@@ -4251,7 +4327,7 @@ do_heavy_concurrent(Opts) ->
     ?line ok = fill_tab2(Tab, 0, Size),
     ?line Procs = lists:map(
 		    fun (N) ->
-			    spawn_link(
+			    my_spawn_link(
 			      fun () ->
 				      do_heavy_concurrent_proc(Tab, Size, N)
 			      end)
@@ -4855,12 +4931,7 @@ otp_7665_act(Tab,Min,Max,DelNr) ->
 %% Whitebox testing of meta name table hashing.
 meta_wb(Config) when is_list(Config) ->
     ?line EtsMem = etsmem(),
-    ?line erts_debug:set_internal_state(available_internal_state, true),
-    try
-	repeat_for_opts(meta_wb_do)
-    after
-	erts_debug:set_internal_state(available_internal_state, false)
-    end,
+    repeat_for_opts(meta_wb_do),
     ?line verify_etsmem(EtsMem).
 
 
@@ -4929,12 +5000,15 @@ colliding_names(Name) ->
 
 grow_shrink(Config) when is_list(Config) ->
     ?line EtsMem = etsmem(),
-    grow_shrink_0(lists:seq(3071, 5000), EtsMem).
+    ?line grow_shrink_0(lists:seq(3071, 5000), EtsMem),
+    ?line verify_etsmem(EtsMem).
 
 grow_shrink_0([N|Ns], EtsMem) ->
     ?line grow_shrink_1(N, [set]),
     ?line grow_shrink_1(N, [ordered_set]),
-    ?line verify_etsmem(EtsMem),
+    %% Verifying ets-memory here takes too long time, since
+    %% lock-free allocators were introduced...
+    %% ?line verify_etsmem(EtsMem),
     grow_shrink_0(Ns, EtsMem);
 grow_shrink_0([], _) -> ok.
 
@@ -4981,13 +5055,13 @@ grow_pseudo_deleted_do(Type) ->
     ?line Left = ets:info(T,size),
     ?line Mult = get_kept_objects(T),
     filltabstr(T,Mult),
-    spawn_opt(fun()-> ?line true = ets:info(T,fixed),
-		       Self ! start,
-		       io:format("Starting to filltabstr... ~p\n",[now()]),
-		       filltabstr(T,Mult,Mult+10000),
-		       io:format("Done with filltabstr. ~p\n",[now()]),
-		       Self ! done 
-	       end, [link, {scheduler,2}]),
+    my_spawn_opt(fun()-> ?line true = ets:info(T,fixed),
+			 Self ! start,
+			 io:format("Starting to filltabstr... ~p\n",[now()]),
+			 filltabstr(T,Mult,Mult+10000),
+			 io:format("Done with filltabstr. ~p\n",[now()]),
+			 Self ! done 
+		 end, [link, {scheduler,2}]),
     ?line start = receive_any(),
     io:format("Unfixing table...~p nitems=~p\n",[now(),ets:info(T,size)]),
     ?line true = ets:safe_fixtable(T,false),
@@ -5021,13 +5095,13 @@ shrink_pseudo_deleted_do(Type) ->
 				     [true]}]),    
     ?line Half = ets:info(T,size),
     ?line Half = get_kept_objects(T),
-    spawn_opt(fun()-> ?line true = ets:info(T,fixed),
-		      Self ! start,
-		      io:format("Starting to delete... ~p\n",[now()]),
-		      del_one_by_one_set(T,1,Half+1),
-		      io:format("Done with delete. ~p\n",[now()]),
-		      Self ! done 
-	      end, [link, {scheduler,2}]),
+    my_spawn_opt(fun()-> ?line true = ets:info(T,fixed),
+			 Self ! start,
+			 io:format("Starting to delete... ~p\n",[now()]),
+			 del_one_by_one_set(T,1,Half+1),
+			 io:format("Done with delete. ~p\n",[now()]),
+			 Self ! done 
+		 end, [link, {scheduler,2}]),
     ?line start = receive_any(),
     io:format("Unfixing table...~p nitems=~p\n",[now(),ets:info(T,size)]),
     ?line true = ets:safe_fixtable(T,false),
@@ -5184,24 +5258,24 @@ smp_unfix_fix_do() ->
     ?line Deleted = get_kept_objects(T),
     
     {Child, Mref} = 
-	spawn_opt(fun()-> ?line true = ets:info(T,fixed),
-			  Parent ! start,
-			  io:format("Child waiting for table to be unfixed... now=~p mem=~p\n",
-				    [now(),ets:info(T,memory)]),
-			  repeat_while(fun()-> ets:info(T,fixed) end),
-			  io:format("Table unfixed. Child Fixating! now=~p mem=~p\n",
-				    [now(),ets:info(T,memory)]),    
-			  ?line true = ets:safe_fixtable(T,true),
-			  repeat_while(fun(Key) when Key =< NumOfObjs -> 
-					       ets:delete(T,Key), {true,Key+1};
-					  (Key) -> {false,Key}
-				       end,
-				       Deleted),
-			  ?line 0 = ets:info(T,size),
-			  ?line true = get_kept_objects(T) >= Left,		      
-			  ?line done = receive_any()
-		  end, 
-		  [link, monitor, {scheduler,2}]),
+      my_spawn_opt(fun()-> ?line true = ets:info(T,fixed),
+			   Parent ! start,
+			   io:format("Child waiting for table to be unfixed... now=~p mem=~p\n",
+				     [now(),ets:info(T,memory)]),
+			   repeat_while(fun()-> ets:info(T,fixed) end),
+			   io:format("Table unfixed. Child Fixating! now=~p mem=~p\n",
+				     [now(),ets:info(T,memory)]),    
+			   ?line true = ets:safe_fixtable(T,true),
+			   repeat_while(fun(Key) when Key =< NumOfObjs -> 
+						ets:delete(T,Key), {true,Key+1};
+					   (Key) -> {false,Key}
+					end,
+					Deleted),
+			   ?line 0 = ets:info(T,size),
+			   ?line true = get_kept_objects(T) >= Left,		      
+			   ?line done = receive_any()
+		   end, 
+		   [link, monitor, {scheduler,2}]),
     
     ?line start = receive_any(),        
     ?line true = ets:info(T,fixed),
@@ -5232,11 +5306,11 @@ otp_8166_do(WC) ->
     Deleted = NumOfObjs div 2,
     filltabint(T,NumOfObjs),
     {ReaderPid, ReaderMref} = 
- 	spawn_opt(fun()-> otp_8166_reader(T,NumOfObjs) end, 
- 		  [link, monitor, {scheduler,2}]),
+ 	my_spawn_opt(fun()-> otp_8166_reader(T,NumOfObjs) end, 
+		     [link, monitor, {scheduler,2}]),
     {ZombieCrPid, ZombieCrMref} = 
- 	spawn_opt(fun()-> otp_8166_zombie_creator(T,Deleted) end, 
- 		  [link, monitor, {scheduler,3}]),
+ 	my_spawn_opt(fun()-> otp_8166_zombie_creator(T,Deleted) end, 
+		     [link, monitor, {scheduler,3}]),
 
     repeat(fun() -> ZombieCrPid ! {loop, self()},
 		    zombies_created = receive_any(),
@@ -5432,6 +5506,22 @@ types_do(Opts) ->
     ?line verify_etsmem(EtsMem).
 
 
+%% OTP-9932: Memory overwrite when inserting large integers in compressed bag.
+%% Will crash with segv on 64-bit opt if not fixed.
+otp_9932(Config) when is_list(Config) ->
+    T = ets:new(xxx, [bag, compressed]),    
+    Fun = fun(N) -> 
+		  Key = {1316110174588445 bsl N,1316110174588583 bsl N},
+		  S = {Key, Key},
+		  true = ets:insert(T, S),
+		  [S] = ets:lookup(T, Key),
+		  true = ets:insert(T, S),
+		  [S] = ets:lookup(T, Key)
+	  end,
+    lists:foreach(Fun, lists:seq(0, 16)),
+    ets:delete(T).
+    
+
 otp_9423(doc) -> ["vm-deadlock caused by race between ets:delete and others on write_concurrency table"];
 otp_9423(Config) when is_list(Config) ->
     InitF = fun(_) -> {0,0} end,
@@ -5463,7 +5553,33 @@ otp_9423(Config) when is_list(Config) ->
 	Skipped -> Skipped
     end.
 	    
-    
+
+%% Corrupted binary in compressed table
+otp_10182(Config) when is_list(Config) ->
+    Bin = <<"aHR0cDovL2hvb3RzdWl0ZS5jb20vYy9wcm8tYWRyb2xsLWFi">>,
+    Key = {test, Bin},
+    Value = base64:decode(Bin),
+    In = {Key,Value},
+    Db = ets:new(undefined, [set, protected, {read_concurrency, true}, compressed]),
+    ets:insert(Db, In),
+    [Out] = ets:lookup(Db, Key),
+    io:format("In :  ~p\nOut: ~p\n", [In,Out]),
+    ets:delete(Db),
+    In = Out.
+
+%% Test that ets:all include/exclude tables that we know are created/deleted
+ets_all(Config) when is_list(Config) ->
+    Pids = [spawn_link(fun() -> ets_all_run() end) || _ <- [1,2]],
+    receive after 3*1000 -> ok end,
+    [begin unlink(P), exit(P,kill) end || P <- Pids],
+    ok.
+
+ets_all_run() ->
+    Table = ets:new(undefined, []),
+    true = lists:member(Table, ets:all()),
+    ets:delete(Table),
+    false = lists:member(Table, ets:all()),
+    ets_all_run().
     
 
 %
@@ -5496,7 +5612,7 @@ run_workers_do(InitF,ExecF,FiniF,Laps, Exclude) ->
     io:format("smp starting ~p workers\n",[NumOfProcs]),
     Seeds = [{ProcN,random:uniform(9999)} || ProcN <- lists:seq(1,NumOfProcs)],
     Parent = self(),
-    Pids = [spawn_link(fun()-> worker(Seed,InitF,ExecF,FiniF,Laps,Parent,NumOfProcs) end)
+    Pids = [my_spawn_link(fun()-> worker(Seed,InitF,ExecF,FiniF,Laps,Parent,NumOfProcs) end)
 	    || Seed <- Seeds],
     case Laps of
 	infinite -> Pids;
@@ -5545,46 +5661,53 @@ my_tab_to_list(_Ts,'$end_of_table', Acc) -> lists:reverse(Acc);
 my_tab_to_list(Ts,Key, Acc) ->
     my_tab_to_list(Ts,ets:next(Ts,Key),[ets:lookup(Ts, Key)| Acc]).
 
-wait_for_all_schedulers_online_to_execute() ->
-    PMs = lists:map(fun (Sched) ->
-			    spawn_opt(fun () -> ok end,
-				      [monitor, {scheduler, Sched}])
-		    end,
-		    lists:seq(1,erlang:system_info(schedulers_online))),
-    lists:foreach(fun ({P, M}) ->
-			  receive
-			      {'DOWN', M, process, P, _} -> ok
-			  end
-		  end,
-		  PMs),
-    ok.
+
+wait_for_memory_deallocations() ->
+    try
+	erts_debug:set_internal_state(wait, deallocations)
+    catch
+	error:undef ->
+	    erts_debug:set_internal_state(available_internal_state, true),
+	    wait_for_memory_deallocations()
+    end.
+	    
 
 etsmem() ->
-    %% Wait until it is guaranteed that all already scheduled
-    %% deallocations of DbTable structures have completed.
-    wait_for_all_schedulers_online_to_execute(),
+    wait_for_memory_deallocations(),
 
     AllTabs = lists:map(fun(T) -> {T,ets:info(T,name),ets:info(T,size),
 				   ets:info(T,memory),ets:info(T,type)} 
 			end, ets:all()),
+
+    EtsAllocInfo = erlang:system_info({allocator,ets_alloc}),
+    ErlangMemoryEts = try erlang:memory(ets) catch error:notsup -> notsup end,
+
     Mem =
-    {try erlang:memory(ets) catch error:notsup -> notsup end,
-     case erlang:system_info({allocator,ets_alloc}) of
+    {ErlangMemoryEts,
+     case EtsAllocInfo of
 	 false -> undefined;
 	 MemInfo ->
 	     CS = lists:foldl(
 		    fun ({instance, _, L}, Acc) ->
-			    {value,{_,SBMBCS}} = lists:keysearch(sbmbcs, 1, L),
-			    {value,{_,MBCS}} = lists:keysearch(mbcs, 1, L),
-			    {value,{_,SBCS}} = lists:keysearch(sbcs, 1, L),
-			    [SBMBCS,MBCS,SBCS | Acc]
+			    {value,{mbcs,MBCS}} = lists:keysearch(mbcs, 1, L),
+			    {value,{sbcs,SBCS}} = lists:keysearch(sbcs, 1, L),
+			    NewAcc = [MBCS, SBCS | Acc],
+			    case lists:keysearch(mbcs_pool, 1, L) of
+				{value,{mbcs_pool, MBCS_POOL}} ->
+				    [MBCS_POOL|NewAcc];
+				_ -> NewAcc
+			    end
 		    end,
 		    [],
 		    MemInfo),
 	     lists:foldl(
 	       fun(L, {Bl0,BlSz0}) ->
-		       {value,{_,Bl,_,_}} = lists:keysearch(blocks, 1, L),
-		       {value,{_,BlSz,_,_}} = lists:keysearch(blocks_size, 1, L),
+		       {value,BlTup} = lists:keysearch(blocks, 1, L),
+		       blocks = element(1, BlTup),
+		       Bl = element(2, BlTup),
+		       {value,BlSzTup} = lists:keysearch(blocks_size, 1, L),	
+		       blocks_size = element(1, BlSzTup),
+		       BlSz = element(2, BlSzTup),
 		       {Bl0+Bl,BlSz0+BlSz}
 	       end, {0,0}, CS)
      end},
@@ -5607,7 +5730,8 @@ verify_etsmem({MemInfo,AllTabs}) ->
 	    io:format("Actual:   ~p", [MemInfo2]),
 	    io:format("Changed tables before: ~p\n",[AllTabs -- AllTabs2]),
 	    io:format("Changed tables after: ~p\n", [AllTabs2 -- AllTabs]),
-	    ?t:fail()
+	    ets_test_spawn_logger ! failed_memcheck,
+	    {comment, "Failed memory check"}
     end.
 
 
@@ -5629,10 +5753,10 @@ stop_loopers(Loopers) ->
 looper(Fun, State) ->
     looper(Fun, Fun(State)).
 
-spawn_logger(Procs) ->
+spawn_logger(Procs, FailedMemchecks) ->
     receive
 	{new_test_proc, Proc} ->
-	    spawn_logger([Proc|Procs]);
+	    spawn_logger([Proc|Procs], FailedMemchecks);
 	{sync_test_procs, Kill, From} ->
 	    lists:foreach(fun (Proc) when From == Proc ->
 				  ok;
@@ -5646,6 +5770,8 @@ spawn_logger(Procs) ->
 					      true -> exit(Proc, kill);
 					      _ -> ok
 					  end,
+					  erlang:display({"Waiting for 'DOWN' from", Proc,
+							  process_info(Proc), pid_status(Proc)}),
 					  receive
 					      {'DOWN', Mon, _, _, _} ->
 						  ok
@@ -5653,14 +5779,30 @@ spawn_logger(Procs) ->
 				  end
 			  end, Procs),
 	    From ! test_procs_synced,
-	    spawn_logger([From])
+	    spawn_logger([From], FailedMemchecks);
+
+	failed_memcheck ->
+	    spawn_logger(Procs, FailedMemchecks+1);
+
+	{Pid, get_failed_memchecks} ->
+	    Pid ! {get_failed_memchecks, FailedMemchecks},
+	    spawn_logger(Procs, FailedMemchecks)
     end.
+
+pid_status(Pid) ->
+    try
+	erts_debug:get_internal_state({process_status, Pid})
+    catch
+	error:undef ->
+	    erts_debug:set_internal_state(available_internal_state, true),
+	    pid_status(Pid)
+    end. 
 
 start_spawn_logger() ->
     case whereis(ets_test_spawn_logger) of
 	Pid when is_pid(Pid) -> true;
 	_ -> register(ets_test_spawn_logger,
-		      spawn_opt(fun () -> spawn_logger([]) end,
+		      spawn_opt(fun () -> spawn_logger([], 0) end,
 				[{priority, max}]))
     end.
 
@@ -5671,8 +5813,7 @@ start_spawn_logger() ->
 stop_spawn_logger() ->
     Mon = erlang:monitor(process, ets_test_spawn_logger),
     (catch exit(whereis(ets_test_spawn_logger), kill)),
-    receive {'DOWN', Mon, _, _, _} -> ok end,
-    ok.
+    receive {'DOWN', Mon, _, _, _} -> ok end.
 
 wait_for_test_procs() ->
     wait_for_test_procs(false).
@@ -5681,7 +5822,7 @@ wait_for_test_procs(Kill) ->
     ets_test_spawn_logger ! {sync_test_procs, Kill, self()},
     receive test_procs_synced -> ok end.
 
-log_test_proc(Proc) ->
+log_test_proc(Proc) when is_pid(Proc) ->
     ets_test_spawn_logger ! {new_test_proc, Proc},
     Proc.
 
@@ -5693,9 +5834,17 @@ my_spawn_link(Fun) -> log_test_proc(spawn_link(Fun)).
 my_spawn_link(M,F,A) -> log_test_proc(spawn_link(M,F,A)).
 %%my_spawn_link(N,M,F,A) -> log_test_proc(spawn_link(N,M,F,A)).
 
-my_spawn_opt(Fun,Opts) -> log_test_proc(spawn_opt(Fun,Opts)).
-%%my_spawn_opt(M,F,A,Opts) -> log_test_proc(spawn_opt(M,F,A,Opts)).
-%%my_spawn_opt(N,M,F,A,Opts) -> log_test_proc(spawn_opt(N,M,F,A,Opts)).
+my_spawn_opt(Fun,Opts) ->
+    case spawn_opt(Fun,Opts) of
+	Pid when is_pid(Pid) -> log_test_proc(Pid);
+	{Pid, _} = Res when is_pid(Pid) -> log_test_proc(Pid), Res
+    end.
+
+my_spawn_monitor(Fun) ->
+    Res = spawn_monitor(Fun),
+    {Pid, _} = Res,
+    log_test_proc(Pid),
+    Res.
 
 repeat(_Fun, 0) ->
     ok;
@@ -5752,25 +5901,20 @@ receive_any_spinning(Loops, N, Tries) when N>0 ->
 
 
 spawn_monitor_with_pid(Pid, Fun) when is_pid(Pid) ->
-    spawn_monitor_with_pid(Pid, Fun, 1, 10).
+    spawn_monitor_with_pid(Pid, Fun, 10).
 
-spawn_monitor_with_pid(Pid, Fun, N, M) when N > M*10 ->
-    spawn_monitor_with_pid(Pid, Fun, N, M*10);
-spawn_monitor_with_pid(Pid, Fun, N, M) ->
-    ?line false = is_process_alive(Pid),
-    case spawn(fun()-> case self() of
-			  Pid -> Fun();
-			  _ -> die
-		       end
-	       end) of
-	Pid ->	    
+spawn_monitor_with_pid(_, _, 0) ->
+    failed;
+spawn_monitor_with_pid(Pid, Fun, N) ->
+    case my_spawn(fun()-> case self() of
+			      Pid -> Fun();
+			      _ -> die
+			  end
+		  end) of
+	Pid ->
 	    {Pid, erlang:monitor(process, Pid)};
-	Other ->
-	    case N rem M of
-		0 -> io:format("Failed ~p times to get pid ~p (current = ~p)\n",[N,Pid,Other]);
-		_ -> ok
-	    end,
-	    spawn_monitor_with_pid(Pid,Fun,N+1,M)
+	_Other ->
+	    spawn_monitor_with_pid(Pid,Fun,N-1)
     end.
 
 
@@ -5950,33 +6094,103 @@ make_ext_ref() ->
 init_externals() ->
     case get(externals) of
 	undefined ->
-	    SysDistSz = ets:info(sys_dist,size),
-	    ?line Pa = filename:dirname(code:which(?MODULE)),
-	    ?line {ok, Node} = test_server:start_node(plopp, slave, [{args, " -pa " ++ Pa}]),
-	    ?line Res = case rpc:call(Node, ?MODULE, rpc_externals, []) of
-			    {badrpc, {'EXIT', E}} ->
-				test_server:fail({rpcresult, E});
-			    R -> R
-			end,
-	    ?line test_server:stop_node(Node),
-
-	    %% Wait for table 'sys_dist' to stabilize
-	    repeat_while(fun() ->
-				 case ets:info(sys_dist,size) of
-				     SysDistSz -> false;
-				     Sz ->
-					 io:format("Waiting for sys_dist to revert size from ~p to size ~p\n",
-						   [Sz, SysDistSz]),
-					 receive after 1000 -> true end
-				 end
-			 end),
+	    OtherNode = {gurka@sallad, 1},
+	    Res = {mk_pid(OtherNode, 7645, 8123),
+		   mk_port(OtherNode, 187489773),
+		   mk_ref(OtherNode, [262143, 1293964255, 3291964278])},
 	    put(externals, Res);
 
 	{_,_,_} -> ok
     end.
 
-rpc_externals() ->
-    {self(), make_port(), make_ref()}.
+%%
+%% Node container constructor functions
+%%
+
+-define(VERSION_MAGIC,       131).
+-define(PORT_EXT,            102).
+-define(PID_EXT,             103).
+-define(NEW_REFERENCE_EXT,   114).
+
+uint32_be(Uint) when is_integer(Uint), 0 =< Uint, Uint < 1 bsl 32 ->
+    [(Uint bsr 24) band 16#ff,
+     (Uint bsr 16) band 16#ff,
+     (Uint bsr 8) band 16#ff,
+     Uint band 16#ff];
+uint32_be(Uint) ->
+    exit({badarg, uint32_be, [Uint]}).
+
+uint16_be(Uint) when is_integer(Uint), 0 =< Uint, Uint < 1 bsl 16 ->
+    [(Uint bsr 8) band 16#ff,
+     Uint band 16#ff];
+uint16_be(Uint) ->
+    exit({badarg, uint16_be, [Uint]}).
+
+uint8(Uint) when is_integer(Uint), 0 =< Uint, Uint < 1 bsl 8 ->
+    Uint band 16#ff;
+uint8(Uint) ->
+    exit({badarg, uint8, [Uint]}).
+
+mk_pid({NodeName, Creation}, Number, Serial) when is_atom(NodeName) ->
+    <<?VERSION_MAGIC, NodeNameExt/binary>> = term_to_binary(NodeName),
+    mk_pid({NodeNameExt, Creation}, Number, Serial);
+mk_pid({NodeNameExt, Creation}, Number, Serial) ->
+    case catch binary_to_term(list_to_binary([?VERSION_MAGIC,
+					?PID_EXT,
+					NodeNameExt,
+					uint32_be(Number),
+					uint32_be(Serial),
+					uint8(Creation)])) of
+	Pid when is_pid(Pid) ->
+	    Pid;
+	{'EXIT', {badarg, _}} ->
+	    exit({badarg, mk_pid, [{NodeNameExt, Creation}, Number, Serial]});
+	Other ->
+	    exit({unexpected_binary_to_term_result, Other})
+    end.
+
+mk_port({NodeName, Creation}, Number) when is_atom(NodeName) ->
+    <<?VERSION_MAGIC, NodeNameExt/binary>> = term_to_binary(NodeName),
+    mk_port({NodeNameExt, Creation}, Number);
+mk_port({NodeNameExt, Creation}, Number) ->
+    case catch binary_to_term(list_to_binary([?VERSION_MAGIC,
+					      ?PORT_EXT,
+					      NodeNameExt,
+					      uint32_be(Number),
+					      uint8(Creation)])) of
+	Port when is_port(Port) ->
+	    Port;
+	{'EXIT', {badarg, _}} ->
+	    exit({badarg, mk_port, [{NodeNameExt, Creation}, Number]});
+	Other ->
+	    exit({unexpected_binary_to_term_result, Other})
+    end.
+
+mk_ref({NodeName, Creation}, Numbers) when is_atom(NodeName),
+					   is_integer(Creation),
+					   is_list(Numbers) ->
+    <<?VERSION_MAGIC, NodeNameExt/binary>> = term_to_binary(NodeName),
+    mk_ref({NodeNameExt, Creation}, Numbers);
+mk_ref({NodeNameExt, Creation}, Numbers) when is_binary(NodeNameExt),
+					      is_integer(Creation),
+					      is_list(Numbers) ->
+    case catch binary_to_term(list_to_binary([?VERSION_MAGIC,
+					      ?NEW_REFERENCE_EXT,
+					      uint16_be(length(Numbers)),
+					      NodeNameExt,
+					      uint8(Creation),
+					      lists:map(fun (N) ->
+								uint32_be(N)
+							end,
+							Numbers)])) of
+	Ref when is_reference(Ref) ->
+	    Ref;
+	{'EXIT', {badarg, _}} ->
+	    exit({badarg, mk_ref, [{NodeNameExt, Creation}, Numbers]});
+	Other ->
+	    exit({unexpected_binary_to_term_result, Other})
+    end.
+
 
 make_sub_binary(Bin) when is_binary(Bin) ->
     {_,B} = split_binary(list_to_binary([0,1,3,Bin]), 3),
@@ -6005,11 +6219,18 @@ repeat_for_opts(F, OptGenList) ->
     repeat_for_opts(F, OptGenList, []).
 
 repeat_for_opts(F, [], Acc) ->
-    lists:map(fun(Opts) ->
-                    OptList = lists:filter(fun(E) -> E =/= void end, Opts),
-                    io:format("Calling with options ~p\n",[OptList]),
-		            F(OptList)
-	          end, Acc);
+    lists:foldl(fun(Opts, RV_Acc) ->
+			OptList = lists:filter(fun(E) -> E =/= void end, Opts),
+			io:format("Calling with options ~p\n",[OptList]),
+			RV = F(OptList),
+			case RV_Acc of
+			    {comment,_} -> RV_Acc;
+			    _ -> case RV of
+				     {comment,_} -> RV;
+				     _ -> [RV | RV_Acc]
+				 end
+			end
+	          end, [], Acc);
 repeat_for_opts(F, [OptList | Tail], []) when is_list(OptList) ->
     repeat_for_opts(F, Tail, [[Opt] || Opt <- OptList]);
 repeat_for_opts(F, [OptList | Tail], AccList) when is_list(OptList) ->

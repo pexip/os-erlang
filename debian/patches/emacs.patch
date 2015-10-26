@@ -3,9 +3,9 @@ syntax (see http://bugs.debian.org/cgi-bin/bugreport.cgi?bug=494823).
 Also, it fixes manpage name regexp matching only 3erl manpages in
 section 3.
 
---- erlang-14.b.4-dfsg.orig/lib/tools/emacs/erlang.el
-+++ erlang-14.b.4-dfsg/lib/tools/emacs/erlang.el
-@@ -496,8 +496,8 @@
+--- a/lib/tools/emacs/erlang.el
++++ b/lib/tools/emacs/erlang.el
+@@ -497,8 +497,8 @@
  (defvar erlang-man-dirs
    '(("Man - Commands" "/man/man1" t)
      ("Man - Modules" "/man/man3" t)
@@ -16,7 +16,7 @@ section 3.
    "*The man directories displayed in the Erlang menu.
  
  Each item in the list should be a list with three elements, the first
-@@ -1206,23 +1206,22 @@
+@@ -1286,23 +1286,22 @@
  (or (fboundp 'eval-when-compile)
      (defmacro eval-when-compile (&rest rest) nil))
  
@@ -44,7 +44,7 @@ section 3.
  
  ;; defvar some obsolete variables, which we still support for
  ;; backwards compatibility reasons.
-@@ -1965,7 +1964,7 @@
+@@ -2025,7 +2024,7 @@
  
  (defun erlang-man-make-menu-item (file)
    "Create a menu item containing the name of the man page."
@@ -53,7 +53,7 @@ section 3.
         (let ((page (substring file (match-beginning 1) (match-end 1))))
  	 (list (capitalize page)
  	       (list 'lambda '()
-@@ -1976,7 +1975,7 @@
+@@ -2036,7 +2035,7 @@
  
  (defun erlang-man-get-files (dir)
    "Return files in directory DIR."
@@ -62,7 +62,7 @@ section 3.
  
  
  (defun erlang-man-module (&optional module)
-@@ -1996,7 +1995,7 @@
+@@ -2056,7 +2055,7 @@
    (if (or (null module) (string= module ""))
        (error "No Erlang module name given"))
    (let ((dir-list erlang-man-dirs)
@@ -71,7 +71,7 @@ section 3.
  	(file nil)
  	file-list)
      (while (and dir-list (null file))
-@@ -2137,9 +2136,9 @@
+@@ -2197,9 +2196,9 @@
      (error nil))
    (if file
        (let ((process-environment (copy-sequence process-environment)))

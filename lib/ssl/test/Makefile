@@ -1,7 +1,7 @@
 #
 # %CopyrightBegin%
 #
-# Copyright Ericsson AB 1999-2011. All Rights Reserved.
+# Copyright Ericsson AB 1999-2013. All Rights Reserved.
 #
 # The contents of this file are subject to the Erlang Public License,
 # Version 1.1, (the "License"); you may not use this file except in
@@ -37,34 +37,34 @@ VSN=$(GS_VSN)
 MODULES = \
 	ssl_test_lib \
 	ssl_basic_SUITE \
+	ssl_cipher_SUITE \
+	ssl_certificate_verify_SUITE\
+	ssl_crl_SUITE\
+	ssl_dist_SUITE \
 	ssl_handshake_SUITE \
+	ssl_npn_hello_SUITE \
+	ssl_npn_handshake_SUITE \
 	ssl_packet_SUITE \
 	ssl_payload_SUITE \
-	ssl_to_openssl_SUITE \
 	ssl_session_cache_SUITE	\
-	ssl_test_MACHINE \
-	old_ssl_active_SUITE \
-	old_ssl_active_once_SUITE \
-	old_ssl_passive_SUITE \
-	old_ssl_verify_SUITE \
-	old_ssl_peer_cert_SUITE \
-	old_ssl_misc_SUITE \
-	old_ssl_protocol_SUITE \
-	old_transport_accept_SUITE \
-	old_ssl_dist_SUITE \
+	ssl_to_openssl_SUITE \
+	ssl_ECC_SUITE \
 	make_certs\
 	erl_make_certs
 
 
 ERL_FILES = $(MODULES:%=%.erl)
 
-HRL_FILES = ssl_test_MACHINE.hrl 
+HRL_FILES =
 
 HRL_FILES_SRC = \
-	ssl_int.hrl \
+	ssl_api.hrl\
 	ssl_internal.hrl\
 	ssl_alert.hrl \
+	tls_handshake.hrl \
 	ssl_handshake.hrl \
+	ssl_cipher.hrl \
+	tls_record.hrl \
 	ssl_record.hrl
 
 HRL_FILES_INC = 
@@ -128,11 +128,11 @@ include $(ERL_TOP)/make/otp_release_targets.mk
 release_spec: opt
 
 release_tests_spec: opt
-	$(INSTALL_DIR) $(RELSYSDIR)
-	$(INSTALL_DATA)  $(ERL_FILES) $(HRL_FILES) $(HRL_FILES_NEEDED_IN_TEST) $(COVER_FILE) $(RELSYSDIR)
-	$(INSTALL_DATA) ssl.spec ssl.cover $(RELSYSDIR)
-	chmod -R u+w $(RELSYSDIR)
-	@tar cf - *_SUITE_data | (cd $(RELSYSDIR); tar xf -)
+	$(INSTALL_DIR) "$(RELSYSDIR)"
+	$(INSTALL_DATA)  $(ERL_FILES) $(HRL_FILES) $(HRL_FILES_NEEDED_IN_TEST) $(COVER_FILE) "$(RELSYSDIR)"
+	$(INSTALL_DATA) ssl.spec ssl.cover "$(RELSYSDIR)"
+	chmod -R u+w "$(RELSYSDIR)"
+	@tar cf - *_SUITE_data | (cd "$(RELSYSDIR)"; tar xf -)
 
 release_docs_spec:
 

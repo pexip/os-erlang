@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2001-2011. All Rights Reserved.
+%% Copyright Ericsson AB 2001-2012. All Rights Reserved.
 %%
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -191,11 +191,17 @@ tail_seq(Config) when is_list(Config) ->
 
 %%%---------------------------------------------------------------------
 
-create_file_slow(doc) ->
-    ["Tests the create_file_slow benchmark"];
-create_file_slow(suite) ->
-    [];
-create_file_slow(Config) when is_list(Config) ->
+%% Tests the create_file_slow benchmark.
+create_file_slow(Config) ->
+    case test_server:is_native(lists) orelse
+	test_server:is_native(file) of
+	true ->
+	    {skip,"Native libs -- tracing does not work"};
+	false ->
+	    do_create_file_slow(Config)
+    end.
+
+do_create_file_slow(Config) ->
     ?line Timetrap = ?t:timetrap(?t:seconds(40)),
     ?line PrivDir = ?config(priv_dir, Config),
     ?line TraceFile = 

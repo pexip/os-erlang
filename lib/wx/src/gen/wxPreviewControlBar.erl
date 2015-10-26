@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2008-2010. All Rights Reserved.
+%% Copyright Ericsson AB 2008-2013. All Rights Reserved.
 %%
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -17,7 +17,7 @@
 %% %CopyrightEnd%
 %% This file is generated DO NOT EDIT
 
-%% @doc See external documentation: <a href="http://www.wxwidgets.org/manuals/stable/wx_wxpreviewcontrolbar.html">wxPreviewControlBar</a>.
+%% @doc See external documentation: <a href="http://www.wxwidgets.org/manuals/2.8.12/wx_wxpreviewcontrolbar.html">wxPreviewControlBar</a>.
 %% <p>This class is derived (and can use functions) from:
 %% <br />{@link wxPanel}
 %% <br />{@link wxWindow}
@@ -58,8 +58,8 @@
   screenToClient/2,scrollLines/2,scrollPages/2,scrollWindow/3,scrollWindow/4,
   setAcceleratorTable/2,setAutoLayout/2,setBackgroundColour/2,setBackgroundStyle/2,
   setCaret/2,setClientSize/2,setClientSize/3,setContainingSizer/2,setCursor/2,
-  setDropTarget/2,setExtraStyle/2,setFocus/1,setFocusFromKbd/1,setFont/2,
-  setForegroundColour/2,setHelpText/2,setId/2,setLabel/2,setMaxSize/2,
+  setDropTarget/2,setExtraStyle/2,setFocus/1,setFocusFromKbd/1,setFocusIgnoringChildren/1,
+  setFont/2,setForegroundColour/2,setHelpText/2,setId/2,setLabel/2,setMaxSize/2,
   setMinSize/2,setName/2,setOwnBackgroundColour/2,setOwnFont/2,setOwnForegroundColour/2,
   setPalette/2,setScrollPos/3,setScrollPos/4,setScrollbar/5,setScrollbar/6,
   setSize/2,setSize/3,setSize/5,setSize/6,setSizeHints/2,setSizeHints/3,
@@ -70,21 +70,28 @@
   show/1,show/2,thaw/1,transferDataFromWindow/1,transferDataToWindow/1,
   update/1,updateWindowUI/1,updateWindowUI/2,validate/1,warpPointer/3]).
 
+-export_type([wxPreviewControlBar/0]).
 %% @hidden
 parent_class(wxPanel) -> true;
 parent_class(wxWindow) -> true;
 parent_class(wxEvtHandler) -> true;
 parent_class(_Class) -> erlang:error({badtype, ?MODULE}).
 
-%% @spec (Preview::wxPrintPreview:wxPrintPreview(), Buttons::integer(), Parent::wxWindow:wxWindow()) -> wxPreviewControlBar()
+-type wxPreviewControlBar() :: wx:wx_object().
 %% @equiv new(Preview,Buttons,Parent, [])
+-spec new(Preview, Buttons, Parent) -> wxPreviewControlBar() when
+	Preview::wxPrintPreview:wxPrintPreview(), Buttons::integer(), Parent::wxWindow:wxWindow().
+
 new(Preview,Buttons,Parent)
  when is_record(Preview, wx_ref),is_integer(Buttons),is_record(Parent, wx_ref) ->
   new(Preview,Buttons,Parent, []).
 
-%% @spec (Preview::wxPrintPreview:wxPrintPreview(), Buttons::integer(), Parent::wxWindow:wxWindow(), [Option]) -> wxPreviewControlBar()
-%% Option = {pos, {X::integer(),Y::integer()}} | {size, {W::integer(),H::integer()}} | {style, integer()}
-%% @doc See <a href="http://www.wxwidgets.org/manuals/stable/wx_wxpreviewcontrolbar.html#wxpreviewcontrolbarwxpreviewcontrolbar">external documentation</a>.
+%% @doc See <a href="http://www.wxwidgets.org/manuals/2.8.12/wx_wxpreviewcontrolbar.html#wxpreviewcontrolbarwxpreviewcontrolbar">external documentation</a>.
+-spec new(Preview, Buttons, Parent, [Option]) -> wxPreviewControlBar() when
+	Preview::wxPrintPreview:wxPrintPreview(), Buttons::integer(), Parent::wxWindow:wxWindow(),
+	Option :: {pos, {X::integer(), Y::integer()}}
+		 | {size, {W::integer(), H::integer()}}
+		 | {style, integer()}.
 new(#wx_ref{type=PreviewT,ref=PreviewRef},Buttons,#wx_ref{type=ParentT,ref=ParentRef}, Options)
  when is_integer(Buttons),is_list(Options) ->
   ?CLASS(PreviewT,wxPrintPreview),
@@ -97,42 +104,48 @@ new(#wx_ref{type=PreviewT,ref=PreviewRef},Buttons,#wx_ref{type=ParentT,ref=Paren
   wxe_util:construct(?wxPreviewControlBar_new,
   <<PreviewRef:32/?UI,Buttons:32/?UI,ParentRef:32/?UI, 0:32,BinOpt/binary>>).
 
-%% @spec (This::wxPreviewControlBar()) -> ok
-%% @doc See <a href="http://www.wxwidgets.org/manuals/stable/wx_wxpreviewcontrolbar.html#wxpreviewcontrolbarcreatebuttons">external documentation</a>.
+%% @doc See <a href="http://www.wxwidgets.org/manuals/2.8.12/wx_wxpreviewcontrolbar.html#wxpreviewcontrolbarcreatebuttons">external documentation</a>.
+-spec createButtons(This) -> ok when
+	This::wxPreviewControlBar().
 createButtons(#wx_ref{type=ThisT,ref=ThisRef}) ->
   ?CLASS(ThisT,wxPreviewControlBar),
   wxe_util:cast(?wxPreviewControlBar_CreateButtons,
   <<ThisRef:32/?UI>>).
 
-%% @spec (This::wxPreviewControlBar()) -> wxPrintPreview:wxPrintPreview()
-%% @doc See <a href="http://www.wxwidgets.org/manuals/stable/wx_wxpreviewcontrolbar.html#wxpreviewcontrolbargetprintpreview">external documentation</a>.
+%% @doc See <a href="http://www.wxwidgets.org/manuals/2.8.12/wx_wxpreviewcontrolbar.html#wxpreviewcontrolbargetprintpreview">external documentation</a>.
+-spec getPrintPreview(This) -> wxPrintPreview:wxPrintPreview() when
+	This::wxPreviewControlBar().
 getPrintPreview(#wx_ref{type=ThisT,ref=ThisRef}) ->
   ?CLASS(ThisT,wxPreviewControlBar),
   wxe_util:call(?wxPreviewControlBar_GetPrintPreview,
   <<ThisRef:32/?UI>>).
 
-%% @spec (This::wxPreviewControlBar()) -> integer()
-%% @doc See <a href="http://www.wxwidgets.org/manuals/stable/wx_wxpreviewcontrolbar.html#wxpreviewcontrolbargetzoomcontrol">external documentation</a>.
+%% @doc See <a href="http://www.wxwidgets.org/manuals/2.8.12/wx_wxpreviewcontrolbar.html#wxpreviewcontrolbargetzoomcontrol">external documentation</a>.
+-spec getZoomControl(This) -> integer() when
+	This::wxPreviewControlBar().
 getZoomControl(#wx_ref{type=ThisT,ref=ThisRef}) ->
   ?CLASS(ThisT,wxPreviewControlBar),
   wxe_util:call(?wxPreviewControlBar_GetZoomControl,
   <<ThisRef:32/?UI>>).
 
-%% @spec (This::wxPreviewControlBar(), Zoom::integer()) -> ok
-%% @doc See <a href="http://www.wxwidgets.org/manuals/stable/wx_wxpreviewcontrolbar.html#wxpreviewcontrolbarsetzoomcontrol">external documentation</a>.
+%% @doc See <a href="http://www.wxwidgets.org/manuals/2.8.12/wx_wxpreviewcontrolbar.html#wxpreviewcontrolbarsetzoomcontrol">external documentation</a>.
+-spec setZoomControl(This, Zoom) -> ok when
+	This::wxPreviewControlBar(), Zoom::integer().
 setZoomControl(#wx_ref{type=ThisT,ref=ThisRef},Zoom)
  when is_integer(Zoom) ->
   ?CLASS(ThisT,wxPreviewControlBar),
   wxe_util:cast(?wxPreviewControlBar_SetZoomControl,
   <<ThisRef:32/?UI,Zoom:32/?UI>>).
 
-%% @spec (This::wxPreviewControlBar()) -> ok
 %% @doc Destroys this object, do not use object again
+-spec destroy(This::wxPreviewControlBar()) -> ok.
 destroy(Obj=#wx_ref{type=Type}) ->
   ?CLASS(Type,wxPreviewControlBar),
   wxe_util:destroy(?DESTROY_OBJECT,Obj),
   ok.
  %% From wxPanel
+%% @hidden
+setFocusIgnoringChildren(This) -> wxPanel:setFocusIgnoringChildren(This).
 %% @hidden
 initDialog(This) -> wxPanel:initDialog(This).
  %% From wxWindow

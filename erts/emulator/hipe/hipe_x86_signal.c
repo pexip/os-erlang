@@ -2,7 +2,7 @@
  * %CopyrightBegin%
 
  *
- * Copyright Ericsson AB 2001-2011. All Rights Reserved.
+ * Copyright Ericsson AB 2001-2014. All Rights Reserved.
  *
  * The contents of this file are subject to the Erlang Public License,
  * Version 1.1, (the "License"); you may not use this file except in
@@ -183,6 +183,7 @@ static void do_init(void)
 #include <dlfcn.h>
 static int (*__next_sigaction)(int, const struct sigaction*, struct sigaction*);
 #define init_done()	(__next_sigaction != 0)
+extern int _sigaction(int, const struct sigaction*, struct sigaction*);
 #define __SIGACTION _sigaction
 static void do_init(void)
 {
@@ -303,7 +304,9 @@ static void hipe_sigaltstack(void *ss_sp)
  */
 void hipe_thread_signal_init(void)
 {
-    hipe_sigaltstack(erts_alloc(ERTS_ALC_T_HIPE, SIGSTKSZ));
+    /* Stack don't really need to be cache aligned.
+       We use it to suppress false leak report from valgrind */
+    hipe_sigaltstack(erts_alloc_permanent_cache_aligned(ERTS_ALC_T_HIPE, SIGSTKSZ));
 }
 #endif
 

@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2000-2010. All Rights Reserved.
+%% Copyright Ericsson AB 2000-2011. All Rights Reserved.
 %%
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -22,7 +22,7 @@
 
 -export([interpret/1]).
 
-interpret(Mod) when atom(Mod) ->
+interpret(Mod) when is_atom(Mod) ->
     case lists:member(Mod, int:interpreted()) of
 	true -> ok;
 	false -> {module,Mod} = i:ii(Mod)

@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 1996-2011. All Rights Reserved.
+%% Copyright Ericsson AB 1996-2013. All Rights Reserved.
 %%
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -184,12 +184,16 @@ prepare_run_args({run, [M,F|Args]}) ->
     [b2a(M), b2a(F) | bs2ss(Args)].
 
 b2a(Bin) when is_binary(Bin) ->
-    list_to_atom(binary_to_list(Bin));
+    list_to_atom(b2s(Bin));
 b2a(A) when is_atom(A) ->
     A.
 
 b2s(Bin) when is_binary(Bin) ->
-    binary_to_list(Bin);
+    try
+	unicode:characters_to_list(Bin,file:native_name_encoding())
+    catch
+	_:_ -> binary_to_list(Bin)
+    end;
 b2s(L) when is_list(L) ->
     L.
 
@@ -461,7 +465,10 @@ make_permanent(Boot,Config,Flags0,State) ->
 set_flag(_Flag,false,Flags) ->
     {ok,Flags};
 set_flag(Flag,Value,Flags) when is_list(Value) ->
-    case catch list_to_binary(Value) of
+    %% The flag here can be -boot or -config, which means the value is
+    %% a file name! Thus the file name encoding is used when coverting.
+    Encoding = file:native_name_encoding(),
+    case catch unicode:characters_to_binary(Value,Encoding,Encoding) of
 	{'EXIT',_} ->
 	    {error,badarg};
 	AValue ->
@@ -635,7 +642,15 @@ do_unload([M|Mods]) ->
     catch erlang:purge_module(M),
     do_unload(Mods);
 do_unload([]) ->
+    purge_all_hipe_refs(),
     ok.
+
+purge_all_hipe_refs() ->
+    case erlang:system_info(hipe_architecture) of
+	undefined -> ok;
+	_ -> hipe_bifs:remove_refs_from(all)
+    end.
+
 
 sub([H|T],L) -> sub(T,del(H,L));
 sub([],L)    -> L.
@@ -1026,14 +1041,14 @@ start_em([]) -> ok.
 start_it([]) ->
     ok;
 start_it({eval,Bin}) ->
-    Str = binary_to_list(Bin),
+    Str = b2s(Bin),
     {ok,Ts,_} = erl_scan:string(Str),
     Ts1 = case reverse(Ts) of
 	      [{dot,_}|_] -> Ts;
 	      TsR -> reverse([{dot,1} | TsR])
 	  end,
     {ok,Expr} = erl_parse:parse_exprs(Ts1),
-    erl_eval:exprs(Expr, erl_eval:new_bindings()),
+    {value, _Value, _Bs} = erl_eval:exprs(Expr, erl_eval:new_bindings()),
     ok;
 start_it([_|_]=MFA) ->
     Ref = make_ref(),
@@ -1252,7 +1267,7 @@ get_arguments([]) ->
     [].
 
 to_strings([H|T]) when is_atom(H) -> [atom_to_list(H)|to_strings(T)];
-to_strings([H|T]) when is_binary(H) -> [binary_to_list(H)|to_strings(T)];
+to_strings([H|T]) when is_binary(H) -> [b2s(H)|to_strings(T)];
 to_strings([])    -> [].
 
 get_argument(Arg,Flags) ->

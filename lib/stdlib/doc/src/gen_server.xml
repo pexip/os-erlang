@@ -1,10 +1,10 @@
-<?xml version="1.0" encoding="latin1" ?>
+<?xml version="1.0" encoding="utf-8" ?>
 <!DOCTYPE erlref SYSTEM "erlref.dtd">
 
 <erlref>
   <header>
     <copyright>
-      <year>1996</year><year>2010</year>
+      <year>1996</year><year>2013</year>
       <holder>Ericsson AB. All Rights Reserved.</holder>
     </copyright>
     <legalnotice>
@@ -83,9 +83,10 @@ gen_server:abcast     -----> Module:handle_cast/2
       <name>start_link(ServerName, Module, Args, Options) -> Result</name>
       <fsummary>Create a gen_server process in a supervision tree.</fsummary>
       <type>
-        <v>ServerName = {local,Name} | {global,GlobalName}</v>
+        <v>ServerName = {local,Name} | {global,GlobalName}
+	| {via,Module,ViaName}</v>
         <v>&nbsp;Name = atom()</v>
-        <v>&nbsp;GlobalName = term()</v>
+        <v>&nbsp;GlobalName = ViaName = term()</v>
         <v>Module = atom()</v>
         <v>Args = term()</v>
         <v>Options = [Option]</v>
@@ -111,14 +112,22 @@ gen_server:abcast     -----> Module:handle_cast/2
           If <c>ServerName={global,GlobalName}</c> the gen_server is
           registered globally as <c>GlobalName</c> using
           <c>global:register_name/2</c>. If no name is provided,
-          the gen_server is not registered.</p>
+          the gen_server is not registered.
+	  If <c>ServerName={via,Module,ViaName}</c>, the gen_server will
+	  register with the registry represented by <c>Module</c>.
+	  The <c>Module</c> callback should export the functions
+	  <c>register_name/2</c>, <c>unregister_name/1</c>,
+	  <c>whereis_name/1</c> and <c>send/2</c>, which should behave like the
+	  corresponding functions in <c>global</c>. Thus,
+	<c>{via,global,GlobalName}</c> is a valid reference.</p>
         <p><c>Module</c> is the name of the callback module.</p>
         <p><c>Args</c> is an arbitrary term which is passed as
           the argument to <c>Module:init/1</c>.</p>
         <p>If the option <c>{timeout,Time}</c> is present,
           the gen_server is allowed to spend <c>Time</c> milliseconds
           initializing or it will be terminated and the start function
-          will return <c>{error,timeout}</c>.</p>
+          will return <c>{error,timeout}</c>.
+	</p>
         <p>If the option <c>{debug,Dbgs}</c> is present,
           the corresponding <c>sys</c> function will be called for each
           item in <c>Dbgs</c>. See
@@ -151,9 +160,10 @@ gen_server:abcast     -----> Module:handle_cast/2
       <name>start(ServerName, Module, Args, Options) -> Result</name>
       <fsummary>Create a stand-alone gen_server process.</fsummary>
       <type>
-        <v>ServerName = {local,Name} | {global,GlobalName}</v>
+        <v>ServerName = {local,Name} | {global,GlobalName}
+	| {via,Module,ViaName}</v>
         <v>&nbsp;Name = atom()</v>
-        <v>&nbsp;GlobalName = term()</v>
+        <v>&nbsp;GlobalName = ViaName = term()</v>
         <v>Module = atom()</v>
         <v>Args = term()</v>
         <v>Options = [Option]</v>
@@ -178,9 +188,10 @@ gen_server:abcast     -----> Module:handle_cast/2
       <name>call(ServerRef, Request, Timeout) -> Reply</name>
       <fsummary>Make a synchronous call to a generic server.</fsummary>
       <type>
-        <v>ServerRef = Name | {Name,Node} | {global,GlobalName} | pid()</v>
+        <v>ServerRef = Name | {Name,Node} | {global,GlobalName}
+	| {via,Module,ViaName} | pid()</v>
         <v>&nbsp;Node = atom()</v>
-        <v>&nbsp;GlobalName = term()</v>
+        <v>&nbsp;GlobalName = ViaName = term()</v>
         <v>Request = term()</v>
         <v>Timeout = int()>0 | infinity</v>
         <v>Reply = term()</v>
@@ -198,6 +209,8 @@ gen_server:abcast     -----> Module:handle_cast/2
            registered at another node, or</item>
           <item><c>{global,GlobalName}</c>, if the gen_server is
            globally registered.</item>
+          <item><c>{via,Module,ViaName}</c>, if the gen_server is
+           registered through an alternative process registry.</item>
         </list>
         <p><c>Request</c> is an arbitrary term which is passed as one of
           the arguments to <c>Module:handle_call/3</c>.</p>
@@ -281,9 +294,10 @@ gen_server:abcast     -----> Module:handle_cast/2
       <name>cast(ServerRef, Request) -> ok</name>
       <fsummary>Send an asynchronous request to a generic server.</fsummary>
       <type>
-        <v>ServerRef = Name | {Name,Node} | {global,GlobalName} | pid()</v>
+        <v>ServerRef = Name | {Name,Node} | {global,GlobalName}
+	| {via,Module,ViaName} | pid()</v>
         <v>&nbsp;Node = atom()</v>
-        <v>&nbsp;GlobalName = term()</v>
+        <v>&nbsp;GlobalName = ViaName = term()</v>
         <v>Request = term()</v>
       </type>
       <desc>
@@ -355,9 +369,10 @@ gen_server:abcast     -----> Module:handle_cast/2
         <v>&nbsp;&nbsp;&nbsp;Dbg = trace | log | statistics</v>
         <v>&nbsp;&nbsp;&nbsp;&nbsp;| {log_to_file,FileName} | {install,{Func,FuncState}}</v>
         <v>State = term()</v>
-        <v>ServerName = {local,Name} | {global,GlobalName}</v>
+        <v>ServerName = {local,Name} | {global,GlobalName}
+	| {via,Module,ViaName}</v>
         <v>&nbsp;Name = atom()</v>
-        <v>&nbsp;GlobalName = term()</v>
+        <v>&nbsp;GlobalName = ViaName = term()</v>
         <v>Timeout = int() | infinity</v>
       </type>
       <desc>
@@ -570,13 +585,14 @@ gen_server:abcast     -----> Module:handle_cast/2
       </desc>
     </func>
     <func>
-      <name>Module:code_change(OldVsn, State, Extra) -> {ok, NewState}</name>
+      <name>Module:code_change(OldVsn, State, Extra) -> {ok, NewState} | {error, Reason}</name>
       <fsummary>Update the internal state during upgrade/downgrade.</fsummary>
       <type>
         <v>OldVsn = Vsn | {down, Vsn}</v>
         <v>&nbsp;&nbsp;Vsn = term()</v>
         <v>State = NewState = term()</v>
         <v>Extra = term()</v>
+	<v>Reason = term()</v>
       </type>
       <desc>
         <p>This function is called by a gen_server when it should
@@ -595,7 +611,10 @@ gen_server:abcast     -----> Module:handle_cast/2
         <p><c>State</c> is the internal state of the gen_server.</p>
         <p><c>Extra</c> is passed as-is from the <c>{advanced,Extra}</c>
           part of the update instruction.</p>
-        <p>The function should return the updated internal state.</p>
+        <p>If successful, the function shall return the updated
+          internal state.</p>
+	<p>If the function returns <c>{error,Reason}</c>, the ongoing
+	  upgrade will fail and roll back to the old release.</p>
       </desc>
     </func>
     <func>

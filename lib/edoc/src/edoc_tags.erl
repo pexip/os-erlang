@@ -391,10 +391,10 @@ parse_header(Data, Line, Env, Where) when is_list(Where) ->
 -spec throw_error(line(), err()) -> no_return().
 
 throw_error(L, {read_file, File, R}) ->
-    throw_error(L, {"error reading file '~s': ~w",
+    throw_error(L, {"error reading file '~ts': ~w",
 		    [edoc_lib:filename(File), R]});
 throw_error(L, {file_not_found, F}) ->
-    throw_error(L, {"file not found: ~s", [F]});
+    throw_error(L, {"file not found: ~ts", [F]});
 throw_error(L, file_not_string) ->
     throw_error(L, "expected file name as a string");
 throw_error(L, D) ->
@@ -454,12 +454,14 @@ check_type(#tag{line = L, data = Data}, P0, Ls, Ts) ->
 check_type(#t_def{type = Type}, P, Ls, Ts) ->
     check_type(Type, P, Ls, Ts);
 check_type(#t_type{name = Name, args = Args}, P, Ls, Ts) ->
-    check_used_type(Name, Args, P, Ls),
+    _ = check_used_type(Name, Args, P, Ls),
     check_types3(Args++Ts, P, Ls);
 check_type(#t_var{}, P, Ls, Ts) ->
     check_types3(Ts, P, Ls);
 check_type(#t_fun{args = Args, range = Range}, P, Ls, Ts) ->
     check_type(Range, P, Ls, Args++Ts);
+check_type(#t_map{}, P, Ls, Ts) ->
+    check_types3(Ts, P, Ls);
 check_type(#t_tuple{types = Types}, P, Ls, Ts) ->
     check_types3(Types ++Ts, P, Ls);
 check_type(#t_list{type = Type}, P, Ls, Ts) ->

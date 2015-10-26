@@ -1,11 +1,11 @@
-<?xml version="1.0" encoding="latin1" ?>
+<?xml version="1.0" encoding="utf-8" ?>
 <!DOCTYPE erlref SYSTEM "erlref.dtd">
 
 <erlref>
   <header>
     <copyright>
       <year>1996</year>
-      <year>2011</year>
+      <year>2013</year>
       <holder>Ericsson AB, All Rights Reserved</holder>
     </copyright>
     <legalnotice>
@@ -111,6 +111,11 @@
           low-level instruction to restart the emulator is appended to
           the relup scripts. This ensures that a complete reboot of
           the system is done when the system is upgraded or downgraded.</p>
+	<p>If an upgrade includes a change from an emulator earlier
+	  than OTP R15 to OTP R15 or later, the warning
+	  <c>pre_R15_emulator_upgrade</c> is issued. See <seealso
+	  marker="doc/design_principles:appup_cookbook">Design
+	  Principles</seealso> for more information about this.</p>
         <p>By default, errors and warnings are printed to tty and
           the function returns <c>ok</c> or <c>error</c>. If the option
           <c>silent</c> is provided, the function instead returns
@@ -133,8 +138,9 @@
       <fsummary>Generate a boot script <c>.script/.boot</c>.</fsummary>
       <type>
         <v>Name = string()</v>
-        <v>Opt = src_tests | {path,[Dir]} | local | {variables,[Var]} | exref | {exref,[App]}]
-	| silent | {outdir,Dir} | warnings_as_errors</v>
+        <v>Opt = src_tests | {path,[Dir]} | local | {variables,[Var]} | exref |
+	  {exref,[App]}] | silent | {outdir,Dir} | no_dot_erlang | no_warn_sasl |
+	  warnings_as_errors</v>
         <v>&nbsp;Dir = string()</v>
         <v>&nbsp;Var = {VarName,Prefix}</v>
         <v>&nbsp;&nbsp;VarName = Prefix = string()</v>
@@ -190,6 +196,14 @@
         <p>The applications are sorted according to the dependencies
           between the applications. Where there are no dependencies,
           the order in the <c>.rel</c> file is kept.</p>
+	<p>The function will fail if the mandatory
+	  applications <c>kernel</c> and <c>stdlib</c> are not
+	  included in the <c>.rel</c> file and have start
+	  type <c>permanent</c> (default).</p>
+	<p>If <c>sasl</c> is not included as an application in
+	  the <c>.rel</c> file, a warning is emitted because such a
+	  release can not be used in an upgrade. To turn off this
+	  warning, add the option <c>no_warn_sasl</c>.</p>
         <p>All files are searched for in the current path. It is
           assumed that the <c>.app</c> and <c>.beam</c> files for an
           application is located in the same directory. The <c>.erl</c>
@@ -220,7 +234,7 @@
         <p>Example: If the option <c>{variables,[{"TEST","lib"}]}</c> is
           supplied, and <c>myapp.app</c> is found in
           <c>lib/myapp/ebin</c>, then the path to this application in
-          the boot script will be <c>$TEST/myapp-1/ebin"</c>. If
+          the boot script will be <c>"$TEST/myapp-1/ebin"</c>. If
           <c>myapp.app</c> is found in <c>lib/test</c>, then the path
           will be <c>$TEST/test/myapp-1/ebin</c>.</p>
         <p>The checks performed before the boot script is generated can
@@ -238,6 +252,8 @@
           <c>Module:format_error(Error)</c>.</p>
 	<p>If the option <c>warnings_as_errors</c> is provided, warnings
 	   are treated as errors.</p>
+	<p>If the option <c>no_dot_erlang</c> is provided, the instruction to
+	   load the <c>.erlang</c> file during boot is <em>NOT</em> included.</p>
       </desc>
     </func>
     <func>

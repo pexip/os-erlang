@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %% 
-%% Copyright Ericsson AB 1996-2009. All Rights Reserved.
+%% Copyright Ericsson AB 1996-2013. All Rights Reserved.
 %% 
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -176,8 +176,8 @@ init([AgentType, Opts]) ->
       "~n   AgentType: ~p"
       "~n   Opts:      ~p", [AgentType, Opts]),
 
-    put(sname, asup),
-    put(verbosity,get_verbosity(Opts)),
+    put(sname,     asup),
+    put(verbosity, get_verbosity(Opts)),
 
     ?vlog("starting",[]),
 
@@ -203,7 +203,12 @@ init([AgentType, Opts]) ->
     Vsns = get_opt(versions, Opts, [v1,v2,v3]),
     ?vdebug("[agent table] store versions: ~p",[Vsns]),
     ets:insert(snmp_agent_table, {versions, Vsns}),
-    
+
+    %% -- Max number of VBs in a Get-BULK response --
+    GbMaxVBs = get_gb_max_vbs(Opts),
+    ?vdebug("[agent table] Get-BULK max VBs: ~p", [GbMaxVBs]),
+    ets:insert(snmp_agent_table, {gb_max_vbs, GbMaxVBs}),
+
     %% -- DB-directory --
     DbDir = get_opt(db_dir, Opts),
     ?vdebug("[agent table] store db_dir: ~n   ~p",[DbDir]),
@@ -219,26 +224,101 @@ init([AgentType, Opts]) ->
     ets:insert(snmp_agent_table, {error_report_mod, ErrorReportMod}),
 
     %% -- mib storage --
+    %% MibStorage has only one mandatory part: module
+    %% Everything else is module dependent and therefor 
+    %% put in a special option: options
     MibStorage = 
-	case get_opt(mib_storage, Opts, ets) of
-	    dets ->
-		{dets, DbDir};
-	    {dets, default} ->
-		{dets, DbDir};
-	    {dets, default, Act} ->
-		{dets, DbDir, Act};
+	case get_opt(mib_storage, Opts, [{module, snmpa_mib_storage_ets}]) of
+
+	    %% --- ETS wrappers ---
+
+	    ets ->
+		[{module, snmpa_mib_storage_ets}];
 	    {ets, default} ->
-		{ets, DbDir};
+		[{module,  snmpa_mib_storage_ets}, 
+		 {options, [{dir,    filename:join([DbDir])}, 
+			    {action, keep}]}];
+	    {ets, Dir} when is_list(Dir) ->
+		[{module,  snmpa_mib_storage_ets}, 
+		 {options, [{dir,    filename:join([Dir])}, 
+			    {action, keep}]}];
+	    {ets, default, Action} when ((Action =:= keep) orelse 
+					 (Action =:= clear)) ->
+		[{module,  snmpa_mib_storage_ets}, 
+		 {options, [{dir,    filename:join([DbDir])}, 
+			    {action, Action}]}];
+	    {ets, Dir, Action} when is_list(Dir) andalso 
+				    ((Action =:= keep) orelse 
+				     (Action =:= clear)) ->
+		[{module,  snmpa_mib_storage_ets}, 
+		 {options, [{dir,    filename:join([Dir])}, 
+			    {action, Action}]}];
+
+	    %% --- DETS wrappers ---
+
+	    dets ->
+		[{module,  snmpa_mib_storage_dets}, 
+		 {options, [{dir,    filename:join([DbDir])}, 
+			    {action, keep}]}];
+	    {dets, default} ->
+		[{module,  snmpa_mib_storage_dets}, 
+		 {options, [{dir,    filename:join([DbDir])}, 
+			    {action, keep}]}];
+	    {dets, default, Action} when ((Action =:= keep) orelse 
+					  (Action =:= clear)) ->
+		[{module,  snmpa_mib_storage_dets}, 
+		 {options, [{dir,    filename:join([DbDir])}, 
+			    {action, Action}]}];
+	    {dets, Dir, Action} when is_list(Dir) andalso 
+				     ((Action =:= keep) orelse 
+				      (Action =:= clear)) ->
+		[{module,  snmpa_mib_storage_dets}, 
+		 {options, [{dir,    filename:join([Dir])}, 
+			    {action, Action}]}];
+
+	    %% --- Mnesia wrappers ---
+
 	    mnesia ->
-		{mnesia, erlang:nodes()};
-	    {mnesia, visible} ->
-		{mnesia, erlang:nodes(visible)};
-	    {mnesia, connected} ->
-		{mnesia, erlang:nodes(connected)};
-	    Other ->
+		[{module,  snmpa_mib_storage_mnesia}, 
+		 {options, [{nodes,  erlang:nodes()}, 
+			    {action, keep}]}];
+	    {mnesia, Nodes0} ->
+		Nodes = 
+		    if
+			Nodes0 =:= visible ->
+			    erlang:nodes(visible);
+			Nodes0 =:= connected ->
+			    erlang:nodes(connected);
+			Nodes0 =:= [] ->
+			    [node()];
+			true ->
+			    Nodes0
+		    end,
+		[{module, snmpa_mib_storage_mnesia}, 
+		 {options, [{nodes,  Nodes}, 
+			    {action, keep}]}];
+	    {mnesia, Nodes0, Action} when ((Action =:= keep) orelse 
+					   (Action =:= clear)) ->
+		Nodes = 
+		    if
+			Nodes0 =:= visible ->
+			    erlang:nodes(visible);
+			Nodes0 =:= connected ->
+			    erlang:nodes(connected);
+			Nodes0 =:= [] ->
+			    [node()];
+			true ->
+			    Nodes0
+		    end,
+		[{module,  snmpa_mib_storage_mnesia}, 
+		 {options, [{nodes,  Nodes}, 
+			    {action, Action}]}];
+
+	    Other when is_list(Other) ->
 		Other
 	end,
-    ?vdebug("[agent table] store mib storage: ~w",[MibStorage]),
+
+    ?vdebug("[agent table] store mib storage: ~w", [MibStorage]),
     ets:insert(snmp_agent_table, {mib_storage, MibStorage}),
 
     %% -- Agent mib storage --
@@ -276,7 +356,7 @@ init([AgentType, Opts]) ->
     SymStoreSpec = 
 	worker_spec(snmpa_symbolic_store, SymStoreArgs, Restart, 2000),
 
-    LdbArgs = [Prio, DbDir, LdbOpts],
+    LdbArgs = [Prio, DbDir, DbInitError, LdbOpts],
     LocalDbSpec = 
 	worker_spec(snmpa_local_db, LdbArgs, Restart, 5000),
 
@@ -377,12 +457,13 @@ init([AgentType, Opts]) ->
 		     {versions,               Vsns},
 		     {net_if,                 NiOpts},
 		     {mib_server,             MibsOpts},
-		     {note_store,             NsOpts}|
+		     {note_store,             NsOpts},
+		     {gb_max_vbs,             GbMaxVBs} |
 		     get_opt(master_agent_options, Opts, [])],
 		     
 		AgentSpec =
 		    worker_spec(snmpa_agent, 
-				[Prio,snmp_master_agent,none,Ref,AgentOpts],
+				[Prio, snmp_master_agent, none, Ref, AgentOpts],
 				Restart, 15000),
 		AgentSupSpec = 
 		    sup_spec(snmpa_agent_sup, [AgentSpec], 
@@ -541,6 +622,32 @@ get_verbosity(Opts) ->
 
 get_agent_type(Opts) ->
     get_opt(agent_type, Opts, master).
+
+
+%% We validate this option! This should really be done for all
+%% options, but it is beyond the scope of this ticket, OTP-9700.
+
+get_gb_max_vbs(Opts) ->
+    Validate = 
+	fun(GbMaxVBs) 
+	   when ((is_integer(GbMaxVBs) andalso (GbMaxVBs > 0)) orelse
+		 (GbMaxVBs =:= infinity)) ->
+		ok;
+	   (_) ->
+		error
+	end,
+    get_option(gb_max_vbs, ?DEFAULT_GB_MAX_VBS, Validate, Opts).
+
+get_option(Key, Default, Validate, Opts) 
+  when is_list(Opts) andalso is_function(Validate) ->
+    Value = get_opt(Key, Opts, Default),
+    case Validate(Value) of
+	ok ->
+	    Value;
+	error ->
+	    exit({bad_option, Key, Value})
+    end.
+    
 
 get_opt(Key, Opts) ->
     snmp_misc:get_option(Key, Opts).

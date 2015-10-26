@@ -1,10 +1,10 @@
-<?xml version="1.0" encoding="latin1" ?>
+<?xml version="1.0" encoding="utf-8" ?>
 <!DOCTYPE chapter SYSTEM "chapter.dtd">
 
 <chapter>
   <header>
     <copyright>
-      <year>1998</year><year>2011</year>
+      <year>1998</year><year>2013</year>
       <holder>Ericsson AB. All Rights Reserved.</holder>
     </copyright>
     <legalnotice>
@@ -29,6 +29,206 @@
     <rev>AC</rev>
     <file>notes.xml</file>
   </header>
+
+   <section><title>IC 4.3.6</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+          <p>
+	    Fix compiler warnings reported by LLVM</p>
+          <p>
+	    Own Id: OTP-12138</p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>IC 4.3.5</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+	    <p> Added Latin-1 code directive in the generated files
+	    to keep old behaviour. Updated IC so it can handle
+	    Unicode characters in the path. </p>
+          <p>
+	    Own Id: OTP-11783</p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>IC 4.3.4</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+          <p>
+	    Fix two small silent rules omissions. Thanks to Anthony
+	    Ramine.</p>
+          <p>
+	    Own Id: OTP-11351</p>
+        </item>
+        <item>
+          <p>
+	    Silence warnings (Thanks to Anthony Ramine)</p>
+          <p>
+	    Own Id: OTP-11517</p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>IC 4.3.3</title>
+
+    <section><title>Improvements and New Features</title>
+      <list>
+        <item>
+          <p>
+	    Header and library files from ic and erl_interface are
+	    now installed into usr/{include,lib}. Note that these
+	    directories are unversioned, so the latest installed
+	    version will be the one in the directory.</p>
+          <p>
+	    Own Id: OTP-11284</p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>IC 4.3.2</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+          <p>
+	    Fixed some compilation warnings on miscellaneous
+	    platforms. Thanks to Anthony Ramine.</p>
+          <p>
+	    Own Id: OTP-11086</p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>IC 4.3.1</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+          <p>
+	    Revert the structs <c>erlang_pid</c>, <c>erlang_port</c>
+	    and <c>erlang_ref</c> as they were before R16A (without
+	    <c>node_org_enc</c>) in order to be backward compatible
+	    with user code that accesses the fields of these structs.</p>
+          <p>
+	    Own Id: OTP-10885 Aux Id: seq12256 </p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>IC 4.3</title>
+
+    <section><title>Improvements and New Features</title>
+      <list>
+        <item>
+          <p>
+	    Misc build updates</p>
+          <p>
+	    Own Id: OTP-10784</p>
+        </item>
+        <item>
+          <p>
+	    Adapt ic for changes in erl_interface and jinterface due
+	    to utf8 atom support. This change makes ic dependent on
+	    erl_interface-3.7.10 (R16) or later in order to build.</p>
+          <p>
+	    Own Id: OTP-10785</p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>IC 4.2.31</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+          <p>
+	    Fix bug where the ic pre-processor would ignore
+	    whitespace quoting.</p>
+          <p>
+	    Own Id: OTP-10109</p>
+        </item>
+        <item>
+	    <p> A bug regarding spaces in C function prototypes has
+	    been fixed. (Thanks to Richard O'Keefe.) </p>
+          <p>
+	    Own Id: OTP-10138</p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>IC 4.2.30</title>
+
+    <section><title>Improvements and New Features</title>
+      <list>
+        <item>
+          <p>
+	    Add generation of Erlang callback functions to generated
+	    Erlang source code to avoid compiler warnings.</p>
+          <p>
+	    Own Id: OTP-9998</p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>IC 4.2.29</title>
+
+    <section><title>Improvements and New Features</title>
+      <list>
+        <item>
+	    <p>Erlang/OTP can now be built using parallel make if you
+	    limit the number of jobs, for instance using '<c>make
+	    -j6</c>' or '<c>make -j10</c>'. '<c>make -j</c>' does not
+	    work at the moment because of some missing
+	    dependencies.</p>
+          <p>
+	    Own Id: OTP-9451</p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section>
+    <title>IC 4.2.28</title>
+
+    <section>
+      <title>Fixed Bugs and Malfunctions</title>
+      <list type="bulleted">
+        <item>
+          <p>
+	    Incorrect use of ets:match changed to ets:match_object.</p>
+          <p>
+            Own Id: OTP-9630 </p>
+        </item>
+      </list>
+    </section>
+   </section>
 
    <section>
     <title>IC 4.2.27</title>

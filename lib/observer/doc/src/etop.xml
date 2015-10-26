@@ -1,11 +1,11 @@
-<?xml version="1.0" encoding="latin1" ?>
+<?xml version="1.0" encoding="utf-8" ?>
 <!DOCTYPE erlref SYSTEM "erlref.dtd">
 
 <erlref>
   <header>
     <copyright>
       <year>2002</year>
-      <year>2011</year>
+      <year>2013</year>
       <holder>Ericsson AB, All Rights Reserved</holder>
     </copyright>
     <legalnotice>
@@ -38,21 +38,19 @@
   <description>
 
     <p><c>etop</c> should be started with the provided scripts
-      <c>etop</c> and <c>getop</c> for text based and graphical
-      presentation respectively. This will start a hidden erlang node
+      <c>etop</c>. This will start a hidden erlang node
       which connects to the node to be measured. The measured node is
       given with the <c>-node</c> option. If the measured node has a
       different cookie than the default cookie for the user who
       invokes the script, the cookie must be explicitly given witht
       the <c>-setcookie</c> option.</p>
 
-    <p>Under Windows the batch files <c>etop.bat</c> and
-      <c>getop.bat</c> can be used.</p>
+    <p>Under Windows the batch file <c>etop.bat</c> can be used.</p>
 
     <p>The following configuration parameters exist for the
-    <c>etop</c> tool. When executing the <c>etop</c> or <c>getop</c>
-    scripts, these parameters can be given as command line options,
-    e.g. <c>getop -node testnode@myhost -setcookie MyCookie</c>.</p>
+    <c>etop</c> tool. When executing the <c>etop</c> script,
+    these parameters can be given as command line options,
+    e.g. <c>etop -node testnode@myhost -setcookie MyCookie</c>.</p>
     <taglist>
       <tag>node</tag>
       <item>The measured node.
@@ -103,16 +101,42 @@ Value: <c>on | off</c>      <br></br>
 Default: <c>on</c></item>
     </taglist>
 
-    <p>All interaction with <c>etop</c> when running the graphical
-      presentation should happen via the menus. For the text based
-      presentation the functions described below can be used.
-      </p>
-
     <p>See the <seealso marker="etop_ug">user's guide</seealso> for
     more information about the <c>etop</c> tool.</p>
 
   </description>
   <funcs>
+    <func>
+      <name>start() -> ok</name>
+      <fsummary>Start etop</fsummary>
+      <desc>
+        <p>This function starts <c>etop</c>.
+        Note that etop is preferably started with the etop script.</p>
+      </desc>
+    </func>
+    <func>
+      <name>start(Options) -> ok</name>
+      <fsummary>Start etop</fsummary>
+      <type>
+        <v>Options = [Option]</v>
+        <v>Option = {Key, Value}</v>
+        <v>Key = atom()</v>
+        <v>Value = term()</v>
+      </type>
+      <desc>
+        <p>This function starts <c>etop</c>. Use
+          <seealso marker="#help/0">help/0</seealso> to see a
+          description of the possible options.</p>
+      </desc>
+    </func>
+    <func>
+      <name>help() -> ok</name>
+      <fsummary>Print etop's help</fsummary>
+      <desc>
+        <p>This function prints the help of <c>etop</c> and
+          its options.</p>
+      </desc>
+    </func>
     <func>
       <name>config(Key,Value) -> Result</name>
       <fsummary>Change tool's configuration</fsummary>

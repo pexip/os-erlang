@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2007-2011. All Rights Reserved.
+%% Copyright Ericsson AB 2007-2014. All Rights Reserved.
 %%
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -20,7 +20,7 @@
 %%
 %%----------------------------------------------------------------------
 %% Purpose: Record and constant defenitions for the SSL-handshake protocol
-%% see RFC 4346
+%% see RFC 5246. Also includes supported hello extensions.
 %%----------------------------------------------------------------------
 
 -ifndef(ssl_handshake).
@@ -28,9 +28,13 @@
 
 -include_lib("public_key/include/public_key.hrl").
 
--type algo_oid()          :: ?'rsaEncryption' | ?'id-dsa'.
--type public_key_params() :: #'Dss-Parms'{} | term().
--type public_key_info()   :: {algo_oid(), #'RSAPublicKey'{} | integer() , public_key_params()}.
+-define(NO_PROTOCOL, <<>>).
+
+%% Signature algorithms
+-define(ANON, 0).
+-define(RSA, 1).
+-define(DSA, 2).
+-define(ECDSA, 3).
 
 -record(session, {
 	  session_id,
@@ -39,8 +43,10 @@
 	  compression_method,
 	  cipher_suite,
 	  master_secret,
+	  srp_username,
 	  is_resumable,
-	  time_stamp
+	  time_stamp,
+	  ecc
 	  }).
 
 -define(NUM_OF_SESSION_ID_BYTES, 32).  % TSL 1.1 & SSL 3
@@ -81,15 +87,19 @@
 % -define(NULL, 0). %% Already defined by ssl_internal.hrl
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-%%% Hello messages - RFC 4346 section 7.4.2
+%%% Hello messages - RFC 5246 section 7.4.1
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
--record(client_hello, {
-	  client_version,
-	  random,             
-	  session_id,         % opaque SessionID<0..32>
-	  cipher_suites,      % cipher_suites<2..2^16-1>
-	  compression_methods, % compression_methods<1..2^8-1>,
-	  renegotiation_info
+
+%% client_hello defined in tls_handshake.hrl and dtls_handshake.hrl
+
+-record(hello_extensions, {
+	  renegotiation_info,
+	  hash_signs,          % supported combinations of hashes/signature algos
+	  next_protocol_negotiation = undefined, % [binary()]
+	  srp,
+	  ec_point_formats,
+	  elliptic_curves,
+	  sni
 	 }).
 
 -record(server_hello, {
@@ -98,11 +108,11 @@
 	  session_id,         % opaque SessionID<0..32>
 	  cipher_suite,       % cipher_suites
 	  compression_method, % compression_method
-	  renegotiation_info
+	  extensions
 	 }).
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-%%% Server authentication and key exchange messages - RFC 4346 section 7.4.3
+%%% Server authentication and key exchange messages - RFC 5246 section 7.4.3
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
 %% opaque ASN.1Cert<2^24-1>;
@@ -115,6 +125,11 @@
 
 -define(KEY_EXCHANGE_RSA, 0).
 -define(KEY_EXCHANGE_DIFFIE_HELLMAN, 1).
+-define(KEY_EXCHANGE_EC_DIFFIE_HELLMAN, 6).
+-define(KEY_EXCHANGE_PSK, 2).
+-define(KEY_EXCHANGE_DHE_PSK, 3).
+-define(KEY_EXCHANGE_RSA_PSK, 4).
+-define(KEY_EXCHANGE_SRP, 5).
 
 -record(server_rsa_params, {
 	  rsa_modulus,  %%  opaque RSA_modulus<1..2^16-1>
@@ -126,10 +141,37 @@
 	  dh_g, %% opaque DH_g<1..2^16-1>
 	  dh_y  %% opaque DH_Ys<1..2^16-1>
 	 }).
-  
+
+-record(server_ecdh_params, {
+	  curve,
+	  public           %% opaque encoded ECpoint
+	 }).
+
+-record(server_psk_params, {
+	  hint
+	 }).
+
+-record(server_dhe_psk_params, {
+	  hint,
+	  dh_params
+	 }).
+
+-record(server_srp_params, {
+	  srp_n, %% opaque srp_N<1..2^16-1>
+	  srp_g, %% opaque srp_g<1..2^16-1>
+	  srp_s, %% opaque srp_s<1..2^8-1>
+	  srp_b  %% opaque srp_B<1..2^16-1>
+	 }).
+
 -record(server_key_exchange, {
+	  exchange_keys
+	 }).
+
+-record(server_key_params, {
 	  params, %% #server_rsa_params{} | #server_dh_params{}
-	  signed_params %% #signature{}
+	  params_bin,
+	  hashsign, %% term(atom(), atom())
+	  signature %% #signature{}
 	 }).
 	
 %% enum { anonymous, rsa, dsa } SignatureAlgorithm;
@@ -142,7 +184,7 @@
 -record(server_hello_done, {}).
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-%%% Certificate request  - RFC 4346 section 7.4.4
+%%% Certificate request  - RFC 5246 section 7.4.4
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
 %%    enum {
@@ -154,11 +196,15 @@
 -define(DSS_SIGN, 2).
 -define(RSA_FIXED_DH, 3).
 -define(DSS_FIXED_DH, 4).
+-define(ECDSA_SIGN, 64).
+-define(RSA_FIXED_ECDH, 65).
+-define(ECDSA_FIXED_ECDH, 66).
 
 % opaque DistinguishedName<1..2^16-1>;
 
 -record(certificate_request, {
 	  certificate_types,        %ClientCertificateType   <1..2^8-1>
+	  hashsign_algorithms,      %%SignatureAndHashAlgorithm <2^16-1>;
 	  certificate_authorities   %DistinguishedName       <0..2^16-1>
 	 }).
 
@@ -189,10 +235,33 @@
 	  dh_public
 	 }).
 
+-record(client_ec_diffie_hellman_public, {
+	  dh_public
+	 }).
+
+-record(client_psk_identity, {
+	  identity
+	 }).
+
+-record(client_dhe_psk_identity, {
+	  identity,
+	  dh_public
+	 }).
+
+-record(client_rsa_psk_identity, {
+	  identity,
+	  exchange_keys
+	 }).
+
+-record(client_srp_public, {
+	  srp_a
+	 }).
+
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %%% Certificate verify - RFC 4346 section 7.4.8
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 -record(certificate_verify, {
+	  hashsign_algorithm,
 	  signature % binary()
 	 }).
 
@@ -213,7 +282,74 @@
 	  renegotiated_connection
 	 }).
 
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%% SRP  RFC 5054 section 2.8.1.
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+-define(SRP_EXT, 12).
+
+-record(srp, {
+	  username
+	 }).
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%% Signature Algorithms  RFC 5746 section 7.4.1.4.1.
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+-define(SIGNATURE_ALGORITHMS_EXT, 13).
+
+-record(hash_sign_algos, {
+	  hash_sign_algos
+	 }).
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%% Next Protocol Negotiation
+%% (http://tools.ietf.org/html/draft-agl-tls-nextprotoneg-02)
+%% (http://technotes.googlecode.com/git/nextprotoneg.html)
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+-define(NEXTPROTONEG_EXT, 13172).
+-define(NEXT_PROTOCOL, 67).
+-record(next_protocol_negotiation, {extension_data}).
+
+-record(next_protocol, {selected_protocol}).
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%% ECC Extensions RFC 4492 section 4 and 5
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+-define(ELLIPTIC_CURVES_EXT, 10).
+-define(EC_POINT_FORMATS_EXT, 11).
+
+-record(elliptic_curves, {
+	  elliptic_curve_list
+	 }).
+
+-record(ec_point_formats, {
+	  ec_point_format_list
+	 }).
+
+-define(ECPOINT_UNCOMPRESSED, 0).
+-define(ECPOINT_ANSIX962_COMPRESSED_PRIME, 1).
+-define(ECPOINT_ANSIX962_COMPRESSED_CHAR2, 2).
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%% ECC RFC 4492 Handshake Messages, Section 5
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+-define(EXPLICIT_PRIME, 1).
+-define(EXPLICIT_CHAR2, 2).
+-define(NAMED_CURVE, 3).
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%% Server name indication RFC 6066 section 3
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+-define(SNI_EXT, 16#0000).
+
+%% enum { host_name(0), (255) } NameType;
+-define(SNI_NAMETYPE_HOST_NAME, 0).
+
+-record(sni, {
+          hostname = undefined
+        }).
+
 -endif. % -ifdef(ssl_handshake).
-
-
-     

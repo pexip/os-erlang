@@ -1,7 +1,7 @@
 %% This is an -*- erlang -*- file.
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 1997-2010. All Rights Reserved.
+%% Copyright Ericsson AB 1997-2014. All Rights Reserved.
 %%
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -18,14 +18,15 @@
 %% 
 
 {application,inets,
- [{description,"INETS  CXC 138 49"},
-  {vsn,"%VSN%"},
+ [{description, "INETS  CXC 138 49"},
+  {vsn, "%VSN%"},
   {modules,[
             inets,
             inets_sup,
             inets_app,
 	    inets_service,	                  
 	    inets_regexp,	                  
+	    inets_trace,	                  
 
             %% FTP
             ftp,
@@ -34,8 +35,7 @@
             ftp_sup,
             
             %% HTTP client:
-            http,    %% Old client API module
-            httpc,   %% New client API module
+            httpc, 
             httpc_handler,
 	    httpc_handler_sup,	
             httpc_manager,
@@ -59,6 +59,7 @@
             httpd_acceptor,
             httpd_acceptor_sup,
 	    httpd_cgi,
+	    httpd_connection_sup,
             httpd_conf,
 	    httpd_esi,
             httpd_example,
@@ -109,4 +110,6 @@
   {registered,[inets_sup, httpc_manager]},
   %% If the "new" ssl is used then 'crypto' must be started before inets.
   {applications,[kernel,stdlib]},
-  {mod,{inets_app,[]}}]}.
+  {mod,{inets_app,[]}},
+  {runtime_dependencies, ["stdlib-2.0","ssl-5.3.4","runtime_tools-1.8.14",
+			  "mnesia-4.12","kernel-3.0","erts-6.0"]}]}.

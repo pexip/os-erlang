@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2008-2010. All Rights Reserved.
+%% Copyright Ericsson AB 2008-2013. All Rights Reserved.
 %%
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -18,35 +18,22 @@
 %%
 %%
 -module(test_modified_x420).
-
-%-compile(export_all).
--export([compile/1, test_io/1]).
+-export([test/1]).
 
 -include_lib("test_server/include/test_server.hrl").
 
-compile(Config) ->
-    ?line DataDir = ?config(data_dir,Config),
-    ?line OutDir = ?config(priv_dir,Config),
-
-    ok = asn1ct:compile(filename:join([DataDir,modified_x420,"PKCS7"]),[der,{outdir,OutDir}]),
-    ok = asn1ct:compile(filename:join([DataDir,modified_x420,"InformationFramework"]),[der,{outdir,OutDir}]),
-    ok = asn1ct:compile(filename:join([DataDir,modified_x420,"AuthenticationFramework"]),[der,{outdir,OutDir}]).
-
-test_io(Config) ->
-    io:format("~p~n~n", [catch test(Config)]).
-
 test(Config) ->
-    ?line DataDir = ?config(data_dir,Config),
-%    ?line OutDir = ?config(priv_dir,Config),
+    DataDir = ?config(data_dir,Config),
 
-    ?line Der = read_pem(filename:join([DataDir,modified_x420,"p7_signed_data.pem"])),
-    ?line {ok, {_,_,SignedData}} = 'PKCS7':decode('ContentInfo', Der),
-    ?line {ok,_} = 'PKCS7':decode('SignedData', SignedData).
+    Der = read_pem(filename:join([DataDir,modified_x420,"p7_signed_data.pem"])),
+    {ok,{_,_,SignedData}} = 'PKCS7':decode( 'ContentInfo', Der),
+    {ok,_} = 'PKCS7':decode('SignedData', SignedData),
+    ok.
 
 read_pem(File) ->    
-    ?line {ok, Bin} = file:read_file(File),
-    ?line ssl_base64:join_decode(lists:flatten(extract_base64(Bin))).
-
+    {ok,Bin} = file:read_file(File),
+    Der = base64:mime_decode(lists:flatten(extract_base64(Bin))),
+    binary_to_list(Der).
 
 
 extract_base64(Binary) ->

@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 1997-2010. All Rights Reserved.
+%% Copyright Ericsson AB 1997-2012. All Rights Reserved.
 %%
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -19,6 +19,11 @@
 
 %%
 -module(tool_utils).
+-compile([{nowarn_deprecated_function,{gs,config,2}},
+          {nowarn_deprecated_function,{gs,create,3}},
+          {nowarn_deprecated_function,{gs,destroy,1}},
+          {nowarn_deprecated_function,{gs,read,2}}]).
+
 -include_lib("kernel/include/file.hrl").
 
 %%%---------------------------------------------------------------------
@@ -98,7 +103,8 @@ open_help_default(Parent, File) ->
                                _Else -> "netscape -remote \"openURL(file:" ++ File ++ ")\""
 			  end;
 		      {win32,_AnyType} ->
-			  "netscape.exe -h " ++ regexp:gsub(File,"\\\\","/");
+			  "netscape.exe -h " ++
+			      re:replace(File,"\\\\","/",[global,{return,list}]);
 		      _Other ->
 			  unknown
 		  end;

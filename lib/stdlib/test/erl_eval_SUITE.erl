@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %% 
-%% Copyright Ericsson AB 1998-2011. All Rights Reserved.
+%% Copyright Ericsson AB 1998-2013. All Rights Reserved.
 %% 
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -25,7 +25,7 @@
 	 match_bin/1,
 	 string_plusplus/1,
 	 pattern_expr/1,
-         guard_3/1, guard_4/1,
+         guard_3/1, guard_4/1, guard_5/1,
          lc/1,
          simple_cases/1,
          unary_plus/1,
@@ -37,10 +37,13 @@
          otp_6977/1,
 	 otp_7550/1,
          otp_8133/1,
+         otp_10622/1,
          funs/1,
 	 try_catch/1,
 	 eval_expr_5/1,
-	 zero_width/1]).
+	 zero_width/1,
+         eep37/1,
+         eep43/1]).
 
 %%
 %% Define to run outside of test server
@@ -76,10 +79,11 @@ suite() -> [{ct_hooks,[ts_install_cth]}].
 
 all() -> 
     [guard_1, guard_2, match_pattern, string_plusplus,
-     pattern_expr, match_bin, guard_3, guard_4, lc,
+     pattern_expr, match_bin, guard_3, guard_4, guard_5, lc,
      simple_cases, unary_plus, apply_atom, otp_5269,
      otp_6539, otp_6543, otp_6787, otp_6977, otp_7550,
-     otp_8133, funs, try_catch, eval_expr_5, zero_width].
+     otp_8133, otp_10622, funs, try_catch, eval_expr_5, zero_width,
+     eep37, eep43].
 
 groups() -> 
     [].
@@ -216,13 +220,13 @@ guard_4(doc) ->
 guard_4(suite) ->
     [];
 guard_4(Config) when is_list(Config) ->
-    ?line check(fun() -> if {erlang,'+'}(3,a) -> true ; true -> false end end,
-                "if {erlang,'+'}(3,a) -> true ; true -> false end.",
-                false),
-    ?line check(fun() -> if {erlang,is_integer}(3) -> true ; true -> false end
-                end,
-                "if {erlang,is_integer}(3) -> true ; true -> false end.",
-                true),
+    check(fun() -> if erlang:'+'(3,a) -> true ; true -> false end end,
+	  "if erlang:'+'(3,a) -> true ; true -> false end.",
+	  false),
+    check(fun() -> if erlang:is_integer(3) -> true ; true -> false end
+	  end,
+	  "if erlang:is_integer(3) -> true ; true -> false end.",
+	  true),
     ?line check(fun() -> [X || X <- [1,2,3], erlang:is_integer(X)] end,
                 "[X || X <- [1,2,3], erlang:is_integer(X)].",
                 [1,2,3]),
@@ -230,11 +234,11 @@ guard_4(Config) when is_list(Config) ->
                 end,
                 "if is_atom(is_integer(a)) -> true ; true -> false end.",
                 true),
-    ?line check(fun() -> if {erlang,is_atom}({erlang,is_integer}(a)) -> true;
-                            true -> false end end,
-                "if {erlang,is_atom}({erlang,is_integer}(a)) -> true; "
-                "true -> false end.",
-                true),
+    check(fun() -> if erlang:is_atom(erlang:is_integer(a)) -> true;
+		      true -> false end end,
+	  "if erlang:is_atom(erlang:is_integer(a)) -> true; "
+	  "true -> false end.",
+	  true),
     ?line check(fun() -> if is_atom(3+a) -> true ; true -> false end end,
                 "if is_atom(3+a) -> true ; true -> false end.",
                 false),
@@ -244,6 +248,20 @@ guard_4(Config) when is_list(Config) ->
                 false),
     ok.
 
+guard_5(doc) ->
+    ["Guards with erlang:'=='/2"];
+guard_5(suite) ->
+    [];
+guard_5(Config) when is_list(Config) ->
+    {ok,Tokens ,_} =
+	erl_scan:string("case 1 of A when erlang:'=='(A, 1) -> true end."),
+    {ok, [Expr]} = erl_parse:parse_exprs(Tokens),
+    true = guard_5_compiled(),
+    {value, true, [{'A',1}]} = erl_eval:expr(Expr, []),
+    ok.
+
+guard_5_compiled() ->
+    case 1 of A when erlang:'=='(A, 1) -> true end.
 
 lc(doc) ->
     ["OTP-4518."];
@@ -960,6 +978,7 @@ otp_8133(Config) when is_list(Config) ->
                   E = fun(N) -> 
                               if 
                                   is_integer(N) -> <<N/integer>>; 
+
                                   true -> erlang:error(foo) 
                               end 
                       end,
@@ -978,6 +997,48 @@ otp_8133(Config) when is_list(Config) ->
                  end
              end.",
             ok),
+    ok.
+
+otp_10622(doc) ->
+    ["OTP-10622. Bugs."];
+otp_10622(suite) ->
+    [];
+otp_10622(Config) when is_list(Config) ->
+    check(fun() -> <<0>> = <<"\x{400}">> end,
+          "<<0>> = <<\"\\x{400}\">>. ",
+          <<0>>),
+    check(fun() -> <<"\x{aa}ff"/utf8>> = <<"\x{aa}ff"/utf8>> end,
+          "<<\"\\x{aa}ff\"/utf8>> = <<\"\\x{aa}ff\"/utf8>>. ",
+          <<"Â\xaaff">>),
+    %% The same bug as last example:
+    check(fun() -> case <<"foo"/utf8>> of
+                       <<"foo"/utf8>> -> true
+                   end
+          end,
+          "case <<\"foo\"/utf8>> of <<\"foo\"/utf8>> -> true end.",
+          true),
+    check(fun() -> <<"\x{400}"/utf8>> = <<"\x{400}"/utf8>> end,
+          "<<\"\\x{400}\"/utf8>> = <<\"\\x{400}\"/utf8>>. ",
+          <<208,128>>),
+    error_check("<<\"\\x{aaa}\">> = <<\"\\x{aaa}\">>.",
+                {badmatch,<<"\xaa">>}),
+
+    check(fun() -> [a || <<"\x{aaa}">> <= <<2703:16>>] end,
+          "[a || <<\"\\x{aaa}\">> <= <<2703:16>>]. ",
+          []),
+    check(fun() -> [a || <<"\x{aa}"/utf8>> <= <<"\x{aa}"/utf8>>] end,
+          "[a || <<\"\\x{aa}\"/utf8>> <= <<\"\\x{aa}\"/utf8>>]. ",
+          [a]),
+    check(fun() -> [a || <<"\x{aa}x"/utf8>> <= <<"\x{aa}y"/utf8>>] end,
+          "[a || <<\"\\x{aa}x\"/utf8>> <= <<\"\\x{aa}y\"/utf8>>]. ",
+          []),
+    check(fun() -> [a || <<"\x{aaa}">> <= <<"\x{aaa}">>] end,
+          "[a || <<\"\\x{aaa}\">> <= <<\"\\x{aaa}\">>]. ",
+          []),
+    check(fun() -> [a || <<"\x{aaa}"/utf8>> <= <<"\x{aaa}"/utf8>>] end,
+          "[a || <<\"\\x{aaa}\"/utf8>> <= <<\"\\x{aaa}\"/utf8>>]. ",
+          [a]),
+
     ok.
 
 funs(doc) ->
@@ -1036,6 +1097,16 @@ funs(Config) when is_list(Config) ->
         lists:usort([run_many_args(SAs) || SAs <- many_args(MaxArgs)]),
     ?line {'EXIT',{{argument_limit,_},_}} = 
         (catch run_many_args(many_args1(MaxArgs+1))),
+
+    ?line check(fun() -> M = lists, F = fun M:reverse/1,
+			 [1,2] = F([2,1]), ok end,
+		"begin M = lists, F = fun M:reverse/1,"
+		" [1,2] = F([2,1]), ok end.",
+		ok),
+
+    %% Test that {M,F} is not accepted as a fun.
+    error_check("{" ?MODULE_STRING ",module_info}().",
+		{badfun,{?MODULE,module_info}}),
     ok.
 
 run_many_args({S, As}) ->
@@ -1071,11 +1142,6 @@ do_funs(LFH, EFH) ->
                 concat(["begin F1 = fun(F,N) -> apply(", M, 
                         ",count_down,[F, N]) end, F1(F1,1000) end."]),
 		0, ['F1'], LFH, EFH),
-    ?line check(fun() -> F1 = fun(F,N) -> {?MODULE,count_down}(F,N)
-                              end, F1(F1, 1000) end,
-                concat(["begin F1 = fun(F,N) -> {", M, 
-                        ",count_down}(F, N) end, F1(F1,1000) end."]),
-		0, ['F1'], LFH, EFH),
     ?line check(fun() -> F = fun(F,N) when N > 0 -> apply(F,[F,N-1]); 
                                 (_F,0) -> ok end, 
                          F(F, 1000)
@@ -1107,11 +1173,11 @@ do_funs(LFH, EFH) ->
                          true = {2,3} == F(2) end,
                 "begin F = fun(X) -> A = 1+X, {X,A} end, 
                        true = {2,3} == F(2) end.", true, ['F'], LFH, EFH),
-    ?line check(fun() -> F = fun(X) -> {erlang,'+'}(X,2) end, 
-                         true = 3 == F(1) end,
-                "begin F = fun(X) -> {erlang,'+'}(X,2) end," 
-                "      true = 3 == F(1) end.", true, ['F'],
-               LFH, EFH),
+    check(fun() -> F = fun(X) -> erlang:'+'(X,2) end,
+		   true = 3 == F(1) end,
+	  "begin F = fun(X) -> erlang:'+'(X,2) end,"
+	  "      true = 3 == F(1) end.", true, ['F'],
+	  LFH, EFH),
     ?line check(fun() -> F = fun(X) -> byte_size(X) end,
                          ?MODULE:do_apply(F,<<"hej">>) end, 
                 concat(["begin F = fun(X) -> size(X) end,",
@@ -1159,17 +1225,6 @@ do_funs(LFH, EFH) ->
                 concat(["begin F = fun(F, N) -> [", M, 
                        ":count_down(F,N) || X <-[1]] end, F(F,2) end."]),
                 [[[0]]], ['F'], LFH, EFH),
-
-    %% Tests for a bug found by the Dialyzer - used to crash.
-    ?line check(fun() -> Pmod = erl_eval_helper:new(42), Pmod:add(5) end,
-		"begin Pmod = erl_eval_helper:new(42), Pmod:add(5) end.",
-		47,
-		['Pmod'], LFH, EFH),
-    ?line check(fun() -> Pmod = erl_eval_helper:new(42), B = Pmod:add(7), B end,
-		"begin Pmod = erl_eval_helper:new(42), B = Pmod:add(7), B end.",
-		49,
-		['B','Pmod'], LFH, EFH),
-
     ok.
 
 count_down(F, N) when N > 0 ->
@@ -1361,6 +1416,50 @@ zero_width(Config) when is_list(Config) ->
 			ok
 		end, "begin {'EXIT',{badarg,_}} = (catch <<not_a_number:0>>), "
 		"ok end.", ok),
+    ok.
+
+eep37(Config) when is_list(Config) ->
+    check(fun () -> (fun _(X) -> X end)(42) end,
+          "(fun _(X) -> X end)(42).",
+          42),
+    check(fun () -> (fun _Id(X) -> X end)(42) end,
+          "(fun _Id(X) -> X end)(42).", 42),
+    check(fun () -> is_function((fun Self() -> Self end)(), 0) end,
+          "is_function((fun Self() -> Self end)(), 0).",
+          true),
+    check(fun () ->
+                  F = fun Fact(N) when N > 0 ->
+                              N * Fact(N - 1);
+                          Fact(0) ->
+                              1
+                       end,
+                  F(6)
+          end,
+          "(fun Fact(N) when N > 0 -> N * Fact(N - 1); Fact(0) -> 1 end)(6).",
+          720),
+    ok.
+
+eep43(Config) when is_list(Config) ->
+    check(fun () -> #{} end, " #{}.", #{}),
+    check(fun () -> #{a => b} end, "#{a => b}.", #{a => b}),
+    check(fun () ->
+                  Map = #{a => b},
+                  {Map#{a := b},Map#{a => c},Map#{d => e}}
+          end,
+          "begin "
+          "    Map = #{a => B=b}, "
+          "    {Map#{a := B},Map#{a => c},Map#{d => e}} "
+          "end.",
+          {#{a => b},#{a => c},#{a => b,d => e}}),
+    check(fun () ->
+                  lists:map(fun (X) -> X#{price := 0} end,
+                            [#{hello => 0, price => nil}])
+          end,
+          "lists:map(fun (X) -> X#{price := 0} end,
+                     [#{hello => 0, price => nil}]).",
+          [#{hello => 0, price => 0}]),
+    error_check("[camembert]#{}.", {badarg,[camembert]}),
+    error_check("#{} = 1.", {badmatch,1}),
     ok.
 
 %% Check the string in different contexts: as is; in fun; from compiled code.

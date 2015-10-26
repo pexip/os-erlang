@@ -2,7 +2,7 @@
 %%-----------------------------------------------------------------------
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2006-2011. All Rights Reserved.
+%% Copyright Ericsson AB 2006-2014. All Rights Reserved.
 %%
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -31,6 +31,7 @@
 	 format_sig/1,
 	 format_sig/2,
 	 get_abstract_code_from_beam/1,
+ 	 get_compile_options_from_beam/1,
 	 get_abstract_code_from_src/1,
 	 get_abstract_code_from_src/2,
 	 get_core_from_abstract_code/1,
@@ -43,7 +44,8 @@
 	 pp_hook/0,
 	 process_record_remote_types/1,
          sets_filter/2,
-	 src_compiler_opts/0
+	 src_compiler_opts/0,
+	 parallelism/0
 	]).
 
 -include("dialyzer.hrl").
@@ -135,6 +137,26 @@ get_abstract_code_from_beam(File) ->
       error
   end.
 
+-spec get_compile_options_from_beam(file:filename()) -> 'error' | {'ok', [compile:option()]}.
+
+get_compile_options_from_beam(File) ->
+  case beam_lib:chunks(File, [compile_info]) of
+    {ok, {_, List}} ->
+      case lists:keyfind(compile_info, 1, List) of
+	{compile_info, CompInfo} -> compile_info_to_options(CompInfo);
+	_ -> error
+      end;
+    _ ->
+      %% No or unsuitable compile info.
+      error
+  end.
+
+compile_info_to_options(CompInfo) ->
+  case lists:keyfind(options, 1, CompInfo) of
+    {options, CompOpts} -> {ok, CompOpts};
+    _ -> error
+  end.
+
 -type get_core_from_abs_ret() :: {'ok', cerl:c_module()} | 'error'.
 
 -spec get_core_from_abstract_code(abstract_code()) -> get_core_from_abs_ret().
@@ -149,7 +171,9 @@ get_core_from_abstract_code(AbstrCode, Opts) ->
   %% performed them. In some cases we end up in trouble when
   %% performing them again.
   AbstrCode1 = cleanup_parse_transforms(AbstrCode),
-  try compile:forms(AbstrCode1, Opts ++ src_compiler_opts()) of
+  %% Remove parse_transforms (and other options) from compile options.
+  Opts2 = cleanup_compile_options(Opts),
+  try compile:forms(AbstrCode1, Opts2 ++ src_compiler_opts()) of
       {ok, _, Core} -> {ok, Core};
       _What -> error
   catch
@@ -163,14 +187,14 @@ get_core_from_abstract_code(AbstrCode, Opts) ->
 %% ============================================================================
 
 -spec get_record_and_type_info(abstract_code()) ->
-	{'ok', dict()} | {'error', string()}.
+	{'ok', dict:dict()} | {'error', string()}.
 
 get_record_and_type_info(AbstractCode) ->
   Module = get_module(AbstractCode),
   get_record_and_type_info(AbstractCode, Module, dict:new()).
 
--spec get_record_and_type_info(abstract_code(), module(), dict()) ->
-	{'ok', dict()} | {'error', string()}.
+-spec get_record_and_type_info(abstract_code(), module(), dict:dict()) ->
+	{'ok', dict:dict()} | {'error', string()}.
 
 get_record_and_type_info(AbstractCode, Module, RecDict) ->
   get_record_and_type_info(AbstractCode, Module, [], RecDict).
@@ -218,15 +242,18 @@ get_record_and_type_info([], _Module, Records, RecDict) ->
   end.
 
 add_new_type(TypeOrOpaque, Name, TypeForm, ArgForms, Module, RecDict) ->
-  case erl_types:type_is_defined(TypeOrOpaque, Name, RecDict) of
+  Arity = length(ArgForms),
+  case erl_types:type_is_defined(TypeOrOpaque, Name, Arity, RecDict) of
     true ->
-      throw({error, flat_format("Type ~s already defined\n", [Name])});
+      Msg = flat_format("Type ~s/~w already defined\n", [Name, Arity]),
+      throw({error, Msg});
     false ->
       ArgTypes = [erl_types:t_from_form(X) || X <- ArgForms],
       case lists:all(fun erl_types:t_is_var/1, ArgTypes) of
 	true ->
 	  ArgNames = [erl_types:t_var_name(X) || X <- ArgTypes],
-	  dict:store({TypeOrOpaque, Name}, {Module, TypeForm, ArgNames}, RecDict);
+	  dict:store({TypeOrOpaque, Name, Arity},
+                     {Module, TypeForm, ArgNames}, RecDict);
 	false ->
 	  throw({error, flat_format("Type declaration for ~w does not "
 				    "have variables as parameters", [Name])})
@@ -300,7 +327,7 @@ process_record_remote_types(CServer) ->
   CServer1 = dialyzer_codeserver:finalize_records(NewRecords, CServer),
   dialyzer_codeserver:finalize_exported_types(TempExpTypes, CServer1).
 
--spec merge_records(dict(), dict()) -> dict().
+-spec merge_records(dict:dict(), dict:dict()) -> dict:dict().
 
 merge_records(NewRecords, OldRecords) ->
   dict:merge(fun(_Key, NewVal, _OldVal) -> NewVal end, NewRecords, OldRecords).
@@ -311,11 +338,15 @@ merge_records(NewRecords, OldRecords) ->
 %%
 %% ============================================================================
 
--spec get_spec_info(atom(), abstract_code(), dict()) ->
-        {'ok', dict()} | {'error', string()}.
+-type spec_dict()     :: dict:dict().
+-type callback_dict() :: dict:dict().
+
+-spec get_spec_info(atom(), abstract_code(), dict:dict()) ->
+        {'ok', spec_dict(), callback_dict()} | {'error', string()}.
 
 get_spec_info(ModName, AbstractCode, RecordsDict) ->
-  get_spec_info(AbstractCode, dict:new(), RecordsDict, ModName, "nofile").
+  get_spec_info(AbstractCode, dict:new(), dict:new(),
+		RecordsDict, ModName, "nofile").
 
 %% TypeSpec is a list of conditional contracts for a function.
 %% Each contract is of the form {[Argument], Range, [Constraint]} where
@@ -323,21 +354,34 @@ get_spec_info(ModName, AbstractCode, RecordsDict) ->
 %%  - Constraint is of the form {subtype, T1, T2} where T1 and T2
 %%    are erl_types:erl_type()
 
-get_spec_info([{attribute, Ln, spec, {Id, TypeSpec}}|Left],
-	      SpecDict, RecordsDict, ModName, File) when is_list(TypeSpec) ->
+get_spec_info([{attribute, Ln, Contract, {Id, TypeSpec}}|Left],
+	      SpecDict, CallbackDict, RecordsDict, ModName, File)
+  when ((Contract =:= 'spec') or (Contract =:= 'callback')),
+       is_list(TypeSpec) ->
   MFA = case Id of
 	  {_, _, _} = T -> T;
 	  {F, A} -> {ModName, F, A}
 	end,
-  try dict:find(MFA, SpecDict) of
+  ActiveDict =
+    case Contract of
+      spec     -> SpecDict;
+      callback -> CallbackDict
+    end,
+  try dict:find(MFA, ActiveDict) of
     error ->
-      NewSpecDict =
+      NewActiveDict =
 	dialyzer_contracts:store_tmp_contract(MFA, {File, Ln}, TypeSpec,
-					      SpecDict, RecordsDict),
-      get_spec_info(Left, NewSpecDict, RecordsDict, ModName, File);
+					      ActiveDict, RecordsDict),
+      {NewSpecDict, NewCallbackDict} =
+	case Contract of
+	  spec     -> {NewActiveDict, CallbackDict};
+	  callback -> {SpecDict, NewActiveDict}
+	end,
+      get_spec_info(Left, NewSpecDict, NewCallbackDict,
+		    RecordsDict, ModName,File);
     {ok, {{OtherFile, L},_C}} ->
       {Mod, Fun, Arity} = MFA,
-      Msg = flat_format("  Contract for function ~w:~w/~w "
+      Msg = flat_format("  Contract/callback for function ~w:~w/~w "
 			"already defined in ~s:~w\n",
 			[Mod, Fun, Arity, OtherFile, L]),
       throw({error, Msg})
@@ -347,12 +391,14 @@ get_spec_info([{attribute, Ln, spec, {Id, TypeSpec}}|Left],
 			  [Ln, Error])}
   end;
 get_spec_info([{attribute, _, file, {IncludeFile, _}}|Left],
-	      SpecDict, RecordsDict, ModName, _File) ->
-  get_spec_info(Left, SpecDict, RecordsDict, ModName, IncludeFile);
-get_spec_info([_Other|Left], SpecDict, RecordsDict, ModName, File) ->
-  get_spec_info(Left, SpecDict, RecordsDict, ModName, File);
-get_spec_info([], SpecDict, _RecordsDict, _ModName, _File) ->
-  {ok, SpecDict}.
+	      SpecDict, CallbackDict, RecordsDict, ModName, _File) ->
+  get_spec_info(Left, SpecDict, CallbackDict,
+		RecordsDict, ModName, IncludeFile);
+get_spec_info([_Other|Left], SpecDict, CallbackDict,
+	      RecordsDict, ModName, File) ->
+  get_spec_info(Left, SpecDict, CallbackDict, RecordsDict, ModName, File);
+get_spec_info([], SpecDict, CallbackDict, _RecordsDict, _ModName, _File) ->
+  {ok, SpecDict, CallbackDict}.
 
 %% ============================================================================
 %%
@@ -360,7 +406,7 @@ get_spec_info([], SpecDict, _RecordsDict, _ModName, _File) ->
 %%
 %% ============================================================================
 
--spec sets_filter([module()], set()) -> set().
+-spec sets_filter([module()], sets:set()) -> sets:set().
 
 sets_filter([], ExpTypes) ->
   ExpTypes;
@@ -379,7 +425,7 @@ sets_filter([Mod|Mods], ExpTypes) ->
 src_compiler_opts() ->
   [no_copt, to_core, binary, return_errors,
    no_inline, strict_record_tests, strict_record_updates,
-   no_is_record_optimization].
+   dialyzer].
 
 -spec get_module(abstract_code()) -> module().
 
@@ -394,6 +440,24 @@ cleanup_parse_transforms([{attribute, _, compile, {parse_transform, _}}|Left]) -
 cleanup_parse_transforms([Other|Left]) ->
   [Other|cleanup_parse_transforms(Left)];
 cleanup_parse_transforms([]) ->
+  [].
+
+-spec cleanup_compile_options([compile:option()]) -> [compile:option()].
+
+%% Using abstract, not asm or core.
+cleanup_compile_options([from_asm|Opts]) ->
+  Opts;
+cleanup_compile_options([asm|Opts]) ->
+  Opts;
+cleanup_compile_options([from_core|Opts]) ->
+  Opts;
+%% The parse transform will already have been applied, may cause problems if it
+%% is re-applied.
+cleanup_compile_options([{parse_transform, _}|Opts]) ->
+  Opts;
+cleanup_compile_options([Other|Opts]) ->
+  [Other|cleanup_compile_options(Opts)];
+cleanup_compile_options([]) ->
   [].
 
 -spec format_errors([{module(), string()}]) -> [string()].
@@ -411,7 +475,7 @@ format_errors([]) ->
 format_sig(Type) ->
   format_sig(Type, dict:new()).
 
--spec format_sig(erl_types:erl_type(), dict()) -> string().
+-spec format_sig(erl_types:erl_type(), dict:dict()) -> string().
 
 format_sig(Type, RecDict) ->
   "fun(" ++ Sig = lists:flatten(erl_types:t_to_string(Type, RecDict)),
@@ -427,10 +491,9 @@ flat_format(Fmt, Lst) ->
 %% Created     : 5 March 2007
 %%-------------------------------------------------------------------
 
+-spec pp_hook() -> fun((cerl:cerl(), _, _) -> term()).
 pp_hook() ->
   fun pp_hook/3.
-
--spec pp_hook() -> fun((cerl:cerl(), _, _) -> term()).
 
 pp_hook(Node, Ctxt, Cont) ->
   case cerl:type(Node) of
@@ -517,3 +580,12 @@ pp_unit(Unit, Ctxt, Cont) ->
 pp_atom(Atom) ->
   String = atom_to_list(cerl:atom_val(Atom)),
   prettypr:text(String).
+
+%%------------------------------------------------------------------------------
+
+-spec parallelism() -> integer().
+
+parallelism() ->
+  CPUs = erlang:system_info(logical_processors_available),
+  Schedulers = erlang:system_info(schedulers),
+  min(CPUs, Schedulers).

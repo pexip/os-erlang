@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %% 
-%% Copyright Ericsson AB 1996-2009. All Rights Reserved.
+%% Copyright Ericsson AB 1996-2012. All Rights Reserved.
 %% 
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -21,6 +21,9 @@
 %% Purpose : Fractal trees
 
 -module(frac).
+-compile([{nowarn_deprecated_function,{gs,config,2}},
+          {nowarn_deprecated_function,{gs,create,3}},
+          {nowarn_deprecated_function,{gs,start,0}}]).
 
 -export([start/0, go/0, test/0, grow/2, expand/3, subst/2]).
 

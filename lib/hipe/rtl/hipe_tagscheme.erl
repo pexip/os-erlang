@@ -2,7 +2,7 @@
 %%
 %% %CopyrightBegin%
 %% 
-%% Copyright Ericsson AB 2001-2011. All Rights Reserved.
+%% Copyright Ericsson AB 2001-2013. All Rights Reserved.
 %% 
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -20,7 +20,7 @@
 %%========================================================================
 %%
 %% Filename : hipe_tagscheme.erl
-%% Note     : This is specific to Erlang 5.* (i.e. R9 to R13).
+%% Note     : This is specific to Erlang 5.* (i.e. starting with R9).
 %%
 %% Modifications:
 %%  020904: Happi - added support for external pids and ports.
@@ -39,14 +39,13 @@
 	 test_tuple/4, test_atom/4, test_bignum/4, test_pos_bignum/4,
 	 test_any_pid/4, test_any_port/4,
 	 test_ref/4, test_fun/4, test_fun2/5, test_matchstate/4,
-	 test_binary/4, test_bitstr/4, test_list/4,
-	 test_integer/4, test_number/4, test_constant/4, test_tuple_N/5]).
+	 test_binary/4, test_bitstr/4, test_list/4, test_map/4,
+	 test_integer/4, test_number/4, test_tuple_N/5]).
 -export([realtag_fixnum/2, tag_fixnum/2, realuntag_fixnum/2, untag_fixnum/2]).
 -export([test_two_fixnums/3, test_fixnums/4, unsafe_fixnum_add/3,
 	 unsafe_fixnum_sub/3,
 	 fixnum_gt/5, fixnum_lt/5, fixnum_ge/5, fixnum_le/5, fixnum_val/1,
-	 fixnum_mul/4,
-	 fixnum_addsub/5, fixnum_andorxor/4, fixnum_not/2,
+	 fixnum_mul/4, fixnum_addsub/5, fixnum_andorxor/4, fixnum_not/2,
 	 fixnum_bsr/3, fixnum_bsl/3]).
 -export([unsafe_car/2, unsafe_cdr/2,
 	 unsafe_constant_element/3, unsafe_update_element/3, element/6]).
@@ -113,13 +112,15 @@
 -define(TAG_HEADER_EXTERNAL_PID, ((16#C bsl ?TAG_PRIMARY_SIZE) bor ?TAG_PRIMARY_HEADER)).
 -define(TAG_HEADER_EXTERNAL_PORT,((16#D bsl ?TAG_PRIMARY_SIZE) bor ?TAG_PRIMARY_HEADER)).
 -define(TAG_HEADER_EXTERNAL_REF, ((16#E bsl ?TAG_PRIMARY_SIZE) bor ?TAG_PRIMARY_HEADER)).
+-define(TAG_HEADER_MAP,     ((16#F bsl ?TAG_PRIMARY_SIZE) bor ?TAG_PRIMARY_HEADER)).
 
 -define(TAG_HEADER_MASK, 16#3F).
 -define(HEADER_ARITY_OFFS, 6).
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
-mk_header(SZ,TAG) -> (SZ bsl ?HEADER_ARITY_OFFS) + TAG.
+mk_header(SZ, TAG) -> (SZ bsl ?HEADER_ARITY_OFFS) + TAG.
+
 mk_arityval(SZ)	-> mk_header(SZ, ?TAG_HEADER_ARITYVAL).
 
 size_from_header(Sz, Header) ->
@@ -133,9 +134,9 @@ mk_var_header(Header, Size, Tag) ->
 mk_fixnum(X) -> (X bsl ?TAG_IMMED1_SIZE) + ?TAG_IMMED1_SMALL.
 
 -define(NIL, ((-1 bsl ?TAG_IMMED2_SIZE) bor ?TAG_IMMED2_NIL)).
-mk_nil()	-> ?NIL.
-%% mk_atom(X)	-> (X bsl ?TAG_IMMED2_SIZE) + ?TAG_IMMED2_ATOM.
-mk_non_value()	-> ?THE_NON_VALUE.
+mk_nil()       -> ?NIL.
+%% mk_atom(X)  -> (X bsl ?TAG_IMMED2_SIZE) + ?TAG_IMMED2_ATOM.
+mk_non_value() -> ?THE_NON_VALUE.
 
 -spec is_fixnum(integer()) -> boolean().
 is_fixnum(N) when is_integer(N) ->
@@ -252,6 +253,15 @@ test_tuple_N(X, N, TrueLab, FalseLab, Pred) ->
    get_header(Tmp, X),
    hipe_rtl:mk_branch(Tmp, 'eq', hipe_rtl:mk_imm(mk_arityval(N)),
 		      TrueLab, FalseLab, Pred)].
+
+test_map(X, TrueLab, FalseLab, Pred) ->
+  Tmp = hipe_rtl:mk_new_reg_gcsafe(),
+  HalfTrueLab = hipe_rtl:mk_new_label(),
+  MapMask = ?TAG_HEADER_MASK,
+  [test_is_boxed(X, hipe_rtl:label_name(HalfTrueLab), FalseLab, Pred),
+   HalfTrueLab,
+   get_header(Tmp, X),
+   mask_and_compare(Tmp, MapMask, ?TAG_HEADER_MAP, TrueLab, FalseLab, Pred)].
 
 test_ref(X, TrueLab, FalseLab, Pred) ->
   Hdr = hipe_rtl:mk_new_reg_gcsafe(),
@@ -404,17 +414,6 @@ test_number(X, TrueLab, FalseLab, Pred) ->
    Lab3,
    hipe_rtl:mk_branch(Tmp, 'eq', hipe_rtl:mk_imm(HeaderFlonum),
 		      TrueLab, FalseLab, Pred)].
-
-%% CONS, NIL, and TUPLE are not constants, everything else is
-test_constant(X, TrueLab, FalseLab, Pred) ->
-  Lab1 = hipe_rtl:mk_new_label(),
-  Lab2 = hipe_rtl:mk_new_label(),
-  Pred1 = 1-Pred,
-  [test_cons(X, FalseLab, hipe_rtl:label_name(Lab1), Pred1),
-   Lab1,
-   test_nil(X, FalseLab, hipe_rtl:label_name(Lab2), Pred1),
-   Lab2,
-   test_tuple(X, FalseLab, TrueLab, Pred1)].
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 

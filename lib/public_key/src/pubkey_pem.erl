@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2008-2011. All Rights Reserved.
+%% Copyright Ericsson AB 2008-2014. All Rights Reserved.
 %%
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -43,8 +43,6 @@
 -include("public_key.hrl").
 
 -export([encode/1, decode/1, decipher/2, cipher/3]).
-%% Backwards compatibility
--export([decode_key/2]).
 
 -define(ENCODED_LINE_LENGTH, 64).
 
@@ -53,7 +51,7 @@
 %%====================================================================
 
 %%--------------------------------------------------------------------
--spec decode(binary()) -> [pem_entry()].
+-spec decode(binary()) -> [public_key:pem_entry()].
 %%
 %% Description: Decodes a PEM binary.
 %%--------------------------------------------------------------------		    
@@ -61,7 +59,7 @@ decode(Bin) ->
     decode_pem_entries(split_bin(Bin), []).
 
 %%--------------------------------------------------------------------
--spec encode([pem_entry()]) -> iolist().
+-spec encode([public_key:pem_entry()]) -> iolist().
 %%
 %% Description: Encodes a list of PEM entries.
 %%--------------------------------------------------------------------		    
@@ -69,23 +67,25 @@ encode(PemEntries) ->
     encode_pem_entries(PemEntries).
 
 %%--------------------------------------------------------------------
--spec decipher({pki_asn1_type(), DerEncrypted::binary(),{Cipher :: string(),
-							 Salt :: binary()}},
+-spec decipher({public_key:pki_asn1_type(), DerEncrypted::binary(),
+		{Cipher :: string(), Salt :: iodata() | #'PBES2-params'{} 
+					   | {#'PBEParameter'{}, atom()}}},
 	       string()) -> Der::binary().
 %%
 %% Description: Deciphers a decrypted pem entry.
 %%--------------------------------------------------------------------
-decipher({_, DecryptDer, {Cipher,Salt}}, Password) ->
-    decode_key(DecryptDer, Password, Cipher, Salt).	
+decipher({_, DecryptDer, {Cipher, KeyDevParams}}, Password) ->
+    pubkey_pbe:decode(DecryptDer, Password, Cipher, KeyDevParams).
 
 %%--------------------------------------------------------------------
--spec cipher(Der::binary(),{Cipher :: string(), Salt :: binary()} ,
+-spec cipher(Der::binary(), {Cipher :: string(), Salt :: iodata() | #'PBES2-params'{} 
+						       | {#'PBEParameter'{}, atom()}}, 
 	     string()) -> binary().
 %%
 %% Description: Ciphers a PEM entry
 %%--------------------------------------------------------------------
-cipher(Der, {Cipher,Salt}, Password)->
-    encode_key(Der, Password, Cipher, Salt).
+cipher(Der, {Cipher, KeyDevParams}, Password)->
+    pubkey_pbe:encode(Der, Password, Cipher, KeyDevParams).
 
 %%--------------------------------------------------------------------
 %%% Internal functions
@@ -96,6 +96,10 @@ encode_pem_entries(Entries) ->
 encode_pem_entry({Type, Der, not_encrypted}) ->
     StartStr = pem_start(Type),
     [StartStr, "\n", b64encode_and_split(Der), "\n", pem_end(StartStr) ,"\n\n"];
+encode_pem_entry({'PrivateKeyInfo', Der, EncParams}) -> 
+    EncDer = encode_encrypted_private_keyinfo(Der, EncParams),
+    StartStr = pem_start('EncryptedPrivateKeyInfo'),
+    [StartStr, "\n", b64encode_and_split(EncDer), "\n", pem_end(StartStr) ,"\n\n"];
 encode_pem_entry({Type, Der, {Cipher, Salt}}) ->
     StartStr = pem_start(Type),
     [StartStr,"\n", pem_decrypt(),"\n", pem_decrypt_info(Cipher, Salt),"\n",
@@ -127,8 +131,26 @@ decode_pem_entry(Start, Lines) ->
     Type = asn1_type(Start),
     Cs = erlang:iolist_to_binary(Lines),
     Decoded = base64:mime_decode(Cs),
-    {Type, Decoded, not_encrypted}.
-    
+    case Type of
+	'EncryptedPrivateKeyInfo'->
+	    decode_encrypted_private_keyinfo(Decoded);
+	_ ->
+	    {Type, Decoded, not_encrypted}
+    end.
+
+decode_encrypted_private_keyinfo(Der) ->
+    #'EncryptedPrivateKeyInfo'{encryptionAlgorithm = AlgorithmInfo,				  
+			       encryptedData = Data} = 
+	public_key:der_decode('EncryptedPrivateKeyInfo', Der),
+    DecryptParams = pubkey_pbe:decrypt_parameters(AlgorithmInfo), 
+    {'PrivateKeyInfo', iolist_to_binary(Data), DecryptParams}.
+
+
+encode_encrypted_private_keyinfo(EncData, EncryptParmams) ->
+    AlgorithmInfo = pubkey_pbe:encrypt_parameters(EncryptParmams),
+    public_key:der_encode('EncryptedPrivateKeyInfo',   
+			  #'EncryptedPrivateKeyInfo'{encryptionAlgorithm = AlgorithmInfo,
+						     encryptedData = EncData}).
 split_bin(Bin) ->
     split_bin(0, Bin).
 
@@ -157,39 +179,10 @@ split_lines(Bin) ->
 %% Ignore white space at end of line
 join_entry([<<"-----END ", _/binary>>| Lines], Entry) ->
     {lists:reverse(Entry), Lines};
+join_entry([<<"-----END X509 CRL-----", _/binary>>| Lines], Entry) ->
+    {lists:reverse(Entry), Lines};
 join_entry([Line | Lines], Entry) ->
     join_entry(Lines, [Line | Entry]).
-
-decode_key(Data, Password, "DES-CBC", Salt) ->
-    Key = password_to_key(Password, Salt, 8),
-    IV = Salt,
-    crypto:des_cbc_decrypt(Key, IV, Data);
-decode_key(Data,  Password, "DES-EDE3-CBC", Salt) ->
-    Key = password_to_key(Password, Salt, 24),
-    IV = Salt,
-    <<Key1:8/binary, Key2:8/binary, Key3:8/binary>> = Key,
-    crypto:des_ede3_cbc_decrypt(Key1, Key2, Key3, IV, Data).
-
-encode_key(Data, Password, "DES-CBC", Salt) ->
-    Key = password_to_key(Password, Salt, 8),
-    IV = Salt,
-    crypto:des_cbc_encrypt(Key, IV, Data);
-encode_key(Data, Password, "DES-EDE3-CBC", Salt) ->
-    Key = password_to_key(Password, Salt, 24),
-    IV = Salt,
-    <<Key1:8/binary, Key2:8/binary, Key3:8/binary>> = Key,
-    crypto:des_ede3_cbc_encrypt(Key1, Key2, Key3, IV, Data).
-
-password_to_key(Data, Salt, KeyLen) ->
-    <<Key:KeyLen/binary, _/binary>> = 
-	password_to_key(<<>>, Data, Salt, KeyLen, <<>>),
-    Key.
-
-password_to_key(_, _, _, Len, Acc) when Len =< 0 ->
-    Acc;
-password_to_key(Prev, Data, Salt, Len, Acc) ->
-    M = crypto:md5([Prev, Data, Salt]),
-    password_to_key(M, Data, Salt, Len - size(M), <<Acc/binary, M/binary>>).
 
 unhex(S) ->
     unhex(S, []).
@@ -215,7 +208,20 @@ pem_start('SubjectPublicKeyInfo') ->
 pem_start('DSAPrivateKey') ->
     <<"-----BEGIN DSA PRIVATE KEY-----">>;
 pem_start('DHParameter') ->
-    <<"-----BEGIN DH PARAMETERS-----">>.
+    <<"-----BEGIN DH PARAMETERS-----">>;
+pem_start('EncryptedPrivateKeyInfo') ->
+    <<"-----BEGIN ENCRYPTED PRIVATE KEY-----">>;
+pem_start('CertificationRequest') ->
+    <<"-----BEGIN CERTIFICATE REQUEST-----">>;
+pem_start('ContentInfo') ->
+    <<"-----BEGIN PKCS7-----">>;
+pem_start('CertificateList') ->
+     <<"-----BEGIN X509 CRL-----">>;
+pem_start('EcpkParameters') ->
+    <<"-----BEGIN EC PARAMETERS-----">>;
+pem_start('ECPrivateKey') ->
+    <<"-----BEGIN EC PRIVATE KEY-----">>.
+
 pem_end(<<"-----BEGIN CERTIFICATE-----">>) ->
     <<"-----END CERTIFICATE-----">>;
 pem_end(<<"-----BEGIN RSA PRIVATE KEY-----">>) ->
@@ -228,6 +234,20 @@ pem_end(<<"-----BEGIN DSA PRIVATE KEY-----">>) ->
     <<"-----END DSA PRIVATE KEY-----">>;
 pem_end(<<"-----BEGIN DH PARAMETERS-----">>) ->
     <<"-----END DH PARAMETERS-----">>;
+pem_end(<<"-----BEGIN PRIVATE KEY-----">>) ->
+    <<"-----END PRIVATE KEY-----">>;
+pem_end(<<"-----BEGIN ENCRYPTED PRIVATE KEY-----">>) ->
+    <<"-----END ENCRYPTED PRIVATE KEY-----">>;
+pem_end(<<"-----BEGIN CERTIFICATE REQUEST-----">>) ->
+    <<"-----END CERTIFICATE REQUEST-----">>;
+pem_end(<<"-----BEGIN PKCS7-----">>) ->
+    <<"-----END PKCS7-----">>;
+pem_end(<<"-----BEGIN X509 CRL-----">>) ->
+    <<"-----END X509 CRL-----">>;
+pem_end(<<"-----BEGIN EC PARAMETERS-----">>) ->
+    <<"-----END EC PARAMETERS-----">>;
+pem_end(<<"-----BEGIN EC PRIVATE KEY-----">>) ->
+    <<"-----END EC PRIVATE KEY-----">>;
 pem_end(_) ->
     undefined.
 
@@ -242,18 +262,24 @@ asn1_type(<<"-----BEGIN PUBLIC KEY-----">>) ->
 asn1_type(<<"-----BEGIN DSA PRIVATE KEY-----">>) ->
     'DSAPrivateKey';
 asn1_type(<<"-----BEGIN DH PARAMETERS-----">>) ->
-    'DHParameter'.
+    'DHParameter';
+asn1_type(<<"-----BEGIN PRIVATE KEY-----">>) ->
+    'PrivateKeyInfo';
+asn1_type(<<"-----BEGIN ENCRYPTED PRIVATE KEY-----">>) ->
+    'EncryptedPrivateKeyInfo';
+asn1_type(<<"-----BEGIN CERTIFICATE REQUEST-----">>) ->
+    'CertificationRequest';
+asn1_type(<<"-----BEGIN PKCS7-----">>) ->
+    'ContentInfo';
+asn1_type(<<"-----BEGIN X509 CRL-----">>) ->
+    'CertificateList';
+asn1_type(<<"-----BEGIN EC PARAMETERS-----">>) ->
+    'EcpkParameters';
+asn1_type(<<"-----BEGIN EC PRIVATE KEY-----">>) ->
+    'ECPrivateKey'.
 
 pem_decrypt() ->
     <<"Proc-Type: 4,ENCRYPTED">>.
 
 pem_decrypt_info(Cipher, Salt) ->
     io_lib:format("DEK-Info: ~s,~s", [Cipher, lists:flatten(hexify(Salt))]).
-
-%%--------------------------------------------------------------------
-%%% Deprecated
-%%--------------------------------------------------------------------
-decode_key({_Type, Bin, not_encrypted}, _) ->
-    Bin;
-decode_key({_Type, Bin, {Chipher,Salt}}, Password) ->
-    decode_key(Bin, Password, Chipher, Salt).

@@ -1,10 +1,10 @@
-<?xml version="1.0" encoding="latin1" ?>
+<?xml version="1.0" encoding="utf-8" ?>
 <!DOCTYPE erlref SYSTEM "erlref.dtd">
 
 <erlref>
   <header>
     <copyright>
-      <year>2006</year><year>2011</year>
+      <year>2006</year><year>2014</year>
       <holder>Ericsson AB. All Rights Reserved.</holder>
     </copyright>
     <legalnotice>
@@ -50,33 +50,31 @@
     <p>Dialyzer also has a command line version for automated use. Below is a
       brief description of the list of its options. The same information can
       be obtained by writing</p>
-    <code type="none"><![CDATA[
-      dialyzer --help
-    ]]></code>
+    <code type="none">
+      dialyzer --help</code>
     <p>in a shell. Please refer to the GUI description for more details on
       the operation of Dialyzer.</p>
     <p>The exit status of the command line version is:</p>
-    <code type="none"><![CDATA[
+    <code type="none">
       0 - No problems were encountered during the analysis and no
           warnings were emitted.
       1 - Problems were encountered during the analysis.
-      2 - No problems were encountered, but warnings were emitted.
-    ]]></code>
+      2 - No problems were encountered, but warnings were emitted.</code>
     <p>Usage:</p>
-    <code type="none"><![CDATA[
+    <code type="none">
        dialyzer [--help] [--version] [--shell] [--quiet] [--verbose]
 		[-pa dir]* [--plt plt] [--plts plt*] [-Ddefine]*
-                [-I include_dir]* [--output_plt file] [-Wwarn]*
-                [--src] [--gui | --wx] [files_or_dirs] [-r dirs]
+                [-I include_dir]* [--output_plt file] [-Wwarn]* [--raw]
+                [--src] [--gui] [files_or_dirs] [-r dirs]
                 [--apps applications] [-o outfile]
 		[--build_plt] [--add_to_plt] [--remove_from_plt]
 		[--check_plt] [--no_check_plt] [--plt_info] [--get_warnings]
-                [--no_native] [--fullpath]
-    ]]></code>
+                [--dump_callgraph file] [--no_native] [--fullpath]
+                [--statistics]</code>
     <p>Options:</p>
     <taglist>
       <tag><c><![CDATA[files_or_dirs]]></c> (for backwards compatibility also
-        as: <c><![CDATA[-c files_or_dirs]]></c></tag>
+        as: <c><![CDATA[-c files_or_dirs]]></c>)</tag>
       <item>Use Dialyzer from the command line to detect defects in the
         specified files or directories containing <c><![CDATA[.erl]]></c> or
          <c><![CDATA[.beam]]></c> files, depending on the type of the
@@ -88,16 +86,14 @@
         analysis.</item>
       <tag><c><![CDATA[--apps applications]]></c></tag>
       <item>Option typically used when building or modifying a plt as in:
-        <code type="none"><![CDATA[
-           dialyzer --build_plt --apps erts kernel stdlib mnesia ...
-        ]]></code>
+        <code type="none">
+           dialyzer --build_plt --apps erts kernel stdlib mnesia ...</code>
         to conveniently refer to library applications corresponding to the
         Erlang/OTP installation. However, the option is general and can also
         be used during analysis in order to refer to Erlang/OTP applications.
         In addition, file or directory names can also be included, as in:
-        <code type="none"><![CDATA[
-           dialyzer --apps inets ssl ./ebin ../other_lib/ebin/my_module.beam
-        ]]></code></item>
+        <code type="none">
+           dialyzer --apps inets ssl ./ebin ../other_lib/ebin/my_module.beam</code></item>
       <tag><c><![CDATA[-o outfile]]></c> (or
         <c><![CDATA[--output outfile]]></c>)</tag>
       <item>When using Dialyzer from the command line, send the analysis
@@ -129,19 +125,16 @@
         that the plts are disjoint (i.e., do not have any module
         appearing in more than one plt).
         The plts are created in the usual way:
-        <code type="none"><![CDATA[
+        <code type="none">
            dialyzer --build_plt --output_plt plt_1 files_to_include
            ...
-           dialyzer --build_plt --output_plt plt_n files_to_include
-        ]]></code>
+           dialyzer --build_plt --output_plt plt_n files_to_include</code>
         and then can be used in either of the following ways:
-        <code type="none"><![CDATA[
-           dialyzer files_to_analyze --plts plt_1 ... plt_n
-        ]]></code>
+        <code type="none">
+           dialyzer files_to_analyze --plts plt_1 ... plt_n</code>
         or:
-        <code type="none"><![CDATA[
-           dialyzer --plts plt_1 ... plt_n -- files_to_analyze
-        ]]></code>
+        <code type="none">
+           dialyzer --plts plt_1 ... plt_n -- files_to_analyze</code>
         (Note the -- delimiter in the second case)</item>
       <tag><c><![CDATA[-Wwarn]]></c></tag>
       <item>A family of options which selectively turn on/off warnings
@@ -158,6 +151,9 @@
       <item>Make Dialyzer a bit more quiet.</item>
       <tag><c><![CDATA[--verbose]]></c></tag>
       <item>Make Dialyzer a bit more verbose.</item>
+      <tag><c><![CDATA[--statistics]]></c></tag>
+      <item>Prints information about the progress of execution (analysis phases,
+      time spent in each and size of the relative input).</item>
       <tag><c><![CDATA[--build_plt]]></c></tag>
       <item>The analysis starts from an empty plt and creates a new one from
         the files specified with <c><![CDATA[-c]]></c> and
@@ -201,9 +197,7 @@
        <tag><c><![CDATA[--fullpath]]></c></tag>
        <item>Display the full path names of files for which warnings are emitted.</item>
        <tag><c><![CDATA[--gui]]></c></tag>
-       <item>Use the gs-based GUI.</item>
-       <tag><c><![CDATA[--wx]]></c></tag>
-       <item>Use the wx-based GUI.</item>
+       <item>Use the GUI.</item>
     </taglist>
     <note>
       <p>* denotes that multiple occurrences of these options are possible.</p>
@@ -219,8 +213,6 @@
       <item>Suppress warnings for unused functions.</item>
       <tag><c><![CDATA[-Wno_improper_lists]]></c></tag>
       <item>Suppress warnings for construction of improper lists.</item>
-      <tag><c><![CDATA[-Wno_tuple_as_fun]]></c></tag>
-      <item>Suppress warnings for using tuples instead of funs.</item>
       <tag><c><![CDATA[-Wno_fun_app]]></c></tag>
       <item>Suppress warnings for fun applications that will fail.</item>
       <tag><c><![CDATA[-Wno_match]]></c></tag>
@@ -228,6 +220,16 @@
        match.</item>
       <tag><c><![CDATA[-Wno_opaque]]></c></tag>
       <item>Suppress warnings for violations of opaqueness of data types.</item>
+      <tag><c><![CDATA[-Wno_fail_call]]></c></tag>
+      <item>Suppress warnings for failing calls.</item>
+      <tag><c><![CDATA[-Wno_contracts]]></c></tag>
+      <item>Suppress warnings about invalid contracts.</item>
+      <tag><c><![CDATA[-Wno_behaviours]]></c></tag>
+      <item>Suppress warnings about behaviour callbacks which drift from the
+       published recommended interfaces.</item>
+      <tag><c><![CDATA[-Wno_undefined_callbacks]]></c></tag>
+      <item>Suppress warnings about behaviours that have no
+        <c>-callback</c> attributes for their callbacks.</item>
       <tag><c><![CDATA[-Wunmatched_returns]]></c>***</tag>
       <item>Include warnings for function calls which ignore a structured return
         value or do not match against one of many possible return
@@ -237,9 +239,6 @@
        exception.</item>
       <tag><c><![CDATA[-Wrace_conditions]]></c>***</tag>
       <item>Include warnings for possible race conditions.</item>
-      <tag><c><![CDATA[-Wbehaviours]]></c>***</tag>
-      <item>Include warnings about behaviour callbacks which drift from the
-       published recommended interfaces.</item>
       <tag><c><![CDATA[-Wunderspecs]]></c>***</tag>
       <item>Warn about underspecified functions
       (the -spec is strictly more allowing than the success typing).</item>
@@ -277,18 +276,22 @@
       </type>
       <desc>
         <p>Dialyzer GUI version.</p>
-        <code type="none"><![CDATA[
+        <code type="none">
 OptList  :: [Option]
 Option   :: {files,          [Filename :: string()]}
           | {files_rec,      [DirName :: string()]}
           | {defines,        [{Macro: atom(), Value : term()}]}
-          | {from,           src_code | byte_code} %% Defaults to byte_code
-          | {init_plt,       FileName :: string()}  %% If changed from default
+          | {from,           src_code | byte_code}   %% Defaults to byte_code
+          | {init_plt,       FileName :: string()}   %% If changed from default
           | {plts,           [FileName :: string()]} %% If changed from default
           | {include_dirs,   [DirName :: string()]}
           | {output_file,    FileName :: string()}
           | {output_plt,     FileName :: string()}
-          | {analysis_type,  'succ_typings' | 'plt_add' | 'plt_build' | 'plt_check' | 'plt_remove'}
+          | {analysis_type,  'succ_typings' |
+                             'plt_add' |
+                             'plt_build' |
+                             'plt_check' |
+                             'plt_remove'}
           | {warnings,       [WarnOpts]}
           | {get_warnings,   bool()}
 
@@ -299,14 +302,15 @@ WarnOpts :: no_return
           | no_match
           | no_opaque
           | no_fail_call
+          | no_contracts
+          | no_behaviours
+          | no_undefined_callbacks
+          | unmatched_returns
           | error_handling
           | race_conditions
-          | behaviours
-          | unmatched_returns
           | overspecs
           | underspecs
-          | specdiffs
-        ]]></code>
+          | specdiffs</code>
       </desc>
     </func>
     <func>
@@ -318,17 +322,30 @@ WarnOpts :: no_return
       </type>
       <desc>
         <p>Dialyzer command line version.</p>
-        <code type="none"><![CDATA[
+        <code type="none">
 Warnings :: [{Tag, Id, Msg}]
-Tag :: 'warn_return_no_exit' | 'warn_return_only_exit'
-     | 'warn_not_called' | 'warn_non_proper_list'
-     | 'warn_fun_app' | 'warn_matching'
-     | 'warn_failing_call' | 'warn_contract_types'
-     | 'warn_contract_syntax' | 'warn_contract_not_equal'
-     | 'warn_contract_subtype' | 'warn_contract_supertype'
+Tag :: 'warn_behaviour'
+     | 'warn_bin_construction'
+     | 'warn_callgraph'
+     | 'warn_contract_not_equal'
+     | 'warn_contract_range'
+     | 'warn_contract_subtype'
+     | 'warn_contract_supertype'
+     | 'warn_contract_syntax'
+     | 'warn_contract_types'
+     | 'warn_failing_call'
+     | 'warn_fun_app'
+     | 'warn_matching'
+     | 'warn_non_proper_list'
+     | 'warn_not_called'
+     | 'warn_opaque'
+     | 'warn_race_condition'
+     | 'warn_return_no_exit'
+     | 'warn_return_only_exit'
+     | 'warn_umatched_return'
+     | 'warn_undefined_callbacks'
 Id = {File :: string(), Line :: integer()}
-Msg = msg() -- Undefined
-]]></code>
+Msg = msg() -- Undefined</code>
       </desc>
     </func>
     <func>

@@ -1,7 +1,7 @@
 #
 # %CopyrightBegin%
 # 
-# Copyright Ericsson AB 2000-2009. All Rights Reserved.
+# Copyright Ericsson AB 2000-2012. All Rights Reserved.
 # 
 # The contents of this file are subject to the Erlang Public License,
 # Version 1.1, (the "License"); you may not use this file except in
@@ -147,23 +147,28 @@ cleanb:
 	rm -f errs core *~
 
 clean:
-	rm -f $(TARGET_FILES) $(GEN_FILES) $(APP_TARGET) $(APPUP_TARGET)
+	rm -f $(TARGET_FILES) $(GEN_FILES) $(APP_TARGET) $(APPUP_TARGET) IDL-GENERATED
 	rm -f errs core *~
 
 $(APP_TARGET): $(APP_SRC)
-	sed -e 's;%VSN%;$(VSN);' $< > $@
+	$(vsn_verbose)sed -e 's;%VSN%;$(VSN);' $< > $@
 
 $(APPUP_TARGET): $(APPUP_SRC) ../vsn.mk
-	sed -e 's;%VSN%;$(VSN);' $< > $@
+	$(vsn_verbose)sed -e 's;%VSN%;$(VSN);' $< > $@
 
 docs:
 
 # ----------------------------------------------------
 # Special Build Targets
 # ----------------------------------------------------
-$(GEN_ERL_FILES) $(GEN_HRL_FILES): CosFileTransfer.idl
-	erlc $(ERL_IDL_FLAGS) +'{cfgfile,"CosFileTransfer.cfg"}' CosFileTransfer.idl
-	mv $(LOCAL_HRL_FILES) $(EXTERNAL_INC_PATH)
+IDL-GENERATED: CosFileTransfer.idl
+	$(gen_verbose)erlc $(ERL_IDL_FLAGS) +'{cfgfile,"CosFileTransfer.cfg"}' CosFileTransfer.idl
+	$(V_at)mv $(LOCAL_HRL_FILES) $(EXTERNAL_INC_PATH)
+	$(V_at)>IDL-GENERATED
+
+$(GEN_FILES): IDL-GENERATED
+
+$(TARGET_FILES): IDL-GENERATED
 
 # ----------------------------------------------------
 # Release Target
@@ -171,12 +176,12 @@ $(GEN_ERL_FILES) $(GEN_HRL_FILES): CosFileTransfer.idl
 include $(ERL_TOP)/make/otp_release_targets.mk
 
 release_spec: opt
-	$(INSTALL_DIR) $(RELSYSDIR)/ebin
-	$(INSTALL_DATA) $(TARGET_FILES) $(APP_TARGET) $(APPUP_TARGET) $(RELSYSDIR)/ebin
-	$(INSTALL_DIR) $(RELSYSDIR)/src
-	$(INSTALL_DATA) $(GEN_FILES) $(IDL_FILES) $(RELSYSDIR)/src
-	$(INSTALL_DATA) $(ERL_FILES) $(HRL_FILES) $(GEN_ERL_FILES) $(IDL_FILES) $(RELSYSDIR)/src
-	$(INSTALL_DIR) $(RELSYSDIR)/include
-	$(INSTALL_DATA) $(GEN_HRL_FILES) $(RELSYSDIR)/include
+	$(INSTALL_DIR) "$(RELSYSDIR)/ebin"
+	$(INSTALL_DATA) $(TARGET_FILES) $(APP_TARGET) $(APPUP_TARGET) "$(RELSYSDIR)/ebin"
+	$(INSTALL_DIR) "$(RELSYSDIR)/src"
+	$(INSTALL_DATA) $(GEN_FILES) $(IDL_FILES) "$(RELSYSDIR)/src"
+	$(INSTALL_DATA) $(ERL_FILES) $(HRL_FILES) $(GEN_ERL_FILES) $(IDL_FILES) "$(RELSYSDIR)/src"
+	$(INSTALL_DIR) "$(RELSYSDIR)/include"
+	$(INSTALL_DATA) $(GEN_HRL_FILES) "$(RELSYSDIR)/include"
 
 release_docs_spec:

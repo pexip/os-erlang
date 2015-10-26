@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2003-2010. All Rights Reserved.
+%% Copyright Ericsson AB 2003-2013. All Rights Reserved.
 %%
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -19,56 +19,47 @@
 %%
 -module(testTCAP).
 
--export([compile/3,test/2,compile_asn1config/3,test_asn1config/0]).
+-export([compile/2,test/2,compile_asn1config/2,test_asn1config/0]).
 
 -include_lib("test_server/include/test_server.hrl").
 
+compile(Config, Options) ->
+    Files = ["Remote-Operations-Information-Objects",
+             "TCAPMessages",
+             "TCAPMessages-simple",
+             "TCAPPackage"],
+    asn1_test_lib:compile_all(Files, Config, Options),
+    asn1_test_lib:compile_erlang("TCAPPackage_msg", Config, []).
 
+compile_asn1config(Config, Options) ->
+    Files = ["Remote-Operations-Information-Objects",
+             "TCAPPackage"],
+    asn1_test_lib:compile_all(Files, Config, Options),
+    asn1_test_lib:compile_erlang("TCAPPackage_msg", Config, []).
 
-compile(Config,Rules,Opt) ->
-
-    ?line DataDir = ?config(data_dir,Config),
-    ?line OutDir = ?config(priv_dir,Config),
-    ?line true = code:add_patha(?config(priv_dir,Config)),
-    
-    ?line ok = asn1ct:compile(DataDir ++ "Remote-Operations-Information-Objects",[Rules,{outdir,OutDir}]++Opt),
-%    ?line ok = asn1ct:compile(DataDir ++ "Remote-Operations-Generic-ROS-PDUs",[Rules,{outdir,OutDir}]++Opt),
-%    ?line ok = asn1ct:compile(DataDir ++ "Remote-Operations-Useful-Definitions",[Rules,{outdir,OutDir}]++Opt),
-    ?line ok = asn1ct:compile(DataDir ++ "TCAPMessages",[Rules,{outdir,OutDir}]++Opt),
-    ?line ok = asn1ct:compile(DataDir ++ "TCAPMessages-simple",[Rules,{outdir,OutDir}]++Opt),
-    ?line ok = asn1ct:compile(DataDir ++ "TCAPPackage",[Rules,{outdir,OutDir}]++Opt),
-    ?line compile:file(filename:join([DataDir,"TCAPPackage_msg"]),[{i,OutDir},{outdir,OutDir}]).
-
-compile_asn1config(Config,Rules,Opt) ->
-    ?line DataDir = ?config(data_dir,Config),
-    ?line OutDir = ?config(priv_dir,Config),
-    ?line true = code:add_patha(?config(priv_dir,Config)),
-    
-    ?line ok = asn1ct:compile(DataDir ++ "TCAPPackage",
-			      [Rules,{outdir,OutDir},{i,DataDir}]++Opt).
-
-test(Erule,_Config) when Erule==ber;Erule==ber_bin;Erule==ber_bin_v2 ->
+test(Erule,_Config) ->
 %    ?line OutDir = ?config(priv_dir,Config),
     %% testing OTP-4798, open type encoded with indefinite length
-    ?line {ok,_Res} = asn1_wrapper:decode('TCAPMessages-simple','MessageType', val_OTP_4798(Erule)),
+    {ok,_Res} = 'TCAPMessages-simple':decode('MessageType',
+					     val_OTP_4798(Erule)),
+
     %% testing OTP-4799, absent optional open type
-    ?line {ok,_Res2} = asn1_wrapper:decode('TCAPMessages-simple','MessageType',val_OTP_4799(Erule)),
+    {ok,_Res2} = 'TCAPMessages-simple':decode('MessageType',
+					      val_OTP_4799(Erule)),
+
     %% testing vance shipley's problems. Parameterized object sets.
     ?line Val3 = 'TCAPPackage_msg':val('PackageType',unidirectional),
-    ?line {ok,Bytes3} = asn1_wrapper:encode('TCAPPackage','PackageType',Val3),
-    ?line {ok,Res3} = asn1_wrapper:decode('TCAPPackage','PackageType',Bytes3),
+    Res3 = enc_dec('PackageType', Val3),
     ?line ok = 'TCAPPackage_msg':check_result('PackageType',unidirectional,Res3),
 %%    ?line io:format("Res3:~n~p~n~n",[Res3]),
     
     ?line Val4 = 'TCAPPackage_msg':val('PackageType',abort),
-    ?line {ok,Bytes4} = asn1_wrapper:encode('TCAPPackage','PackageType',Val4),
-    ?line {ok,Res4} = asn1_wrapper:decode('TCAPPackage','PackageType',Bytes4),
+    Res4 = enc_dec('PackageType', Val4),
     ?line ok = 'TCAPPackage_msg':check_result('PackageType',abort,Res4),
 %%    ?line io:format("Res4:~n~p~n~n",[Res4]),
 
     ?line Val5 = 'TCAPPackage_msg':val('PackageType',response),
-    ?line {ok,Bytes5} = asn1_wrapper:encode('TCAPPackage','PackageType',Val5),
-    ?line {ok,Res5} = asn1_wrapper:decode('TCAPPackage','PackageType',Bytes5),
+    Res5 = enc_dec('PackageType', Val5),
     ?line ok = 'TCAPPackage_msg':check_result('PackageType',response,Res5).
 %%    ?line io:format("Res5:~n~p~n~n",[Res5]).
 
@@ -83,21 +74,26 @@ val_OTP_4799(_) ->
     <<100,16,73,4,41,182,36,0,108,8,163,6,2,1,29,2,1,27>>.
 
 test_asn1config() ->
-    ?line Val = 'TCAPPackage_msg':val('PackageType',queryWithPerm),
-    ?line {ok,B} = asn1_wrapper:encode('TCAPPackage','PackageType',Val),
-    ?line {ok,ExMsg}='TCAPPackage':decode_PackageType(list_to_binary(B)),
-    ?line {_,{_,_,_,{Key,ExVal}}}=ExMsg,
-    ?line {ok,_Parts}='TCAPPackage':decode_part(Key,ExVal),
+    Val = 'TCAPPackage_msg':val('PackageType', queryWithPerm),
+    {ok,B} = 'TCAPPackage':encode('PackageType', Val),
+    {ok,ExMsg}='TCAPPackage':decode_PackageType(B),
+    {_,{_,_,_,{Key,ExVal}}} = ExMsg,
+    {ok,_Parts} = 'TCAPPackage':decode_part(Key, ExVal),
     
-    ?line Val2 = 'TCAPPackage_msg':val('TransactionPDU'),
-    ?line {ok,B2} = 'TCAPPackage':encode('TransactionPDU',Val2),
-    ?line {ok,ExMsg2}='TCAPPackage':decode_TransactionPDU(list_to_binary(B2)),
-    ?line {_,_,_,{Key2,ExVal2}}=ExMsg2,
-    ?line {ok,_Parts2}='TCAPPackage':decode_part(Key2,ExVal2),
+    Val2 = 'TCAPPackage_msg':val('TransactionPDU'),
+    {ok,B2} = 'TCAPPackage':encode('TransactionPDU', Val2),
+    {ok,ExMsg2} = 'TCAPPackage':decode_TransactionPDU(B2),
+    {_,_,_,{Key2,ExVal2}} = ExMsg2,
+    {ok,_Parts2} = 'TCAPPackage':decode_part(Key2, ExVal2),
 
-    ?line Val3 = 'TCAPPackage_msg':val('PackageType',response),
-    ?line {ok,B3} = asn1_wrapper:encode('TCAPPackage','PackageType',Val3),
-    ?line {ok,ExMsg3}='TCAPPackage':decode_PackageType(list_to_binary(B3)),
-    ?line {_,{_,_,_,{Key3,ExVal3}}}=ExMsg3,
-    ?line {ok,_Parts3}='TCAPPackage':decode_part(Key3,ExVal3).
+    Val3 = 'TCAPPackage_msg':val('PackageType', response),
+    {ok,B3} = 'TCAPPackage':encode('PackageType', Val3),
+    {ok,ExMsg3} = 'TCAPPackage':decode_PackageType(B3),
+    {_,{_,_,_,{Key3,ExVal3}}} = ExMsg3,
+    {ok,_Parts3}='TCAPPackage':decode_part(Key3, ExVal3).
     
+enc_dec(T, V0) ->
+    M = 'TCAPPackage',
+    {ok,Enc} = M:encode(T, V0),
+    {ok,V} = M:decode(T, Enc),
+    V.

@@ -1,7 +1,7 @@
 /*
  * %CopyrightBegin%
  * 
- * Copyright Ericsson AB 2008-2011. All Rights Reserved.
+ * Copyright Ericsson AB 2008-2013. All Rights Reserved.
  * 
  * The contents of this file are subject to the Erlang Public License,
  * Version 1.1, (the "License"); you may not use this file except in
@@ -19,40 +19,75 @@
 
 #include <stdio.h>
 #include "wxe_driver.h"
+
 /* Platform specific initialisation stuff */ 
 #ifdef _MACOSX
 
 #include <Cocoa/Cocoa.h>
 #include <objc/objc-runtime.h>
 
+extern OSErr  CPSSetProcessName (ProcessSerialNumber *psn, char *processname);
+
 void * wxe_ps_init() 
 {
    ProcessSerialNumber psn;
-   NSAutoreleasePool *pool;
    // Enable GUI 
-   GetCurrentProcess(&psn);
-   TransformProcessType(&psn, kProcessTransformToForegroundApplication);
-   SetFrontProcess(&psn);
-   // Enable Cocoa calls from Carbon app
-   NSApplicationLoad();
+   if(!GetCurrentProcess(&psn)) {
+      TransformProcessType(&psn, kProcessTransformToForegroundApplication);
+#ifdef  MAC_OS_X_VERSION_10_6
+      [[NSRunningApplication currentApplication] activateWithOptions:
+       (NSApplicationActivateAllWindows | NSApplicationActivateIgnoringOtherApps)];
+#else 
+      SetFrontProcess(&psn);
+#endif
+   }
+   return (void *) 0;
+}
+
+int is_packaged_app() {
+   // Can get lost in when execing around, we use the name instead
+   /* if(mainBundle) { */
+   /*    return (CFBundleGetValueForInfoDictionaryKey(mainBundle, CFSTR("CFBundlePackageType")) != nil); */
+   /* } */
+#ifdef MAC_OS_X_VERSION_10_6
+   NSString *  appName = [[NSRunningApplication currentApplication] localizedName];
+   return (strncmp("beam", [appName UTF8String], 4) != 0);
+#else
+   return 0;
+#endif
+}
+
+void * wxe_ps_init2() {
+   NSAutoreleasePool *pool;
+   ProcessSerialNumber psn;
 
    // Setup and enable gui
    pool = [[NSAutoreleasePool alloc] init];
-
-   NSApplication *app = [NSApplication sharedApplication];
-   // Load and set icon
    
-   NSMutableString *file = [[NSMutableString alloc] init];
-   [file appendFormat:@"%s/%s", erl_wx_privdir, "erlang-logo64.png"];
-   NSImage *icon = [[NSImage alloc] initWithContentsOfFile: file];
-   [app setApplicationIconImage: icon];
+   if( !is_packaged_app() ) {
+      // Undocumented function (but no documented way of doing this exists)
+      char *app_title = getenv("WX_APP_TITLE");
+      if(!GetCurrentProcess(&psn)) {
+      	 CPSSetProcessName(&psn, app_title?app_title:"Erlang");
+      }
+      // Load and set icon
+      NSMutableString *file = [[NSMutableString alloc] init];
+      [file appendFormat:@"%s/%s", erl_wx_privdir, "erlang-logo64.png"];
+      NSImage *icon = [[NSImage alloc] initWithContentsOfFile: file];
+      [NSApp setApplicationIconImage: icon];
+   };
 
-   return (void *) pool;
+   return pool;
 }
+
 /* _MACOSX */
 #else
-void * wxe_ps_init() 
+void * wxe_ps_init()
 {
    return (void *) 0;
 }
-#endif 
+void * wxe_ps_init2()
+{
+   return (void *) 0;
+}
+#endif

@@ -62,6 +62,9 @@ static __inline__ void hipe_arch_glue_init(void)
 	.sdesc = {
 	    .bucket = { .hvalue = (unsigned long)nbif_return },
 	    .summary = (1<<8),
+	#ifdef DEBUG
+	    .dbg_F = am_return,
+	#endif
 	},
     };
     hipe_init_sdesc_table(&nbif_return_sdesc.sdesc);
@@ -185,6 +188,25 @@ hipe_call_from_native_is_recursive(Process *p, Eterm reg[])
     }
     return 0;
 }
+
+/* BEAM called native, which called BIF that returned trap
+ * Discard bif parameters.
+ * If tailcall, also clean up native stub continuation. */
+static __inline__ int
+hipe_trap_from_native_is_recursive(Process *p)
+{
+    Eterm nra = *(p->hipe.nsp++);
+
+    if (p->hipe.narity > NR_ARG_REGS) {
+	p->hipe.nsp += (p->hipe.narity - NR_ARG_REGS);
+    }
+    if (nra != (Eterm)nbif_return) {
+	*--(p->hipe.nsp) = nra;
+	return 1;
+    }
+    return 0;
+}
+
 
 /* Native makes a call which needs to unload the parameters.
    This differs from hipe_call_from_native_is_recursive() in

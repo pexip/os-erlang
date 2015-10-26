@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2004-2011. All Rights Reserved.
+%% Copyright Ericsson AB 2004-2014. All Rights Reserved.
 %%
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -20,7 +20,6 @@
 %%% Purpose:Test Suite for the 'qlc' module.
 %%%-----------------------------------------------------------------
 -module(qlc_SUITE).
--compile(r12).
 
 -define(QLC, qlc).
 -define(QLCs, "qlc").
@@ -73,11 +72,13 @@
 
 	  otp_5644/1, otp_5195/1, otp_6038_bug/1, otp_6359/1, otp_6562/1,
 	  otp_6590/1, otp_6673/1, otp_6964/1, otp_7114/1, otp_7238/1,
-	  otp_7232/1, otp_7552/1, otp_6674/1, otp_7714/1,
+	  otp_7232/1, otp_7552/1, otp_6674/1, otp_7714/1, otp_11758/1,
 
 	  manpage/1,
 
-	  backward/1, forward/1]).
+	  backward/1, forward/1,
+
+         eep37/1]).
 
 %% Internal exports.
 -export([bad_table_throw/1, bad_table_exit/1, default_table/1, bad_table/1,
@@ -133,7 +134,7 @@ groups() ->
        evaluator, string_to_handle, table, process_dies, sort,
        keysort, filesort, cache, cache_list, filter, info,
        nested_info, lookup1, lookup2, lookup_rec, indices,
-       pre_fun, skip_filters]},
+       pre_fun, skip_filters, eep37]},
      {table_impls, [], [ets, dets]},
      {join, [],
       [join_option, join_filter, join_lookup, join_merge,
@@ -141,7 +142,7 @@ groups() ->
      {tickets, [],
       [otp_5644, otp_5195, otp_6038_bug, otp_6359, otp_6562,
        otp_6590, otp_6673, otp_6964, otp_7114, otp_7232,
-       otp_7238, otp_7552, otp_6674, otp_7714]},
+       otp_7238, otp_7552, otp_6674, otp_7714, otp_11758]},
      {compat, [], [backward, forward]}].
 
 init_per_suite(Config) ->
@@ -2545,7 +2546,7 @@ info(Config) when is_list(Config) ->
           ets:delete(E)">>,
 
        <<"Q1 = qlc:q([W || W <- [a,b]]),
-          Q2 = qlc:q([Z || Z <- qlc:sort([1,2,300])], unique),
+          Q2 = qlc:q([Z || Z <- qlc:sort([55296,56296,57296])], unique),
           Q3 = qlc:q([{X,Y} || X <- qlc:keysort([2], [{1,a}]),
                                Y <- qlc:append([Q1, Q2]),
                                X > Y]),
@@ -2553,7 +2554,7 @@ info(Config) when is_list(Config) ->
            [{generate, P1, {list, [{1,a}]}},
             {generate, P2, {append, [{list, [a,b]},
                                     {qlc, T2, [{generate, P3,
-                                                {sort, {list,[1,2,300]},[]}}],
+                                                {sort, {list,[55296,56296,57296]},[]}}],
                                      [{cache,ets},{unique,true}]}]}},F],
            []} = i(Q3, cache_all),
           {tuple, _, [{var,_,'X'}, {var,_,'Y'}]} = binary_to_term(T1),
@@ -2563,7 +2564,7 @@ info(Config) when is_list(Config) ->
           {var, _, 'Z'} = binary_to_term(T2),
           {op, _, '>', {var, _, 'X'}, {var, _, 'Y'}} = binary_to_term(F),
           true = binary_to_list(<<
-           \"beginV1=qlc:q([Z||Z<-qlc:sort([1,2,300],[])],[{unique,true}]),\"
+           \"beginV1=qlc:q([Z||Z<-qlc:sort([55296,56296,57296],[])],[{unique,true}]),\"
            \"qlc:q([{X,Y}||X<-[{1,a}],Y<-qlc:append([[a,b],V1]),X>Y])end\"
               >>) == format_info(Q3, true)">>,
 
@@ -2966,13 +2967,6 @@ lookup1(Config) when is_list(Config) ->
        <<"A = 3,
           etsc(fun(E) ->
                 Q = qlc:q([X || X <- ets:table(E), A =:= erlang:element(1, X)]),
-                [{3,3}] = qlc:e(Q),
-                [3] = lookup_keys(Q)
-        end, [{1,a},{3,3}])">>,
-
-       <<"A = 3,
-          etsc(fun(E) ->
-                Q = qlc:q([X || X <- ets:table(E), A =:= {erlang,element}(1, X)]),
                 [{3,3}] = qlc:e(Q),
                 [3] = lookup_keys(Q)
         end, [{1,a},{3,3}])">>,
@@ -3440,12 +3434,6 @@ lookup2(Config) when is_list(Config) ->
                  [r] = qlc:e(Q),
                  [r] = lookup_keys(Q)
          end, [{keypos,1}], [#r{}])">>,
-       <<"etsc(fun(E) ->
-                Q = qlc:q([element(1, X) || X <- ets:table(E), 
-                                            {erlang,is_record}(X, r, 2)]),
-                 [r] = qlc:e(Q),
-                 [r] = lookup_keys(Q)
-         end, [{keypos,1}], [#r{}])">>,
        {cres,
         <<"etsc(fun(E) ->
                 Q = qlc:q([element(1, X) || X <- ets:table(E), 
@@ -3463,12 +3451,6 @@ lookup2(Config) when is_list(Config) ->
        <<"etsc(fun(E) ->
                 Q = qlc:q([element(1, X) || X <- ets:table(E), 
                                             is_record(X, r)]),
-                 [r] = qlc:e(Q),
-                 [r] = lookup_keys(Q)
-         end, [{keypos,1}], [#r{}])">>,
-       <<"etsc(fun(E) ->
-                Q = qlc:q([element(1, X) || X <- ets:table(E), 
-                                            {erlang,is_record}(X, r)]),
                  [r] = qlc:e(Q),
                  [r] = lookup_keys(Q)
          end, [{keypos,1}], [#r{}])">>
@@ -6082,21 +6064,6 @@ otp_6673(Config) when is_list(Config) ->
     ],
     ?line run(Config, Ts_RT),
 
-    %% Ulf Wiger provided a patch that makes QLC work with packages:
-    Dir = filename:join(?privdir, "p"),
-    ?line ok = filelib:ensure_dir(filename:join(Dir, ".")),
-    File = filename:join(Dir, "p.erl"),
-    ?line ok = file:write_file(File, 
-        <<"-module(p.p).\n"
-          "-export([q/0]).\n"
-          "-include_lib(\"stdlib/include/qlc.hrl\").\n"
-          "q() ->\n"
-          "    .qlc:q([X || X <- [1,2]]).">>),
-    ?line {ok, 'p.p'} = compile:file(File, [{outdir,Dir}]),
-    ?line code:purge('p.p'),
-    ?line {module, 'p.p'} = code:load_abs(filename:rootname(File), 'p.p'),
-    ?line [1,2] = qlc:e(p.p:q()),
-
     ok.
 
 otp_6964(doc) ->
@@ -6118,6 +6085,7 @@ otp_6964(Config) when is_list(Config) ->
                       qlc:e(Q, [{max_list_size,64*1024},{tmpdir_usage,Use}])
               end,
           D = erlang:system_flag(backtrace_depth, 0),
+      try
           20000 = length(F(allowed)),
           ErrReply = F(not_allowed),
           {error, qlc, {tmpdir_usage,joining}} = ErrReply,
@@ -6129,8 +6097,10 @@ otp_6964(Config) when is_list(Config) ->
           20000 = length(F(info_msg)),
           {info, joining} = qlc_SUITE:read_error_logger(),
           20000 = length(F(error_msg)),
-          {error, joining} = qlc_SUITE:read_error_logger(),
-          _ = erlang:system_flag(backtrace_depth, D),
+          {error, joining} = qlc_SUITE:read_error_logger()
+      after
+          _ = erlang:system_flag(backtrace_depth, D)
+      end,
           qlc_SUITE:uninstall_error_logger()">>],
     ?line run(Config, T1),
 
@@ -6632,19 +6602,19 @@ otp_7232(Config) when is_list(Config) ->
              {call,_,
                {remote,_,{atom,_,qlc},{atom,_,sort}},
                [{cons,_,
-                      {'fun',_,{function,math,sqrt,_}},
+                      {'fun',_,{function,{atom,_,math},{atom,_,sqrt},_}},
                       {cons,_,
                             {string,_,\"<0.4.1>\"}, % could use list_to_pid..
                             {cons,_,{string,_,\"#Ref<\"++_},{nil,_}}}},
                 {nil,_}]} = 
               qlc:info(qlc:sort(L),{format,abstract_code})">>,
 
-          <<"Q1 = qlc:q([X || X <- [1000,2000]]),
+          <<"Q1 = qlc:q([X || X <- [55296,56296]]),
              Q = qlc:sort(Q1, {order, fun(A,B)-> A>B end}),
-             \"qlc:sort([1000,2000],[{order,fun'-function/0-fun-2-'/2}])\" = 
+             \"qlc:sort([55296,56296],[{order,fun'-function/0-fun-2-'/2}])\" =
                 format_info(Q, true),
              AC = qlc:info(Q, {format, abstract_code}),
-             \"qlc:sort([1000,2000], [{order,fun '-function/0-fun-2-'/2}])\" = 
+             \"qlc:sort([55296,56296], [{order,fun '-function/0-fun-2-'/2}])\" =
                 binary_to_list(iolist_to_binary(erl_pp:expr(AC)))">>,
 
          %% OTP-7234. erl_parse:abstract() handles bit strings
@@ -6695,10 +6665,23 @@ otp_7714(Config) when is_list(Config) ->
                            {A,I1} <- ets:table(E1),
                            {B,I2} <- ets:table(E2),
                            I1 =:= I2],{join,merge}),
-             [{a,1},{a,2},{a,3}] = qlc:e(Q),
+             [{a,1},{a,2},{a,3}] = lists:sort(qlc:e(Q)),
              ets:delete(E1),
              ets:delete(E2)">>],
     ?line run(Config, Ts).
+
+otp_11758(doc) ->
+    "OTP-11758. Bug.";
+otp_11758(suite) -> [];
+otp_11758(Config) when is_list(Config) ->
+    Ts = [<<"T = ets:new(r, [{keypos, 2}]),
+             L = [{rrr, xxx, aaa}, {rrr, yyy, bbb}],
+             true = ets:insert(T, L),
+             QH = qlc:q([{rrr, B, C} || {rrr, B, C} <- ets:table(T),
+                              (B =:= xxx) or (B =:= yyy) and (C =:= aaa)]),
+             [{rrr,xxx,aaa}] = qlc:e(QH),
+             ets:delete(T)">>],
+    run(Config, Ts).
 
 otp_6674(doc) ->
     "OTP-6674. match/comparison.";
@@ -6760,7 +6743,7 @@ otp_6674(Config) when is_list(Config) ->
                      [{join,lookup}]}}],
             []} = qlc:info(Q, {format,debug}),
           {0,1,0,0} = join_info(Q),
-          [{1.0,1},{2,2}] = qlc:e(Q),
+          [{1.0,1},{2,2}] = lists:sort(qlc:e(Q)),
           ets:delete(E1), 
           ets:delete(E2)">>,
        <<"E1 = ets:new(join, [ordered_set]),
@@ -7399,70 +7382,37 @@ backward(doc) ->
     "OTP-6674. Join info and extra constants.";
 backward(suite) -> [];
 backward(Config) when is_list(Config) ->
-    case try_old_join_info(Config) of
-        ok ->
-            ok;
-        Reply ->
-            Reply
-    end.
-
--ifdef(debug).
-try_old_join_info(_Config) ->
+    try_old_join_info(Config),
     ok.
--else.
+
 try_old_join_info(Config) ->
-    case ?t:is_release_available("r12b") of
-        true ->
-            %% Check join info for handlers of extra constants. Start R12B-0.
-            ?line {ok, R12} = start_node_rel(r12, r12b, slave),
-            File  = filename("handle.erl", Config),
-            ?line file:write_file(File, 
-                <<"-module(handle).\n"
-                  "-export([create_handle/0, lookup_handle/0]).\n"
-                  "-include_lib(\"stdlib/include/qlc.hrl\").\n"
-                  "create_handle() ->\n"
-                  "  H1 = qlc:sort([{192.0,1,a},{192.0,2,b},{192.0,3,c}]),\n"
-                  "  qlc:q([{X, Y} || {B,X,_} <- H1,\n"
-                  "                   B =:= 192.0,\n"
-                  "                   {Y} <- [{0},{1},{2}],\n"
-                  "                   X == Y]).\n",
-                  "\n",
-                  "lookup_handle() ->\n"
-                  "  E = qlc_SUITE:table([{1,a},{2,b},{3,c}], 1, [1]),\n"
-                  "  qlc:q([{X, Y} || {X,_} <- E,\n"
-                  "                   {Y} <- [{0},{1},{2}],\n"
-                  "                   X =:= Y]).\n">>),
-            ?line {ok, handle} = rpc:call(R12, compile, file,
-                                          [File, [{outdir,?privdir}]]),
-            ?line {module, handle} = rpc:call(R12, code, load_abs,
-                                              [filename:rootname(File)]),
-            ?line H = rpc:call(R12, handle, create_handle, []),
-            ?line {module, handle} = code:load_abs(filename:rootname(File)),
-            ?line {block,0,
-                     [{match,_,_,
-                       {call,_,_,
-                        [{lc,_,_,
-                          [_,
-                           {op,_,'=:=',
-                            {float,_,192.0},
-                            {call,_,{atom,_,element},[{integer,_,1},_]}}]}]}},
-                      _,_,
-                      {call,_,_,
-                       [{lc,_,_,
-                         [_,
-                          {op,_,'=:=',{var,_,'B'},{float,_,192.0}},
-                          {op,_,'==',{var,_,'X'},{var,_,'Y'}}]}]}]} 
-                    = qlc:info(H,{format,abstract_code}),
-            ?line [{1,1},{2,2}] = qlc:e(H),
-            ?line H2 = rpc:call(R12, handle, lookup_handle, []),
-            ?line {qlc,_,[{generate,_,{qlc,_,_,[{join,lookup}]}},_],[]} =
-                qlc:info(H2, {format,debug}),
-            ?line [{1,1},{2,2}] = qlc:e(H2),
-            stop_node(R12);
-	false ->
-	    ?line {skipped, "No support for old node"}
-    end.
--endif.
+    %% Check join info for handlers of extra constants.
+    File = filename:join(?datadir, "join_info_compat.erl"),
+    M = join_info_compat,
+    {ok, M} = compile:file(File, [{outdir, ?datadir}]),
+    {module, M} = code:load_abs(filename:rootname(File)),
+    H = M:create_handle(),
+    {block,0,
+     [{match,_,_,
+       {call,_,_,
+        [{lc,_,_,
+          [_,
+           {op,_,'=:=',
+            {float,_,192.0},
+            {call,_,{atom,_,element},[{integer,_,1},_]}}]}]}},
+      _,_,
+      {call,_,_,
+       [{lc,_,_,
+         [_,
+          {op,_,'=:=',{var,_,'B'},{float,_,192.0}},
+          {op,_,'==',{var,_,'X'},{var,_,'Y'}}]}]}]}
+        = qlc:info(H,{format,abstract_code}),
+    [{1,1},{2,2}] = qlc:e(H),
+
+    H2 = M:lookup_handle(),
+    {qlc,_,[{generate,_,{qlc,_,_,[{join,lookup}]}},_],[]} =
+        qlc:info(H2, {format,debug}),
+    [{1,1},{2,2}] = qlc:e(H2).
 
 forward(doc) ->
     "";
@@ -7490,6 +7440,14 @@ forward(Config) when is_list(Config) ->
 
      ],
     ?line run(Config, Ts),
+    ok.
+
+eep37(Config) when is_list(Config) ->
+    Ts = [
+        <<"H = (fun _Handle() -> qlc:q([X || X <- []]) end)(),
+           [] = qlc:eval(H)">>
+    ],
+    run(Config, Ts),
     ok.
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -7958,15 +7916,23 @@ run_test(Config, Extra, {cres, Body, Opts, ExpectedCompileReturn}) ->
             ok
     end,
 
-    Ms = erlang:process_info(self(),messages),
-    After = {get(), pps(), ets:all(), Ms},
-    code:purge(Mod),
-    case {R, After} of
-        {ok, Before} -> ok;
-        _ -> expected({ok,Before}, {R,After}, SourceFile)
-    end;
+    wait_for_expected(R, Before, SourceFile, true),
+    code:purge(Mod);
 run_test(Config, Extra, Body) ->
     run_test(Config, Extra, {cres,Body,[]}).
+
+wait_for_expected(R, Before, SourceFile, Wait) ->
+    Ms = erlang:process_info(self(),messages),
+    After = {get(), pps(), ets:all(), Ms},
+    case {R, After} of
+        {ok, Before} ->
+            ok;
+        _ when Wait ->
+            timer:sleep(1000),
+            wait_for_expected(R, Before, SourceFile, false);
+        _ ->
+            expected({ok,Before}, {R,After}, SourceFile)
+    end.
 
 unload_pt() ->
     erlang:garbage_collect(), % get rid of references to qlc_pt...
@@ -8126,27 +8092,6 @@ fail(Source) ->
     ?t:fail({failed,testcase,on,Source}).
 
 %% Copied from global_SUITE.erl.
-
-start_node_rel(Name, Rel, How) ->
-    {Release, Compat} = case Rel of
-                            this ->
-                                {[this], "+R8"};
-                            Rel when is_atom(Rel) ->
-                                {[{release, atom_to_list(Rel)}], ""};
-                            RelList ->
-			       {RelList, ""}
-		       end,
-    ?line Pa = filename:dirname(code:which(?MODULE)),
-    ?line Res = test_server:start_node(Name, How, 
-                                       [{args,
-                                         Compat ++ 
-                                         " -kernel net_setuptime 100 "
-                                         " -pa " ++ Pa},
-                                        {erl, Release}]),
-    Res.
-
-stop_node(Node) ->
-    ?line ?t:stop_node(Node).
 
 install_error_logger() ->
     error_logger:add_report_handler(?MODULE, self()).

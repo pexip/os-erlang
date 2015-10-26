@@ -1,7 +1,7 @@
 /*
  * %CopyrightBegin%
  *
- * Copyright Ericsson AB 2001-2011. All Rights Reserved.
+ * Copyright Ericsson AB 2001-2013. All Rights Reserved.
  *
  * The contents of this file are subject to the Erlang Public License,
  * Version 1.1, (the "License"); you may not use this file except in
@@ -46,7 +46,7 @@ static void erts_init_fp_exception(void)
 {
     /* XXX: the wrappers prevent using a pthread destructor to
        deallocate the key's value; so when/where do we do that? */
-    erts_tsd_key_create(&fpe_key);
+    erts_tsd_key_create(&fpe_key,"fp_exception");
 }
 
 void erts_thread_init_fp_exception(void)
@@ -152,7 +152,7 @@ static int mask_sse2(void)
 
 #if defined(__x86_64__)
 
-static inline int cpu_has_sse2(void) { return 1; }
+static ERTS_INLINE int cpu_has_sse2(void) { return 1; }
 
 #else /* !__x86_64__ */
 
@@ -179,7 +179,7 @@ static unsigned int xor_eflags(unsigned int mask)
     return eax;
 }
 
-static __inline__ unsigned int cpuid_eax(unsigned int op)
+static ERTS_INLINE unsigned int cpuid_eax(unsigned int op)
 {
     unsigned int eax, save_ebx;
 
@@ -195,7 +195,7 @@ static __inline__ unsigned int cpuid_eax(unsigned int op)
     return eax;
 }
 
-static __inline__ unsigned int cpuid_edx(unsigned int op)
+static ERTS_INLINE unsigned int cpuid_edx(unsigned int op)
 {
     unsigned int eax, edx, save_ebx;
  
@@ -215,7 +215,7 @@ static __inline__ unsigned int cpuid_edx(unsigned int op)
  * register on the Intel486 processor to generate alignment
  * faults. This bit cannot be set on the Intel386 processor.
  */
-static __inline__ int is_386(void)
+static ERTS_INLINE int is_386(void)
 {
     return ((xor_eflags(1<<18) >> 18) & 1) == 0;
 }
@@ -223,7 +223,7 @@ static __inline__ int is_386(void)
 /* Newer x86 processors have a CPUID instruction, as indicated by
  * the ID bit (#21) in EFLAGS being modifiable.
  */
-static __inline__ int has_CPUID(void)
+static ERTS_INLINE int has_CPUID(void)
 {
     return (xor_eflags(1<<21) >> 21) & 1;
 }
@@ -735,7 +735,7 @@ void erts_sys_unblock_fpe(int unmasked)
 
 /* 
  ** Convert a double to ascii format 0.dddde[+|-]ddd
- ** return number of characters converted
+ ** return number of characters converted or -1 if error.
  **
  ** These two functions should maybe use localeconv() to pick up
  ** the current radix character, but since it is uncertain how
@@ -745,18 +745,19 @@ void erts_sys_unblock_fpe(int unmasked)
  */
 
 int
-sys_double_to_chars(double fp, char *buf)
+sys_double_to_chars_ext(double fp, char *buffer, size_t buffer_size, size_t decimals)
 {
-    char *s = buf;
-    
-    (void) sprintf(buf, "%.20e", fp);
+    char *s = buffer;
+
+    if (erts_snprintf(buffer, buffer_size, "%.*e", decimals, fp) >= buffer_size)
+        return -1;
     /* Search upto decimal point */
     if (*s == '+' || *s == '-') s++;
     while (ISDIGIT(*s)) s++;
     if (*s == ',') *s++ = '.'; /* Replace ',' with '.' */
     /* Scan to end of string */
     while (*s) s++;
-    return s-buf; /* i.e strlen(buf) */
+    return s-buffer; /* i.e strlen(buffer) */
 }
 
 /* Float conversion */
@@ -831,6 +832,8 @@ sys_chars_to_double(char* buf, double* fp)
     return 0;
 }
 
+#ifdef USE_MATHERR
+
 int
 matherr(struct exception *exc)
 {
@@ -841,3 +844,5 @@ matherr(struct exception *exc)
 #endif
     return 1;
 }
+
+#endif

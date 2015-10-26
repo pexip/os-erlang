@@ -1,10 +1,10 @@
-<?xml version="1.0" encoding="latin1" ?>
+<?xml version="1.0" encoding="utf-8" ?>
 <!DOCTYPE erlref SYSTEM "erlref.dtd">
 
 <erlref>
   <header>
     <copyright>
-      <year>1997</year><year>2011</year>
+      <year>1997</year><year>2013</year>
       <holder>Ericsson AB. All Rights Reserved.</holder>
     </copyright>
     <legalnotice>
@@ -96,37 +96,52 @@ do_recv(Sock, Bs) ->
           can be either a hostname, or an IP address.</p>
         <p>The available options are:</p>
         <taglist>
-          <tag><c>list</c></tag>
-          <item>
-            <p>Received <c>Packet</c> is delivered as a list.</p>
-          </item>
-          <tag><c>binary</c></tag>
-          <item>
-            <p>Received <c>Packet</c> is delivered as a binary.</p>
-          </item>
-          <tag><c>{ip, ip_address()}</c></tag>
+         <tag><c>{ip, ip_address()}</c></tag>
           <item>
             <p>If the host has several network interfaces, this option
               specifies which one to use.</p>
           </item>
-          <tag><c>{port, Port}</c></tag>
+
+		  <tag><c>{ifaddr, ip_address()}</c></tag>
           <item>
-            <p>Specify which local port number to use.</p>
-          </item>
+			  <p>Same as <c>{ip, ip_address()}</c>. If the host has several network interfaces, this option
+              specifies which one to use.</p>
+		  </item>
+
           <tag><c>{fd, integer() >= 0}</c></tag>
           <item>
             <p>If a socket has somehow been connected without using
               <c>gen_tcp</c>, use this option to pass the file
-              descriptor for it.</p>
+              descriptor for it. If <c>{ip, ip_address()}</c>
+              and/or <c>{port, port_number()}</c> is combined with
+              this option the fd will be bound to the given interface
+              and port before connecting. If these options are not given
+              it is assumed that the fd is already bound appropriately.
+            </p>
           </item>
-          <tag><c>inet6</c></tag>
-          <item>
-            <p>Set up the socket for IPv6.</p>
-          </item>
+
           <tag><c>inet</c></tag>
           <item>
             <p>Set up the socket for IPv4.</p>
           </item>
+
+		  <tag><c>inet6</c></tag>
+		  <item>
+            <p>Set up the socket for IPv6.</p>
+          </item>
+
+          <tag><c>{port, Port}</c></tag>
+          <item>
+            <p>Specify which local port number to use.</p>
+          </item>
+
+		  <tag><c>{tcp_module, module()}</c></tag>
+		  <item> <p>
+				  Override which callback module is used. Defaults to
+				  <c>inet_tcp</c> for IPv4 and <c>inet6_tcp</c> for IPv6.
+			  </p>
+		  </item>
+
           <tag><c>Opt</c></tag>
           <item>
             <p>See
@@ -138,6 +153,12 @@ do_recv(Sock, Bs) ->
           as messages:</p>
         <code type="none">
 {tcp, Socket, Data}</code>
+        <p>If the socket is in <c>{active, N}</c> mode (see <seealso marker="inet#setopts/2">
+          inet:setopts/2</seealso> for details) and its message counter
+          drops to 0, the following message is delivered to indicate that the
+          socket has transitioned to passive (<c>{active, false}</c>) mode:</p>
+        <code type="none">
+{tcp_passive, Socket}</code>
         <p>If the socket is closed, the following message is delivered:</p>
         <code type="none">
 {tcp_closed, Socket}</code>
@@ -197,6 +218,13 @@ do_recv(Sock, Bs) ->
               <c>gen_tcp</c>, use this option to pass the file
               descriptor for it.</p>
           </item>
+
+		  <tag><c>{ifaddr, ip_address()}</c></tag>
+          <item>
+			  <p>Same as <c>{ip, ip_address()}</c>. If the host has several network interfaces, this option
+              specifies which one to use.</p>
+		  </item>
+
           <tag><c>inet6</c></tag>
           <item>
             <p>Set up the socket for IPv6.</p>
@@ -205,6 +233,14 @@ do_recv(Sock, Bs) ->
           <item>
             <p>Set up the socket for IPv4.</p>
           </item>
+
+		  <tag><c>{tcp_module, module()}</c></tag>
+		  <item> <p>
+				  Override which callback module is used. Defaults to
+				  <c>inet_tcp</c> for IPv4 and <c>inet6_tcp</c> for IPv6.
+			  </p>
+		  </item>
+
           <tag><c>Opt</c></tag>
           <item>
             <p>See
@@ -235,7 +271,9 @@ do_recv(Sock, Bs) ->
         <p>Returns <c>{ok, <anno>Socket</anno>}</c> if a connection is established,
           or <c>{error, closed}</c> if <c><anno>ListenSocket</anno></c> is closed,
           or <c>{error, timeout}</c> if no connection is established
-          within the specified time. May also return a POSIX error
+          within the specified time,
+          or <c>{error, system_limit}</c> if all available ports in the
+          Erlang emulator are in use. May also return a POSIX error
           value if something else goes wrong, see inet(3) for possible
           error values.</p>
         <p>Packets can be sent to the returned socket <c><anno>Socket</anno></c>
@@ -297,7 +335,7 @@ do_recv(Sock, Bs) ->
           <c><anno>Socket</anno></c>. The controlling process is the process which
           receives messages from the socket. If called by any other
           process than the current controlling process,
-          <c>{error, eperm}</c> is returned.</p>
+          <c>{error, not_owner}</c> is returned.</p>
       </desc>
     </func>
     <func>

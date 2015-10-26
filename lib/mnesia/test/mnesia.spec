@@ -1,4 +1,4 @@
-{suites,"../mnesia_test",all}.
+{suites,"../mnesia_test",[mnesia_SUITE]}.
 {skip_cases,"../mnesia_test",mnesia_measure_test,
             [ram_meter],
             "Takes to long time"}.
@@ -41,9 +41,6 @@
             "Takes too much time and memory"}.
 {skip_cases,"../mnesia_test",mnesia_measure_test,
             [measure_all_api_functions],
-            "Not yet implemented"}.
-{skip_cases,"../mnesia_test",mnesia_measure_test,
-            [mnemosyne_vs_mnesia_kernel],
             "Not yet implemented"}.
 {skip_cases,"../mnesia_test",mnesia_examples_test,
             [company],

@@ -1,7 +1,7 @@
 /*
  * %CopyrightBegin%
  *
- * Copyright Ericsson AB 2004-2011. All Rights Reserved.
+ * Copyright Ericsson AB 2004-2013. All Rights Reserved.
  *
  * The contents of this file are subject to the Erlang Public License,
  * Version 1.1, (the "License"); you may not use this file except in
@@ -25,7 +25,7 @@
 #include "hipe_x86_asm.h"	/* for NR_ARG_REGS */
 
 /* uncomment to simulate & test what the initial PowerPC port will do */
-//#define SKIP_YOUNGEST_FRAME
+/* #define SKIP_YOUNGEST_FRAME */
 
 struct nstack_walk_state {
 #ifdef SKIP_YOUNGEST_FRAME
@@ -69,6 +69,11 @@ nstack_walk_init_sdesc(const Process *p, struct nstack_walk_state *state)
 	nstkarity = 0;
     state->sdesc0[0].summary = (0 << 9) | (0 << 8) | nstkarity;
     state->sdesc0[0].livebits[0] = 0;
+# ifdef DEBUG
+    state->sdesc0[0].dbg_M = 0;
+    state->sdesc0[0].dbg_F = am_undefined;
+    state->sdesc0[0].dbg_A = 0;
+# endif
     /* XXX: this appears to prevent a gcc-4.1.1 bug on x86 */
     __asm__ __volatile__("" : : "m"(*state) : "memory");
     return &state->sdesc0[0];

@@ -1,7 +1,7 @@
 /*
  * %CopyrightBegin%
  *
- * Copyright Ericsson AB 2009-2011. All Rights Reserved.
+ * Copyright Ericsson AB 2009-2014. All Rights Reserved.
  *
  * The contents of this file are subject to the Erlang Public License,
  * Version 1.1, (the "License"); you may not use this file except in
@@ -40,7 +40,7 @@ typedef struct
     int ref_cnt;
     CallInfo* call_history;
     NifModPrivData* nif_mod;
-    union { ErlNifResourceType* t; long l; } rt_arr[2];
+    union { ErlNifResourceType* t; void* vp; } rt_arr[2];
 } PrivData;
 
 /*
@@ -92,6 +92,23 @@ struct binary_resource {
     unsigned char* data;
     unsigned size;
 };
+
+static int get_pointer(ErlNifEnv* env, ERL_NIF_TERM term, void** pp)
+{
+    ErlNifUInt64 i64;
+    int r = enif_get_uint64(env, term, &i64);
+    if (r) {
+	*pp = (void*)i64;
+    }
+    return r;
+}
+
+static ERL_NIF_TERM make_pointer(ErlNifEnv* env, void* p)
+{
+    ErlNifUInt64 i64 = (ErlNifUInt64) p;
+    return enif_make_uint64(env, i64);
+}
+
 
 static int load(ErlNifEnv* env, void** priv_data, ERL_NIF_TERM load_info)
 {
@@ -224,15 +241,15 @@ static ERL_NIF_TERM call_history(ErlNifEnv* env, int argc, const ERL_NIF_TERM ar
 static ERL_NIF_TERM hold_nif_mod_priv_data(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[])
 {
     PrivData* data = (PrivData*) enif_priv_data(env);
-    unsigned long ptr_as_ulong;
+    void* ptr;
     
-    if (!enif_get_ulong(env,argv[0],&ptr_as_ulong)) {
+    if (!get_pointer(env,argv[0],&ptr)) {
 	return enif_make_badarg(env);
     }
     if (data->nif_mod != NULL) {
 	NifModPrivData_release(data->nif_mod);
     }
-    data->nif_mod = (NifModPrivData*) ptr_as_ulong;    
+    data->nif_mod = (NifModPrivData*) ptr;    
     return enif_make_int(env,++(data->nif_mod->ref_cnt)); 
 }
 
@@ -345,8 +362,13 @@ static int test_double(ErlNifEnv* env, double d1)
 
 #define TAG_BITS        4
 #define SMALL_BITS	(sizeof(void*)*8 - TAG_BITS)
+#ifdef _WIN64
+#define MAX_SMALL	((1LL << (SMALL_BITS-1))-1)
+#define MIN_SMALL	(-(1LL << (SMALL_BITS-1)))
+#else
 #define MAX_SMALL	((1L << (SMALL_BITS-1))-1)
 #define MIN_SMALL	(-(1L << (SMALL_BITS-1)))
+#endif
 
 static ERL_NIF_TERM type_test(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[])
 {
@@ -691,7 +713,7 @@ static ERL_NIF_TERM last_resource_dtor_call(ErlNifEnv* env, int argc, const ERL_
 	memcpy(enif_make_new_binary(env, resource_dtor_last_sz, &bin),
 	       resource_dtor_last_data, resource_dtor_last_sz);
 	ret = enif_make_tuple3(env,
-				enif_make_long(env, (long)resource_dtor_last),
+				make_pointer(env, resource_dtor_last),
 				bin,  
 				enif_make_int(env, resource_dtor_cnt));
     }
@@ -712,40 +734,40 @@ static ERL_NIF_TERM get_resource_type(ErlNifEnv* env, int argc, const ERL_NIF_TE
     if (!enif_get_int(env, argv[0], &ix) || ix >= 2) {
 	return enif_make_badarg(env);
     }
-    return enif_make_long(env, data->rt_arr[ix].l);
+    return make_pointer(env, data->rt_arr[ix].vp);
 }
 
 static ERL_NIF_TERM alloc_resource(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[])
 {
     ErlNifBinary data_bin;
-    union { ErlNifResourceType* t; long l; } type;
-    union { void* p; long l;} data;
-    if (!enif_get_long(env, argv[0], &type.l)
+    union { ErlNifResourceType* t; void* vp; } type;
+    void* data;
+    if (!get_pointer(env, argv[0], &type.vp)
 	|| !enif_inspect_binary(env, argv[1], &data_bin)
-	|| (data.p = enif_alloc_resource(type.t, data_bin.size))==NULL) {
+	|| (data = enif_alloc_resource(type.t, data_bin.size))==NULL) {
 
 	return enif_make_badarg(env);
     }
-    memcpy(data.p, data_bin.data, data_bin.size);
-    return enif_make_long(env, data.l);
+    memcpy(data, data_bin.data, data_bin.size);
+    return make_pointer(env, data);
 }
 
 static ERL_NIF_TERM make_resource(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[])
 {
-    union { void* p; long l; } data;
-    if (!enif_get_long(env, argv[0], &data.l)) {
+    void* data;
+    if (!get_pointer(env, argv[0], &data)) {
 	return enif_make_badarg(env);
     }
-    return enif_make_resource(env, data.p);
+    return enif_make_resource(env, data);
 }
 
 static ERL_NIF_TERM make_new_resource(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[])
 {
     ErlNifBinary data_bin;
-    union { ErlNifResourceType* t; long l; } type;
+    union { ErlNifResourceType* t; void* vp; } type;
     void* data;
     ERL_NIF_TERM ret;
-    if (!enif_get_long(env, argv[0], &type.l)
+    if (!get_pointer(env, argv[0], &type.vp)
 	|| !enif_inspect_binary(env, argv[1], &data_bin)
 	|| (data = enif_alloc_resource(type.t, data_bin.size))==NULL) {
 
@@ -760,7 +782,7 @@ static ERL_NIF_TERM make_new_resource(ErlNifEnv* env, int argc, const ERL_NIF_TE
 static ERL_NIF_TERM make_new_resource_binary(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[])
 {
     ErlNifBinary data_bin;
-    union { struct binary_resource* p; void* vp; long l; } br;
+    union { struct binary_resource* p; void* vp; } br;
     void* buf;
     ERL_NIF_TERM ret;
     if (!enif_inspect_binary(env, argv[0], &data_bin)
@@ -776,7 +798,7 @@ static ERL_NIF_TERM make_new_resource_binary(ErlNifEnv* env, int argc, const ERL
     memcpy(br.p->data, data_bin.data, data_bin.size);    
     ret = enif_make_resource_binary(env, br.vp, br.p->data, br.p->size);    
     enif_release_resource(br.p);
-    return enif_make_tuple2(env, enif_make_long(env,br.l), ret);
+    return enif_make_tuple2(env, make_pointer(env,br.vp), ret);
 }
 
 static void binary_resource_dtor(ErlNifEnv* env, void* obj)
@@ -791,33 +813,33 @@ static void binary_resource_dtor(ErlNifEnv* env, void* obj)
 static ERL_NIF_TERM get_resource(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[])
 {
     ErlNifBinary data_bin;
-    union { ErlNifResourceType* t; long l; } type;
-    union { void* p; long l; } data;
+    union { ErlNifResourceType* t; void* vp; } type;
+    void* data;
 
     type.t = NULL;
     if (enif_is_identical(argv[0], atom_binary_resource_type)) {
 	type.t = binary_resource_type;
     }
     else {
-	enif_get_long(env, argv[0], &type.l);
+	get_pointer(env, argv[0], &type.vp);
     }
     if (type.t == NULL 
-	|| !enif_get_resource(env, argv[1], type.t, &data.p)) {
+	|| !enif_get_resource(env, argv[1], type.t, &data)) {
 	return enif_make_badarg(env);
     }
-    enif_alloc_binary(enif_sizeof_resource(data.p), &data_bin);    
-    memcpy(data_bin.data, data.p, data_bin.size);
-    return enif_make_tuple2(env, enif_make_long(env,data.l),
+    enif_alloc_binary(enif_sizeof_resource(data), &data_bin);    
+    memcpy(data_bin.data, data, data_bin.size);
+    return enif_make_tuple2(env, make_pointer(env,data),
 			    enif_make_binary(env, &data_bin));
 }
 
 static ERL_NIF_TERM release_resource(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[])
 {
-    union { void* p; long l; } data;
-    if (!enif_get_long(env, argv[0], &data.l)) {
+    void* data;
+    if (!get_pointer(env, argv[0], &data)) {
 	return enif_make_badarg(env);
     }
-    enif_release_resource(data.p);
+    enif_release_resource(data);
     return enif_make_atom(env,"ok");
 }
 
@@ -832,6 +854,7 @@ static ERL_NIF_TERM release_resource(ErlNifEnv* env, int argc, const ERL_NIF_TER
  * argv[7] an empty list
  * argv[8] a non-empty list
  * argv[9] a tuple
+ * argv[10] a number (small, big integer or float)
  */
 static ERL_NIF_TERM check_is(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[])
 {
@@ -848,6 +871,7 @@ static ERL_NIF_TERM check_is(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[]
     if (!enif_is_list(env, argv[7])) return enif_make_badarg(env);
     if (!enif_is_list(env, argv[8])) return enif_make_badarg(env);
     if (!enif_is_tuple(env, argv[9])) return enif_make_badarg(env);
+    if (!enif_is_number(env, argv[10])) return enif_make_badarg(env);
 
     return ok_atom;
 }
@@ -1421,6 +1445,312 @@ static ERL_NIF_TERM send_term(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[
     return enif_make_int(env, ret);
 }
 
+static ERL_NIF_TERM reverse_list(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[]) {
+    ERL_NIF_TERM rev_list;
+
+    if(!enif_make_reverse_list(env, argv[0], &rev_list))
+	return enif_make_atom(env, "badarg");
+    return rev_list;
+}
+
+static ERL_NIF_TERM otp_9668_nif(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[])
+{
+    /* Inspect in process independent env */
+    ErlNifEnv* myenv = enif_alloc_env();
+    ERL_NIF_TERM mycopy = enif_make_copy(myenv, argv[0]);
+    ErlNifBinary obin, cbin;
+
+    if ((enif_inspect_binary(env, argv[0], &obin)
+	 && enif_inspect_binary(myenv, mycopy, &cbin))
+	||
+	(enif_inspect_iolist_as_binary(env, argv[0], &obin)
+	 && enif_inspect_iolist_as_binary(myenv, mycopy, &cbin)))
+    {
+	assert(obin.size == cbin.size);
+	assert(memcmp(obin.data, cbin.data, obin.size) == 0);
+    }	
+    enif_free_env(myenv);
+    return atom_ok;
+}
+
+static ERL_NIF_TERM otp_9828_nif(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[])
+{
+    /* copy a writable binary could reallocate it due to "emasculation"
+       and thereby render a previous inspection invalid.
+     */
+    ErlNifBinary bin1;
+    ErlNifEnv* myenv;
+
+    if (!enif_inspect_binary(env, argv[0], &bin1)) {
+	return enif_make_badarg(env);
+    }
+
+    myenv = enif_alloc_env();
+    enif_make_copy(myenv, argv[0]);
+    enif_free_env(myenv);
+
+    return memcmp(bin1.data, "I'm alive!", 10)==0 ? atom_ok : atom_false;
+}
+
+
+static ERL_NIF_TERM consume_timeslice_nif(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[])
+{
+    int percent;
+    char atom[10];
+
+    if (!enif_get_int(env, argv[0], &percent) ||
+	!enif_get_atom(env, argv[1], atom, sizeof(atom), ERL_NIF_LATIN1)) {
+	return enif_make_badarg(env);
+    }
+    if (strcmp(atom , "true") == 0) {
+	int cnt = 1;
+	while (enif_consume_timeslice(env, percent) == 0 && cnt < 200)
+	    cnt++;
+	return enif_make_int(env, cnt);
+    }
+    else {
+	return enif_make_int(env, enif_consume_timeslice(env, percent));
+    }
+}
+
+static ERL_NIF_TERM nif_sched2(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[])
+{
+    char s[64];
+    if (!enif_get_string(env, argv[2], s, sizeof s, ERL_NIF_LATIN1))
+	return enif_make_badarg(env);
+    return enif_make_tuple2(env, argv[3], argv[2]);
+}
+
+static ERL_NIF_TERM nif_sched1(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[])
+{
+    ERL_NIF_TERM new_argv[4];
+    new_argv[0] = enif_make_atom(env, "garbage0");
+    new_argv[1] = enif_make_atom(env, "garbage1");
+    new_argv[2] = argv[0];
+    new_argv[3] = argv[1];
+    return enif_schedule_nif(env, "nif_sched2", 0, nif_sched2, 4, new_argv);
+}
+
+static ERL_NIF_TERM call_nif_schedule(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[])
+{
+    if (argc != 2)
+	return enif_make_atom(env, "false");
+    return enif_schedule_nif(env, "nif_sched1", 0, nif_sched1, argc, argv);
+}
+
+#ifdef ERL_NIF_DIRTY_SCHEDULER_SUPPORT
+
+static int have_dirty_schedulers(void)
+{
+    ErlNifSysInfo si;
+    enif_system_info(&si, sizeof(si));
+    return si.dirty_scheduler_support;
+}
+
+static ERL_NIF_TERM dirty_nif(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[])
+{
+    int n;
+    char s[10];
+    ErlNifBinary b;
+    ERL_NIF_TERM result;
+    if (have_dirty_schedulers()) {
+	assert(enif_is_on_dirty_scheduler(env));
+    }
+    assert(argc == 3);
+    enif_get_int(env, argv[0], &n);
+    enif_get_string(env, argv[1], s, sizeof s, ERL_NIF_LATIN1);
+    enif_inspect_binary(env, argv[2], &b);
+    return enif_make_tuple3(env,
+			    enif_make_int(env, n),
+			    enif_make_string(env, s, ERL_NIF_LATIN1),
+			    enif_make_binary(env, &b));
+}
+
+static ERL_NIF_TERM call_dirty_nif(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[])
+{
+    int n;
+    char s[10];
+    ErlNifBinary b;
+    assert(!enif_is_on_dirty_scheduler(env));
+    if (argc != 3)
+	return enif_make_badarg(env);
+    if (have_dirty_schedulers()) {
+	if (enif_get_int(env, argv[0], &n) &&
+	    enif_get_string(env, argv[1], s, sizeof s, ERL_NIF_LATIN1) &&
+	    enif_inspect_binary(env, argv[2], &b))
+	    return enif_schedule_nif(env, "call_dirty_nif", ERL_NIF_DIRTY_JOB_CPU_BOUND, dirty_nif, argc, argv);
+	else
+	    return enif_make_badarg(env);
+    } else {
+	return dirty_nif(env, argc, argv);
+    }
+}
+
+static ERL_NIF_TERM send_from_dirty_nif(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[])
+{
+    ERL_NIF_TERM result;
+    ErlNifPid pid;
+    ErlNifEnv* menv;
+    int res;
+
+    if (!enif_get_local_pid(env, argv[0], &pid))
+	return enif_make_badarg(env);
+    result = enif_make_tuple2(env, enif_make_atom(env, "ok"), enif_make_pid(env, &pid));
+    menv = enif_alloc_env();
+    res = enif_send(env, &pid, menv, result);
+    enif_free_env(menv);
+    if (!res)
+	return enif_make_badarg(env);
+    else
+	return result;
+}
+
+static ERL_NIF_TERM call_dirty_nif_exception(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[])
+{
+    switch (argc) {
+    case 0: {
+	ERL_NIF_TERM args[255];
+	int i;
+	for (i = 0; i < 255; i++)
+	    args[i] = enif_make_int(env, i);
+	return enif_schedule_nif(env, "call_dirty_nif_exception", ERL_NIF_DIRTY_JOB_CPU_BOUND,
+				 call_dirty_nif_exception, 255, argv);
+    }
+    case 1:
+	return enif_make_badarg(env);
+    default:
+	return enif_schedule_nif(env, "call_dirty_nif_exception", ERL_NIF_DIRTY_JOB_CPU_BOUND,
+				 call_dirty_nif_exception, argc-1, argv);
+    }
+}
+#endif
+
+static ERL_NIF_TERM is_map_nif(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[])
+{
+    return enif_make_int(env, enif_is_map(env,argv[0]));
+}
+static ERL_NIF_TERM get_map_size_nif(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[])
+{
+    size_t size = (size_t)-123;
+    int ret = enif_get_map_size(env, argv[0], &size);
+    return enif_make_tuple2(env, enif_make_int(env, ret), enif_make_int(env, (int)size));
+}
+static ERL_NIF_TERM make_new_map_nif(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[])
+{
+    return enif_make_new_map(env);
+}
+static ERL_NIF_TERM make_map_put_nif(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[])
+{
+    ERL_NIF_TERM map_out = enif_make_atom(env, "undefined");
+    int ret = enif_make_map_put(env, argv[0], argv[1], argv[2], &map_out);
+    return enif_make_tuple2(env, enif_make_int(env,ret), map_out);
+}
+static ERL_NIF_TERM get_map_value_nif(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[])
+{
+    ERL_NIF_TERM value = enif_make_atom(env, "undefined");
+    int ret = enif_get_map_value(env, argv[0], argv[1], &value);
+    return enif_make_tuple2(env, enif_make_int(env,ret), value);
+
+}
+static ERL_NIF_TERM make_map_update_nif(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[])
+{
+    ERL_NIF_TERM map_out = enif_make_atom(env, "undefined");
+    int ret = enif_make_map_update(env, argv[0], argv[1], argv[2], &map_out);
+    return enif_make_tuple2(env, enif_make_int(env,ret), map_out);
+}
+static ERL_NIF_TERM make_map_remove_nif(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[])
+{
+    ERL_NIF_TERM map_out = enif_make_atom(env, "undefined");
+    int ret = enif_make_map_remove(env, argv[0], argv[1], &map_out);
+    return enif_make_tuple2(env, enif_make_int(env,ret), map_out);
+}
+
+/* maps */
+static ERL_NIF_TERM maps_from_list_nif(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[])
+{
+    ERL_NIF_TERM cell = argv[0];
+    ERL_NIF_TERM map  = enif_make_new_map(env);
+    ERL_NIF_TERM tuple;
+    const ERL_NIF_TERM *pair;
+    int arity = -1;
+
+    if (argc != 1 && !enif_is_list(env, cell)) return enif_make_badarg(env);
+
+    /* assume sorted keys */
+
+    while (!enif_is_empty_list(env,cell)) {
+	if (!enif_get_list_cell(env, cell, &tuple, &cell)) return enif_make_badarg(env);
+	if (enif_get_tuple(env,tuple,&arity,&pair)) {
+	    enif_make_map_put(env, map, pair[0], pair[1], &map);
+	}
+    }
+
+    return map;
+}
+
+static ERL_NIF_TERM sorted_list_from_maps_nif(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[]) {
+
+    ERL_NIF_TERM map = argv[0];
+    ERL_NIF_TERM list_f = enif_make_list(env, 0); /* NIL */
+    ERL_NIF_TERM list_b = enif_make_list(env, 0); /* NIL */
+    ERL_NIF_TERM key, value, k2, v2;
+    ErlNifMapIterator iter_f;
+    ErlNifMapIterator iter_b;
+    int cnt, next_ret, prev_ret;
+
+    if (argc != 1 && !enif_is_map(env, map))
+	return enif_make_int(env, __LINE__);
+
+    if(!enif_map_iterator_create(env, map, &iter_f, ERL_NIF_MAP_ITERATOR_HEAD))
+	return enif_make_int(env, __LINE__);
+
+    cnt = 0;
+    while(enif_map_iterator_get_pair(env,&iter_f,&key,&value)) {
+	if (cnt && !next_ret)
+	    return enif_make_int(env, __LINE__);
+	list_f = enif_make_list_cell(env, enif_make_tuple2(env, key, value), list_f);
+	next_ret = enif_map_iterator_next(env,&iter_f);
+	cnt++;
+    }
+    if (cnt && next_ret)
+	return enif_make_int(env, __LINE__);
+
+    if(!enif_map_iterator_create(env, map, &iter_b, ERL_NIF_MAP_ITERATOR_TAIL))
+	return enif_make_int(env, __LINE__);
+
+    cnt = 0;
+    while(enif_map_iterator_get_pair(env,&iter_b,&key,&value)) {
+	if (cnt && !prev_ret)
+	    return enif_make_int(env, __LINE__);
+
+	/* Test that iter_f can step "backwards" */
+	if (!enif_map_iterator_prev(env,&iter_f)
+	    || !enif_map_iterator_get_pair(env,&iter_f,&k2,&v2)
+	    || k2 != key || v2 != value) {
+	    return enif_make_int(env, __LINE__);
+	}
+
+	list_b = enif_make_list_cell(env, enif_make_tuple2(env, key, value), list_b);
+	prev_ret = enif_map_iterator_prev(env,&iter_b);
+    }
+
+    if (cnt) {
+	if (prev_ret || enif_map_iterator_prev(env,&iter_f))
+	    return enif_make_int(env, __LINE__);
+
+	/* Test that iter_b can step "backwards" one step */
+	if (!enif_map_iterator_next(env, &iter_b)
+	    || !enif_map_iterator_get_pair(env,&iter_b,&k2,&v2)
+	    || k2 != key || v2 != value)
+	    return enif_make_int(env, __LINE__);
+    }
+
+    enif_map_iterator_destroy(env, &iter_f);
+    enif_map_iterator_destroy(env, &iter_b);
+
+    return enif_make_tuple2(env, list_f, list_b);
+}
+
 static ErlNifFunc nif_funcs[] =
 {
     {"lib_version", 0, lib_version},
@@ -1447,7 +1777,7 @@ static ErlNifFunc nif_funcs[] =
     {"release_resource", 1, release_resource},
     {"last_resource_dtor_call", 0, last_resource_dtor_call},
     {"make_new_resource", 2, make_new_resource},
-    {"check_is", 10, check_is},
+    {"check_is", 11, check_is},
     {"check_is_exception", 0, check_is_exception},
     {"length_test", 5, length_test},
     {"make_atoms", 0, make_atoms},
@@ -1466,8 +1796,27 @@ static ErlNifFunc nif_funcs[] =
     {"join_send_thread", 1, join_send_thread},
     {"copy_blob", 1, copy_blob},
     {"send_term", 2, send_term},
+    {"reverse_list",1, reverse_list},
     {"echo_int", 1, echo_int},
-    {"type_sizes", 0, type_sizes}
+    {"type_sizes", 0, type_sizes},
+    {"otp_9668_nif", 1, otp_9668_nif},
+    {"otp_9828_nif", 1, otp_9828_nif},
+    {"consume_timeslice_nif", 2, consume_timeslice_nif},
+    {"call_nif_schedule", 2, call_nif_schedule},
+#ifdef ERL_NIF_DIRTY_SCHEDULER_SUPPORT
+    {"call_dirty_nif", 3, call_dirty_nif},
+    {"send_from_dirty_nif", 1, send_from_dirty_nif, ERL_NIF_DIRTY_JOB_CPU_BOUND},
+    {"call_dirty_nif_exception", 0, call_dirty_nif_exception, ERL_NIF_DIRTY_JOB_IO_BOUND},
+#endif
+    {"is_map_nif", 1, is_map_nif},
+    {"get_map_size_nif", 1, get_map_size_nif},
+    {"make_new_map_nif", 0, make_new_map_nif},
+    {"make_map_put_nif", 3, make_map_put_nif},
+    {"get_map_value_nif", 2, get_map_value_nif},
+    {"make_map_update_nif", 3, make_map_update_nif},
+    {"make_map_remove_nif", 2, make_map_remove_nif},
+    {"maps_from_list_nif", 1, maps_from_list_nif},
+    {"sorted_list_from_maps_nif", 1, sorted_list_from_maps_nif}
 };
 
 ERL_NIF_INIT(nif_SUITE,nif_funcs,load,reload,upgrade,unload)

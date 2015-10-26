@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2000-2011. All Rights Reserved.
+%% Copyright Ericsson AB 2000-2013. All Rights Reserved.
 %%
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -26,7 +26,8 @@
 
 %% Generic file contents operations
 -export([open/2, close/1, datasync/1, sync/1, advise/4, position/2, truncate/1,
-	 write/2, pwrite/2, pwrite/3, read/2, read_line/1, pread/2, pread/3, copy/3]).
+	 write/2, pwrite/2, pwrite/3, read/2, read_line/1, pread/2, pread/3,
+	 copy/3, sendfile/8, allocate/3]).
 
 %% Specialized file operations
 -export([open/1, open/3]).
@@ -44,14 +45,14 @@
 	 rename/2, rename/3, 
 	 make_dir/1, make_dir/2,
 	 del_dir/1, del_dir/2,
-	 read_file_info/1, read_file_info/2,
+	 read_file_info/1, read_file_info/2, read_file_info/3,
 	 altname/1, altname/2,
-	 write_file_info/2, write_file_info/3,
+	 write_file_info/2, write_file_info/3, write_file_info/4,
 	 make_link/2, make_link/3,
 	 make_symlink/2, make_symlink/3,
-	 read_link/1, read_link/2,
-	 read_link_info/1, read_link_info/2,
-	 list_dir/1, list_dir/2]).
+	 read_link/1, read_link/2, read_link_all/1, read_link_all/2,
+	 read_link_info/1, read_link_info/2, read_link_info/3,
+	 list_dir/1, list_dir/2, list_dir_all/1, list_dir_all/2]).
 %% How to start and stop the ?DRV port.
 -export([start/0, stop/1]).
 
@@ -98,6 +99,8 @@
 -define(FILE_READ_LINE,        29).
 -define(FILE_FDATASYNC,        30).
 -define(FILE_ADVISE,           31).
+-define(FILE_SENDFILE,         32).
+-define(FILE_ALLOCATE,         33).
 
 %% Driver responses
 -define(FILE_RESP_OK,          0).
@@ -111,6 +114,7 @@
 -define(FILE_RESP_EOF,         8).
 -define(FILE_RESP_FNAME,       9).
 -define(FILE_RESP_ALL_DATA,   10).
+-define(FILE_RESP_LFNAME,     11).
 
 %% Open modes for the driver's open function.
 -define(EFILE_MODE_READ,       1).
@@ -119,9 +123,11 @@
 -define(EFILE_MODE_APPEND,     4).
 -define(EFILE_COMPRESSED,      8).
 -define(EFILE_MODE_EXCL,       16).
+%% Note: bit 5 (32) is used internally for VxWorks
+-define(EFILE_MODE_SYNC,       64).
 
 %% Use this mask to get just the mode bits to be passed to the driver.
--define(EFILE_MODE_MASK, 31).
+-define(EFILE_MODE_MASK, 127).
 
 %% Seek modes for the driver's seek function.
 -define(EFILE_SEEK_SET, 0).
@@ -143,6 +149,42 @@
 -define(POSIX_FADV_DONTNEED,   4).
 -define(POSIX_FADV_NOREUSE,    5).
 
+%% Sendfile flags
+-define(EFILE_SENDFILE_USE_THREADS, 1).
+
+
+%%% BIFs
+
+-export([internal_name2native/1,
+         internal_native2name/1,
+         internal_normalize_utf8/1,
+	 is_translatable/1]).
+
+-type prim_file_name() :: string() | unicode:unicode_binary().
+-type prim_file_name_error() :: 'error' | 'ignore' | 'warning'.
+
+-spec internal_name2native(prim_file_name()) -> binary().
+
+internal_name2native(_) ->
+    erlang:nif_error(undefined).
+
+-spec internal_native2name(binary()) ->
+        prim_file_name() | {'error',prim_file_name_error()}.
+
+internal_native2name(_) ->
+    erlang:nif_error(undefined).
+
+-spec internal_normalize_utf8(unicode:unicode_binary()) -> string().
+
+internal_normalize_utf8(_) ->
+    erlang:nif_error(undefined).
+
+-spec is_translatable(prim_file_name()) -> boolean().
+
+is_translatable(_) ->
+    erlang:nif_error(undefined).
+
+%%% End of BIFs
 
 %%%-----------------------------------------------------------------
 %%% Functions operating on a file through a handle. ?FD_DRV.
@@ -181,12 +223,7 @@ open(_, _) ->
 %% Opens a port that can be used for open/3 or read_file/2.
 %% Returns {ok, Port} | {error, Reason}.
 open(Portopts) when is_list(Portopts) ->
-    case drv_open(?FD_DRV, Portopts) of
-	{error, _} = Error ->
-	    Error;
-	Other ->
-	    Other
-    end;
+    drv_open(?FD_DRV, [binary|Portopts]);
 open(_) ->
     {error, badarg}.
 
@@ -264,8 +301,13 @@ advise(#file_descriptor{module = ?MODULE, data = {Port, _}},
     end.
 
 %% Returns {error, Reason} | ok.
+allocate(#file_descriptor{module = ?MODULE, data = {Port, _}}, Offset, Length) ->
+    Cmd = <<?FILE_ALLOCATE, Offset:64/signed, Length:64/signed>>,
+    drv_command(Port, Cmd).
+
+%% Returns {error, Reason} | ok.
 write(#file_descriptor{module = ?MODULE, data = {Port, _}}, Bytes) ->
-    case drv_command(Port, [?FILE_WRITE,Bytes]) of
+    case drv_command_nt(Port, [?FILE_WRITE,erlang:dt_prepend_vm_tag_data(Bytes)],undefined) of
 	{ok, _Size} ->
 	    ok;
 	Error ->
@@ -280,8 +322,8 @@ pwrite(#file_descriptor{module = ?MODULE, data = {Port, _}}, L)
 pwrite_int(_, [], 0, [], []) ->
     ok;
 pwrite_int(Port, [], N, Spec, Data) ->
-    Header = list_to_binary([<<?FILE_PWRITEV, N:32>> | reverse(Spec)]),
-    case drv_command_raw(Port, [Header | reverse(Data)]) of
+    Header = list_to_binary([?FILE_PWRITEV, erlang:dt_prepend_vm_tag_data(<<N:32>>) | reverse(Spec)]),
+    case drv_command_nt(Port, [Header | reverse(Data)], undefined) of
 	{ok, _Size} ->
 	    ok;
 	Error ->
@@ -399,7 +441,7 @@ pread(#file_descriptor{module = ?MODULE, data = {Port, _}}, L)
 pread_int(_, [], 0, []) ->
     {ok, []};
 pread_int(Port, [], N, Spec) ->
-    drv_command(Port, [<<?FILE_PREADV, 0:32, N:32>> | reverse(Spec)]);
+    drv_command_nt(Port, [?FILE_PREADV, erlang:dt_prepend_vm_tag_data(<<0:32, N:32>>) | reverse(Spec)],undefined);
 pread_int(Port, [{Offs, Size} | T], N, Spec)
   when is_integer(Offs), is_integer(Size), 0 =< Size ->
     if
@@ -420,9 +462,9 @@ pread(#file_descriptor{module = ?MODULE, data = {Port, _}}, Offs, Size)
     if
 	-(?LARGEFILESIZE) =< Offs, Offs < ?LARGEFILESIZE,
 	Size < ?LARGEFILESIZE ->
-	    case drv_command(Port, 
-			     <<?FILE_PREADV, 0:32, 1:32,
-			      Offs:64/signed, Size:64>>) of
+	    case drv_command_nt(Port, 
+				[?FILE_PREADV, erlang:dt_prepend_vm_tag_data(<<0:32, 1:32,
+									     Offs:64/signed, Size:64>>)], undefined) of
 		{ok, [eof]} ->
 		    eof;
 		{ok, [Data]} ->
@@ -450,7 +492,7 @@ position(#file_descriptor{module = ?MODULE, data = {Port, _}}, At) ->
 	    {error, Reason}
     end.
 
-%% Returns {error, Reaseon} | ok.
+%% Returns {error, Reason} | ok.
 truncate(#file_descriptor{module = ?MODULE, data = {Port, _}}) ->
     drv_command(Port, <<?FILE_TRUNCATE>>).
 
@@ -536,7 +578,39 @@ write_file(File, Bin) when (is_list(File) orelse is_binary(File)) ->
     end;
 write_file(_, _) -> 
     {error, badarg}.
-    
+
+
+%% Returns {error, Reason} | {ok, BytesCopied}
+%sendfile(_,_,_,_,_,_,_,_,_,_) ->
+%    {error, enotsup};
+sendfile(#file_descriptor{module = ?MODULE, data = {Port, _}},
+	 Dest, Offset, Bytes, _ChunkSize, Headers, Trailers,
+	 Flags) ->
+    case erlang:port_get_data(Dest) of
+	Data when Data == inet_tcp; Data == inet6_tcp ->
+	    ok = inet:lock_socket(Dest,true),
+	    {ok, DestFD} = prim_inet:getfd(Dest),
+	    IntFlags = translate_sendfile_flags(Flags),
+	    try drv_command(Port, [<<?FILE_SENDFILE, DestFD:32,
+				     IntFlags:8,
+				     Offset:64/unsigned,
+				     Bytes:64/unsigned,
+				     (iolist_size(Headers)):32/unsigned,
+				     (iolist_size(Trailers)):32/unsigned>>,
+				   Headers,Trailers])
+	    after
+		ok = inet:lock_socket(Dest,false)
+	    end;
+	_Else ->
+	    {error,badarg}
+    end.
+
+translate_sendfile_flags([{use_threads,true}|T]) ->
+    ?EFILE_SENDFILE_USE_THREADS bor translate_sendfile_flags(T);
+translate_sendfile_flags([_|T]) ->
+    translate_sendfile_flags(T);
+translate_sendfile_flags([]) ->
+    0.
 
 
 %%%-----------------------------------------------------------------
@@ -549,13 +623,7 @@ write_file(_, _) ->
 %% Returns {ok, Port}, the Port should be used as first argument in all
 %% the following functions. Returns {error, Reason} upon failure.
 start() ->
-    try erlang:open_port({spawn, ?DRV}, [binary]) of
-	Port ->
-	    {ok, Port}
-    catch
-	error:Reason ->
-	    {error, Reason}
-    end.
+    drv_open(?DRV, [binary]).
 
 stop(Port) when is_port(Port) ->
     try erlang:port_close(Port) of
@@ -609,7 +677,8 @@ get_cwd_int(Drive) ->
     get_cwd_int({?DRV, [binary]}, Drive).
 
 get_cwd_int(Port, Drive) ->
-    drv_command(Port, <<?FILE_PWD, Drive>>).
+    drv_command(Port, <<?FILE_PWD, Drive>>,
+		fun handle_fname_response/1).
 
 
 
@@ -621,28 +690,17 @@ set_cwd(Dir) ->
 set_cwd(Port, Dir) when is_port(Port) ->
     set_cwd_int(Port, Dir).
 
-set_cwd_int(Port, Dir0) ->
-    Dir = 
-	(catch
-	 case os:type() of
-	     vxworks -> 
-		 %% chdir on vxworks doesn't support
-		 %% relative paths
-		 %% must call get_cwd from here and use
-		 %% absname/2, since
-		 %% absname/1 uses file:get_cwd ...
-		 case get_cwd_int(Port, 0) of
-		     {ok, AbsPath} ->
-			 filename:absname(Dir0, AbsPath);
-		     _Badcwd ->
-			 Dir0
-		 end;
-	     _Else ->
-		 Dir0
-	 end),
-    %% Dir is now either a string or an EXIT tuple.
-    %% An EXIT tuple will fail in the following catch.
-    drv_command(Port, [?FILE_CHDIR, pathname(Dir)]).
+set_cwd_int(Port, Dir) when is_binary(Dir) ->
+    case prim_file:is_translatable(Dir) of
+	false ->
+	    {error, no_translation};
+	true ->
+	    drv_command(Port, [?FILE_CHDIR, pathname(Dir)])
+    end;
+set_cwd_int(Port, Dir) when is_list(Dir) ->
+    drv_command(Port, [?FILE_CHDIR, pathname(Dir)]);
+set_cwd_int(_, _) ->
+    {error, badarg}.
 
 
 
@@ -698,16 +756,33 @@ del_dir_int(Port, Dir) ->
 
 
 
-%% read_file_info/{1,2}
+%% read_file_info/{1,2,3}
 
 read_file_info(File) ->
-    read_file_info_int({?DRV, [binary]}, File).
+    read_file_info_int({?DRV, [binary]}, File, local).
 
 read_file_info(Port, File) when is_port(Port) ->
-    read_file_info_int(Port, File).
+    read_file_info_int(Port, File, local);
+read_file_info(File, Opts) ->
+    read_file_info_int({?DRV, [binary]}, File, plgv(time, Opts, local)).
 
-read_file_info_int(Port, File) ->
-    drv_command(Port, [?FILE_FSTAT, pathname(File)]).
+read_file_info(Port, File, Opts) when is_port(Port) ->
+    read_file_info_int(Port, File, plgv(time, Opts, local)).
+
+read_file_info_int(Port, File, TimeType) ->
+    try
+	case drv_command(Port, [?FILE_FSTAT, pathname(File)]) of
+	    {ok, FI} -> {ok, FI#file_info{
+			ctime = from_seconds(FI#file_info.ctime, TimeType),
+			mtime = from_seconds(FI#file_info.mtime, TimeType),
+			atime = from_seconds(FI#file_info.atime, TimeType)
+		    }};
+	    Error    -> Error
+	end
+    catch
+	error:_ -> {error, badarg}
+    end.
+
 
 %% altname/{1,2}
 
@@ -718,40 +793,64 @@ altname(Port, File) when is_port(Port) ->
     altname_int(Port, File).
 
 altname_int(Port, File) ->
-    drv_command(Port, [?FILE_ALTNAME, pathname(File)]).
+    drv_command(Port, [?FILE_ALTNAME, pathname(File)],
+		fun handle_fname_response/1).
 
-%% write_file_info/{2,3}
+%% write_file_info/{2,3,4}
 
 write_file_info(File, Info) ->
-    write_file_info_int({?DRV, [binary]}, File, Info).
+    write_file_info_int({?DRV, [binary]}, File, Info, local).
 
 write_file_info(Port, File, Info) when is_port(Port) ->
-    write_file_info_int(Port, File, Info).
+    write_file_info_int(Port, File, Info, local);
+write_file_info(File, Info, Opts) ->
+    write_file_info_int({?DRV, [binary]}, File, Info, plgv(time, Opts, local)).
 
-write_file_info_int(Port, 
-		    File, 
+write_file_info(Port, File, Info, Opts) when is_port(Port) ->
+    write_file_info_int(Port, File, Info, plgv(time, Opts, local)).
+
+write_file_info_int(Port, File, 
 		    #file_info{mode=Mode, 
 			       uid=Uid, 
 			       gid=Gid,
 			       atime=Atime0, 
 			       mtime=Mtime0, 
-			       ctime=Ctime}) ->
-    {Atime, Mtime} =
-	case {Atime0, Mtime0} of
-	    {undefined, Mtime0} -> {erlang:localtime(), Mtime0};
-	    {Atime0, undefined} -> {Atime0, Atime0};
-	    Complete -> Complete
-	end,
-    drv_command(Port, [?FILE_WRITE_INFO, 
-			int_to_bytes(Mode), 
-			int_to_bytes(Uid), 
-			int_to_bytes(Gid),
-			date_to_bytes(Atime), 
-			date_to_bytes(Mtime), 
-			date_to_bytes(Ctime),
-			pathname(File)]).
+			       ctime=Ctime0},
+		       TimeType) ->
+
+    % Atime and/or Mtime might be undefined
+    %  - use localtime() for atime, if atime is undefined
+    %  - use atime as mtime if mtime is undefined
+    %  - use mtime as ctime if ctime is undefined
+
+    try
+	Atime = file_info_validate_atime(Atime0, TimeType),
+	Mtime = file_info_validate_mtime(Mtime0, Atime),
+	Ctime = file_info_validate_ctime(Ctime0, Mtime),
+
+	drv_command(Port, [?FILE_WRITE_INFO, 
+		int_to_int32bytes(Mode), 
+		int_to_int32bytes(Uid), 
+		int_to_int32bytes(Gid),
+		int_to_int64bytes(to_seconds(Atime, TimeType)), 
+		int_to_int64bytes(to_seconds(Mtime, TimeType)), 
+		int_to_int64bytes(to_seconds(Ctime, TimeType)),
+		pathname(File)])
+    catch
+	error:_ -> {error, badarg}
+    end.
 
 
+file_info_validate_atime(Atime, _) when Atime =/= undefined -> Atime;
+file_info_validate_atime(undefined, local)     -> erlang:localtime();
+file_info_validate_atime(undefined, universal) -> erlang:universaltime();
+file_info_validate_atime(undefined, posix)     -> erlang:universaltime_to_posixtime(erlang:universaltime()).
+
+file_info_validate_mtime(undefined, Atime) -> Atime;
+file_info_validate_mtime(Mtime, _)         -> Mtime.
+
+file_info_validate_ctime(undefined, Mtime) -> Mtime;
+file_info_validate_ctime(Ctime, _)         -> Ctime.
 
 %% make_link/{2,3}
 
@@ -788,22 +887,51 @@ read_link(Port, Link) when is_port(Port) ->
     read_link_int(Port, Link).
 
 read_link_int(Port, Link) ->
-    drv_command(Port, [?FILE_READLINK, pathname(Link)]).
+    drv_command(Port, [?FILE_READLINK, pathname(Link)],
+		fun handle_fname_response/1).
+
+%% read_link_all/{2,3}
+
+read_link_all(Link) ->
+    read_link_all_int({?DRV, [binary]}, Link).
+
+read_link_all(Port, Link) when is_port(Port) ->
+    read_link_all_int(Port, Link).
+
+read_link_all_int(Port, Link) ->
+    drv_command(Port, [?FILE_READLINK, pathname(Link)],
+		fun handle_fname_response_all/1).
 
 
 
 %% read_link_info/{2,3}
 
 read_link_info(Link) ->
-    read_link_info_int({?DRV, [binary]}, Link).
+    read_link_info_int({?DRV, [binary]}, Link, local).
 
 read_link_info(Port, Link) when is_port(Port) ->
-    read_link_info_int(Port, Link).
+    read_link_info_int(Port, Link, local);
 
-read_link_info_int(Port, Link) ->
-    drv_command(Port, [?FILE_LSTAT, pathname(Link)]).
+read_link_info(Link, Opts) ->
+    read_link_info_int({?DRV, [binary]}, Link, plgv(time, Opts, local)).
+
+read_link_info(Port, Link, Opts) when is_port(Port) ->
+    read_link_info_int(Port, Link, plgv(time, Opts, local)).
 
 
+read_link_info_int(Port, Link, TimeType) ->
+    try
+	case drv_command(Port, [?FILE_LSTAT, pathname(Link)]) of
+	    {ok, FI} -> {ok, FI#file_info{
+			ctime = from_seconds(FI#file_info.ctime, TimeType),
+			mtime = from_seconds(FI#file_info.mtime, TimeType),
+			atime = from_seconds(FI#file_info.atime, TimeType)
+		    }};
+	    Error    -> Error
+	end
+    catch
+	error:_ -> {error, badarg}
+    end.
 
 %% list_dir/{1,2}
 
@@ -814,20 +942,117 @@ list_dir(Port, Dir) when is_port(Port) ->
     list_dir_int(Port, Dir).
 
 list_dir_int(Port, Dir) ->
-    drv_command(Port, [?FILE_READDIR, pathname(Dir)], []).
+    drv_command(Port, [?FILE_READDIR, pathname(Dir)],
+		fun(P) ->
+			case list_dir_response(P, []) of
+			    {ok, RawNames} ->
+				try
+				    {ok, list_dir_convert(RawNames)}
+				catch
+				    throw:Reason ->
+					Reason
+				end;
+			    Error ->
+				Error
+			end
+		end).
 
+list_dir_all(Dir) ->
+    list_dir_all_int({?DRV, [binary]}, Dir).
 
+list_dir_all(Port, Dir) when is_port(Port) ->
+    list_dir_all_int(Port, Dir).
+
+list_dir_all_int(Port, Dir) ->
+    drv_command(Port, [?FILE_READDIR, pathname(Dir)],
+		fun(P) ->
+			case list_dir_response(P, []) of
+			    {ok, RawNames} ->
+				{ok, list_dir_convert_all(RawNames)};
+			    Error ->
+				Error
+			end
+		end).
+
+list_dir_response(Port, Acc0) ->
+    case drv_get_response(Port) of
+	{lfname, []} ->
+	    {ok, Acc0};
+	{lfname, Names} ->
+	    Acc = [Name || <<L:16,Name:L/binary>> <= Names] ++ Acc0,
+	    list_dir_response(Port, Acc);
+	Error ->
+	    Error
+    end.
+
+list_dir_convert([Name|Names]) ->
+    %% If the filename cannot be converted, return error or ignore
+    %% with optional error logger warning, depending on +fn{u|a}{i|e|w}
+    %% emulator switches.
+    case prim_file:internal_native2name(Name) of
+	{error, warning} ->
+	    error_logger:warning_msg("Non-unicode filename ~p ignored\n",
+				     [Name]),
+	    list_dir_convert(Names);
+	{error, ignore} ->
+	    list_dir_convert(Names);
+	{error, error} ->
+	    throw({error, {no_translation, Name}});
+	Converted when is_list(Converted) ->
+	    [Converted|list_dir_convert(Names)]
+    end;
+list_dir_convert([]) -> [].
+
+list_dir_convert_all([Name|Names]) ->
+    %% If the filename cannot be converted, retain the filename as
+    %% a binary.
+    case prim_file:internal_native2name(Name) of
+	{error, _} ->
+	    [Name|list_dir_convert_all(Names)];
+	Converted when is_list(Converted) ->
+	    [Converted|list_dir_convert_all(Names)]
+    end;
+list_dir_convert_all([]) -> [].
 
 %%%-----------------------------------------------------------------
 %%% Functions to communicate with the driver
 
+handle_fname_response(Port) ->
+    case drv_get_response(Port) of
+	{fname, Name} ->
+	    case prim_file:internal_native2name(Name) of
+		{error, warning} ->
+		    error_logger:warning_msg("Non-unicode filename ~p "
+					     "ignored when reading link\n",
+					     [Name]),
+		    {error, einval};
+		{error, _} ->
+		    {error, einval};
+		Converted when is_list(Converted) ->
+		    {ok, Converted}
+	    end;
+	Error ->
+	    Error
+    end.
 
+handle_fname_response_all(Port) ->
+    case drv_get_response(Port) of
+	{fname, Name} ->
+	    case prim_file:internal_native2name(Name) of
+		{error, _} ->
+		    {ok, Name};
+		Converted when is_list(Converted) ->
+		    {ok, Converted}
+	    end;
+	Error ->
+	    Error
+    end.
 
 %% Opens a driver port and converts any problems into {error, emfile}.
 %% Returns {ok, Port} when successful.
 
 drv_open(Driver, Portopts) ->
-    try erlang:open_port({spawn, Driver}, Portopts) of
+    try erlang:open_port({spawn_driver, Driver}, Portopts) of
 	Port ->
 	    {ok, Port}
     catch
@@ -840,12 +1065,17 @@ drv_open(Driver, Portopts) ->
 %% Closes a port in a safe way. Returns ok.
 
 drv_close(Port) ->
-    try erlang:port_close(Port) catch error:_ -> ok end,
-    receive %% Ugly workaround in case the caller==owner traps exits
-	{'EXIT', Port, _Reason} -> 
-	    ok
-    after 0 -> 
-	    ok
+    Save = erlang:dt_spread_tag(false),
+    try
+	try erlang:port_close(Port) catch error:_ -> ok end,
+	receive %% Ugly workaround in case the caller==owner traps exits
+	    {'EXIT', Port, _Reason} -> 
+		ok
+	after 0 -> 
+		ok
+	end
+    after
+	erlang:dt_restore_tag(Save)
     end.
 
 
@@ -854,9 +1084,6 @@ drv_close(Port) ->
 %% If Port is {Driver, Portopts} a port is first opened and 
 %% then closed after the result has been received.
 %% Returns {ok, Result} or {error, Reason}.
-
-drv_command_raw(Port, Command) ->
-    drv_command(Port, Command, false, undefined).
 
 drv_command(Port, Command) ->
     drv_command(Port, Command, undefined).
@@ -873,7 +1100,8 @@ drv_command(Port, Command, R) ->
     end.
 
 drv_command(Port, Command, Validated, R) when is_port(Port) ->
-    try erlang:port_command(Port, Command) of
+    Save = erlang:dt_spread_tag(false),
+    try erlang:port_command(Port, erlang:dt_append_vm_tag_data(Command)) of
 	true ->
 	    drv_get_response(Port, R)
     catch
@@ -892,6 +1120,8 @@ drv_command(Port, Command, Validated, R) when is_port(Port) ->
 	    end;
 	error:Reason ->
 	    {error, Reason}
+    after
+	erlang:dt_restore_tag(Save)
     end;
 drv_command({Driver, Portopts}, Command, Validated, R) ->
     case drv_open(Driver, Portopts) of
@@ -902,23 +1132,35 @@ drv_command({Driver, Portopts}, Command, Validated, R) ->
 	Error ->
 	    Error
     end.
+drv_command_nt(Port, Command, R) when is_port(Port) ->
+    Save = erlang:dt_spread_tag(false),
+    try erlang:port_command(Port, Command) of
+	true ->
+	    drv_get_response(Port, R)
+    catch
+	error:badarg ->
+	    try erlang:iolist_size(Command) of
+		_ -> % Valid
+		    {error, einval}
+	    catch
+		error:_ ->
+		    {error, badarg}
+	    end;
+	error:Reason ->
+	    {error, Reason}
+    after
+	erlang:dt_restore_tag(Save)
+    end.
 
 
     
 %% Receives the response from a driver port.
 %% Returns: {ok, ListOrBinary}|{error, Reason}
 
-drv_get_response(Port, R) when is_list(R) ->
-    case drv_get_response(Port) of
-	ok ->
-	    {ok, R};
-	{ok, Name} ->
-	    drv_get_response(Port, [Name|R]);
-	Error ->
-	    Error
-    end;
-drv_get_response(Port, _) ->
-    drv_get_response(Port).
+drv_get_response(Port, undefined) ->
+    drv_get_response(Port);
+drv_get_response(Port, Fun) when is_function(Fun, 1) ->
+    Fun(Port).
 
 drv_get_response(Port) ->
     erlang:bump_reductions(100),
@@ -937,8 +1179,6 @@ drv_get_response(Port) ->
 
 %%%-----------------------------------------------------------------
 %%% Utility functions.
-
-
 
 %% Converts a list of mode atoms into a mode word for the driver.
 %% Returns {Mode, Portopts, Setopts} where Portopts is a list of 
@@ -970,6 +1210,8 @@ open_mode([append|Rest], Mode, Portopts, Setopts) ->
 	      Portopts, Setopts);
 open_mode([exclusive|Rest], Mode, Portopts, Setopts) ->
     open_mode(Rest, Mode bor ?EFILE_MODE_EXCL, Portopts, Setopts);
+open_mode([sync|Rest], Mode, Portopts, Setopts) ->
+    open_mode(Rest, Mode bor ?EFILE_MODE_SYNC, Portopts, Setopts);
 open_mode([delayed_write|Rest], Mode, Portopts, Setopts) ->
     open_mode([{delayed_write, 64*1024, 2000}|Rest], Mode,
 	      Portopts, Setopts);
@@ -1044,7 +1286,7 @@ translate_response(?FILE_RESP_DATA, List) ->
     {_N, _Data} = ND = get_uint64(List),
     {ok, ND};
 translate_response(?FILE_RESP_INFO, List) when is_list(List) ->
-    {ok, transform_info_ints(get_uint32s(List))};
+    {ok, transform_info(List)};
 translate_response(?FILE_RESP_NUMERR, L0) ->
     {N, L1} = get_uint64(L0),
     {error, {N, list_to_atom(L1)}};
@@ -1067,7 +1309,7 @@ translate_response(?FILE_RESP_N2DATA,
     {ok, {Size, Offset, D}};
 translate_response(?FILE_RESP_N2DATA = X, L0) when is_list(L0) ->
     {Offset, L1}    = get_uint64(L0),
-    {ReadSize, L2} = get_uint64(L1),
+    {ReadSize, L2}  = get_uint64(L1),
     {Size, L3}      = get_uint64(L2),
     case {ReadSize, L3} of
 	{0, []} ->
@@ -1081,38 +1323,46 @@ translate_response(?FILE_RESP_N2DATA = X, L0) when is_list(L0) ->
     end;
 translate_response(?FILE_RESP_EOF, []) ->
     eof;
-translate_response(?FILE_RESP_FNAME, []) ->
-    ok;
-translate_response(?FILE_RESP_FNAME, Data) when is_binary(Data) ->
-    {ok, prim_file:internal_native2name(Data)};
 translate_response(?FILE_RESP_FNAME, Data) ->
-    {ok, Data};
+    {fname, Data};
+translate_response(?FILE_RESP_LFNAME, Data) ->
+    {lfname, Data};
 translate_response(?FILE_RESP_ALL_DATA, Data) ->
     {ok, Data};
 translate_response(X, Data) ->
     {error, {bad_response_from_port, [X | Data]}}.
 
-transform_info_ints(Ints) ->
-    [HighSize, LowSize, Type|Tail0] = Ints,
-    Size = HighSize * 16#100000000 + LowSize,
-    [Ay, Am, Ad, Ah, Ami, As|Tail1]  = Tail0,
-    [My, Mm, Md, Mh, Mmi, Ms|Tail2] = Tail1,
-    [Cy, Cm, Cd, Ch, Cmi, Cs|Tail3] = Tail2,
-    [Mode, Links, Major, Minor, Inode, Uid, Gid, Access] = Tail3,
+transform_info([
+    Hsize1, Hsize2, Hsize3, Hsize4, 
+    Lsize1, Lsize2, Lsize3, Lsize4,
+    Type1,  Type2,  Type3,  Type4,
+    Atime1, Atime2, Atime3, Atime4, Atime5, Atime6, Atime7, Atime8,
+    Mtime1, Mtime2, Mtime3, Mtime4, Mtime5, Mtime6, Mtime7, Mtime8,
+    Ctime1, Ctime2, Ctime3, Ctime4, Ctime5, Ctime6, Ctime7, Ctime8,
+    Mode1,  Mode2,  Mode3,  Mode4,
+    Links1, Links2, Links3, Links4,
+    Major1, Major2, Major3, Major4,
+    Minor1, Minor2, Minor3, Minor4,
+    Inode1, Inode2, Inode3, Inode4,
+    Uid1,   Uid2,   Uid3,   Uid4,
+    Gid1,   Gid2,   Gid3,   Gid4,
+    Access1,Access2,Access3,Access4]) ->
     #file_info {
-		size = Size,
-		type = file_type(Type),
-		access = file_access(Access),
-		atime = {{Ay, Am, Ad}, {Ah, Ami, As}},
-		mtime = {{My, Mm, Md}, {Mh, Mmi, Ms}},
-		ctime = {{Cy, Cm, Cd}, {Ch, Cmi, Cs}},
-		mode = Mode,
-		links = Links,
-		major_device = Major,
-		minor_device = Minor,
-		inode = Inode,
-		uid = Uid,
-		gid = Gid}.
+		size   = uint32(Hsize1,Hsize2,Hsize3,Hsize4)*16#100000000 + uint32(Lsize1,Lsize2,Lsize3,Lsize4),
+		type   = file_type(uint32(Type1,Type2,Type3,Type4)),
+		access = file_access(uint32(Access1,Access2,Access3,Access4)),
+		atime  = sint64(Atime1, Atime2, Atime3, Atime4, Atime5, Atime6, Atime7, Atime8),
+		mtime  = sint64(Mtime1, Mtime2, Mtime3, Mtime4, Mtime5, Mtime6, Mtime7, Mtime8),
+		ctime  = sint64(Ctime1, Ctime2, Ctime3, Ctime4, Ctime5, Ctime6, Ctime7, Ctime8),
+		mode   = uint32(Mode1,Mode2,Mode3,Mode4),
+		links  = uint32(Links1,Links2,Links3,Links4),
+		major_device = uint32(Major1,Major2,Major3,Major4),
+		minor_device = uint32(Minor1,Minor2,Minor3,Minor4),
+		inode = uint32(Inode1,Inode2,Inode3,Inode4),
+		uid   = uint32(Uid1,Uid2,Uid3,Uid4),
+		gid   = uint32(Gid1,Gid2,Gid3,Gid4)
+	    }.
+    
     
 file_type(1) -> device;
 file_type(2) -> directory;
@@ -1125,24 +1375,22 @@ file_access(1) -> write;
 file_access(2) -> read;
 file_access(3) -> read_write.
 
-int_to_bytes(Int) when is_integer(Int) ->
+int_to_int32bytes(Int) when is_integer(Int) ->
     <<Int:32>>;
-int_to_bytes(undefined) ->
+int_to_int32bytes(undefined) ->
     <<-1:32>>.
 
-date_to_bytes(undefined) ->
-    <<-1:32, -1:32, -1:32, -1:32, -1:32, -1:32>>;
-date_to_bytes({{Y, Mon, D}, {H, Min, S}}) ->
-    <<Y:32, Mon:32, D:32, H:32, Min:32, S:32>>.
+int_to_int64bytes(Int) when is_integer(Int) ->
+    <<Int:64/signed>>.
 
-%% uint64([[X1, X2, X3, X4] = Y1 | [X5, X6, X7, X8] = Y2]) ->
-%%     (uint32(Y1) bsl 32) bor uint32(Y2).
 
-%% uint64(X1, X2, X3, X4, X5, X6, X7, X8) ->
-%%     (uint32(X1, X2, X3, X4) bsl 32) bor uint32(X5, X6, X7, X8).
+sint64(I1,I2,I3,I4,I5,I6,I7,I8) when I1 > 127 ->
+    ((I1 bsl 56) bor (I2 bsl 48) bor (I3 bsl 40) bor (I4 bsl 32) bor
+	(I5 bsl 24) bor (I6 bsl 16) bor (I7 bsl  8) bor I8) - (1 bsl 64);
+sint64(I1,I2,I3,I4,I5,I6,I7,I8) ->
+    ((I1 bsl 56) bor (I2 bsl 48) bor (I3 bsl 40) bor (I4 bsl 32) bor
+	(I5 bsl 24) bor (I6 bsl 16) bor (I7 bsl  8) bor I8).
 
-%% uint32([X1,X2,X3,X4]) ->
-%%     (X1 bsl 24) bor (X2 bsl 16) bor (X3 bsl 8) bor X4.
 
 uint32(X1,X2,X3,X4) ->
     (X1 bsl 24) bor (X2 bsl 16) bor (X3 bsl 8) bor X4.
@@ -1154,11 +1402,6 @@ get_uint64(L0) ->
 
 get_uint32([X1,X2,X3,X4|List]) ->
     {(((((X1 bsl 8) bor X2) bsl 8) bor X3) bsl 8) bor X4, List}.
-
-get_uint32s([X1,X2,X3,X4|Tail]) ->
-    [uint32(X1,X2,X3,X4) | get_uint32s(Tail)];
-get_uint32s([]) -> [].
-
 
 
 %% Binary mode
@@ -1199,8 +1442,6 @@ transform_ldata(0, List, [Size | Sizes], R) ->
     {Front, Rear} = lists_split(List, Size),
     transform_ldata(0, Rear, Sizes, [Front | R]).
 
-
-
 lists_split(List, 0) when is_list(List) ->
     {[], List};
 lists_split(List, N) when is_list(List), is_integer(N), N < 0 ->
@@ -1230,3 +1471,28 @@ reverse(L, T) -> lists:reverse(L, T).
 % in list_to_binary, which is caught and generates the {error,badarg} return
 pathname(File) ->
     (catch prim_file:internal_name2native(File)).
+
+
+%% proplist:get_value/3
+plgv(K, [{K, V}|_], _) -> V;
+plgv(K, [_|KVs], D)    -> plgv(K, KVs, D);
+plgv(_, [], D)         -> D.
+
+%%
+%% We don't actually want this here
+%% We want to use posix time in all prim but erl_prim_loader makes that tricky
+%% It is probably needed to redo the whole erl_prim_loader
+
+from_seconds(Seconds, posix) when is_integer(Seconds) ->
+    Seconds;
+from_seconds(Seconds, universal) when is_integer(Seconds) ->
+    erlang:posixtime_to_universaltime(Seconds);
+from_seconds(Seconds, local) when is_integer(Seconds) ->
+    erlang:universaltime_to_localtime(erlang:posixtime_to_universaltime(Seconds)).
+
+to_seconds(Seconds, posix) when is_integer(Seconds) ->
+    Seconds;
+to_seconds({_,_} = Datetime, universal) ->
+    erlang:universaltime_to_posixtime(Datetime);
+to_seconds({_,_} = Datetime, local) ->
+    erlang:universaltime_to_posixtime(erlang:localtime_to_universaltime(Datetime)).

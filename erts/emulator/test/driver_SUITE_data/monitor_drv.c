@@ -21,8 +21,9 @@
 #include "erl_driver.h"
 
 static ErlDrvData monitor_drv_start(ErlDrvPort, char *);
-static int monitor_drv_control(ErlDrvData, unsigned int,
-				char *, int, char **, int);
+static void monitor_drv_stop(ErlDrvData data);
+static ErlDrvSSizeT monitor_drv_control(ErlDrvData, unsigned int,
+					char *, ErlDrvSizeT, char **, ErlDrvSizeT);
 static void handle_monitor(ErlDrvData drv_data, ErlDrvMonitor *monitor);
 
 #define OP_I_AM_IPID 1
@@ -50,7 +51,7 @@ typedef struct {
 static ErlDrvEntry monitor_drv_entry = { 
     NULL /* init */,
     monitor_drv_start,
-    NULL /* stop */,
+    monitor_drv_stop,
     NULL /* output */,
     NULL /* ready_input */,
     NULL /* ready_output */,
@@ -116,22 +117,22 @@ static void handle_monitor(ErlDrvData drv_data, ErlDrvMonitor *monitor)
 	    o->next = p->next;
 	}
 	driver_free(p);
-	driver_send_term(data->port, data->ipid, spec, sizeof(spec)/sizeof(ErlDrvTermData));
+	erl_drv_send_term(driver_mk_port(data->port), data->ipid, spec, sizeof(spec)/sizeof(ErlDrvTermData));
     }
     
     return;
 }
 
-static int
+static ErlDrvSSizeT
 monitor_drv_control(ErlDrvData drv_data,
 		     unsigned int command,
-		     char *ibuf, int ilen,
-		     char **rbuf, int rlen)
+		     char *ibuf, ErlDrvSizeT ilen,
+		     char **rbuf, ErlDrvSizeT rlen)
 {
     MyDrvData *data = (MyDrvData *) drv_data;
     char *answer = NULL;
     char buff[64];
-    int alen;
+    ErlDrvSSizeT alen;
 
     switch (command) {
     case OP_I_AM_IPID:

@@ -22,7 +22,10 @@ MODULES =  \
 	observer_SUITE \
 	crashdump_viewer_SUITE \
 	etop_SUITE \
+	ttb_helper \
 	ttb_SUITE \
+	client \
+	server \
 	crashdump_helper
 
 ERL_FILES= $(MODULES:%=%.erl)
@@ -79,11 +82,11 @@ include $(ERL_TOP)/make/otp_release_targets.mk
 release_spec: opt
 
 release_tests_spec: make_emakefile
-	$(INSTALL_DIR) $(RELSYSDIR)
+	$(INSTALL_DIR) "$(RELSYSDIR)"
 	$(INSTALL_DATA) observer.spec $(EMAKEFILE) \
 		$(COVERFILE) $(ERL_FILES) \
-		$(RELSYSDIR)
-	@tar cf - *_SUITE_data | (cd $(RELSYSDIR); tar xf -)
+		"$(RELSYSDIR)"
+	@tar cf - *_SUITE_data | (cd "$(RELSYSDIR)"; tar xf -)
 
 release_docs_spec:
 

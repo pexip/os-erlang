@@ -1,7 +1,7 @@
 #
 # %CopyrightBegin%
 #
-# Copyright Ericsson AB 2003-2011. All Rights Reserved.
+# Copyright Ericsson AB 2003-2013. All Rights Reserved.
 #
 # The contents of this file are subject to the Erlang Public License,
 # Version 1.1, (the "License"); you may not use this file except in
@@ -40,7 +40,6 @@ RELSYSDIR = $(RELEASE_PATH)/lib/common_test-$(VSN)
 # ----------------------------------------------------
 
 MODULES= \
-	ct_line \
 	ct \
 	ct_logs \
 	ct_framework \
@@ -69,13 +68,22 @@ MODULES= \
 	ct_config_xml \
 	ct_slave \
         ct_hooks\
-        ct_hooks_lock
+        ct_hooks_lock\
+	cth_log_redirect\
+	cth_surefire \
+	ct_netconfc \
+	ct_conn_log_h \
+	cth_conn_log \
+	ct_groups \
+	ct_property_test
 
 TARGET_MODULES= $(MODULES:%=$(EBIN)/%)
+BEAM_FILES= $(MODULES:%=$(EBIN)/%.$(EMULATOR))
 
 ERL_FILES= $(MODULES:=.erl)
 HRL_FILES = \
-	ct_util.hrl
+	ct_util.hrl \
+	ct_netconfc.hrl
 EXTERNAL_HRL_FILES = \
 	../include/ct.hrl \
 	../include/ct_event.hrl
@@ -90,14 +98,14 @@ DTD_FILES = \
 # ----------------------------------------------------
 ERL_COMPILE_FLAGS += -pa ../ebin -I../include -I $(ERL_TOP)/lib/snmp/include/ \
 	-I../../test_server/include -I../../xmerl/inc/ \
-	-I $(ERL_TOP)/lib/kernel/include
+	-I $(ERL_TOP)/lib/kernel/include -Werror
 
 # ----------------------------------------------------
 # Targets
 # ----------------------------------------------------
 TARGET_FILES = \
 	$(GEN_ERL_FILES:%.erl=$(EBIN)/%.$(EMULATOR)) \
-	$(MODULES:%=$(EBIN)/%.$(EMULATOR)) \
+	$(BEAM_FILES) \
 	$(APP_TARGET) $(APPUP_TARGET)
 
 APP_FILE= common_test.app
@@ -120,10 +128,10 @@ clean:
 # Special Build Targets
 # ----------------------------------------------------
 $(APP_TARGET): $(APP_SRC) ../vsn.mk
-	sed -e 's;%VSN%;$(VSN);' $< > $@
+	$(vsn_verbose)sed -e 's;%VSN%;$(VSN);' $< > $@
 
 $(APPUP_TARGET): $(APPUP_SRC) ../vsn.mk
-	sed -e 's;%VSN%;$(VSN);' $< > $@
+	$(vsn_verbose)sed -e 's;%VSN%;$(VSN);' $< > $@
 
 # ----------------------------------------------------
 # Release Target
@@ -131,12 +139,12 @@ $(APPUP_TARGET): $(APPUP_SRC) ../vsn.mk
 include $(ERL_TOP)/make/otp_release_targets.mk
 
 release_spec: opt
-	$(INSTALL_DIR) $(RELSYSDIR)/src
-	$(INSTALL_DATA) $(ERL_FILES) $(HRL_FILES) $(RELSYSDIR)/src
-	$(INSTALL_DIR) $(RELSYSDIR)/ebin
-	$(INSTALL_DATA) $(TARGET_FILES) $(RELSYSDIR)/ebin
-	$(INSTALL_DIR) $(RELSYSDIR)/include
-	$(INSTALL_DATA) $(EXTERNAL_HRL_FILES) $(RELSYSDIR)/include
+	$(INSTALL_DIR) "$(RELSYSDIR)/src"
+	$(INSTALL_DATA) $(ERL_FILES) $(HRL_FILES) "$(RELSYSDIR)/src"
+	$(INSTALL_DIR) "$(RELSYSDIR)/ebin"
+	$(INSTALL_DATA) $(TARGET_FILES) "$(RELSYSDIR)/ebin"
+	$(INSTALL_DIR) "$(RELSYSDIR)/include"
+	$(INSTALL_DATA) $(EXTERNAL_HRL_FILES) "$(RELSYSDIR)/include"
 
 release_tests_spec: opt
 	$(INSTALL_DIR) $(RELEASE_PATH)/common_test_test

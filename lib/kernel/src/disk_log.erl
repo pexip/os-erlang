@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %% 
-%% Copyright Ericsson AB 1997-2011. All Rights Reserved.
+%% Copyright Ericsson AB 1997-2013. All Rights Reserved.
 %% 
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -44,6 +44,8 @@
 %% To be used for debugging only:
 -export([pid2name/1]).
 
+-export_type([continuation/0]).
+
 -type dlog_state_error() :: 'ok' | {'error', term()}.
 
 -record(state, {queue = [],
@@ -64,7 +66,7 @@
 %%-define(PROFILE(C), C).
 -define(PROFILE(C), void).
 
--compile({inline,[{log_loop,4},{log_end_sync,2},{replies,2},{rflat,1}]}).
+-compile({inline,[{log_loop,5},{log_end_sync,2},{replies,2},{rflat,1}]}).
 
 %%%----------------------------------------------------------------------
 %%% Contract type specifications
@@ -282,7 +284,8 @@ change_notify(Log, Pid, NewNotify) ->
 
 -spec change_header(Log, Header) -> 'ok' | {'error', Reason} when
       Log :: log(),
-      Header :: {head, dlog_head_opt()} | {head_func, mfa()},
+      Header :: {head, dlog_head_opt()}
+              | {head_func, MFA :: {atom(), atom(), list()}},
       Reason :: no_such_log | nonode | {read_only_mode, Log}
               | {blocked_log, Log} | {badarg, head}.
 change_header(Log, NewHead) ->
@@ -336,7 +339,9 @@ format_error(Error) ->
                         ok | {blocked, QueueLogRecords :: boolean()}}
                    | {node, Node :: node()}
                    | {distributed, Dist :: local | [node()]}
-                   | {head, Head :: none | {head, term()} | mfa()}
+                   | {head, Head :: none
+                                  | {head, term()}
+                                  | (MFA :: {atom(), atom(), list()})}
                    | {no_written_items, NoWrittenItems ::non_neg_integer()}
                    | {full, Full :: boolean}
                    | {no_current_bytes, non_neg_integer()}
@@ -685,7 +690,7 @@ handle({From, {log, B}}, S) ->
 	L when L#log.mode =:= read_only ->
 	    reply(From, {error, {read_only_mode, L#log.name}}, S);
 	L when L#log.status =:= ok, L#log.format =:= internal ->
-	    log_loop(S, From, [B], []);
+	    log_loop(S, From, [B], [], iolist_size(B));
 	L when L#log.status =:= ok, L#log.format =:= external ->
 	    reply(From, {error, {format_external, L#log.name}}, S);
 	L when L#log.status =:= {blocked, false} ->
@@ -700,7 +705,7 @@ handle({From, {blog, B}}, S) ->
 	L when L#log.mode =:= read_only ->
 	    reply(From, {error, {read_only_mode, L#log.name}}, S);
 	L when L#log.status =:= ok ->
-	    log_loop(S, From, [B], []);
+	    log_loop(S, From, [B], [], iolist_size(B));
 	L when L#log.status =:= {blocked, false} ->
 	    reply(From, {error, {blocked_log, L#log.name}}, S);
 	L when L#log.blocked_by =:= From ->
@@ -714,7 +719,7 @@ handle({alog, B}, S) ->
 	    notify_owners({read_only,B}),
 	    loop(S);
 	L when L#log.status =:= ok, L#log.format =:= internal ->
-	    log_loop(S, [], [B], []);
+	    log_loop(S, [], [B], [], iolist_size(B));
 	L when L#log.status =:= ok ->
 	    notify_owners({format_external, B}),
 	    loop(S);
@@ -730,7 +735,7 @@ handle({balog, B}, S) ->
 	    notify_owners({read_only,B}),
 	    loop(S);
 	L when L#log.status =:= ok ->
-	    log_loop(S, [], [B], []);
+	    log_loop(S, [], [B], [], iolist_size(B));
 	L when L#log.status =:= {blocked, false} ->
 	    notify_owners({blocked_log, B}),
 	    loop(S);
@@ -1029,38 +1034,40 @@ handle(_, S) ->
     loop(S).
 
 sync_loop(From, S) ->
-    log_loop(S, [], [], From).
+    log_loop(S, [], [], From, 0).
+
+-define(MAX_LOOK_AHEAD, 64*1024).
 
 %% Inlined.
-log_loop(S, Pids, _Bins, _Sync) when S#state.cache_error =/= ok ->
+log_loop(#state{cache_error = CE}=S, Pids, _Bins, _Sync, _Sz) when CE =/= ok ->
     loop(cache_error(S, Pids));
-log_loop(S, Pids, Bins, Sync) when S#state.messages =:= [] ->
+log_loop(#state{}=S, Pids, Bins, Sync, Sz) when Sz > ?MAX_LOOK_AHEAD ->
+    loop(log_end(S, Pids, Bins, Sync));
+log_loop(#state{messages = []}=S, Pids, Bins, Sync, Sz) ->
     receive 
 	Message ->
-	    log_loop(Message, Pids, Bins, Sync, S, get(log))
+            log_loop(Message, Pids, Bins, Sync, Sz, S, get(log))
     after 0 ->
 	    loop(log_end(S, Pids, Bins, Sync))
     end;
-log_loop(S, Pids, Bins, Sync) ->
-    [M | Ms] = S#state.messages,
+log_loop(#state{messages = [M | Ms]}=S, Pids, Bins, Sync, Sz) ->
     S1 = S#state{messages = Ms},
-    log_loop(M, Pids, Bins, Sync, S1, get(log)).
+    log_loop(M, Pids, Bins, Sync, Sz, S1, get(log)).
 
 %% Items logged after the last sync request found are sync:ed as well.
-log_loop({alog,B}, Pids, Bins, Sync, S, L) when L#log.format =:= internal ->
+log_loop({alog,B}, Pids, Bins, Sync, Sz, S, #log{format = internal}) ->
     %% {alog, _} allowed for the internal format only.
-    log_loop(S, Pids, [B | Bins], Sync);
-log_loop({balog, B}, Pids, Bins, Sync, S, _L) ->
-    log_loop(S, Pids, [B | Bins], Sync);
-log_loop({From, {log, B}}, Pids, Bins, Sync, S, L) 
-                                           when L#log.format =:= internal ->
+    log_loop(S, Pids, [B | Bins], Sync, Sz+iolist_size(B));
+log_loop({balog, B}, Pids, Bins, Sync, Sz, S, _L) ->
+    log_loop(S, Pids, [B | Bins], Sync, Sz+iolist_size(B));
+log_loop({From, {log, B}}, Pids, Bins, Sync, Sz, S, #log{format = internal}) ->
     %% {log, _} allowed for the internal format only.
-    log_loop(S, [From | Pids], [B | Bins], Sync);
-log_loop({From, {blog, B}}, Pids, Bins, Sync, S, _L) ->
-    log_loop(S, [From | Pids], [B | Bins], Sync);
-log_loop({From, sync}, Pids, Bins, Sync, S, _L) ->
-    log_loop(S, Pids, Bins, [From | Sync]);
-log_loop(Message, Pids, Bins, Sync, S, _L) ->
+    log_loop(S, [From | Pids], [B | Bins], Sync, Sz+iolist_size(B));
+log_loop({From, {blog, B}}, Pids, Bins, Sync, Sz, S, _L) ->
+    log_loop(S, [From | Pids], [B | Bins], Sync, Sz+iolist_size(B));
+log_loop({From, sync}, Pids, Bins, Sync, Sz, S, _L) ->
+    log_loop(S, Pids, Bins, [From | Sync], Sz);
+log_loop(Message, Pids, Bins, Sync, _Sz, S, _L) ->
     NS = log_end(S, Pids, Bins, Sync),
     handle(Message, NS).
 
@@ -1069,13 +1076,13 @@ log_end(S, [], [], Sync) ->
 log_end(S, Pids, Bins, Sync) ->
     case do_log(get(log), rflat(Bins)) of
 	N when is_integer(N) ->
-	    replies(Pids, ok),
+	    ok = replies(Pids, ok),
 	    S1 = (state_ok(S))#state{cnt = S#state.cnt+N},
 	    log_end_sync(S1, Sync);
         {error, {error, {full, _Name}}, N} when Pids =:= [] ->
             log_end_sync(state_ok(S#state{cnt = S#state.cnt + N}), Sync);
 	{error, Error, N} ->
-	    replies(Pids, Error),
+	    ok = replies(Pids, Error),
 	    state_err(S#state{cnt = S#state.cnt + N}, Error)
     end.
 
@@ -1084,7 +1091,7 @@ log_end_sync(S, []) ->
     S;
 log_end_sync(S, Sync) ->
     Res = do_sync(get(log)),
-    replies(Sync, Res),
+    ok = replies(Sync, Res),
     state_err(S, Res).
 
 %% Inlined.
@@ -1176,7 +1183,7 @@ do_exit(S, From, Message0, Reason) ->
 		  _ -> Message0
 	      end,
     _ = disk_log_server:close(self()),
-    replies(From, Message),
+    ok = replies(From, Message),
     ?PROFILE(ep:done()),
     exit(Reason).
 
@@ -1240,19 +1247,28 @@ is_owner(Pid, L) ->
 
 %% ok | throw(Error)
 rename_file(File, NewFile, halt) ->
-    file:rename(File, NewFile);
+    case file:rename(File, NewFile) of
+        ok ->
+            ok;
+        Else ->
+            file_error(NewFile, Else)
+    end;
 rename_file(File, NewFile, wrap) ->
     rename_file(wrap_file_extensions(File), File, NewFile, ok).
 
-rename_file([Ext|Exts], File, NewFile, Res) ->
-    NRes = case file:rename(add_ext(File, Ext), add_ext(NewFile, Ext)) of
+rename_file([Ext|Exts], File, NewFile0, Res) ->
+    NewFile = add_ext(NewFile0, Ext),
+    NRes = case file:rename(add_ext(File, Ext), NewFile) of
 	       ok ->
 		   Res;
 	       Else ->
-		   Else
+		   file_error(NewFile, Else)
 	   end,
-    rename_file(Exts, File, NewFile, NRes);
+    rename_file(Exts, File, NewFile0, NRes);
 rename_file([], _File, _NewFiles, Res) -> Res.
+
+file_error(FileName, {error, Error}) ->
+    {error, {file_error, FileName, Error}}.
 
 %% "Old" error messages have been kept, arg_mismatch has been added.
 %%-spec compare_arg(dlog_options(), #arg{}, 
@@ -1511,48 +1527,48 @@ do_format_error({size_mismatch, OldSize, ArgSize}) ->
     io_lib:format("The given size ~p does not match the size ~p found on "
 		  "the disk log size file~n", [ArgSize, OldSize]);
 do_format_error({read_only_mode, Log}) ->
-    io_lib:format("The disk log ~p has been opened read-only, but the "
+    io_lib:format("The disk log ~tp has been opened read-only, but the "
 		  "requested operation needs read-write access~n", [Log]);
 do_format_error({format_external, Log}) ->
     io_lib:format("The requested operation can only be applied on internally "
-		  "formatted disk logs, but ~p is externally formatted~n",
+		  "formatted disk logs, but ~tp is externally formatted~n",
 		  [Log]);
 do_format_error({blocked_log, Log}) ->
-    io_lib:format("The blocked disk log ~p does not queue requests, or "
+    io_lib:format("The blocked disk log ~tp does not queue requests, or "
 		  "the log has been blocked by the calling process~n", [Log]);
 do_format_error({full, Log}) ->
-    io_lib:format("The halt log ~p is full~n", [Log]);
+    io_lib:format("The halt log ~tp is full~n", [Log]);
 do_format_error({not_blocked, Log}) ->
-    io_lib:format("The disk log ~p is not blocked~n", [Log]);
+    io_lib:format("The disk log ~tp is not blocked~n", [Log]);
 do_format_error({not_owner, Pid}) ->
-    io_lib:format("The pid ~p is not an owner of the disk log~n", [Pid]);
+    io_lib:format("The pid ~tp is not an owner of the disk log~n", [Pid]);
 do_format_error({not_blocked_by_pid, Log}) ->
-    io_lib:format("The disk log ~p is blocked, but only the blocking pid "
+    io_lib:format("The disk log ~tp is blocked, but only the blocking pid "
 		  "can unblock a disk log~n", [Log]);
 do_format_error({new_size_too_small, Log, CurrentSize}) ->
-    io_lib:format("The current size ~p of the halt log ~p is greater than the "
+    io_lib:format("The current size ~p of the halt log ~tp is greater than the "
 		  "requested new size~n", [CurrentSize, Log]);
 do_format_error({halt_log, Log}) ->
-    io_lib:format("The halt log ~p cannot be wrapped~n", [Log]);
+    io_lib:format("The halt log ~tp cannot be wrapped~n", [Log]);
 do_format_error({same_file_name, Log}) ->
-    io_lib:format("Current and new file name of the disk log ~p "
+    io_lib:format("Current and new file name of the disk log ~tp "
 		  "are the same~n", [Log]);
 do_format_error({arg_mismatch, Option, FirstValue, ArgValue}) ->
-    io_lib:format("The value ~p of the disk log option ~p does not match "
-		  "the current value ~p~n", [ArgValue, Option, FirstValue]);
+    io_lib:format("The value ~tp of the disk log option ~p does not match "
+		  "the current value ~tp~n", [ArgValue, Option, FirstValue]);
 do_format_error({name_already_open, Log}) ->
-    io_lib:format("The disk log ~p has already opened another file~n", [Log]);
+    io_lib:format("The disk log ~tp has already opened another file~n", [Log]);
 do_format_error({node_already_open, Log}) ->
-    io_lib:format("The distribution option of the disk log ~p does not match "
+    io_lib:format("The distribution option of the disk log ~tp does not match "
 		  "already open log~n", [Log]);
 do_format_error({open_read_write, Log}) ->
-    io_lib:format("The disk log ~p has already been opened read-write~n", 
+    io_lib:format("The disk log ~tp has already been opened read-write~n", 
 		  [Log]);
 do_format_error({open_read_only, Log}) ->
-    io_lib:format("The disk log ~p has already been opened read-only~n", 
+    io_lib:format("The disk log ~tp has already been opened read-only~n", 
 		  [Log]);
 do_format_error({not_internal_wrap, Log}) ->
-    io_lib:format("The requested operation cannot be applied since ~p is not "
+    io_lib:format("The requested operation cannot be applied since ~tp is not "
 		  "an internally formatted disk log~n", [Log]);
 do_format_error(no_such_log) ->
     io_lib:format("There is no disk log with the given name~n", []);
@@ -1563,13 +1579,13 @@ do_format_error(nodedown) ->
     io_lib:format("There seems to be no node up that can handle "
 		  "the request~n", []);
 do_format_error({corrupt_log_file, FileName}) ->
-    io_lib:format("The disk log file \"~s\" contains corrupt data~n", 
+    io_lib:format("The disk log file \"~ts\" contains corrupt data~n", 
                   [FileName]);
 do_format_error({need_repair, FileName}) ->
-    io_lib:format("The disk log file \"~s\" has not been closed properly and "
+    io_lib:format("The disk log file \"~ts\" has not been closed properly and "
 		  "needs repair~n", [FileName]);
 do_format_error({not_a_log_file, FileName}) ->
-    io_lib:format("The file \"~s\" is not a wrap log file~n", [FileName]);
+    io_lib:format("The file \"~ts\" is not a wrap log file~n", [FileName]);
 do_format_error({invalid_header, InvalidHeader}) ->
     io_lib:format("The disk log header is not wellformed: ~p~n", 
 		  [InvalidHeader]);
@@ -1577,14 +1593,14 @@ do_format_error(end_of_log) ->
     io_lib:format("An attempt was made to step outside a not yet "
 		  "full wrap log~n", []);
 do_format_error({invalid_index_file, FileName}) ->
-    io_lib:format("The wrap log index file \"~s\" cannot be used~n",
+    io_lib:format("The wrap log index file \"~ts\" cannot be used~n",
 		  [FileName]);
 do_format_error({no_continuation, BadCont}) ->
     io_lib:format("The term ~p is not a chunk continuation~n", [BadCont]);
 do_format_error({file_error, FileName, Reason}) ->
-    io_lib:format("\"~s\": ~p~n", [FileName, file:format_error(Reason)]);
+    io_lib:format("\"~ts\": ~tp~n", [FileName, file:format_error(Reason)]);
 do_format_error(E) ->
-    io_lib:format("~p~n", [E]).
+    io_lib:format("~tp~n", [E]).
 
 do_info(L, Cnt) ->
     #log{name = Name, type = Type, mode = Mode, filename = File, 
@@ -1865,7 +1881,8 @@ replies(Pids, Reply) ->
     send_reply(Pids, M).
 
 send_reply(Pid, M) when is_pid(Pid) ->
-    Pid ! M;
+    Pid ! M,
+    ok;
 send_reply([Pid | Pids], M) ->
     Pid ! M,
     send_reply(Pids, M);
@@ -1898,13 +1915,8 @@ multi_req(Msg, Pids) ->
 			    {'DOWN', Ref, process, Pid, _Info} ->
 				Reply;
 			    {disk_log, Pid, _Reply} ->
-				erlang:demonitor(Ref),
-				receive 
-				    {'DOWN', Ref, process, Pid, _Reason} ->
-					ok
-				after 0 -> 
-					ok
-				end
+				erlang:demonitor(Ref, [flush]),
+				ok
 			end
 		end, {error, nonode}, Refs).
 
@@ -1947,14 +1959,10 @@ monitor_request(Pid, Req) ->
     receive 
 	{'DOWN', Ref, process, Pid, _Info} ->
 	    {error, no_such_log};
-	{disk_log, Pid, Reply} ->
-	    erlang:demonitor(Ref),
-	    receive 
-		{'DOWN', Ref, process, Pid, _Reason} ->
-		    Reply
-	    after 0 ->
-                    Reply
-	    end
+	{disk_log, Pid, Reply} when not is_tuple(Reply) orelse
+                                    element(2, Reply) =/= disk_log_stopped ->
+	    erlang:demonitor(Ref, [flush]),
+	    Reply
     end.
 
 req2(Pid, R) ->
@@ -2015,7 +2023,7 @@ notify_owners(Note) ->
 
 cache_error(S, Pids) ->
     Error = S#state.cache_error,
-    replies(Pids, Error),
+    ok = replies(Pids, Error),
     state_err(S#state{cache_error = ok}, Error).
 
 state_ok(S) ->

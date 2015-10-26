@@ -1,7 +1,7 @@
 /*
  * %CopyrightBegin%
  * 
- * Copyright Ericsson AB 1998-2009. All Rights Reserved.
+ * Copyright Ericsson AB 1998-2011. All Rights Reserved.
  * 
  * The contents of this file are subject to the Erlang Public License,
  * Version 1.1, (the "License"); you may not use this file except in
@@ -94,7 +94,7 @@ char **erl_global_names(int fd, int *count)
   if (!(names = malloc((arity * sizeof(char**)) + (size-index)))) return NULL;
 
   /* arity pointers first, followed by s */
-  s = (char *)(names+arity+1);
+  s = (char *)(names+arity);
 
   if (count) *count = 0;
   for (i=0; i<arity; i++) {

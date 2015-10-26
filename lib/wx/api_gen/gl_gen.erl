@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2008-2011. All Rights Reserved.
+%% Copyright Ericsson AB 2008-2012. All Rights Reserved.
 %%
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -62,11 +62,11 @@ gen_code() ->
     GLDefs  = parse_gl_defs(Opts),    
     {GLUDefines,GLUFuncs} = setup(GLUDefs, Opts),
     {GLDefines,GLFuncs}   = setup(GLDefs, Opts),
+    gl_gen_erl:gl_defines(GLDefines),
+    gl_gen_erl:gl_api(GLFuncs),
     gl_gen_erl:glu_defines(GLUDefines),
     gl_gen_erl:glu_api(GLUFuncs),
 
-    gl_gen_erl:gl_defines(GLDefines),
-    gl_gen_erl:gl_api(GLFuncs),
     %%gl_gen_erl:gen_debug(GLFuncs,GLUFuncs),
     gl_gen_c:gen(GLFuncs,GLUFuncs),
     ok.
@@ -185,24 +185,44 @@ parse_define([#xmlElement{name=name,content=[#xmlText{value="WINGDIAPI"++_}]}|_]
     throw(skip);
 parse_define([#xmlElement{name=name,content=[#xmlText{value=Name}]}|R], Def, Os) ->
     parse_define(R, Def#def{name=Name}, Os);
-parse_define([#xmlElement{name=initializer,content=[#xmlText{value=V}]}|_],Def,_Os) ->
-    Val0 = string:strip(V),
-    try 
+parse_define([#xmlElement{name=initializer,content=Contents}|_R],Def,_Os) ->
+    Val0 = extract_def2(Contents),
+    try
 	case Val0 of
-	    "0x" ++ Val1 -> 
-		Val = http_util:hexlist_to_integer(Val1),
-		Def#def{val=Val, type=hex};
+	    "0x" ++ Val1 ->
+		_ = http_util:hexlist_to_integer(Val1),
+		Def#def{val=Val1, type=hex};
 	    _ ->
 		Val = list_to_integer(Val0),
 		Def#def{val=Val, type=int}
 	end
-    catch _:_ -> 
-	    Def#def{val=Val0, type=string}
+    catch _:_ ->
+	    case catch list_to_float(Val0) of
+		{'EXIT', _} -> Def#def{val=Val0, type=string};
+		_ -> Def#def{val=Val0, type=float_str}
+	    end
     end;
 parse_define([_|R], D, Opts) ->
     parse_define(R, D, Opts);
 parse_define([], D, _Opts) ->
     D.
+
+extract_def2([#xmlText{value=Val}|R]) ->
+    strip_comment(string:strip(Val)) ++ extract_def2(R);
+extract_def2([#xmlElement{content=Cs}|R]) ->
+    extract_def2(Cs) ++ extract_def2(R);
+extract_def2([]) -> [].
+
+strip_comment("/*" ++ Rest) ->
+    strip_comment_until_end(Rest);
+strip_comment("//" ++ _) -> [];
+strip_comment([H|R]) -> [H | strip_comment(R)];
+strip_comment([]) -> [].
+
+strip_comment_until_end("*/" ++ Rest) ->
+    strip_comment(Rest);
+strip_comment_until_end([_|R]) ->
+    strip_comment_until_end(R).
 
 parse_func(Xml, Opts) ->
     {Func,_} = foldl(fun(X,Acc) -> parse_func(X,Acc,Opts) end, {#func{},1}, Xml),
@@ -360,7 +380,9 @@ extract_type_info2("**",  Acc) -> [{by_ref,{pointer,2}}|Acc];
 extract_type_info2(Type,  Acc) -> [Type|Acc].
 
 parse_type2(["void"],  _T, _Opts) ->  void;
-parse_type2([N="void"|R],  T, Opts) ->  
+parse_type2([N="void", const|R], T, Opts) ->
+    parse_type2([const|R],T#type{name=N, base=idx_binary},Opts);
+parse_type2([N="void"|R],  T, Opts) ->
     parse_type2(R,T#type{name=N},Opts);
 parse_type2([const|R],T=#type{mod=Mod},Opts) -> 
     parse_type2(R,T#type{mod=[const|Mod]},Opts);
@@ -676,6 +698,7 @@ get_extension(ExtName,_Opts) ->
 	"IGP"  ++ Name -> {reverse(Name),"PGI"};
 	"PH"   ++ Name -> {reverse(Name),"HP"};
 	"YDEMERG" ++ Name -> {reverse(Name),"GREMEDY"};
+	"SEO" ++ Name -> {reverse(Name),"OES"};
 	%%["" ++ Name] ->     {Name;  %%
 	_ -> {ExtName, ""}
     end.

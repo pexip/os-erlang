@@ -1,10 +1,10 @@
-<?xml version="1.0" encoding="latin1" ?>
+<?xml version="1.0" encoding="utf-8" ?>
 <!DOCTYPE chapter SYSTEM "chapter.dtd">
 
 <chapter>
   <header>
     <copyright>
-      <year>2004</year><year>2010</year>
+      <year>2004</year><year>2013</year>
       <holder>Ericsson AB. All Rights Reserved.</holder>
     </copyright>
     <legalnotice>
@@ -30,7 +30,97 @@
   </header>
   <p>This document describes the changes made to the GS application.</p>
 
-  <section><title>GS 1.5.14</title>
+  <section><title>GS 1.5.16</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+          <p>
+	    Application upgrade (appup) files are corrected for the
+	    following applications: </p>
+          <p>
+	    <c>asn1, common_test, compiler, crypto, debugger,
+	    dialyzer, edoc, eldap, erl_docgen, et, eunit, gs, hipe,
+	    inets, observer, odbc, os_mon, otp_mibs, parsetools,
+	    percept, public_key, reltool, runtime_tools, ssh,
+	    syntax_tools, test_server, tools, typer, webtool, wx,
+	    xmerl</c></p>
+          <p>
+	    A new test utility for testing appup files is added to
+	    test_server. This is now used by most applications in
+	    OTP.</p>
+          <p>
+	    (Thanks to Tobias Schlager)</p>
+          <p>
+	    Own Id: OTP-11744</p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>GS 1.5.15.2</title>
+
+    <section><title>Improvements and New Features</title>
+      <list>
+        <item>
+	    <p>Where necessary a comment stating encoding has been
+	    added to Erlang files. The comment is meant to be removed
+	    in Erlang/OTP R17B when UTF-8 becomes the default
+	    encoding. </p>
+          <p>
+	    Own Id: OTP-10630</p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>GS 1.5.15.1</title>
+
+    <section><title>Improvements and New Features</title>
+      <list>
+        <item>
+	    <p>The GS applications is now deprecated and will be
+	    removed in the R16 release. The following GS-based
+	    applications have been superseded by the Observer
+	    application and will removed in R16: Appmon, Pman,
+	    Tv.</p>
+          <p>
+	    *** POTENTIAL INCOMPATIBILITY ***</p>
+          <p>
+	    Own Id: OTP-9907</p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>GS 1.5.15</title>
+
+    <section><title>Improvements and New Features</title>
+      <list>
+        <item>
+	    <p>Erlang/OTP can now be built using parallel make if you
+	    limit the number of jobs, for instance using '<c>make
+	    -j6</c>' or '<c>make -j10</c>'. '<c>make -j</c>' does not
+	    work at the moment because of some missing
+	    dependencies.</p>
+          <p>
+	    Own Id: OTP-9451</p>
+        </item>
+        <item>
+          <p>
+	    Eliminate use of deprecated regexp module</p>
+          <p>
+	    Own Id: OTP-9810</p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>GS 1.5.14</title>
 
     <section><title>Fixed Bugs and Malfunctions</title>
       <list>

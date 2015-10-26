@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %% 
-%% Copyright Ericsson AB 1997-2009. All Rights Reserved.
+%% Copyright Ericsson AB 1997-2013. All Rights Reserved.
 %% 
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -40,28 +40,15 @@ run([]) ->
 run1(Name) ->
     CFile = Name ++ ".c",
     {ok, Bin} = file:read_file(CFile),
-    String = binary_to_list(Bin),
-
-    %% This ConstPart stuff is because you can't retrieve part of a match.
-    %% Long live Perl!  
-    
-    ConstPart = "\nTESTCASE\\(",
-    ConstPartLen = 10,
-    {match, Matches} = regexp:matches(String, ConstPart++"[_a-zA-Z]*"),
-    Cases = get_names(Matches, ConstPartLen, Bin, []),
+    RE = "\nTESTCASE\\(([_a-zA-Z0-9]*)\\)",
+    {match, Cases0} = re:run(Bin, RE, [{capture,all_but_first,list},global]),
+    Cases = lists:concat(Cases0),
     generate(Name, Cases).
-
-get_names([{Start, Length}|Rest], Skip, Bin, Result) ->
-    Name = binary_to_list(Bin, Start+Skip, Start+Length-1),
-    get_names(Rest, Skip, Bin, [Name|Result]);
-get_names([], _Skip, _Bin, Result) ->
-    lists:reverse(Result).
 
 generate(TcName, Cases) ->
     Hrl = TcName ++ "_cases.hrl",
     {ok, HrlFile} = file:open(Hrl, write),
-    {ok, Dir} = file:get_cwd(),
-    generate_hrl(Cases, HrlFile, {filename:join(Dir, TcName), 0}),
+    generate_hrl(Cases, HrlFile, {TcName, 0}),
     file:close(HrlFile),
     C = TcName ++ "_decl.c",
     {ok, CFile} = file:open(C, write),
@@ -69,7 +56,7 @@ generate(TcName, Cases) ->
     file:close(CFile).
 
 generate_hrl([Case|Rest], File, {Name, Number}) ->
-    io:format(File, "-define(~s, {\"~s\", ~w}).~n", [Case, Name, Number]),
+    io:format(File, "-define(~s, {filename:join(proplists:get_value(data_dir,Config),\"~s\"), ~w}).~n", [Case, Name, Number]),
     generate_hrl(Rest, File, {Name, Number+1});
 generate_hrl([], _, _) ->
     ok.

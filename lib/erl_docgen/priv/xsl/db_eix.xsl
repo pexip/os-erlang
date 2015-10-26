@@ -106,10 +106,14 @@
     <xsl:choose>
       <!-- @arity is mandatory when referring to a specification -->
       <xsl:when test="string-length(@arity) > 0">
-        <xsl:call-template name="spec_name"/>
+        <xsl:call-template name="spec_name">
+	  <xsl:with-param name="lastfuncsblock" select="$lastfuncsblock"/>
+	</xsl:call-template>
       </xsl:when>
       <xsl:otherwise>
-        <xsl:call-template name="name"/>
+        <xsl:call-template name="name">
+	  <xsl:with-param name="lastfuncsblock" select="$lastfuncsblock"/>
+	</xsl:call-template>
       </xsl:otherwise>
     </xsl:choose>
   </xsl:template>
@@ -324,7 +328,7 @@
     <xsl:choose>
       <xsl:when test="string-length($tmp1) > 0 or starts-with($string, $start)">
         <xsl:variable name="tmp2">
-          <xsl:value-of select="substring-after($string, $end)"/>
+          <xsl:value-of select="substring-after(substring-after($string, $start), $end)"/>
         </xsl:variable>
         <xsl:variable name="retstring">
           <xsl:call-template name="remove-paren">

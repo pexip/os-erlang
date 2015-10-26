@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %% 
-%% Copyright Ericsson AB 1997-2010. All Rights Reserved.
+%% Copyright Ericsson AB 1997-2013. All Rights Reserved.
 %% 
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -29,7 +29,7 @@
 -define(INET_AF_ANY,          3). % Fake for ANY in any address family
 -define(INET_AF_LOOPBACK,     4). % Fake for LOOPBACK in any address family
 
-%% type codes (gettype, INET_REQ_GETTYPE)
+%% type codes to open and gettype - INET_REQ_GETTYPE
 -define(INET_TYPE_STREAM,     1).
 -define(INET_TYPE_DGRAM,      2).
 -define(INET_TYPE_SEQPACKET,  3).
@@ -46,6 +46,7 @@
 -define(INET_PASSIVE, 0).
 -define(INET_ACTIVE,  1).
 -define(INET_ONCE,    2). % Active once then passive
+-define(INET_MULTI,   3). % Active N then passive
 
 %% state codes (getstatus, INET_REQ_GETSTATUS)
 -define(INET_F_OPEN,         16#0001).
@@ -83,16 +84,23 @@
 -define(INET_REQ_IFSET,         23).
 -define(INET_REQ_SUBSCRIBE,     24).
 -define(INET_REQ_GETIFADDRS,    25).
+-define(INET_REQ_ACCEPT,        26).
+-define(INET_REQ_LISTEN,        27).
+-define(INET_REQ_IGNOREFD,      28).
+-define(INET_REQ_GETLADDRS,     29).
+-define(INET_REQ_GETPADDRS,     30).
+
 %% TCP requests
--define(TCP_REQ_ACCEPT,         40).
--define(TCP_REQ_LISTEN,         41).
+%%-define(TCP_REQ_ACCEPT,         40). MOVED
+%%-define(TCP_REQ_LISTEN,         41). MERGED
 -define(TCP_REQ_RECV,           42).
 -define(TCP_REQ_UNRECV,         43).
 -define(TCP_REQ_SHUTDOWN,       44).
 %% UDP and SCTP requests
 -define(PACKET_REQ_RECV,        60).
--define(SCTP_REQ_LISTEN,        61).
+%%-define(SCTP_REQ_LISTEN,        61). MERGED
 -define(SCTP_REQ_BINDX,	        62). %% Multi-home SCTP bind
+-define(SCTP_REQ_PEELOFF,       63).
 
 %% subscribe codes, INET_REQ_SUBSCRIBE
 -define(INET_SUBS_EMPTY_OUT_Q,  1).
@@ -100,7 +108,7 @@
 %% reply codes for *_REQ_*
 -define(INET_REP_ERROR,    0).
 -define(INET_REP_OK,       1).
--define(INET_REP_SCTP,     2).
+-define(INET_REP,          2).
 
 %% INET, TCP and UDP options:
 -define(INET_OPT_REUSEADDR,      0).
@@ -119,6 +127,7 @@
 -define(UDP_OPT_MULTICAST_LOOP,  13).
 -define(UDP_OPT_ADD_MEMBERSHIP,  14).
 -define(UDP_OPT_DROP_MEMBERSHIP, 15).
+-define(INET_OPT_IPV6_V6ONLY,    16).
 % "Local" options: codes start from 20:
 -define(INET_LOPT_BUFFER,        20).
 -define(INET_LOPT_HEADER,        21).
@@ -129,13 +138,15 @@
 -define(INET_LOPT_EXITONCLOSE,   26).
 -define(INET_LOPT_TCP_HIWTRMRK,  27).
 -define(INET_LOPT_TCP_LOWTRMRK,  28).
--define(INET_LOPT_BIT8,          29).
 -define(INET_LOPT_TCP_SEND_TIMEOUT, 30).
 -define(INET_LOPT_TCP_DELAY_SEND,   31).
 -define(INET_LOPT_PACKET_SIZE,   32).
 -define(INET_LOPT_READ_PACKETS,  33).
 -define(INET_OPT_RAW,            34).
 -define(INET_LOPT_TCP_SEND_TIMEOUT_CLOSE, 35).
+-define(INET_LOPT_MSGQ_HIWTRMRK,  36).
+-define(INET_LOPT_MSGQ_LOWTRMRK,  37).
+-define(INET_LOPT_NETNS,          38).
 % Specific SCTP options: separate range:
 -define(SCTP_OPT_RTOINFO,	 	100).
 -define(SCTP_OPT_ASSOCINFO,	 	101).
@@ -180,12 +191,6 @@
 -define(TCP_PB_SSL_TLS, 12).
 -define(TCP_PB_HTTP_BIN,13).
 -define(TCP_PB_HTTPH_BIN,14).
-
-%% bit options, INET_LOPT_BIT8
--define(INET_BIT8_CLEAR, 0).
--define(INET_BIT8_SET,   1).
--define(INET_BIT8_ON,    2).
--define(INET_BIT8_OFF,   3).
 
 
 %% getstat, INET_REQ_GETSTAT
@@ -399,6 +404,7 @@
 	  ifaddr,
 	  port   = 0,
 	  fd	 = -1,
+	  type   = seqpacket,
 	  opts   = [{mode,	  binary},
 		    {buffer,	  ?SCTP_DEF_BUFSZ},
 		    {sndbuf,	  ?SCTP_DEF_BUFSZ},

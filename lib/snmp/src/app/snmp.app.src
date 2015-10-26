@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %% 
-%% Copyright Ericsson AB 1996-2009. All Rights Reserved.
+%% Copyright Ericsson AB 1996-2013. All Rights Reserved.
 %% 
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -48,11 +48,15 @@
              snmpa_error_io,
              snmpa_error_logger,
              snmpa_error_report,
-             snmpa_general_db,
              snmpa_local_db,
              snmpa_mib,
              snmpa_mib_data,
+             snmpa_mib_data_tttn,
              snmpa_mib_lib,
+             snmpa_mib_storage,
+             snmpa_mib_storage_ets,
+             snmpa_mib_storage_dets,
+             snmpa_mib_storage_mnesia,
              snmpa_misc_sup,
              snmpa_mpd,
              snmpa_net_if,
@@ -91,6 +95,7 @@
              snmpm_mpd,
              snmpm_net_if,
              snmpm_net_if_filter,
+             snmpm_net_if_mt,
              snmpm_network_interface,
              snmpm_network_interface_filter,
              snmpm_server,
@@ -131,4 +136,6 @@
   %% configuration and use), and in that case mnesia must also be started,
   %% before snmp.
   {applications, [kernel, stdlib]},
-  {mod, {snmp_app, []}}]}.
+  {mod, {snmp_app, []}},
+  {runtime_dependencies, ["stdlib-2.0","runtime_tools-1.8.14","mnesia-4.12",
+			  "kernel-3.0","erts-6.0","crypto-3.3"]}]}.

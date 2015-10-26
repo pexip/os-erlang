@@ -2,7 +2,7 @@
 %%
 %% %CopyrightBegin%
 %% 
-%% Copyright Ericsson AB 2001-2011. All Rights Reserved.
+%% Copyright Ericsson AB 2001-2012. All Rights Reserved.
 %% 
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -396,6 +396,8 @@ gen_primop({Op,Dst,Args,Cont,Fail}, IsGuard, ConstTab) ->
 	      [Dst1]->
 		hipe_tagscheme:unsafe_tag_float(Dst1, Arg)
 	    end;
+	  debug_native_called -> 
+	    [hipe_rtl:mk_call(Dst, Op, Args, Cont, Fail, not_remote)];
 
 	  %% Only names listed above are accepted! MFA:s are not primops!
 	  _ ->
@@ -736,7 +738,7 @@ gen_mkfun([Dst], {_Mod, _FunId, _Arity} = MFidA, MagicNr, Index, FreeVars) ->
 
   %%  Tag the thing and increase the heap_pointer.
   %%    make_fun(funp);
-  WordSize = hipe_rtl_arch:word_size(),
+  WordSize = hipe_rtl_arch:word_size(),
   HeapNeed = (?ERL_FUN_SIZE + NumFree) * WordSize,
   TagCode = [hipe_tagscheme:tag_fun(Dst, HP), 
 	     %%  AdjustHPCode 
@@ -827,7 +829,7 @@ load_struct_field(Dest, StructP, Offset, int32) ->
 
 gen_free_vars(Vars, HPReg) ->
   HPVar = hipe_rtl:mk_new_var(),
-  WordSize = hipe_rtl_arch:word_size(),
+  WordSize = hipe_rtl_arch:word_size(),
   [hipe_rtl:mk_alu(HPVar, HPReg, add, hipe_rtl:mk_imm(?EFT_ENV)) |
    gen_free_vars(Vars, HPVar, 0, WordSize, [])].
 

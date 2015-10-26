@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 1998-2010. All Rights Reserved.
+%% Copyright Ericsson AB 1998-2013. All Rights Reserved.
 %%
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -19,77 +19,77 @@
 %%
 -module(testEnumExt).
 
--export([compile/3]).
 -export([main/1]).
 
 -include_lib("test_server/include/test_server.hrl").
 
-compile(Config,Rules,Options) ->
+main(Rule) when Rule =:= per; Rule =:= uper ->
+    io:format("main(~p)~n",[Rule]),
 
-    ?line DataDir = ?config(data_dir,Config),
-    ?line OutDir = ?config(priv_dir,Config),
-    ?line true = code:add_patha(?config(priv_dir,Config)),
-    ?line ok = asn1ct:compile(DataDir ++ "EnumExt",[Rules,{outdir,OutDir}]++Options).
-
-
-main(Rules) when Rules == per; Rules == per_bin; Rules == uper_bin ->
-    io:format("main(~p)~n",[Rules]),
-    B32=[32],B64=[64],
     %% ENUMERATED with extensionmark (value is in root set)
-    ?line {ok,B32} = asn1_wrapper:encode('EnumExt','Ext',red),
-    ?line {ok,red} = asn1_wrapper:decode('EnumExt','Ext',B32),
+    B32 = <<32>>,
+    B32 = roundtrip('Ext', red),
 
     %% ENUMERATED with extensionmark (value is an extensionvalue)
-    ?line {ok,Or} = asn1_wrapper:encode('EnumExt','Ext1',orange),
-    ?line {ok,orange} = asn1_wrapper:decode('EnumExt','Ext1',Or),
+    Or = roundtrip('Ext1', orange),
     %% unknown extensionvalue
-    ?line {ok,{asn1_enum,0}} = asn1_wrapper:decode('EnumExt','Ext',Or),
-
+    {ok,{asn1_enum,0}} = 'EnumExt':decode('Ext', Or),
 
     %% ENUMERATED no extensionmark 
-    ?line {ok,B64} = asn1_wrapper:encode('EnumExt','Noext',red),
-    ?line {ok,red} = asn1_wrapper:decode('EnumExt','Noext',B64),
-    ok;
-
-main(ber_bin_v2) ->
-    main(ber);
-main(ber_bin) ->
-    main(ber);
+    B64 = <<64>>,
+    B64 = roundtrip('Noext', red),
+    common(Rule);
 main(ber) ->
     io:format("main(ber)~n",[]),
     %% ENUMERATED with extensionmark (value is in root set)
-    ?line {ok,Bytes1} = asn1_wrapper:encode('EnumExt','Ext',red),
-    ?line {ok,red} = asn1_wrapper:decode('EnumExt','Ext',lists:flatten(Bytes1)),
+    roundtrip('Ext', red),
 
     %% value is an extensionvalue
-    ?line {ok,Bytes1_1} = asn1_wrapper:encode('EnumExt','Ext1',orange),
-    ?line {ok,{asn1_enum,7}} = asn1_wrapper:decode('EnumExt','Ext',lists:flatten(Bytes1_1)),
-%%    ?line {ok,Bytes1_1} = asn1_wrapper:encode('EnumExt','Ext',{asn1_enum,7}),
+    {ok,Bytes1_1} = 'EnumExt':encode('Ext1', orange),
+    {ok,{asn1_enum,7}} = 'EnumExt':decode('Ext', Bytes1_1),
 
-    %% ENUMERATED no extensionmark 
-    ?line {ok,Bytes2} = asn1_wrapper:encode('EnumExt','Noext',red),
-    ?line {ok,red} = asn1_wrapper:decode('EnumExt','Noext',lists:flatten(Bytes2)),
-    ?line {error,{asn1,_}} = (catch asn1_wrapper:encode('EnumExt','Noext',orange)),
-%%    ?line {error,{asn1,_}} = (catch asn1_wrapper:encode('EnumExt','Noext',{asn1_enum,7})),
-    ok,
+    %% ENUMERATED no extensionmark
+    roundtrip('Noext', red),
+    {error,{asn1,_}} = (catch 'EnumExt':encode('Noext', orange)),
     
     %% ENUMERATED with atom 'com'
-    ?line {ok,Bytes3} = asn1_wrapper:encode('EnumExt','Globalstate',{'Globalstate',preop}),
-    ?line {ok,preop} = asn1_wrapper:decode('EnumExt','Globalstate',
-					   lists:flatten(Bytes3)),
-    ?line {ok,Bytes4} = asn1_wrapper:encode('EnumExt','Globalstate',{'Globalstate',com}),
-    ?line {ok,com} = asn1_wrapper:decode('EnumExt','Globalstate',
-					   lists:flatten(Bytes4)).
+    roundtrip('Globalstate', preop),
+    roundtrip('Globalstate', com),
 
+    common(ber).
 
+common(Erule) ->
+    roundtrip('SubExt1', blue),
+    roundtrip('SubExt1', orange),
+    roundtrip('SubExt1', black),
 
+    roundtrip('Seq', {'Seq',blue,42}),
+    roundtrip('Seq', {'Seq',red,42}),
+    roundtrip('Seq', {'Seq',green,42}),
+    roundtrip('Seq', {'Seq',orange,47}),
+    roundtrip('Seq', {'Seq',black,4711}),
+    roundtrip('Seq', {'Seq',magenta,4712}),
 
+    [begin
+	 S = io_lib:format("e~2.016.0b", [I]),
+	 E = list_to_atom(lists:flatten(S)),
+	 roundtrip('SeqBig', {'SeqBig',true,E,9357})
+     end || I <- lists:seq(0, 128)],
 
+    v_roundtrip(Erule, 'SeqBig', {'SeqBig',true,e40,9357}),
+    v_roundtrip(Erule, 'SeqBig', {'SeqBig',true,e80,9357}),
+    ok.
 
+roundtrip(Type, Value) ->
+    asn1_test_lib:roundtrip_enc('EnumExt', Type, Value).
 
+v_roundtrip(Erule, Type, Value) ->
+    Encoded = roundtrip(Type, Value),
+    Encoded = asn1_test_lib:hex_to_bin(v(Erule, Value)).
 
-
-
-
-
-
+v(ber, {'SeqBig',true,e40,9357}) -> "300A8001 FF810141 8202248D";
+v(ber, {'SeqBig',true,e80,9357}) -> "300B8001 FF810200 81820224 8D";
+v(per, {'SeqBig',true,e40,9357}) -> "E0014002 248D";
+v(per, {'SeqBig',true,e80,9357}) -> "E0018002 248D";
+v(uper, {'SeqBig',true,e40,9357}) -> "E0280044 91A0";
+v(uper, {'SeqBig',true,e80,9357}) -> "E0300044 91A0".

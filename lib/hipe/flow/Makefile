@@ -1,7 +1,7 @@
 #
 # %CopyrightBegin%
 #
-# Copyright Ericsson AB 2001-2010. All Rights Reserved.
+# Copyright Ericsson AB 2001-2012. All Rights Reserved.
 #
 # The contents of this file are subject to the Erlang Public License,
 # Version 1.1, (the "License"); you may not use this file except in
@@ -65,7 +65,7 @@ DOC_FILES= $(MODULES:%=$(DOCS)/%.html)
 
 include ../native.mk
 
-ERL_COMPILE_FLAGS += +warn_exported_vars +warn_missing_spec +warn_untyped_record
+ERL_COMPILE_FLAGS += +warn_exported_vars +warn_missing_spec # +warn_untyped_record
 
 # ----------------------------------------------------
 # Targets
@@ -82,6 +82,9 @@ clean:
 	rm -f $(TARGET_FILES)
 	rm -f core
 
+distclean: clean
+realclean: clean
+
 $(DOCS)/%.html:%.erl
 	erl -noshell -run edoc_run file '"$<"' '[{dir, "$(DOCS)"}]' -s init stop
 
@@ -97,10 +100,10 @@ $(DOCS)/%.html:%.erl
 include $(ERL_TOP)/make/otp_release_targets.mk
 
 release_spec: opt
-	$(INSTALL_DIR) $(RELSYSDIR)/flow
-	$(INSTALL_DATA) $(ERL_FILES) $(HRL_FILES) $(INC_FILES) $(RELSYSDIR)/flow
-	$(INSTALL_DIR) $(RELSYSDIR)/ebin
-	$(INSTALL_DATA) $(TARGET_FILES) $(RELSYSDIR)/ebin
+	$(INSTALL_DIR) "$(RELSYSDIR)/flow"
+	$(INSTALL_DATA) $(ERL_FILES) $(HRL_FILES) $(INC_FILES) "$(RELSYSDIR)/flow"
+	$(INSTALL_DIR) "$(RELSYSDIR)/ebin"
+	$(INSTALL_DATA) $(TARGET_FILES) "$(RELSYSDIR)/ebin"
 
 release_docs_spec:
 

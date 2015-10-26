@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2000-2011. All Rights Reserved.
+%% Copyright Ericsson AB 2000-2013. All Rights Reserved.
 %%
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -224,7 +224,7 @@ version(File) ->
       MD5 :: binary().
 
 md5(File) ->
-    case catch read_significant_chunks(File) of
+    case catch read_significant_chunks(File, md5_chunks()) of
 	{ok, {Module, Chunks0}} ->
 	    Chunks = filter_funtab(Chunks0),
 	    {ok, {Module, erlang:md5([C || {_Id, C} <- Chunks])}};
@@ -240,21 +240,21 @@ format_error({error, Error}) ->
 format_error({error, Module, Error}) ->
     Module:format_error(Error);
 format_error({unknown_chunk, File, ChunkName}) ->
-    io_lib:format("~p: Cannot find chunk ~p~n", [File, ChunkName]);
+    io_lib:format("~tp: Cannot find chunk ~p~n", [File, ChunkName]);
 format_error({invalid_chunk, File, ChunkId}) ->
-    io_lib:format("~p: Invalid contents of chunk ~p~n", [File, ChunkId]);
+    io_lib:format("~tp: Invalid contents of chunk ~p~n", [File, ChunkId]);
 format_error({not_a_beam_file, File}) ->
-    io_lib:format("~p: Not a BEAM file~n", [File]);
+    io_lib:format("~tp: Not a BEAM file~n", [File]);
 format_error({file_error, File, Reason}) ->
-    io_lib:format("~p: ~p~n", [File, file:format_error(Reason)]);
+    io_lib:format("~tp: ~tp~n", [File, file:format_error(Reason)]);
 format_error({missing_chunk, File, ChunkId}) ->
-    io_lib:format("~p: Not a BEAM file: no IFF \"~s\" chunk~n", 
+    io_lib:format("~tp: Not a BEAM file: no IFF \"~s\" chunk~n", 
 		  [File, ChunkId]);
 format_error({invalid_beam_file, File, Pos}) ->
-    io_lib:format("~p: Invalid format of BEAM file near byte number ~p~n", 
+    io_lib:format("~tp: Invalid format of BEAM file near byte number ~p~n", 
 		  [File, Pos]);
 format_error({chunk_too_big, File, ChunkId, Size, Len}) ->
-    io_lib:format("~p: Size of chunk \"~s\" is ~p bytes, "
+    io_lib:format("~tp: Size of chunk \"~s\" is ~p bytes, "
 		  "but only ~p bytes could be read~n",
 		  [File, ChunkId, Size, Len]);
 format_error({chunks_different, Id}) ->
@@ -265,16 +265,16 @@ format_error({modules_different, Module1, Module2}) ->
     io_lib:format("Module names ~p and ~p differ in the two files~n", 
 		  [Module1, Module2]);
 format_error({not_a_directory, Name}) ->
-    io_lib:format("~p: Not a directory~n", [Name]);
+    io_lib:format("~tp: Not a directory~n", [Name]);
 format_error({key_missing_or_invalid, File, abstract_code}) ->
-    io_lib:format("~p: Cannot decrypt abstract code because key is missing or invalid",
+    io_lib:format("~tp: Cannot decrypt abstract code because key is missing or invalid",
 		  [File]);
 format_error(badfun) ->
     "not a fun or the fun has the wrong arity";
 format_error(exists) ->
     "a fun has already been installed";
 format_error(E) ->
-    io_lib:format("~p~n", [E]).
+    io_lib:format("~tp~n", [E]).
 
 %% 
 %% Exported functions for encrypted debug info.
@@ -300,12 +300,12 @@ clear_crypto_key_fun() ->
     call_crypto_server(clear_crypto_key_fun).
 
 -spec make_crypto_key(mode(), string()) ->
-        {binary(), binary(), binary(), binary()}.
+        {mode(), [binary()], binary(), integer()}.
 
-make_crypto_key(des3_cbc, String) ->
+make_crypto_key(des3_cbc=Type, String) ->
     <<K1:8/binary,K2:8/binary>> = First = erlang:md5(String),
     <<K3:8/binary,IVec:8/binary>> = erlang:md5([First|reverse(String)]),
-    {K1,K2,K3,IVec}.
+    {Type,[K1,K2,K3],IVec,8}.
 
 %%
 %%  Local functions
@@ -324,13 +324,13 @@ diff_directories(Dir1, Dir2) ->
     {OnlyDir1, OnlyDir2, Diff} = compare_dirs(Dir1, Dir2),
     diff_only(Dir1, OnlyDir1),
     diff_only(Dir2, OnlyDir2),
-    foreach(fun(D) -> io:format("** different: ~p~n", [D]) end, Diff),
+    foreach(fun(D) -> io:format("** different: ~tp~n", [D]) end, Diff),
     ok.
 
 diff_only(_Dir, []) -> 
     ok;
 diff_only(Dir, Only) ->
-    io:format("Only in ~p: ~p~n", [Dir, Only]).
+    io:format("Only in ~tp: ~tp~n", [Dir, Only]).
 
 %% -> {OnlyInDir1, OnlyInDir2, Different} | throw(Error)
 compare_dirs(Dir1, Dir2) ->
@@ -395,7 +395,7 @@ strip_fils(Files) ->
 
 %% -> {ok, {Mod, FileName}} | {ok, {Mod, binary()}} | throw(Error)
 strip_file(File) ->
-    {ok, {Mod, Chunks}} = read_significant_chunks(File),
+    {ok, {Mod, Chunks}} = read_significant_chunks(File, significant_chunks()),
     {ok, Stripped0} = build_module(Chunks),
     Stripped = compress(Stripped0),
     case File of
@@ -453,8 +453,8 @@ is_useless_chunk("CInf") -> true;
 is_useless_chunk(_) -> false.
 
 %% -> {ok, {Module, Chunks}} | throw(Error)
-read_significant_chunks(File) ->
-    case read_chunk_data(File, significant_chunks(), [allow_missing_chunks]) of
+read_significant_chunks(File, ChunkList) ->
+    case read_chunk_data(File, ChunkList, [allow_missing_chunks]) of
 	{ok, {Module, Chunks0}} ->
 	    Mandatory = mandatory_chunks(),
 	    Chunks = filter_significant_chunks(Chunks0, Mandatory, File, Module),
@@ -835,12 +835,15 @@ file_error(FileName, {error, Reason}) ->
 error(Reason) ->
     throw({error, ?MODULE, Reason}).
 
-
-%% The following chunks are significant when calculating the MD5 for a module,
-%% and also the modules that must be retained when stripping a file.
-%% They are listed in the order that they should be MD5:ed.
+%% The following chunks must be kept when stripping a BEAM file.
 
 significant_chunks() ->
+    ["Line" | md5_chunks()].
+
+%% The following chunks are significant when calculating the MD5
+%% for a module. They are listed in the order that they should be MD5:ed.
+
+md5_chunks() ->
     ["Atom", "Code", "StrT", "ImpT", "ExpT", "FunT", "LitT"].
 
 %% The following chunks are mandatory in every Beam file.
@@ -861,20 +864,20 @@ mandatory_chunks() ->
 
 -define(CRYPTO_KEY_SERVER, beam_lib__crypto_key_server).
 
-decrypt_abst(Mode, Module, File, Id, AtomTable, Bin) ->
+decrypt_abst(Type, Module, File, Id, AtomTable, Bin) ->
     try
-	KeyString = get_crypto_key({debug_info, Mode, Module, File}),
-	Key = make_crypto_key(des3_cbc, KeyString),
-	Term = decrypt_abst_1(Mode, Key, Bin),
+	KeyString = get_crypto_key({debug_info, Type, Module, File}),
+	Key = make_crypto_key(Type, KeyString),
+	Term = decrypt_abst_1(Key, Bin),
 	{AtomTable, {Id, Term}}
     catch
 	_:_ ->
 	    error({key_missing_or_invalid, File, Id})
     end.
 
-decrypt_abst_1(des3_cbc, {K1, K2, K3, IVec}, Bin) ->
+decrypt_abst_1({Type,Key,IVec,_BlockSize}, Bin) ->
     ok = start_crypto(),
-    NewBin = crypto:des3_cbc_decrypt(K1, K2, K3, IVec, Bin),
+    NewBin = crypto:block_decrypt(Type, Key, IVec, Bin),
     binary_to_term(NewBin).
 
 start_crypto() ->
@@ -901,7 +904,7 @@ call_crypto_server(Req) ->
     end.
 
 call_crypto_server_1(Req) ->
-    gen_server:start({local,?CRYPTO_KEY_SERVER}, ?MODULE, [], []),
+    {ok, _} = gen_server:start({local,?CRYPTO_KEY_SERVER}, ?MODULE, [], []),
     erlang:yield(),
     call_crypto_server(Req).
 
@@ -1027,11 +1030,11 @@ f_p_s(P, F) ->
 	{error, enoent} ->
 	    {error, enoent};
 	{error, {Line, _Mod, _Term}=E} ->
-	    error("file:path_script(~p,~p): error on line ~p: ~s~n",
+	    error("file:path_script(~tp,~tp): error on line ~p: ~ts~n",
 		  [P, F, Line, file:format_error(E)]),
 	    ok;
 	{error, E} when is_atom(E) ->
-	    error("file:path_script(~p,~p): ~s~n",
+	    error("file:path_script(~tp,~tp): ~ts~n",
 		  [P, F, file:format_error(E)]),
 	    ok;
 	Other ->

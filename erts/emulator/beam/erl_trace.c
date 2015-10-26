@@ -1,7 +1,7 @@
 /*
  * %CopyrightBegin%
  *
- * Copyright Ericsson AB 1999-2011. All Rights Reserved.
+ * Copyright Ericsson AB 1999-2014. All Rights Reserved.
  *
  * The contents of this file are subject to the Erlang Public License,
  * Version 1.1, (the "License"); you may not use this file except in
@@ -36,6 +36,7 @@
 #include "error.h"
 #include "erl_binary.h"
 #include "erl_bits.h"
+#include "erl_thr_progress.h"
 
 #if 0
 #define DEBUG_PRINTOUTS
@@ -43,9 +44,9 @@
 #undef DEBUG_PRINTOUTS
 #endif
 
-extern Eterm beam_return_to_trace[1];   /* OpCode(i_return_to_trace) */
-extern Eterm beam_return_trace[1];      /* OpCode(i_return_trace) */
-extern Eterm beam_return_time_trace[1]; /* OpCode(i_return_time_trace) */
+extern BeamInstr beam_return_to_trace[1];   /* OpCode(i_return_to_trace) */
+extern BeamInstr beam_return_trace[1];      /* OpCode(i_return_trace) */
+extern BeamInstr beam_return_time_trace[1]; /* OpCode(i_return_time_trace) */
 
 /* Pseudo export entries. Never filled in with data, only used to
    yield unique pointers of the correct type. */
@@ -63,7 +64,7 @@ int erts_cpu_timestamp;
 #endif
 
 static erts_smp_mtx_t smq_mtx;
-static erts_smp_mtx_t sys_trace_mtx;
+static erts_smp_rwmtx_t sys_trace_rwmtx;
 
 enum ErtsSysMsgType {
     SYS_MSG_TYPE_UNDEFINED,
@@ -90,7 +91,12 @@ static void init_sys_msg_dispatcher(void);
 #endif
 
 void erts_init_trace(void) {
-    erts_smp_mtx_init(&sys_trace_mtx, "sys_tracers");
+    erts_smp_rwmtx_opt_t rwmtx_opts = ERTS_SMP_RWMTX_OPT_DEFAULT_INITER;
+    rwmtx_opts.type = ERTS_SMP_RWMTX_TYPE_EXTREMELY_FREQUENT_READ;
+    rwmtx_opts.lived = ERTS_SMP_RWMTX_LONG_LIVED;
+
+    erts_smp_rwmtx_init_opt(&sys_trace_rwmtx, &rwmtx_opts, "sys_tracers");
+
 #ifdef HAVE_ERTS_NOW_CPU
     erts_cpu_timestamp = 0;
 #endif
@@ -124,8 +130,13 @@ do { \
     enqueue_sys_msg_unlocked(SYS_MSG_TYPE_TRACE, (FPID), (TPID), (MSG), (BP)); \
 } while(0)
 #else
+#ifdef USE_VM_PROBES
 #define ERTS_ENQ_TRACE_MSG(FPID, TPROC, MSG, BP) \
-  erts_queue_message((TPROC), NULL, (BP), (MSG), NIL)
+    erts_queue_message((TPROC), NULL, (BP), (MSG), NIL, NIL)
+#else
+#define ERTS_ENQ_TRACE_MSG(FPID, TPROC, MSG, BP) \
+    erts_queue_message((TPROC), NULL, (BP), (MSG), NIL)
+#endif
 #endif
 
 /*
@@ -140,18 +151,37 @@ do { \
     message dispatcher thread takes care of that). */
 #define ERTS_GET_TRACER_REF(RES, TPID, TRACEE_FLGS) \
 do { (RES) = (TPID); } while(0)
+int
+erts_is_tracer_proc_valid(Process* p)
+{
+    return 1;
+}
 #else
 #define ERTS_NULL_TRACER_REF NULL
 #define ERTS_TRACER_REF_TYPE Process *
 #define ERTS_GET_TRACER_REF(RES, TPID, TRACEE_FLGS) \
 do { \
-    (RES) = process_tab[internal_pid_index((TPID))]; \
-    if (INVALID_PID((RES), (TPID)) || !((RES)->trace_flags & F_TRACER)) { \
+    (RES) = erts_proc_lookup((TPID)); \
+    if (!(RES) || !(ERTS_TRACE_FLAGS((RES)) & F_TRACER)) { \
 	(TPID) = NIL; \
 	(TRACEE_FLGS) &= ~TRACEE_FLAGS; \
 	return; \
     } \
 } while (0)
+int
+erts_is_tracer_proc_valid(Process* p)
+{
+    Process* tracer;
+
+    tracer = erts_proc_lookup(ERTS_TRACER_PROC(p));
+    if (tracer && ERTS_TRACE_FLAGS(tracer) & F_TRACER) {
+	return 1;
+    } else {
+	ERTS_TRACER_PROC(p) = NIL;
+	ERTS_TRACE_FLAGS(p) = ~TRACEE_FLAGS;
+	return 0;
+    }
+}
 #endif
 
 static Uint active_sched;
@@ -159,14 +189,14 @@ static Uint active_sched;
 void
 erts_system_profile_setup_active_schedulers(void)
 {
-    ERTS_SMP_LC_ASSERT(erts_is_system_blocked(0));
+    ERTS_SMP_LC_ASSERT(erts_thr_progress_is_blocking());
     active_sched = erts_active_schedulers();
 }
 
-void
-erts_trace_check_exiting(Eterm exiting)
+static void
+exiting_reset(Eterm exiting)
 {
-    erts_smp_mtx_lock(&sys_trace_mtx);
+    erts_smp_rwmtx_rwlock(&sys_trace_rwmtx);
     if (exiting == default_tracer) {
 	default_tracer = NIL;
 	default_trace_flags &= TRACEE_FLAGS;
@@ -196,29 +226,49 @@ erts_trace_check_exiting(Eterm exiting)
 	erts_system_profile_clear(NULL);
 #endif
     }
-    erts_smp_mtx_unlock(&sys_trace_mtx);
+    erts_smp_rwmtx_rwunlock(&sys_trace_rwmtx);
+}
+
+void
+erts_trace_check_exiting(Eterm exiting)
+{
+    int reset = 0;
+    erts_smp_rwmtx_rlock(&sys_trace_rwmtx);
+    if (exiting == default_tracer)
+	reset = 1;
+    else if (exiting == system_seq_tracer)
+	reset = 1;
+    else if (exiting == system_monitor)
+	reset = 1;
+    else if (exiting == system_profile)
+	reset = 1;
+    erts_smp_rwmtx_runlock(&sys_trace_rwmtx);
+    if (reset)
+	exiting_reset(exiting);
+}
+
+static ERTS_INLINE int
+is_valid_tracer(Eterm tracer)
+{
+    return erts_proc_lookup(tracer) || erts_is_valid_tracer_port(tracer);
 }
 
 Eterm
 erts_set_system_seq_tracer(Process *c_p, ErtsProcLocks c_p_locks, Eterm new)
 {
-    Eterm old = THE_NON_VALUE;
+    Eterm old;
 
-    if (new != am_false) {
-	if (!erts_pid2proc(c_p, c_p_locks, new, 0)
-	    && !erts_is_valid_tracer_port(new)) {
-	    return old;
-	}
-    }
+    if (new != am_false && !is_valid_tracer(new))
+	return THE_NON_VALUE;
 
-    erts_smp_mtx_lock(&sys_trace_mtx);
+    erts_smp_rwmtx_rwlock(&sys_trace_rwmtx);
     old = system_seq_tracer;
     system_seq_tracer = new;
 
 #ifdef DEBUG_PRINTOUTS
     erts_fprintf(stderr, "set seq tracer new=%T old=%T\n", new, old);
 #endif
-    erts_smp_mtx_unlock(&sys_trace_mtx);
+    erts_smp_rwmtx_rwunlock(&sys_trace_rwmtx);
     return old;
 }
 
@@ -226,12 +276,12 @@ Eterm
 erts_get_system_seq_tracer(void)
 {
     Eterm st;
-    erts_smp_mtx_lock(&sys_trace_mtx);
+    erts_smp_rwmtx_rlock(&sys_trace_rwmtx);
     st = system_seq_tracer;
 #ifdef DEBUG_PRINTOUTS
     erts_fprintf(stderr, "get seq tracer %T\n", st);
 #endif
-    erts_smp_mtx_unlock(&sys_trace_mtx);
+    erts_smp_rwmtx_runlock(&sys_trace_rwmtx);
     return st;
 }
 
@@ -244,7 +294,7 @@ get_default_tracing(Uint *flagsp, Eterm *tracerp)
     if (is_nil(default_tracer)) {
 	default_trace_flags &= ~TRACEE_FLAGS;
     } else if (is_internal_pid(default_tracer)) {
-	if (!erts_pid2proc(NULL, 0, default_tracer, 0)) {
+	if (!erts_proc_lookup(default_tracer)) {
 	reset_tracer:
 	    default_trace_flags &= ~TRACEE_FLAGS;
 	    default_tracer = NIL;
@@ -264,7 +314,7 @@ get_default_tracing(Uint *flagsp, Eterm *tracerp)
 void
 erts_change_default_tracing(int setflags, Uint *flagsp, Eterm *tracerp)
 {
-    erts_smp_mtx_lock(&sys_trace_mtx);
+    erts_smp_rwmtx_rwlock(&sys_trace_rwmtx);
     if (flagsp) {
 	if (setflags)
 	    default_trace_flags |= *flagsp;
@@ -274,48 +324,48 @@ erts_change_default_tracing(int setflags, Uint *flagsp, Eterm *tracerp)
     if (tracerp)
 	default_tracer = *tracerp;
     get_default_tracing(flagsp, tracerp);
-    erts_smp_mtx_unlock(&sys_trace_mtx);
+    erts_smp_rwmtx_rwunlock(&sys_trace_rwmtx);
 }
 
 void
 erts_get_default_tracing(Uint *flagsp, Eterm *tracerp)
 {
-    erts_smp_mtx_lock(&sys_trace_mtx);
+    erts_smp_rwmtx_rlock(&sys_trace_rwmtx);
     get_default_tracing(flagsp, tracerp);
-    erts_smp_mtx_unlock(&sys_trace_mtx);
+    erts_smp_rwmtx_runlock(&sys_trace_rwmtx);
 }
 
 void
 erts_set_system_monitor(Eterm monitor)
 {
-    erts_smp_mtx_lock(&sys_trace_mtx);
+    erts_smp_rwmtx_rwlock(&sys_trace_rwmtx);
     system_monitor = monitor;
-    erts_smp_mtx_unlock(&sys_trace_mtx);
+    erts_smp_rwmtx_rwunlock(&sys_trace_rwmtx);
 }
 
 Eterm
 erts_get_system_monitor(void)
 {
     Eterm monitor;
-    erts_smp_mtx_lock(&sys_trace_mtx);
+    erts_smp_rwmtx_rlock(&sys_trace_rwmtx);
     monitor = system_monitor;
-    erts_smp_mtx_unlock(&sys_trace_mtx);
+    erts_smp_rwmtx_runlock(&sys_trace_rwmtx);
     return monitor;
 }
 
 /* Performance monitoring */
 void erts_set_system_profile(Eterm profile) {
-    erts_smp_mtx_lock(&sys_trace_mtx);
+    erts_smp_rwmtx_rwlock(&sys_trace_rwmtx);
     system_profile = profile;
-    erts_smp_mtx_unlock(&sys_trace_mtx);
+    erts_smp_rwmtx_rwunlock(&sys_trace_rwmtx);
 }
 
 Eterm
 erts_get_system_profile(void) {
     Eterm profile;
-    erts_smp_mtx_lock(&sys_trace_mtx);
+    erts_smp_rwmtx_rlock(&sys_trace_rwmtx);
     profile = system_profile;
-    erts_smp_mtx_unlock(&sys_trace_mtx);
+    erts_smp_rwmtx_runlock(&sys_trace_rwmtx);
     return profile;
 }
 
@@ -378,13 +428,9 @@ WRITE_SYS_MSG_TO_PORT(Eterm unused_to,
     }
 
 #ifndef ERTS_SMP
-    if (!INVALID_TRACER_PORT(trace_port, trace_port->id)) {
+    if (!INVALID_TRACER_PORT(trace_port, trace_port->common.id))
 #endif
 	erts_raw_port_command(trace_port, buffer, ptr-buffer);
-#ifndef ERTS_SMP
-	erts_port_release(trace_port);
-    }
-#endif
 
     erts_free(ERTS_ALC_T_TMP, (void *) buffer);
 }
@@ -414,7 +460,7 @@ do_send_schedfix_to_port(Port *trace_port, Eterm pid, Eterm timestamp) {
     message = TUPLE5(hp, am_trace_ts, pid, am_out, mfarity, timestamp);
     /* Note, hp is deliberately NOT incremented since it will be reused */
 
-    do_send_to_port(trace_port->id,
+    do_send_to_port(trace_port->common.id,
 		    trace_port,
 		    pid,
 		    SYS_MSG_TYPE_UNDEFINED,
@@ -424,7 +470,7 @@ do_send_schedfix_to_port(Port *trace_port, Eterm pid, Eterm timestamp) {
     hp += 5;
     hp = patch_ts(message, hp);
 
-    do_send_to_port(trace_port->id,
+    do_send_to_port(trace_port->common.id,
 		    trace_port,
 		    pid,
 		    SYS_MSG_TYPE_UNDEFINED,
@@ -459,13 +505,13 @@ send_to_port(Process *c_p, Eterm message,
 
     trace_port = NULL;
 #else
-    if (is_not_internal_port(*tracer_pid))
-	goto invalid_tracer_port;
 
-    trace_port = &erts_port[internal_port_index(*tracer_pid)];
+    trace_port = erts_id2port_sflgs(*tracer_pid,
+				    NULL,
+				    0,
+				    ERTS_PORT_SFLGS_INVALID_TRACER_LOOKUP);
 
-    if (INVALID_TRACER_PORT(trace_port, *tracer_pid)) {
-    invalid_tracer_port:
+    if (!trace_port) {
 	*tracee_flags &= ~TRACEE_FLAGS;
 	*tracer_pid = NIL;
 	return;
@@ -481,10 +527,11 @@ send_to_port(Process *c_p, Eterm message,
 #endif
 	do_send_to_port(*tracer_pid,
 			trace_port,
-			c_p ? c_p->id : NIL,
+			c_p ? c_p->common.id : NIL,
 			SYS_MSG_TYPE_TRACE,
 			message);
 #ifndef ERTS_SMP
+	erts_port_release(trace_port);
 	return;
     }
 
@@ -515,7 +562,7 @@ send_to_port(Process *c_p, Eterm message,
     trace_port->control_flags &= ~PORT_CONTROL_FLAG_HEAVY;
     do_send_to_port(*tracer_pid,
 		    trace_port,
-		    c_p ? c_p->id : NIL,
+		    c_p ? c_p->common.id : NIL,
 		    SYS_MSG_TYPE_TRACE,
 		    message);
 
@@ -529,8 +576,11 @@ send_to_port(Process *c_p, Eterm message,
 	 * just after writning the real trace message, and now gets scheduled
 	 * in again.
 	 */
-	do_send_schedfix_to_port(trace_port, c_p->id, ts);
+	do_send_schedfix_to_port(trace_port, c_p->common.id, ts);
     }
+
+    erts_port_release(trace_port);
+
     UnUseTmpHeapNoproc(LOCAL_HEAP_SIZE);
 #undef LOCAL_HEAP_SIZE
 #endif
@@ -543,7 +593,7 @@ send_to_port(Process *c_p, Eterm message,
  */
 
 static void 
-profile_send(Eterm message) {
+profile_send(Eterm from, Eterm message) {
     Uint sz = 0;
     ErlHeapFragment *bp = NULL;
     Uint *hp = NULL;
@@ -553,33 +603,44 @@ profile_send(Eterm message) {
 
     Eterm profiler = erts_get_system_profile();
 
+    /* do not profile profiler pid */
+    if (from == profiler) return;
+
     if (is_internal_port(profiler)) {
     	Port *profiler_port = NULL;
 
 	/* not smp */
-	
-	
-	profiler_port = &erts_port[internal_port_index(profiler)];
-	
-	do_send_to_port(profiler,
-			profiler_port,
-			NIL, /* or current process->id */
-			SYS_MSG_TYPE_SYSPROF,
-			message);
+
+	profiler_port = erts_id2port_sflgs(profiler,
+					   NULL,
+					   0,
+					   ERTS_PORT_SFLGS_INVALID_TRACER_LOOKUP);
+	if (profiler_port) {
+	    do_send_to_port(profiler,
+			    profiler_port,
+			    NIL, /* or current process->common.id */
+			    SYS_MSG_TYPE_SYSPROF,
+			    message);
+	    erts_port_release(profiler_port);
+	}
     	
     } else {
-	ASSERT(is_internal_pid(profiler)
-                && internal_pid_index(profiler) < erts_max_processes);
+	ASSERT(is_internal_pid(profiler));
         
-	profile_p = process_tab[internal_pid_index(profiler)];
+	profile_p = erts_proc_lookup(profiler);
 
-        if (INVALID_PID(profile_p, profiler)) return;
+	if (!profile_p)
+	    return;
 
 	sz = size_object(message);
 	hp = erts_alloc_message_heap(sz, &bp, &off_heap, profile_p, 0);
 	msg = copy_struct(message, sz, &hp, &bp->off_heap);
 	
-    	erts_queue_message(profile_p, NULL, bp, msg, NIL);
+    	erts_queue_message(profile_p, NULL, bp, msg, NIL
+#ifdef USE_VM_PROBES
+			   , NIL
+#endif
+			   );
     }
 }
 
@@ -613,13 +674,11 @@ seq_trace_send_to_port(Process *c_p,
 
     trace_port = NULL;
 #else
-    if (is_not_internal_port(seq_tracer))
-	goto invalid_tracer_port;
-
-    trace_port = &erts_port[internal_port_index(seq_tracer)];
-
-    if (INVALID_TRACER_PORT(trace_port, seq_tracer)) {
-    invalid_tracer_port:
+    trace_port = erts_id2port_sflgs(seq_tracer,
+				    NULL,
+				    0,
+				    ERTS_PORT_SFLGS_INVALID_TRACER_LOOKUP);
+    if (!trace_port) {
 	system_seq_tracer = am_false;
 #ifndef ERTS_SMP
 	UnUseTmpHeapNoproc(LOCAL_HEAP_SIZE);
@@ -632,11 +691,12 @@ seq_trace_send_to_port(Process *c_p,
 #endif
 	do_send_to_port(seq_tracer,
 			trace_port,
-			c_p ? c_p->id : NIL,
+			c_p ? c_p->common.id : NIL,
 			SYS_MSG_TYPE_SEQTRACE,
 			message);
 
 #ifndef ERTS_SMP
+	erts_port_release(trace_port);
 	UnUseTmpHeapNoproc(LOCAL_HEAP_SIZE);
 	return;
     }
@@ -662,7 +722,7 @@ seq_trace_send_to_port(Process *c_p,
     trace_port->control_flags &= ~PORT_CONTROL_FLAG_HEAVY;
     do_send_to_port(seq_tracer,
 		    trace_port,
-		    c_p ? c_p->id : NIL,
+		    c_p ? c_p->common.id : NIL,
 		    SYS_MSG_TYPE_SEQTRACE,
 		    message);
 
@@ -676,15 +736,20 @@ seq_trace_send_to_port(Process *c_p,
 	 * just after writing the real trace message, and now gets scheduled
 	 * in again.
 	 */
-	do_send_schedfix_to_port(trace_port, c_p->id, ts);
+	do_send_schedfix_to_port(trace_port, c_p->common.id, ts);
     }
+
+    erts_port_release(trace_port);
+
     UnUseTmpHeapNoproc(LOCAL_HEAP_SIZE);
 #undef LOCAL_HEAP_SIZE
 #endif
 }
 
 #define TS_HEAP_WORDS 5
-#define TS_SIZE(p) (((p)->trace_flags & F_TIMESTAMP) ? TS_HEAP_WORDS : 0)
+#define TS_SIZE(p) ((ERTS_TRACE_FLAGS((p)) & F_TIMESTAMP) \
+		    ? TS_HEAP_WORDS \
+		    : 0)
 
 /*
  * Patch a timestamp into a tuple.  The tuple must be the last thing
@@ -719,17 +784,17 @@ send_to_tracer(Process *tracee,
 
     erts_smp_mtx_lock(&smq_mtx);
 
-    if (tracee->trace_flags & F_TIMESTAMP)
+    if (ERTS_TRACE_FLAGS(tracee) & F_TIMESTAMP)
 	*hpp = patch_ts(msg, *hpp);
 
-    if (is_internal_pid(tracee->tracer_proc))
-	ERTS_ENQ_TRACE_MSG(tracee->id, tracer_ref, msg, bp);
+    if (is_internal_pid(ERTS_TRACER_PROC(tracee)))
+	ERTS_ENQ_TRACE_MSG(tracee->common.id, tracer_ref, msg, bp);
     else {
-	ASSERT(is_internal_port(tracee->tracer_proc));
+	ASSERT(is_internal_port(ERTS_TRACER_PROC(tracee)));
 	send_to_port(no_fake_sched ? NULL : tracee,
 		     msg,
-		     &tracee->tracer_proc,
-		     &tracee->trace_flags);
+		     &ERTS_TRACER_PROC(tracee),
+		     &ERTS_TRACE_FLAGS(tracee));
     }
 
     erts_smp_mtx_unlock(&smq_mtx);
@@ -747,7 +812,7 @@ trace_sched_aux(Process *p, Eterm what, int never_fake_sched)
     ERTS_TRACER_REF_TYPE tracer_ref = ERTS_NULL_TRACER_REF;
     int sched_no, curr_func, to_port, no_fake_sched;
 
-    if (is_nil(p->tracer_proc))
+    if (is_nil(ERTS_TRACER_PROC(p)))
 	return;
 
     no_fake_sched = never_fake_sched;
@@ -767,22 +832,18 @@ trace_sched_aux(Process *p, Eterm what, int never_fake_sched)
     }
 
     sched_no = IS_TRACED_FL(p, F_TRACE_SCHED_NO);
-    to_port = is_internal_port(p->tracer_proc);
+    to_port = is_internal_port(ERTS_TRACER_PROC(p));
 
     if (!to_port) {
-	ASSERT(is_internal_pid(p->tracer_proc)
-	       && internal_pid_index(p->tracer_proc) < erts_max_processes);
+	ASSERT(is_internal_pid(ERTS_TRACER_PROC(p)));
 
-	ERTS_GET_TRACER_REF(tracer_ref, p->tracer_proc, p->trace_flags);
+	ERTS_GET_TRACER_REF(tracer_ref,
+			    ERTS_TRACER_PROC(p),
+			    ERTS_TRACE_FLAGS(p));
     }
 
-    if (ERTS_PROC_IS_EXITING(p)
-#ifndef ERTS_SMP
-	|| p->status == P_FREE
-#endif
-	) {
+    if (ERTS_PROC_IS_EXITING(p))
 	curr_func = 0;
-    }
     else {
 	if (!p->current)
 	    p->current = find_function_from_pc(p->i);
@@ -811,7 +872,7 @@ trace_sched_aux(Process *p, Eterm what, int never_fake_sched)
     }
 
     if (!sched_no) {
-	mess = TUPLE4(hp, am_trace, p->id, what, tmp);
+	mess = TUPLE4(hp, am_trace, p->common.id, what, tmp);
 	hp += 5;
     }
     else {
@@ -820,7 +881,7 @@ trace_sched_aux(Process *p, Eterm what, int never_fake_sched)
 #else
 	Eterm sched_id = make_small(1);
 #endif
-	mess = TUPLE5(hp, am_trace, p->id, what, sched_id, tmp);
+	mess = TUPLE5(hp, am_trace, p->common.id, what, sched_id, tmp);
 	hp += 6;
     }
 
@@ -861,7 +922,7 @@ trace_send(Process *p, Eterm to, Eterm msg)
 
     operation = am_send;
     if (is_internal_pid(to)) {
-	if (!erts_pid2proc(p, ERTS_PROC_LOCK_MAIN, to, 0))
+	if (!erts_proc_lookup(to))
 	    goto send_to_non_existing_process;
     }
     else if(is_external_pid(to)
@@ -872,19 +933,19 @@ trace_send(Process *p, Eterm to, Eterm msg)
 	operation = am_atom_put(s, sys_strlen(s));
     }
 
-    if (is_internal_port(p->tracer_proc)) {
+    if (is_internal_port(ERTS_TRACER_PROC(p))) {
 #define LOCAL_HEAP_SIZE (11)
 	DeclareTmpHeapNoproc(local_heap,LOCAL_HEAP_SIZE);
 	UseTmpHeapNoproc(LOCAL_HEAP_SIZE);
 
 	hp = local_heap;
-	mess = TUPLE5(hp, am_trace, p->id, operation, msg, to);
+	mess = TUPLE5(hp, am_trace, p->common.id, operation, msg, to);
 	hp += 6;
 	erts_smp_mtx_lock(&smq_mtx);
-	if (p->trace_flags & F_TIMESTAMP) {
+	if (ERTS_TRACE_FLAGS(p) & F_TIMESTAMP) {
 	    hp = patch_ts(mess, hp);
 	}
-	send_to_port(p, mess, &p->tracer_proc, &p->trace_flags);
+	send_to_port(p, mess, &ERTS_TRACER_PROC(p), &ERTS_TRACE_FLAGS(p));
 	UnUseTmpHeapNoproc(LOCAL_HEAP_SIZE);
 #undef LOCAL_HEAP_SIZE
 	erts_smp_mtx_unlock(&smq_mtx);
@@ -894,10 +955,11 @@ trace_send(Process *p, Eterm to, Eterm msg)
 	ErlOffHeap *off_heap;
 	ERTS_TRACER_REF_TYPE tracer_ref;
 
-	ASSERT(is_internal_pid(p->tracer_proc)
-	       && internal_pid_index(p->tracer_proc) < erts_max_processes);
+	ASSERT(is_internal_pid(ERTS_TRACER_PROC(p)));
 
-	ERTS_GET_TRACER_REF(tracer_ref, p->tracer_proc, p->trace_flags);
+	ERTS_GET_TRACER_REF(tracer_ref,
+			    ERTS_TRACER_PROC(p),
+			    ERTS_TRACE_FLAGS(p));
 
 	sz_msg = size_object(msg);
 	sz_to  = size_object(to);
@@ -913,16 +975,16 @@ trace_send(Process *p, Eterm to, Eterm msg)
 			  sz_msg,
 			  &hp,
 			  off_heap);
-	mess = TUPLE5(hp, am_trace, p->id/* Local pid */, operation, msg, to);
+	mess = TUPLE5(hp, am_trace, p->common.id, operation, msg, to);
 	hp += 6;
 
 	erts_smp_mtx_lock(&smq_mtx);
 
-	if (p->trace_flags & F_TIMESTAMP) {
+	if (ERTS_TRACE_FLAGS(p) & F_TIMESTAMP) {
 	    patch_ts(mess, hp);
 	}
 
-	ERTS_ENQ_TRACE_MSG(p->id, tracer_ref, mess, bp);
+	ERTS_ENQ_TRACE_MSG(p->common.id, tracer_ref, mess, bp);
 	erts_smp_mtx_unlock(&smq_mtx);
     }
 }
@@ -937,19 +999,19 @@ trace_receive(Process *rp, Eterm msg)
     size_t sz_msg;
     Eterm* hp;
 
-    if (is_internal_port(rp->tracer_proc)) {
+    if (is_internal_port(ERTS_TRACER_PROC(rp))) {
 #define LOCAL_HEAP_SIZE (10)
 	DeclareTmpHeapNoproc(local_heap,LOCAL_HEAP_SIZE);
 	UseTmpHeapNoproc(LOCAL_HEAP_SIZE);
 
 	hp = local_heap;
-	mess = TUPLE4(hp, am_trace, rp->id, am_receive, msg);
+	mess = TUPLE4(hp, am_trace, rp->common.id, am_receive, msg);
 	hp += 5;
 	erts_smp_mtx_lock(&smq_mtx);
-	if (rp->trace_flags & F_TIMESTAMP) {
+	if (ERTS_TRACE_FLAGS(rp) & F_TIMESTAMP) {
 	    hp = patch_ts(mess, hp);
 	}
-	send_to_port(rp, mess, &rp->tracer_proc, &rp->trace_flags);
+	send_to_port(rp, mess, &ERTS_TRACER_PROC(rp), &ERTS_TRACE_FLAGS(rp));
 	UnUseTmpHeapNoproc(LOCAL_HEAP_SIZE);
 #undef LOCAL_HEAP_SIZE
 	erts_smp_mtx_unlock(&smq_mtx);
@@ -959,10 +1021,11 @@ trace_receive(Process *rp, Eterm msg)
 	ErlOffHeap *off_heap;
 	ERTS_TRACER_REF_TYPE tracer_ref;
 
-	ASSERT(is_internal_pid(rp->tracer_proc)
-	       && internal_pid_index(rp->tracer_proc) < erts_max_processes);
+	ASSERT(is_internal_pid(ERTS_TRACER_PROC(rp)));
 
-	ERTS_GET_TRACER_REF(tracer_ref, rp->tracer_proc, rp->trace_flags);
+	ERTS_GET_TRACER_REF(tracer_ref,
+			    ERTS_TRACER_PROC(rp),
+			    ERTS_TRACE_FLAGS(rp));
 
 	sz_msg = size_object(msg);
 
@@ -971,16 +1034,16 @@ trace_receive(Process *rp, Eterm msg)
 	hp = ERTS_ALLOC_SYSMSG_HEAP(hsz, &bp, &off_heap, tracer_ref);
 
 	msg = copy_struct(msg, sz_msg, &hp, off_heap);
-	mess = TUPLE4(hp, am_trace, rp->id/* Local pid */, am_receive, msg);
+	mess = TUPLE4(hp, am_trace, rp->common.id, am_receive, msg);
 	hp += 5;
 
 	erts_smp_mtx_lock(&smq_mtx);
 
-	if (rp->trace_flags & F_TIMESTAMP) {
+	if (ERTS_TRACE_FLAGS(rp) & F_TIMESTAMP) {
 	    patch_ts(mess, hp);
 	}
 
-	ERTS_ENQ_TRACE_MSG(rp->id, tracer_ref, mess, bp);
+	ERTS_ENQ_TRACE_MSG(rp->common.id, tracer_ref, mess, bp);
 	erts_smp_mtx_unlock(&smq_mtx);
     }
 }
@@ -990,10 +1053,14 @@ seq_trace_update_send(Process *p)
 {
     Eterm seq_tracer = erts_get_system_seq_tracer();
     ASSERT((is_tuple(SEQ_TRACE_TOKEN(p)) || is_nil(SEQ_TRACE_TOKEN(p))));
-    if ( (p->id == seq_tracer) || (SEQ_TRACE_TOKEN(p) == NIL))
+    if ( (p->common.id == seq_tracer) || (SEQ_TRACE_TOKEN(p) == NIL)
+#ifdef USE_VM_PROBES
+	 || (SEQ_TRACE_TOKEN(p) == am_have_dt_utag)
+#endif
+	 ) {
 	return 0;
-
-    SEQ_TRACE_TOKEN_SENDER(p) = p->id; /* Internal pid */
+    }
+    SEQ_TRACE_TOKEN_SENDER(p) = p->common.id;
     SEQ_TRACE_TOKEN_SERIAL(p) = 
 	make_small(++(p -> seq_trace_clock));
     SEQ_TRACE_TOKEN_LASTCNT(p) = 
@@ -1030,7 +1097,7 @@ seq_trace_output_generic(Eterm token, Eterm msg, Uint type,
 
     ASSERT(is_tuple(token) || is_nil(token));
     if (SEQ_TRACE_T_SENDER(token) == seq_tracer || token == NIL ||
-	(process && process->trace_flags & F_SENSITIVE)) {
+	(process && ERTS_TRACE_FLAGS(process) & F_SENSITIVE)) {
 	return;
     }
 
@@ -1094,13 +1161,12 @@ seq_trace_output_generic(Eterm token, Eterm msg, Uint type,
 	Uint sz_label, sz_lastcnt_serial, sz_msg, sz_ts, sz_sender,
 	    sz_exitfrom, sz_receiver;
 
-	ASSERT(is_internal_pid(seq_tracer)
-	       && internal_pid_index(seq_tracer) < erts_max_processes);
+	ASSERT(is_internal_pid(seq_tracer));
 
 #ifndef ERTS_SMP
 
-	tracer = process_tab[internal_pid_index(seq_tracer)];
-	if (INVALID_PID(tracer, tracer->id)) {
+	tracer = erts_proc_lookup(seq_tracer);
+	if (!tracer) {
 	    system_seq_tracer = am_false;
 	    return; /* no need to send anything */
 	}
@@ -1174,7 +1240,11 @@ seq_trace_output_generic(Eterm token, Eterm msg, Uint type,
 	enqueue_sys_msg_unlocked(SYS_MSG_TYPE_SEQTRACE, NIL, NIL, mess, bp);
 	erts_smp_mtx_unlock(&smq_mtx);
 #else
-	erts_queue_message(tracer, NULL, bp, mess, NIL); /* trace_token must be NIL here */
+	erts_queue_message(tracer, NULL, bp, mess, NIL
+#ifdef USE_VM_PROBES
+			   , NIL
+#endif
+			   ); /* trace_token must be NIL here */
 #endif
     }
 }
@@ -1205,17 +1275,17 @@ erts_trace_return_to(Process *p, BeamInstr *pc)
 	hp += 4;
     }
 	
-    mess = TUPLE4(hp, am_trace, p->id, am_return_to, mfa);
+    mess = TUPLE4(hp, am_trace, p->common.id, am_return_to, mfa);
     hp += 5;
 
     erts_smp_mtx_lock(&smq_mtx);
 
-    if (p->trace_flags & F_TIMESTAMP) {
+    if (ERTS_TRACE_FLAGS(p) & F_TIMESTAMP) {
 	hp = patch_ts(mess, hp);
     }
 
-    if (is_internal_port(p->tracer_proc)) {
-	send_to_port(p, mess, &p->tracer_proc, &p->trace_flags);
+    if (is_internal_port(ERTS_TRACER_PROC(p))) {
+	send_to_port(p, mess, &ERTS_TRACER_PROC(p), &ERTS_TRACE_FLAGS(p));
     } else {
 	ErlHeapFragment *bp;
 	ErlOffHeap *off_heap;
@@ -1225,10 +1295,11 @@ erts_trace_return_to(Process *p, BeamInstr *pc)
 	/*
 	 * Find the tracer.
 	 */
-	ASSERT(is_internal_pid(p->tracer_proc)
-	       && internal_pid_index(p->tracer_proc) < erts_max_processes);
+	ASSERT(is_internal_pid(ERTS_TRACER_PROC(p)));
 
-	ERTS_GET_TRACER_REF(tracer_ref, p->tracer_proc, p->trace_flags);
+	ERTS_GET_TRACER_REF(tracer_ref,
+			    ERTS_TRACER_PROC(p),
+			    ERTS_TRACE_FLAGS(p));
 
 	size = size_object(mess);
 
@@ -1238,7 +1309,7 @@ erts_trace_return_to(Process *p, BeamInstr *pc)
 	 * Copy the trace message into the buffer and enqueue it.
 	 */
 	mess = copy_struct(mess, size, &hp, off_heap);
-	ERTS_ENQ_TRACE_MSG(p->id, tracer_ref, mess, bp);
+	ERTS_ENQ_TRACE_MSG(p->common.id, tracer_ref, mess, bp);
     }
     UnUseTmpHeapNoproc(LOCAL_HEAP_SIZE);
 #undef LOCAL_HEAP_SIZE
@@ -1267,25 +1338,25 @@ erts_trace_return(Process* p, BeamInstr* fi, Eterm retval, Eterm *tracer_pid)
 	/* Breakpoint trace enabled without specifying tracer =>
 	 *   use process tracer and flags
 	 */
-	tracer_pid = &p->tracer_proc;
+	tracer_pid = &ERTS_TRACER_PROC(p);
     }
     if (is_nil(*tracer_pid)) {
 	/* Trace disabled */
 	return;
     }
     ASSERT(is_internal_pid(*tracer_pid) || is_internal_port(*tracer_pid));
-    if (*tracer_pid == p->id) {
+    if (*tracer_pid == p->common.id) {
 	/* Do not generate trace messages to oneself */
 	return;
     }
-    if (tracer_pid == &p->tracer_proc) {
+    if (tracer_pid == &ERTS_TRACER_PROC(p)) {
 	/* Tracer specified in process structure =>
 	 *   non-breakpoint trace =>
 	 *     use process flags
 	 */
-	tracee_flags = &p->trace_flags;
+	tracee_flags = &ERTS_TRACE_FLAGS(p);
 #ifdef ERTS_SMP
-	tracee = p->id;
+	tracee = p->common.id;
 #endif
     } else {
 	/* Tracer not specified in process structure =>
@@ -1314,7 +1385,7 @@ erts_trace_return(Process* p, BeamInstr* fi, Eterm retval, Eterm *tracer_pid)
 	hp = local_heap;
 	mfa = TUPLE3(hp, mod, name, make_small(arity));
 	hp += 4;
-	mess = TUPLE5(hp, am_trace, p->id, am_return_from, mfa, retval);
+	mess = TUPLE5(hp, am_trace, p->common.id, am_return_from, mfa, retval);
 	hp += 6;
 	erts_smp_mtx_lock(&smq_mtx);
 	if (*tracee_flags & F_TIMESTAMP) {
@@ -1334,8 +1405,7 @@ erts_trace_return(Process* p, BeamInstr* fi, Eterm retval, Eterm *tracer_pid)
 	Eterm* limit;
 #endif
 
-	ASSERT(is_internal_pid(*tracer_pid)
-	       && internal_pid_index(*tracer_pid) < erts_max_processes);
+	ASSERT(is_internal_pid(*tracer_pid));
 
 	ERTS_GET_TRACER_REF(tracer_ref, *tracer_pid, *tracee_flags);
 	
@@ -1357,7 +1427,7 @@ erts_trace_return(Process* p, BeamInstr* fi, Eterm retval, Eterm *tracer_pid)
 	mfa = TUPLE3(hp, mod, name, make_small(arity));
 	hp += 4;
 	retval = copy_struct(retval, retval_size, &hp, off_heap);
-	mess = TUPLE5(hp, am_trace, p->id/* Local pid */, am_return_from, mfa, retval);
+	mess = TUPLE5(hp, am_trace, p->common.id, am_return_from, mfa, retval);
 	hp += 6;
 
 	erts_smp_mtx_lock(&smq_mtx);
@@ -1398,25 +1468,25 @@ erts_trace_exception(Process* p, BeamInstr mfa[3], Eterm class, Eterm value,
 	/* Breakpoint trace enabled without specifying tracer =>
 	 *   use process tracer and flags
 	 */
-	tracer_pid = &p->tracer_proc;
+	tracer_pid = &ERTS_TRACER_PROC(p);
     }
     if (is_nil(*tracer_pid)) {
 	/* Trace disabled */
 	return;
     }
     ASSERT(is_internal_pid(*tracer_pid) || is_internal_port(*tracer_pid));
-    if (*tracer_pid == p->id) {
+    if (*tracer_pid == p->common.id) {
 	/* Do not generate trace messages to oneself */
 	return;
     }
-    if (tracer_pid == &p->tracer_proc) {
+    if (tracer_pid == &ERTS_TRACER_PROC(p)) {
 	/* Tracer specified in process structure =>
 	 *   non-breakpoint trace =>
 	 *     use process flags
 	 */
-	tracee_flags = &p->trace_flags;
+	tracee_flags = &ERTS_TRACE_FLAGS(p);
 #ifdef ERTS_SMP
-	tracee = p->id;
+	tracee = p->common.id;
 #endif
 	if (! (*tracee_flags & F_TRACE_CALLS)) {
 	    return;
@@ -1444,7 +1514,7 @@ erts_trace_exception(Process* p, BeamInstr mfa[3], Eterm class, Eterm value,
 	hp += 4;
 	cv = TUPLE2(hp, class, value);
 	hp += 3;
-	mess = TUPLE5(hp, am_trace, p->id, am_exception_from, mfa_tuple, cv);
+	mess = TUPLE5(hp, am_trace, p->common.id, am_exception_from, mfa_tuple, cv);
 	hp += 6;
 	ASSERT((hp - local_heap) <= LOCAL_HEAP_SIZE);
 	erts_smp_mtx_lock(&smq_mtx);
@@ -1466,8 +1536,7 @@ erts_trace_exception(Process* p, BeamInstr mfa[3], Eterm class, Eterm value,
 	Eterm* limit;
 #endif
 
-	ASSERT(is_internal_pid(*tracer_pid)
-	       && internal_pid_index(*tracer_pid) < erts_max_processes);
+	ASSERT(is_internal_pid(*tracer_pid));
 
 	ERTS_GET_TRACER_REF(tracer_ref, *tracer_pid, *tracee_flags);
 	
@@ -1491,7 +1560,7 @@ erts_trace_exception(Process* p, BeamInstr mfa[3], Eterm class, Eterm value,
 	value = copy_struct(value, value_size, &hp, off_heap);
 	cv = TUPLE2(hp, class, value);
 	hp += 3;
-	mess = TUPLE5(hp, am_trace, p->id/* Local pid */, 
+	mess = TUPLE5(hp, am_trace, p->common.id, 
 		      am_exception_from, mfa_tuple, cv);
 	hp += 6;
 
@@ -1545,25 +1614,25 @@ erts_call_trace(Process* p, BeamInstr mfa[3], Binary *match_spec,
 	/* Breakpoint trace enabled without specifying tracer =>
 	 *   use process tracer and flags
 	 */
-	tracer_pid = &p->tracer_proc;
+	tracer_pid = &ERTS_TRACER_PROC(p);
     } 
     if (is_nil(*tracer_pid)) {
 	/* Trace disabled */
 	return 0;
     }
     ASSERT(is_internal_pid(*tracer_pid) || is_internal_port(*tracer_pid));
-    if (*tracer_pid == p->id) {
+    if (*tracer_pid == p->common.id) {
 	/* Do not generate trace messages to oneself */
 	return 0;
     }
-    if (tracer_pid == &p->tracer_proc) {
+    if (tracer_pid == &ERTS_TRACER_PROC(p)) {
 	/* Tracer specified in process structure =>
 	 *   non-breakpoint trace =>
 	 *     use process flags
 	 */
-	tracee_flags = &p->trace_flags;
+	tracee_flags = &ERTS_TRACE_FLAGS(p);
 #ifdef ERTS_SMP
-	tracee = p->id;
+	tracee = p->common.id;
 #endif
     } else {
 	/* Tracer not specified in process structure =>
@@ -1571,7 +1640,7 @@ erts_call_trace(Process* p, BeamInstr mfa[3], Binary *match_spec,
 	 *     meta trace =>
 	 *       use fixed flag set instead of process flags
 	 */	    
-	if (p->trace_flags & F_SENSITIVE) {
+	if (ERTS_TRACE_FLAGS(p) & F_SENSITIVE) {
 	    /* No trace messages for sensitive processes. */
 	    return 0;
 	}
@@ -1629,7 +1698,7 @@ erts_call_trace(Process* p, BeamInstr mfa[3], Binary *match_spec,
 
 	if (!erts_is_valid_tracer_port(*tracer_pid)) {
 #ifdef ERTS_SMP
-	    ASSERT(is_nil(tracee) || tracer_pid == &p->tracer_proc);
+	    ASSERT(is_nil(tracee) || tracer_pid == &ERTS_TRACER_PROC(p));
 	    if (is_not_nil(tracee))
 		erts_smp_proc_lock(p, ERTS_PROC_LOCKS_ALL_MINOR);
 #endif
@@ -1731,7 +1800,7 @@ erts_call_trace(Process* p, BeamInstr mfa[3], Binary *match_spec,
 	 * Build the trace tuple and send it to the port.
 	 */
 	
-	mess = TUPLE4(hp, am_trace, p->id, am_call, mfa_tuple);
+	mess = TUPLE4(hp, am_trace, p->common.id, am_call, mfa_tuple);
 	hp += 5;
 	if (pam_result != am_true) {
 	    hp[-5] = make_arityval(5);
@@ -1766,21 +1835,21 @@ erts_call_trace(Process* p, BeamInstr mfa[3], Binary *match_spec,
 	Eterm* limit;
 #endif
 
-	ASSERT(is_internal_pid(*tracer_pid)
-	       && internal_pid_index(*tracer_pid) < erts_max_processes);
+	ASSERT(is_internal_pid(*tracer_pid));
 	
 	tracer = erts_pid2proc(p, ERTS_PROC_LOCK_MAIN,
 			       *tracer_pid, ERTS_PROC_LOCK_STATUS);
 	if (!tracer)
 	    invalid_tracer = 1;
 	else {
-	    invalid_tracer = (tracer->trace_flags & F_TRACER) == 0;
+	    invalid_tracer = !(ERTS_TRACE_FLAGS(tracer) & F_TRACER);
 	    erts_smp_proc_unlock(tracer, ERTS_PROC_LOCK_STATUS);
 	}
 
 	if (invalid_tracer) {
 #ifdef ERTS_SMP
-	    ASSERT(is_nil(tracee) || tracer_pid == &p->tracer_proc);
+	    ASSERT(is_nil(tracee)
+		   || tracer_pid == &ERTS_TRACER_PROC(p));
 	    if (is_not_nil(tracee))
 		erts_smp_proc_lock(p, ERTS_PROC_LOCKS_ALL_MINOR);
 #endif
@@ -1904,7 +1973,7 @@ erts_call_trace(Process* p, BeamInstr mfa[3], Binary *match_spec,
 	 * Build the trace tuple and enqueue it.
 	 */
 	
-	mess = TUPLE4(hp, am_trace, p->id/* Local pid */, am_call, mfa_tuple);
+	mess = TUPLE4(hp, am_trace, p->common.id, am_call, mfa_tuple);
 	hp += 5;
 	if (pam_result != am_true) {
 	    hp[-5] = make_arityval(5);
@@ -1940,18 +2009,19 @@ trace_proc(Process *c_p, Process *t_p, Eterm what, Eterm data)
     Eterm* hp;
     int need;
 
-    ERTS_SMP_LC_ASSERT((erts_proc_lc_my_proc_locks(t_p) != 0) || erts_is_system_blocked(0));
-    if (is_internal_port(t_p->tracer_proc)) {
+    ERTS_SMP_LC_ASSERT((erts_proc_lc_my_proc_locks(t_p) != 0)
+		       || erts_thr_progress_is_blocking());
+    if (is_internal_port(ERTS_TRACER_PROC(t_p))) {
 #define LOCAL_HEAP_SIZE (5+5)
 	DeclareTmpHeapNoproc(local_heap,LOCAL_HEAP_SIZE);
 	UseTmpHeapNoproc(LOCAL_HEAP_SIZE);
 
 
 	hp = local_heap;
-	mess = TUPLE4(hp, am_trace, t_p->id, what, data);
+	mess = TUPLE4(hp, am_trace, t_p->common.id, what, data);
 	hp += 5;
 	erts_smp_mtx_lock(&smq_mtx);
-	if (t_p->trace_flags & F_TIMESTAMP) {
+	if (ERTS_TRACE_FLAGS(t_p) & F_TIMESTAMP) {
 	    hp = patch_ts(mess, hp);
 	}
 	send_to_port(
@@ -1962,7 +2032,9 @@ trace_proc(Process *c_p, Process *t_p, Eterm what, Eterm data)
 	    /* Fake schedule out and in are never sent when smp enabled */
 	    c_p,
 #endif
-	    mess, &t_p->tracer_proc, &t_p->trace_flags);
+	    mess,
+	    &ERTS_TRACER_PROC(t_p),
+	    &ERTS_TRACE_FLAGS(t_p));
 	UnUseTmpHeapNoproc(LOCAL_HEAP_SIZE);
 #undef LOCAL_HEAP_SIZE
 	erts_smp_mtx_unlock(&smq_mtx);
@@ -1973,10 +2045,11 @@ trace_proc(Process *c_p, Process *t_p, Eterm what, Eterm data)
 	ERTS_TRACER_REF_TYPE tracer_ref;
 	size_t sz_data;
 
-	ASSERT(is_internal_pid(t_p->tracer_proc)
-	       && internal_pid_index(t_p->tracer_proc) < erts_max_processes);
+	ASSERT(is_internal_pid(ERTS_TRACER_PROC(t_p)));
 
-	ERTS_GET_TRACER_REF(tracer_ref, t_p->tracer_proc, t_p->trace_flags);
+	ERTS_GET_TRACER_REF(tracer_ref,
+			    ERTS_TRACER_PROC(t_p),
+			    ERTS_TRACE_FLAGS(t_p));
 
 	sz_data = size_object(data);
 
@@ -1985,16 +2058,16 @@ trace_proc(Process *c_p, Process *t_p, Eterm what, Eterm data)
 	hp = ERTS_ALLOC_SYSMSG_HEAP(need, &bp, &off_heap, tracer_ref);
 
 	tmp = copy_struct(data, sz_data, &hp, off_heap);
-	mess = TUPLE4(hp, am_trace, t_p->id/* Local pid */, what, tmp);
+	mess = TUPLE4(hp, am_trace, t_p->common.id, what, tmp);
 	hp += 5;
 
 	erts_smp_mtx_lock(&smq_mtx);
 
-	if (t_p->trace_flags & F_TIMESTAMP) {
+	if (ERTS_TRACE_FLAGS(t_p) & F_TIMESTAMP) {
 	    hp = patch_ts(mess, hp);
 	}
 
-	ERTS_ENQ_TRACE_MSG(t_p->id, tracer_ref, mess, bp);
+	ERTS_ENQ_TRACE_MSG(t_p->common.id, tracer_ref, mess, bp);
 	erts_smp_mtx_unlock(&smq_mtx);
     }
 }
@@ -2015,7 +2088,7 @@ trace_proc_spawn(Process *p, Eterm pid,
     Eterm mess;
     Eterm* hp;
 
-    if (is_internal_port(p->tracer_proc)) {
+    if (is_internal_port(ERTS_TRACER_PROC(p))) {
 #define LOCAL_HEAP_SIZE (4+6+5)
 	DeclareTmpHeapNoproc(local_heap,LOCAL_HEAP_SIZE);
 	UseTmpHeapNoproc(LOCAL_HEAP_SIZE);
@@ -2023,13 +2096,13 @@ trace_proc_spawn(Process *p, Eterm pid,
 	hp = local_heap;
 	mfa = TUPLE3(hp, mod, func, args);
 	hp += 4;
-	mess = TUPLE5(hp, am_trace, p->id, am_spawn, pid, mfa);
+	mess = TUPLE5(hp, am_trace, p->common.id, am_spawn, pid, mfa);
 	hp += 6;
 	erts_smp_mtx_lock(&smq_mtx);
-	if (p->trace_flags & F_TIMESTAMP) {
+	if (ERTS_TRACE_FLAGS(p) & F_TIMESTAMP) {
 	    hp = patch_ts(mess, hp);
 	}
-	send_to_port(p, mess, &p->tracer_proc, &p->trace_flags);
+	send_to_port(p, mess, &ERTS_TRACER_PROC(p), &ERTS_TRACE_FLAGS(p));
 	UnUseTmpHeapNoproc(LOCAL_HEAP_SIZE);
 #undef LOCAL_HEAP_SIZE
 	erts_smp_mtx_unlock(&smq_mtx);
@@ -2041,10 +2114,11 @@ trace_proc_spawn(Process *p, Eterm pid,
 	size_t sz_args, sz_pid;
 	Uint need;
 
-	ASSERT(is_internal_pid(p->tracer_proc)
-	       && internal_pid_index(p->tracer_proc) < erts_max_processes);
+	ASSERT(is_internal_pid(ERTS_TRACER_PROC(p)));
 
-	ERTS_GET_TRACER_REF(tracer_ref, p->tracer_proc, p->trace_flags);
+	ERTS_GET_TRACER_REF(tracer_ref,
+			    ERTS_TRACER_PROC(p),
+			    ERTS_TRACE_FLAGS(p));
 
 	sz_args = size_object(args);
 	sz_pid = size_object(pid);
@@ -2056,16 +2130,16 @@ trace_proc_spawn(Process *p, Eterm pid,
 	mfa = TUPLE3(hp, mod, func, tmp);
 	hp += 4;
 	tmp = copy_struct(pid, sz_pid, &hp, off_heap);
-	mess = TUPLE5(hp, am_trace, p->id, am_spawn, tmp, mfa);
+	mess = TUPLE5(hp, am_trace, p->common.id, am_spawn, tmp, mfa);
 	hp += 6;
 
 	erts_smp_mtx_lock(&smq_mtx);
 
-	if (p->trace_flags & F_TIMESTAMP) {
+	if (ERTS_TRACE_FLAGS(p) & F_TIMESTAMP) {
 	    hp = patch_ts(mess, hp);
 	}
 
-	ERTS_ENQ_TRACE_MSG(p->id, tracer_ref, mess, bp);
+	ERTS_ENQ_TRACE_MSG(p->common.id, tracer_ref, mess, bp);
 	erts_smp_mtx_unlock(&smq_mtx);
     }
 }
@@ -2083,190 +2157,6 @@ void save_calls(Process *p, Export *e)
 	if (scb->n < len)
 	    scb->n++;
     }
-}
-
-/* 
- * Entry point called by the trace wrap functions in erl_bif_wrap.c
- *
- * The trace wrap functions are themselves called through the export
- * entries instead of the original BIF functions.
- */
-Eterm
-erts_bif_trace(int bif_index, Process* p, 
-	       Eterm arg1, Eterm arg2, Eterm arg3, BeamInstr *I)
-{
-    Eterm result;
-    int meta = !!(erts_bif_trace_flags[bif_index] & BIF_TRACE_AS_META);
-
-    ERTS_SMP_CHK_HAVE_ONLY_MAIN_PROC_LOCK(p);
-
-    if (!ARE_TRACE_FLAGS_ON(p, F_TRACE_CALLS) && (! meta)) {
-	/* Warning! This is an Optimization. 
-	 *
-	 * If neither meta trace is active nor process trace flags then 
-	 * no tracing will occur. Doing the whole else branch will 
-	 * also do nothing, only slower.
-	 */
-	Eterm (*func)(Process*, Eterm, Eterm, Eterm, BeamInstr*) = bif_table[bif_index].f;
-	result = func(p, arg1, arg2, arg3, I);
-    } else {
-	Eterm (*func)(Process*, Eterm, Eterm, Eterm, BeamInstr*);
-	Export* ep = bif_export[bif_index];
-	Uint32 flags = 0, flags_meta = 0;
-	int global = !!(erts_bif_trace_flags[bif_index] & BIF_TRACE_AS_GLOBAL);
-	int local  = !!(erts_bif_trace_flags[bif_index] & BIF_TRACE_AS_LOCAL);
-	int time   = !!(erts_bif_trace_flags[bif_index] & BIF_TRACE_AS_CALL_TIME);
-	Eterm meta_tracer_pid = NIL;
-	int applying = (I == &(ep->code[3])); /* Yup, the apply code for a bif
-					       * is actually in the 
-					       * export entry */
-	BeamInstr *cp = p->cp;
-	
-	Eterm args[3] = {arg1, arg2, arg3};
-	
-	/* 
-	 * Make continuation pointer OK, it is not during direct BIF calls,
-	 * but it is correct during apply of bif.
-	 */
-	if (!applying) { 
-	    p->cp = I;
-	}
-	if (global || local) {
-	    flags = erts_call_trace(p, ep->code, ep->match_prog_set, args, 
-				       local, &p->tracer_proc);
-	}
-	if (meta) {
-	    flags_meta = erts_bif_mtrace(p, ep->code+3, args, local, 
-					 &meta_tracer_pid);
-	}
-	if (time) {
-	    BpDataTime *bdt = NULL;
-	    BeamInstr *pc = (BeamInstr *)ep->code+3;
-
-	    bdt = (BpDataTime *) erts_get_time_break(p, pc);
-	    ASSERT(bdt);
-
-	    if (!bdt->pause) {
-		erts_trace_time_break(p, pc, bdt, ERTS_BP_CALL_TIME_CALL);
-	    }
-	}
-	/* Restore original continuation pointer (if changed). */
-	p->cp = cp;
-	
-	func = bif_table[bif_index].f;
-
-	result = func(p, arg1, arg2, arg3, I);
-	
-	if (applying && (flags & MATCH_SET_RETURN_TO_TRACE)) {
-	    BeamInstr i_return_trace      = beam_return_trace[0];
-	    BeamInstr i_return_to_trace   = beam_return_to_trace[0];
-	    BeamInstr i_return_time_trace = beam_return_time_trace[0];
-	    Eterm *cpp;
-	    /* Maybe advance cp to skip trace stack frames */
-	    for (cpp = p->stop;  ;  cp = cp_val(*cpp++)) {
-		if (*cp == i_return_trace) {
-		    /* Skip stack frame variables */
-		    while (is_not_CP(*cpp)) cpp++;
-		    cpp += 2; /* Skip return_trace parameters */
-		} else if (*cp == i_return_time_trace) {
-		    /* Skip stack frame variables */
-		    while (is_not_CP(*cpp)) cpp++;
-		    cpp += 1; /* Skip return_time_trace parameters */
-		} else if (*cp == i_return_to_trace) {
-		    /* A return_to trace message is going to be generated
-		     * by normal means, so we do not have to.
-		     */
-		    cp = NULL;
-		    break;
-		} else break;
-	    }
-	}
-	
-	/* Try to get these in the order 
-	 * they usually appear in normal code... */
-	if (is_non_value(result)) {
-	    Uint reason = p->freason;
-	    if (reason != TRAP) {
-		Eterm class;
-		Eterm value = p->fvalue;
-		DeclareTmpHeapNoproc(nocatch,3);
-		UseTmpHeapNoproc(3);
-		/* Expand error value like in handle_error() */
-		if (reason & EXF_ARGLIST) {
-		    Eterm *tp;
-		    ASSERT(is_tuple(value));
-		    tp = tuple_val(value);
-		    value = tp[1];
-		}
-		if ((reason & EXF_THROWN) && (p->catches <= 0)) {
-		    value = TUPLE2(nocatch, am_nocatch, value);
-		    reason = EXC_ERROR;
-		}
-		/* Note: expand_error_value() could theoretically 
-		 * allocate on the heap, but not for any error
-		 * returned by a BIF, and it would do no harm,
-		 * just be annoying.
-		 */
-		value = expand_error_value(p, reason, value);
-		class = exception_tag[GET_EXC_CLASS(reason)];
-		
-		if (flags_meta & MATCH_SET_EXCEPTION_TRACE) {
-		    erts_trace_exception(p, ep->code, class, value,
-					 &meta_tracer_pid);
-		}
-		if (flags & MATCH_SET_EXCEPTION_TRACE) {
-		    erts_trace_exception(p, ep->code, class, value,
-					 &p->tracer_proc);
-		}
-		if ((flags & MATCH_SET_RETURN_TO_TRACE) && p->catches > 0) {
-		    /* can only happen if(local)*/
-		    Eterm *ptr = p->stop;
-		    ASSERT(is_CP(*ptr));
-		    ASSERT(ptr <= STACK_START(p));
-		    /* Search the nearest stack frame for a catch */
-		    while (++ptr < STACK_START(p)) {
-			if (is_CP(*ptr)) break;
-			if (is_catch(*ptr)) {
-			    if (applying) {
-				/* Apply of BIF, cp is in calling function */
-				if (cp) erts_trace_return_to(p, cp);
-			    } else {
-				/* Direct bif call, I points into 
-				 * calling function */
-				erts_trace_return_to(p, I);
-			    }
-			}
-		    }
-		}
-		UnUseTmpHeapNoproc(3);
-		if ((flags_meta|flags) & MATCH_SET_EXCEPTION_TRACE) {
-		    erts_smp_proc_lock(p, ERTS_PROC_LOCKS_ALL_MINOR);
-		    p->trace_flags |= F_EXCEPTION_TRACE;
-		    erts_smp_proc_unlock(p, ERTS_PROC_LOCKS_ALL_MINOR);
-		}
-	    }
-	} else {
-	    if (flags_meta & MATCH_SET_RX_TRACE) {
-		erts_trace_return(p, ep->code, result, &meta_tracer_pid);
-	    }
-	    /* MATCH_SET_RETURN_TO_TRACE cannot occur if(meta) */
-	    if (flags & MATCH_SET_RX_TRACE) {
-		erts_trace_return(p, ep->code, result, &p->tracer_proc);
-	    }
-	    if (flags & MATCH_SET_RETURN_TO_TRACE) { 
-		/* can only happen if(local)*/
-		if (applying) {
-		    /* Apply of BIF, cp is in calling function */
-		    if (cp) erts_trace_return_to(p, cp);
-		} else {
-		    /* Direct bif call, I points into calling function */
-		    erts_trace_return_to(p, I);
-		}
-	    }
-	}
-    }
-    ERTS_SMP_CHK_HAVE_ONLY_MAIN_PROC_LOCK(p);
-    return result;
 }
 
 /* Sends trace message:
@@ -2313,7 +2203,7 @@ trace_gc(Process *p, Eterm what)
 	AM_bin_old_vheap_block_size
     };
 
-    Uint values[] = {
+    UWord values[] = {
 	OLD_HEAP(p) ? OLD_HEND(p) - OLD_HEAP(p) : 0,
 	HEAP_SIZE(p),
 	MBUF_SIZE(p),
@@ -2327,7 +2217,7 @@ trace_gc(Process *p, Eterm what)
 	BIN_OLD_VHEAP_SZ(p)
     };
 #define LOCAL_HEAP_SIZE						\
-    (sizeof(values)/sizeof(Eterm)) *				\
+    (sizeof(values)/sizeof(*values)) *				\
 	(2/*cons*/ + 3/*2-tuple*/ + BIG_UINT_HEAP_SIZE) +	\
 	5/*4-tuple */ + TS_HEAP_WORDS
     DeclareTmpHeap(local_heap,LOCAL_HEAP_SIZE,p);
@@ -2335,31 +2225,32 @@ trace_gc(Process *p, Eterm what)
     Eterm* limit;
 #endif
 
-    ASSERT(sizeof(values)/sizeof(Uint) == sizeof(tags)/sizeof(Eterm));
+    ASSERT(sizeof(values)/sizeof(*values) == sizeof(tags)/sizeof(Eterm));
 
     UseTmpHeap(LOCAL_HEAP_SIZE,p);
 
-    if (is_internal_port(p->tracer_proc)) {
+    if (is_internal_port(ERTS_TRACER_PROC(p))) {
 	hp = local_heap;
 #ifdef DEBUG
 	size = 0;
-	(void) erts_bld_atom_uint_2tup_list(NULL,
+	(void) erts_bld_atom_uword_2tup_list(NULL,
 					    &size,
-					    sizeof(values)/sizeof(Uint),
+					    sizeof(values)/sizeof(*values),
 					    tags,
 					    values);
 	size += 5/*4-tuple*/ + TS_SIZE(p);
 #endif
     } else {
-	ASSERT(is_internal_pid(p->tracer_proc)
-	       && internal_pid_index(p->tracer_proc) < erts_max_processes);
+	ASSERT(is_internal_pid(ERTS_TRACER_PROC(p)));
 
-	ERTS_GET_TRACER_REF(tracer_ref, p->tracer_proc, p->trace_flags);
+	ERTS_GET_TRACER_REF(tracer_ref,
+			    ERTS_TRACER_PROC(p),
+			    ERTS_TRACE_FLAGS(p));
 
 	size = 0;
-	(void) erts_bld_atom_uint_2tup_list(NULL,
+	(void) erts_bld_atom_uword_2tup_list(NULL,
 					    &size,
-					    sizeof(values)/sizeof(Uint),
+					    sizeof(values)/sizeof(*values),
 					    tags,
 					    values);
 	size += 5/*4-tuple*/ + TS_SIZE(p);
@@ -2372,31 +2263,158 @@ trace_gc(Process *p, Eterm what)
     ASSERT(size <= LOCAL_HEAP_SIZE);
 #endif
 
-    msg = erts_bld_atom_uint_2tup_list(&hp,
+    msg = erts_bld_atom_uword_2tup_list(&hp,
 				       NULL,
-				       sizeof(values)/sizeof(Uint),
+				       sizeof(values)/sizeof(*values),
 				       tags,
 				       values);
 
-    msg = TUPLE4(hp, am_trace, p->id/* Local pid */, what, msg);
+    msg = TUPLE4(hp, am_trace, p->common.id, what, msg);
     hp += 5;
 
     erts_smp_mtx_lock(&smq_mtx);
 
-    if (p->trace_flags & F_TIMESTAMP) {
+    if (ERTS_TRACE_FLAGS(p) & F_TIMESTAMP) {
 	hp = patch_ts(msg, hp);
     }
     ASSERT(hp == limit);
-    if (is_internal_port(p->tracer_proc))
-	send_to_port(p, msg, &p->tracer_proc, &p->trace_flags);
+    if (is_internal_port(ERTS_TRACER_PROC(p)))
+	send_to_port(p, msg, &ERTS_TRACER_PROC(p), &ERTS_TRACE_FLAGS(p));
     else
-	ERTS_ENQ_TRACE_MSG(p->id, tracer_ref, msg, bp);
+	ERTS_ENQ_TRACE_MSG(p->common.id, tracer_ref, msg, bp);
     erts_smp_mtx_unlock(&smq_mtx);
     UnUseTmpHeap(LOCAL_HEAP_SIZE,p);
 #undef LOCAL_HEAP_SIZE
 }
 
+void 
+monitor_long_schedule_proc(Process *p, BeamInstr *in_fp, BeamInstr *out_fp, Uint time)
+{
+    ErlHeapFragment *bp;
+    ErlOffHeap *off_heap;
+#ifndef ERTS_SMP
+    Process *monitor_p;
+#endif
+    Uint hsz;
+    Eterm *hp, list, in_mfa = am_undefined, out_mfa = am_undefined;
+    Eterm in_tpl, out_tpl, tmo_tpl, tmo, msg;
+ 
 
+#ifndef ERTS_SMP
+    ASSERT(is_internal_pid(system_monitor));
+    monitor_p = erts_proc_lookup(system_monitor);
+    if (!monitor_p || p == monitor_p) {
+	return;
+    }
+#endif
+    /* 
+     * Size: {monitor, pid, long_schedule, [{timeout, T}, {in, {M,F,A}},{out,{M,F,A}}]} ->
+     * 5 (top tuple of 4), (3 (elements) * 2 (cons)) + 3 (timeout tuple of 2) + size of Timeout +
+     * (2 * 3 (in/out tuple of 2)) + 
+     * 0 (unknown) or 4 (MFA tuple of 3) + 0 (unknown) or 4 (MFA tuple of 3)
+     * = 20 + (in_fp != NULL) ? 4 : 0 + (out_fp != NULL) ? 4 : 0 + size of Timeout
+     */
+    hsz = 20 + ((in_fp != NULL) ? 4 : 0) + ((out_fp != NULL) ? 4 : 0);
+    (void) erts_bld_uint(NULL, &hsz, time);
+    hp = ERTS_ALLOC_SYSMSG_HEAP(hsz, &bp, &off_heap, monitor_p);
+    tmo = erts_bld_uint(&hp, NULL, time);
+    if (in_fp != NULL) {
+	in_mfa = TUPLE3(hp,(Eterm) in_fp[0], (Eterm) in_fp[1], make_small(in_fp[2]));
+	hp +=4;
+    } 
+    if (out_fp != NULL) {
+	out_mfa = TUPLE3(hp,(Eterm) out_fp[0], (Eterm) out_fp[1], make_small(out_fp[2]));
+	hp +=4;
+    } 
+    tmo_tpl = TUPLE2(hp,am_timeout, tmo);
+    hp += 3;
+    in_tpl = TUPLE2(hp,am_in,in_mfa);
+    hp += 3;
+    out_tpl = TUPLE2(hp,am_out,out_mfa);
+    hp += 3;
+    list = CONS(hp,out_tpl,NIL); 
+    hp += 2;
+    list = CONS(hp,in_tpl,list);
+    hp += 2;
+    list = CONS(hp,tmo_tpl,list);
+    hp += 2;
+    msg = TUPLE4(hp, am_monitor, p->common.id, am_long_schedule, list);
+    hp += 5;
+#ifdef ERTS_SMP
+    enqueue_sys_msg(SYS_MSG_TYPE_SYSMON, p->common.id, NIL, msg, bp);
+#else
+    erts_queue_message(monitor_p, NULL, bp, msg, NIL
+#ifdef USE_VM_PROBES
+			   , NIL
+#endif
+		       );
+#endif
+}
+void 
+monitor_long_schedule_port(Port *pp, ErtsPortTaskType type, Uint time)
+{
+    ErlHeapFragment *bp;
+    ErlOffHeap *off_heap;
+#ifndef ERTS_SMP
+    Process *monitor_p;
+#endif
+    Uint hsz;
+    Eterm *hp, list, op;
+    Eterm op_tpl, tmo_tpl, tmo, msg;
+ 
+
+#ifndef ERTS_SMP
+    ASSERT(is_internal_pid(system_monitor));
+    monitor_p = erts_proc_lookup(system_monitor);
+    if (!monitor_p) {
+	return;
+    }
+#endif
+    /* 
+     * Size: {monitor, port, long_schedule, [{timeout, T}, {op, Operation}]} ->
+     * 5 (top tuple of 4), (2 (elements) * 2 (cons)) + 3 (timeout tuple of 2) 
+     * + size of Timeout + 3 (op tuple of 2 atoms)
+     * = 15 + size of Timeout
+     */
+    hsz = 15;
+    (void) erts_bld_uint(NULL, &hsz, time);
+
+    hp = ERTS_ALLOC_SYSMSG_HEAP(hsz, &bp, &off_heap, monitor_p);
+
+    switch (type) {
+    case ERTS_PORT_TASK_PROC_SIG: op = am_proc_sig; break;
+    case ERTS_PORT_TASK_TIMEOUT: op = am_timeout; break;
+    case ERTS_PORT_TASK_INPUT: op = am_input; break;
+    case ERTS_PORT_TASK_OUTPUT: op = am_output; break;
+    case ERTS_PORT_TASK_EVENT: op = am_event; break;
+    case ERTS_PORT_TASK_DIST_CMD: op = am_dist_cmd; break;
+    default: op = am_undefined; break;
+    }
+
+    tmo = erts_bld_uint(&hp, NULL, time);
+
+    op_tpl = TUPLE2(hp,am_port_op,op); 
+    hp += 3;
+
+    tmo_tpl = TUPLE2(hp,am_timeout, tmo);
+    hp += 3;
+
+    list = CONS(hp,op_tpl,NIL);
+    hp += 2;
+    list = CONS(hp,tmo_tpl,list);
+    hp += 2;
+    msg = TUPLE4(hp, am_monitor, pp->common.id, am_long_schedule, list);
+    hp += 5;
+#ifdef ERTS_SMP
+    enqueue_sys_msg(SYS_MSG_TYPE_SYSMON, pp->common.id, NIL, msg, bp);
+#else
+    erts_queue_message(monitor_p, NULL, bp, msg, NIL
+#ifdef USE_VM_PROBES
+			   , NIL
+#endif
+		       );
+#endif
+}
 
 void
 monitor_long_gc(Process *p, Uint time) {
@@ -2416,7 +2434,7 @@ monitor_long_gc(Process *p, Uint time) {
 	am_old_heap_size,
 	am_heap_size
     };
-    Eterm values[] = {
+    UWord values[] = {
 	time,
 	OLD_HEAP(p) ? OLD_HEND(p) - OLD_HEAP(p) : 0,
 	HEAP_SIZE(p),
@@ -2430,18 +2448,16 @@ monitor_long_gc(Process *p, Uint time) {
 #endif
 	
 #ifndef ERTS_SMP
-    ASSERT(is_internal_pid(system_monitor)
-	   && internal_pid_index(system_monitor) < erts_max_processes);
-    monitor_p = process_tab[internal_pid_index(system_monitor)];
-    if (INVALID_PID(monitor_p, system_monitor) || p == monitor_p) {
+    ASSERT(is_internal_pid(system_monitor));
+    monitor_p = erts_proc_lookup(system_monitor);
+    if (!monitor_p || p == monitor_p)
 	return;
-    }
 #endif
 
     hsz = 0;
-    (void) erts_bld_atom_uint_2tup_list(NULL,
+    (void) erts_bld_atom_uword_2tup_list(NULL,
 					&hsz,
-					sizeof(values)/sizeof(Uint),
+					sizeof(values)/sizeof(*values),
 					tags,
 					values);
     hsz += 5 /* 4-tuple */;
@@ -2452,12 +2468,12 @@ monitor_long_gc(Process *p, Uint time) {
     hp_end = hp + hsz;
 #endif
 
-    list = erts_bld_atom_uint_2tup_list(&hp,
+    list = erts_bld_atom_uword_2tup_list(&hp,
 					NULL,
-					sizeof(values)/sizeof(Uint),
+					sizeof(values)/sizeof(*values),
 					tags,
 					values);
-    msg = TUPLE4(hp, am_monitor, p->id/* Local pid */, am_long_gc, list); 
+    msg = TUPLE4(hp, am_monitor, p->common.id, am_long_gc, list); 
 
 #ifdef DEBUG
     hp += 5 /* 4-tuple */;
@@ -2465,9 +2481,13 @@ monitor_long_gc(Process *p, Uint time) {
 #endif
 
 #ifdef ERTS_SMP
-    enqueue_sys_msg(SYS_MSG_TYPE_SYSMON, p->id, NIL, msg, bp);
+    enqueue_sys_msg(SYS_MSG_TYPE_SYSMON, p->common.id, NIL, msg, bp);
 #else
-    erts_queue_message(monitor_p, NULL, bp, msg, NIL);
+    erts_queue_message(monitor_p, NULL, bp, msg, NIL
+#ifdef USE_VM_PROBES
+			   , NIL
+#endif
+		       );
 #endif
 }
 
@@ -2488,7 +2508,7 @@ monitor_large_heap(Process *p) {
 	am_old_heap_size,
 	am_heap_size
     };
-    Uint values[] = {
+    UWord values[] = {
 	OLD_HEAP(p) ? OLD_HEND(p) - OLD_HEAP(p) : 0,
 	HEAP_SIZE(p),
 	MBUF_SIZE(p),
@@ -2502,18 +2522,17 @@ monitor_large_heap(Process *p) {
 
 
 #ifndef ERTS_SMP 
-    ASSERT(is_internal_pid(system_monitor)
-	   && internal_pid_index(system_monitor) < erts_max_processes);
-    monitor_p = process_tab[internal_pid_index(system_monitor)];
-    if (INVALID_PID(monitor_p, system_monitor) || p == monitor_p) {
+    ASSERT(is_internal_pid(system_monitor));
+    monitor_p = erts_proc_lookup(system_monitor);
+    if (!monitor_p || p == monitor_p) {
 	return;
     }
 #endif
 
     hsz = 0;
-    (void) erts_bld_atom_uint_2tup_list(NULL,
+    (void) erts_bld_atom_uword_2tup_list(NULL,
 					&hsz,
-					sizeof(values)/sizeof(Uint),
+					sizeof(values)/sizeof(*values),
 					tags,
 					values);
     hsz += 5 /* 4-tuple */;
@@ -2524,12 +2543,12 @@ monitor_large_heap(Process *p) {
     hp_end = hp + hsz;
 #endif
 
-    list = erts_bld_atom_uint_2tup_list(&hp,
+    list = erts_bld_atom_uword_2tup_list(&hp,
 					NULL,
-					sizeof(values)/sizeof(Uint),
+					sizeof(values)/sizeof(*values),
 					tags,
 					values);
-    msg = TUPLE4(hp, am_monitor, p->id/* Local pid */, am_large_heap, list); 
+    msg = TUPLE4(hp, am_monitor, p->common.id, am_large_heap, list); 
 
 #ifdef DEBUG
     hp += 5 /* 4-tuple */;
@@ -2537,9 +2556,13 @@ monitor_large_heap(Process *p) {
 #endif
 
 #ifdef ERTS_SMP
-    enqueue_sys_msg(SYS_MSG_TYPE_SYSMON, p->id, NIL, msg, bp);
+    enqueue_sys_msg(SYS_MSG_TYPE_SYSMON, p->common.id, NIL, msg, bp);
 #else
-    erts_queue_message(monitor_p, NULL, bp, msg, NIL);
+    erts_queue_message(monitor_p, NULL, bp, msg, NIL
+#ifdef USE_VM_PROBES
+		       , NIL
+#endif
+		       );
 #endif
 }
 
@@ -2553,23 +2576,25 @@ monitor_generic(Process *p, Eterm type, Eterm spec) {
     Eterm *hp, msg;
 
 #ifndef ERTS_SMP
-    ASSERT(is_internal_pid(system_monitor)
-	   && internal_pid_index(system_monitor) < erts_max_processes);
-    monitor_p = process_tab[internal_pid_index(system_monitor)];
-    if (INVALID_PID(monitor_p, system_monitor) || p == monitor_p) {
+    ASSERT(is_internal_pid(system_monitor));
+    monitor_p = erts_proc_lookup(system_monitor);
+    if (!monitor_p || p == monitor_p)
 	return;
-    }
 #endif
 
     hp = ERTS_ALLOC_SYSMSG_HEAP(5, &bp, &off_heap, monitor_p);
 
-    msg = TUPLE4(hp, am_monitor, p->id/* Local pid */, type, spec); 
+    msg = TUPLE4(hp, am_monitor, p->common.id, type, spec); 
     hp += 5;
 
 #ifdef ERTS_SMP
-    enqueue_sys_msg(SYS_MSG_TYPE_SYSMON, p->id, NIL, msg, bp);
+    enqueue_sys_msg(SYS_MSG_TYPE_SYSMON, p->common.id, NIL, msg, bp);
 #else
-    erts_queue_message(monitor_p, NULL, bp, msg, NIL);
+    erts_queue_message(monitor_p, NULL, bp, msg, NIL
+#ifdef USE_VM_PROBES
+		       , NIL
+#endif
+		       );
 #endif
 
 }
@@ -2618,7 +2643,7 @@ profile_scheduler(Eterm scheduler_id, Eterm state) {
 		 make_small(active_sched), timestamp); hp += 7;
 
 #ifndef ERTS_SMP
-    profile_send(msg);
+    profile_send(NIL, msg);
     UnUseTmpHeapNoproc(LOCAL_HEAP_SIZE);
 #undef LOCAL_HEAP_SIZE
 #else
@@ -2653,7 +2678,7 @@ profile_scheduler_q(Eterm scheduler_id, Eterm state, Eterm no_schedulers, Uint M
     timestamp = TUPLE3(hp, make_small(Ms), make_small(s), make_small(us)); hp += 4;
     msg = TUPLE6(hp, am_profile, am_scheduler, scheduler_id, state, no_schedulers, timestamp); hp += 7;
 #ifndef ERTS_SMP
-    profile_send(msg);
+    profile_send(NIL, msg);
     UnUseTmpHeapNoproc(LOCAL_HEAP_SIZE);
 #undef LOCAL_HEAP_SIZE
 #else
@@ -2685,21 +2710,21 @@ trace_port_open(Port *p, Eterm calling_pid, Eterm drv_name) {
     Eterm mess;
     Eterm* hp;
 
-    if (is_internal_port(p->tracer_proc)) {
+    if (is_internal_port(ERTS_TRACER_PROC(p))) {
 #define LOCAL_HEAP_SIZE (5+6)
 	DeclareTmpHeapNoproc(local_heap,LOCAL_HEAP_SIZE);
 	UseTmpHeapNoproc(LOCAL_HEAP_SIZE);
 
 	hp = local_heap;
 
-	mess = TUPLE5(hp, am_trace, calling_pid, am_open, p->id, drv_name);
+	mess = TUPLE5(hp, am_trace, calling_pid, am_open, p->common.id, drv_name);
 	hp += 6;
 	erts_smp_mtx_lock(&smq_mtx);
-	if (p->trace_flags & F_TIMESTAMP) {
+	if (ERTS_TRACE_FLAGS(p) & F_TIMESTAMP) {
 	    hp = patch_ts(mess, hp);
 	}
 	/* No fake schedule */
-	send_to_port(NULL, mess, &p->tracer_proc, &p->trace_flags);
+	send_to_port(NULL, mess, &ERTS_TRACER_PROC(p), &ERTS_TRACE_FLAGS(p));
 	UnUseTmpHeapNoproc(LOCAL_HEAP_SIZE);
 #undef LOCAL_HEAP_SIZE
 	erts_smp_mtx_unlock(&smq_mtx);
@@ -2709,25 +2734,26 @@ trace_port_open(Port *p, Eterm calling_pid, Eterm drv_name) {
 	size_t sz_data;
 	ERTS_TRACER_REF_TYPE tracer_ref;
 	
-	ASSERT(is_internal_pid(p->tracer_proc)
-	       && internal_pid_index(p->tracer_proc) < erts_max_processes);
+	ASSERT(is_internal_pid(ERTS_TRACER_PROC(p)));
 
 	sz_data = 6 + TS_SIZE(p);
 
-	ERTS_GET_TRACER_REF(tracer_ref, p->tracer_proc, p->trace_flags);
+	ERTS_GET_TRACER_REF(tracer_ref,
+			    ERTS_TRACER_PROC(p),
+			    ERTS_TRACE_FLAGS(p));
 
 	hp = ERTS_ALLOC_SYSMSG_HEAP(sz_data, &bp, &off_heap, tracer_ref);
 
-	mess = TUPLE5(hp, am_trace, calling_pid, am_open, p->id, drv_name);
+	mess = TUPLE5(hp, am_trace, calling_pid, am_open, p->common.id, drv_name);
 	hp += 6;
 
 	erts_smp_mtx_lock(&smq_mtx);
 
-	if (p->trace_flags & F_TIMESTAMP) {
+	if (ERTS_TRACE_FLAGS(p) & F_TIMESTAMP) {
 	    hp = patch_ts(mess, hp);
 	}
 
-	ERTS_ENQ_TRACE_MSG(p->id, tracer_ref, mess, bp);
+	ERTS_ENQ_TRACE_MSG(p->common.id, tracer_ref, mess, bp);
 	erts_smp_mtx_unlock(&smq_mtx);
     }
 
@@ -2745,22 +2771,23 @@ trace_port(Port *t_p, Eterm what, Eterm data) {
     Eterm mess;
     Eterm* hp;
 
-    ERTS_SMP_LC_ASSERT(erts_lc_is_port_locked(t_p) || erts_is_system_blocked(0));
+    ERTS_SMP_LC_ASSERT(erts_lc_is_port_locked(t_p)
+		       || erts_thr_progress_is_blocking());
 
-    if (is_internal_port(t_p->tracer_proc)) {
+    if (is_internal_port(ERTS_TRACER_PROC(t_p))) {
 #define LOCAL_HEAP_SIZE (5+5)
 	DeclareTmpHeapNoproc(local_heap,LOCAL_HEAP_SIZE);
 	UseTmpHeapNoproc(LOCAL_HEAP_SIZE);
 
 	hp = local_heap;
-	mess = TUPLE4(hp, am_trace, t_p->id, what, data);
+	mess = TUPLE4(hp, am_trace, t_p->common.id, what, data);
 	hp += 5;
 	erts_smp_mtx_lock(&smq_mtx);
-	if (t_p->trace_flags & F_TIMESTAMP) {
+	if (ERTS_TRACE_FLAGS(t_p) & F_TIMESTAMP) {
 	    hp = patch_ts(mess, hp);
 	}
 	/* No fake schedule */
-	send_to_port(NULL, mess, &t_p->tracer_proc, &t_p->trace_flags);
+	send_to_port(NULL,mess,&ERTS_TRACER_PROC(t_p),&ERTS_TRACE_FLAGS(t_p));
 	UnUseTmpHeapNoproc(LOCAL_HEAP_SIZE);
 #undef LOCAL_HEAP_SIZE
 	erts_smp_mtx_unlock(&smq_mtx);
@@ -2770,25 +2797,26 @@ trace_port(Port *t_p, Eterm what, Eterm data) {
 	size_t sz_data;
 	ERTS_TRACER_REF_TYPE tracer_ref;
 
-	ASSERT(is_internal_pid(t_p->tracer_proc)
-	       && internal_pid_index(t_p->tracer_proc) < erts_max_processes);
+	ASSERT(is_internal_pid(ERTS_TRACER_PROC(t_p)));
 
 	sz_data = 5 + TS_SIZE(t_p);
 
-	ERTS_GET_TRACER_REF(tracer_ref, t_p->tracer_proc, t_p->trace_flags);
+	ERTS_GET_TRACER_REF(tracer_ref,
+			    ERTS_TRACER_PROC(t_p),
+			    ERTS_TRACE_FLAGS(t_p));
 
 	hp = ERTS_ALLOC_SYSMSG_HEAP(sz_data, &bp, &off_heap, tracer_ref);
 
-	mess = TUPLE4(hp, am_trace, t_p->id, what, data);
+	mess = TUPLE4(hp, am_trace, t_p->common.id, what, data);
 	hp += 5;
 
 	erts_smp_mtx_lock(&smq_mtx);
 
-	if (t_p->trace_flags & F_TIMESTAMP) {
+	if (ERTS_TRACE_FLAGS(t_p) & F_TIMESTAMP) {
 	    hp = patch_ts(mess, hp);
 	}
 
-	ERTS_ENQ_TRACE_MSG(t_p->id, tracer_ref, mess, bp);
+	ERTS_ENQ_TRACE_MSG(t_p->common.id, tracer_ref, mess, bp);
 	erts_smp_mtx_unlock(&smq_mtx);
     }
 }
@@ -2813,7 +2841,7 @@ trace_sched_ports_where(Port *p, Eterm what, Eterm where) {
     int ws = 5;	
     Eterm sched_id = am_undefined;
     
-    if (is_internal_port(p->tracer_proc)) {
+    if (is_internal_port(ERTS_TRACER_PROC(p))) {
 #define LOCAL_HEAP_SIZE (5+6)
 	DeclareTmpHeapNoproc(local_heap,LOCAL_HEAP_SIZE);
 	UseTmpHeapNoproc(LOCAL_HEAP_SIZE);
@@ -2828,21 +2856,21 @@ trace_sched_ports_where(Port *p, Eterm what, Eterm where) {
 #else
 		sched_id = make_small(1);
 #endif
-		mess = TUPLE5(hp, am_trace, p->id, what, sched_id, where);
+		mess = TUPLE5(hp, am_trace, p->common.id, what, sched_id, where);
 		ws = 6;
 	} else {
-		mess = TUPLE4(hp, am_trace, p->id, what, where);
+		mess = TUPLE4(hp, am_trace, p->common.id, what, where);
 		ws = 5;
 	}
 	hp += ws;
 	
 	erts_smp_mtx_lock(&smq_mtx);
-	if (p->trace_flags & F_TIMESTAMP) {
+	if (ERTS_TRACE_FLAGS(p) & F_TIMESTAMP) {
 	    hp = patch_ts(mess, hp);
 	}
 	
 	/* No fake scheduling */
-	send_to_port(NULL, mess, &p->tracer_proc, &p->trace_flags);
+	send_to_port(NULL, mess, &ERTS_TRACER_PROC(p), &ERTS_TRACE_FLAGS(p));
 	UnUseTmpHeapNoproc(LOCAL_HEAP_SIZE);
 #undef LOCAL_HEAP_SIZE
 	erts_smp_mtx_unlock(&smq_mtx);
@@ -2851,12 +2879,13 @@ trace_sched_ports_where(Port *p, Eterm what, Eterm where) {
     	ErlOffHeap *off_heap;
 	ERTS_TRACER_REF_TYPE tracer_ref;
 
-	ASSERT(is_internal_pid(p->tracer_proc)
-	       && internal_pid_index(p->tracer_proc) < erts_max_processes);
+	ASSERT(is_internal_pid(ERTS_TRACER_PROC(p)));
 	
 	if (IS_TRACED_FL(p, F_TRACE_SCHED_NO)) ws = 6; /* Make place for scheduler id */
 
-	ERTS_GET_TRACER_REF(tracer_ref, p->tracer_proc, p->trace_flags);
+	ERTS_GET_TRACER_REF(tracer_ref,
+			    ERTS_TRACER_PROC(p),
+			    ERTS_TRACE_FLAGS(p));
 
 	hp = ERTS_ALLOC_SYSMSG_HEAP(ws+TS_SIZE(p), &bp, &off_heap, tracer_ref);
 
@@ -2868,19 +2897,19 @@ trace_sched_ports_where(Port *p, Eterm what, Eterm where) {
 #else
 		sched_id = make_small(1);
 #endif
-		mess = TUPLE5(hp, am_trace, p->id, what, sched_id, where);
+		mess = TUPLE5(hp, am_trace, p->common.id, what, sched_id, where);
 	} else {
-		mess = TUPLE4(hp, am_trace, p->id, what, where);
+		mess = TUPLE4(hp, am_trace, p->common.id, what, where);
 	}
 	hp += ws;
 
 	erts_smp_mtx_lock(&smq_mtx);
 
-	if (p->trace_flags & F_TIMESTAMP) {
+	if (ERTS_TRACE_FLAGS(p) & F_TIMESTAMP) {
 	    hp = patch_ts(mess, hp);
 	}
 
-	ERTS_ENQ_TRACE_MSG(p->id, tracer_ref, mess, bp);
+	ERTS_ENQ_TRACE_MSG(p->common.id, tracer_ref, mess, bp);
 	erts_smp_mtx_unlock(&smq_mtx);
     }
 }
@@ -2916,14 +2945,14 @@ profile_runnable_port(Port *p, Eterm status) {
 
     GET_NOW(&Ms, &s, &us);
     timestamp = TUPLE3(hp, make_small(Ms), make_small(s), make_small(us)); hp += 4;
-    msg = TUPLE5(hp, am_profile, p->id, status, count, timestamp); hp += 6;
+    msg = TUPLE5(hp, am_profile, p->common.id, status, count, timestamp); hp += 6;
 
 #ifndef ERTS_SMP
-    profile_send(msg);
+    profile_send(p->common.id, msg);
     UnUseTmpHeapNoproc(LOCAL_HEAP_SIZE);
 #undef LOCAL_HEAP_SIZE
 #else
-    enqueue_sys_msg_unlocked(SYS_MSG_TYPE_SYSPROF, NIL, NIL, msg, bp);
+    enqueue_sys_msg_unlocked(SYS_MSG_TYPE_SYSPROF, p->common.id, NIL, msg, bp);
 #endif
     erts_smp_mtx_unlock(&smq_mtx);
 }
@@ -2970,13 +2999,13 @@ profile_runnable_proc(Process *p, Eterm status){
 
     GET_NOW(&Ms, &s, &us);
     timestamp = TUPLE3(hp, make_small(Ms), make_small(s), make_small(us)); hp += 4;
-    msg = TUPLE5(hp, am_profile, p->id, status, where, timestamp); hp += 6;
+    msg = TUPLE5(hp, am_profile, p->common.id, status, where, timestamp); hp += 6;
 #ifndef ERTS_SMP
-    profile_send(msg);
+    profile_send(p->common.id, msg);
     UnUseTmpHeapNoproc(LOCAL_HEAP_SIZE);
 #undef LOCAL_HEAP_SIZE
 #else
-    enqueue_sys_msg_unlocked(SYS_MSG_TYPE_SYSPROF, NIL, NIL, msg, bp);
+    enqueue_sys_msg_unlocked(SYS_MSG_TYPE_SYSPROF, p->common.id, NIL, msg, bp);
 #endif
     erts_smp_mtx_unlock(&smq_mtx);
 }
@@ -2989,16 +3018,19 @@ profile_runnable_proc(Process *p, Eterm status){
 void
 erts_check_my_tracer_proc(Process *p)
 {
-    if (is_internal_pid(p->tracer_proc)) {
-	Process *tracer = erts_pid2proc(p, ERTS_PROC_LOCK_MAIN,
-					p->tracer_proc, ERTS_PROC_LOCK_STATUS);
-	int invalid_tracer = !tracer || !(tracer->trace_flags & F_TRACER);
+    if (is_internal_pid(ERTS_TRACER_PROC(p))) {
+	Process *tracer = erts_pid2proc(p,
+					ERTS_PROC_LOCK_MAIN,
+					ERTS_TRACER_PROC(p),
+					ERTS_PROC_LOCK_STATUS);
+	int invalid_tracer = (!tracer
+			      || !(ERTS_TRACE_FLAGS(tracer) & F_TRACER));
 	if (tracer)
 	    erts_smp_proc_unlock(tracer, ERTS_PROC_LOCK_STATUS);
 	if (invalid_tracer) {
 	    erts_smp_proc_lock(p, ERTS_PROC_LOCKS_ALL_MINOR);
-	    p->trace_flags &= ~TRACEE_FLAGS;
-	    p->tracer_proc = NIL;
+	    ERTS_TRACE_FLAGS(p) &= ~TRACEE_FLAGS;
+	    ERTS_TRACER_PROC(p) = NIL;
 	    erts_smp_proc_unlock(p, ERTS_PROC_LOCKS_ALL_MINOR);
 	}
     }
@@ -3020,8 +3052,6 @@ static ErtsSysMsgQ *sys_message_queue_end;
 
 static erts_tid_t sys_msg_dispatcher_tid;
 static erts_cnd_t smq_cnd;
-
-static int dispatcher_waiting;
 
 ERTS_QUALLOC_IMPL(smq_element, ErtsSysMsgQ, 20, ERTS_ALC_T_SYS_MSG_Q)
 
@@ -3064,18 +3094,6 @@ enqueue_sys_msg(enum ErtsSysMsgType type,
     erts_smp_mtx_lock(&smq_mtx);
     enqueue_sys_msg_unlocked(type, from, to, msg, bp);
     erts_smp_mtx_unlock(&smq_mtx);
-}
-
-static void
-prepare_for_block(void *unused)
-{
-    erts_smp_mtx_unlock(&smq_mtx);
-}
-
-static void
-resume_after_block(void *unused)
-{
-    erts_smp_mtx_lock(&smq_mtx);
 }
 
 void
@@ -3131,22 +3149,23 @@ sys_msg_disp_failure(ErtsSysMsgQ *smqp, Eterm receiver)
 	break;
     case SYS_MSG_TYPE_SEQTRACE:
 	/* Reset seq_tracer if it hasn't changed */
-	erts_smp_mtx_lock(&sys_trace_mtx);
+	erts_smp_rwmtx_rwlock(&sys_trace_rwmtx);
 	if (system_seq_tracer == receiver)
 	    system_seq_tracer = am_false;
-	erts_smp_mtx_unlock(&sys_trace_mtx);
+	erts_smp_rwmtx_rwunlock(&sys_trace_rwmtx);
 	break;
     case SYS_MSG_TYPE_SYSMON:
 	if (receiver == NIL
 	    && !erts_system_monitor_long_gc
+	    && !erts_system_monitor_long_schedule
 	    && !erts_system_monitor_large_heap
 	    && !erts_system_monitor_flags.busy_port
 	    && !erts_system_monitor_flags.busy_dist_port)
 	    break; /* Everything is disabled */
-	erts_smp_block_system(ERTS_BS_FLG_ALLOW_GC);
+	erts_smp_thr_progress_block();
 	if (system_monitor == receiver || receiver == NIL)
 	    erts_system_monitor_clear(NULL);
-	erts_smp_release_system();
+	erts_smp_thr_progress_unblock();
 	break;
 	 case SYS_MSG_TYPE_SYSPROF:
 	if (receiver == NIL
@@ -3156,11 +3175,11 @@ sys_msg_disp_failure(ErtsSysMsgQ *smqp, Eterm receiver)
 	    && !erts_system_profile_flags.scheduler)
 		 break;
 	/* Block system to clear flags */
-	erts_smp_block_system(0);
+	erts_smp_thr_progress_block();
 	if (system_profile == receiver || receiver == NIL) { 
 		erts_system_profile_clear(NULL);
 	}
-	erts_smp_release_system();
+	erts_smp_thr_progress_unblock();
 	break;
     case SYS_MSG_TYPE_ERRLGR: {
 	char *no_elgger = "(no error logger present)";
@@ -3201,22 +3220,68 @@ sys_msg_disp_failure(ErtsSysMsgQ *smqp, Eterm receiver)
     }
 }
 
+static void
+sys_msg_dispatcher_wakeup(void *vwait_p)
+{
+    int *wait_p = (int *) vwait_p;
+    erts_smp_mtx_lock(&smq_mtx);
+    *wait_p = 0;
+    erts_smp_cnd_signal(&smq_cnd);
+    erts_smp_mtx_unlock(&smq_mtx);
+}
+
+static void
+sys_msg_dispatcher_prep_wait(void *vwait_p)
+{
+    int *wait_p = (int *) vwait_p;
+    erts_smp_mtx_lock(&smq_mtx);
+    *wait_p = 1;
+    erts_smp_mtx_unlock(&smq_mtx);
+}
+
+static void
+sys_msg_dispatcher_fin_wait(void *vwait_p)
+{
+    int *wait_p = (int *) vwait_p;
+    erts_smp_mtx_lock(&smq_mtx);
+    *wait_p = 0;
+    erts_smp_mtx_unlock(&smq_mtx);
+}
+
+static void
+sys_msg_dispatcher_wait(void *vwait_p)
+{
+    int *wait_p = (int *) vwait_p;
+    erts_smp_mtx_lock(&smq_mtx);
+    while (*wait_p)
+	erts_smp_cnd_wait(&smq_cnd, &smq_mtx);
+    erts_smp_mtx_unlock(&smq_mtx);
+}
+
 static void *
 sys_msg_dispatcher_func(void *unused)
 {
+    ErtsThrPrgrCallbacks callbacks;
     ErtsSysMsgQ *local_sys_message_queue = NULL;
+    int wait = 0;
 
 #ifdef ERTS_ENABLE_LOCK_CHECK
     erts_lc_set_thread_name("system message dispatcher");
 #endif
 
-    erts_register_blockable_thread();
-    erts_smp_activity_begin(ERTS_ACTIVITY_IO, NULL, NULL, NULL);
+    callbacks.arg = (void *) &wait;
+    callbacks.wakeup = sys_msg_dispatcher_wakeup;
+    callbacks.prepare_wait = sys_msg_dispatcher_prep_wait;
+    callbacks.wait = sys_msg_dispatcher_wait;
+    callbacks.finalize_wait = sys_msg_dispatcher_fin_wait;
+
+    erts_thr_progress_register_managed_thread(NULL, &callbacks, 0);
 
     while (1) {
+	int end_wait = 0;
 	ErtsSysMsgQ *smqp;
 
-	ERTS_SMP_LC_ASSERT(!ERTS_LC_IS_BLOCKING);
+	ERTS_SMP_LC_ASSERT(!erts_thr_progress_is_blocking());
 
 	erts_smp_mtx_lock(&smq_mtx);
 
@@ -3228,26 +3293,27 @@ sys_msg_dispatcher_func(void *unused)
 	}
 
 	/* Fetch current trace message queue ... */
-	erts_smp_activity_change(ERTS_ACTIVITY_IO,
-				 ERTS_ACTIVITY_WAIT,
-				 prepare_for_block,
-				 resume_after_block,
-				 NULL);
-	dispatcher_waiting = 1;
+	if (!sys_message_queue) {
+	    erts_smp_mtx_unlock(&smq_mtx);
+	    end_wait = 1;
+	    erts_thr_progress_active(NULL, 0);
+	    erts_thr_progress_prepare_wait(NULL);
+	    erts_smp_mtx_lock(&smq_mtx);
+	}
+
 	while (!sys_message_queue)
 	    erts_smp_cnd_wait(&smq_cnd, &smq_mtx);
-	dispatcher_waiting = 0;
-	erts_smp_activity_change(ERTS_ACTIVITY_WAIT,
-				 ERTS_ACTIVITY_IO,
-				 prepare_for_block,
-				 resume_after_block,
-				 NULL);
 
 	local_sys_message_queue = sys_message_queue;
 	sys_message_queue = NULL;
 	sys_message_queue_end = NULL;
 
 	erts_smp_mtx_unlock(&smq_mtx);
+
+	if (end_wait) {
+	    erts_thr_progress_finalize_wait(NULL);
+	    erts_thr_progress_active(NULL, 1);
+	}
 
 	/* Send trace messages ... */
 
@@ -3258,6 +3324,11 @@ sys_msg_dispatcher_func(void *unused)
 	    ErtsProcLocks proc_locks = ERTS_PROC_LOCKS_MSG_SEND;
 	    Process *proc = NULL;
 	    Port *port = NULL;
+
+	    if (erts_thr_progress_update(NULL))
+		erts_thr_progress_leader_update(NULL);
+
+	    ERTS_SCHED_FAIR_YIELD();
 
 #ifdef DEBUG_PRINTOUTS
 	    print_msg_type(smqp);
@@ -3306,7 +3377,7 @@ sys_msg_dispatcher_func(void *unused)
 		proc = erts_pid2proc(NULL, 0, receiver, proc_locks);
 		if (!proc
 		    || (smqp->type == SYS_MSG_TYPE_TRACE
-			&& !(proc->trace_flags & F_TRACER))) {
+			&& !(ERTS_TRACE_FLAGS(proc) & F_TRACER))) {
 		    /* Bad tracer */
 #ifdef DEBUG_PRINTOUTS
 		    if (smqp->type == SYS_MSG_TYPE_TRACE && proc)
@@ -3318,7 +3389,11 @@ sys_msg_dispatcher_func(void *unused)
 		}
 		else {
 		queue_proc_msg:
-		    erts_queue_message(proc,&proc_locks,smqp->bp,smqp->msg,NIL);
+		    erts_queue_message(proc,&proc_locks,smqp->bp,smqp->msg,NIL
+#ifdef USE_VM_PROBES
+				       , NIL
+#endif
+				       );
 #ifdef DEBUG_PRINTOUTS
 		    erts_fprintf(stderr, "delivered\n");
 #endif
@@ -3329,18 +3404,16 @@ sys_msg_dispatcher_func(void *unused)
 		proc = erts_whereis_process(NULL,0,receiver,proc_locks,0);
 		if (!proc)
 		    goto failure;
-		else if (smqp->from == proc->id)
+		else if (smqp->from == proc->common.id)
 		    goto drop_sys_msg;
 		else
 		    goto queue_proc_msg;
 	    }
 	    else if (is_internal_port(receiver)) {
-		port = erts_id2port(receiver, NULL, 0);
-		if (INVALID_TRACER_PORT(port, receiver)) {
-		    if (port)
-			erts_port_release(port);
+		port = erts_thr_id2port_sflgs(receiver,
+					      ERTS_PORT_SFLGS_INVALID_TRACER_LOOKUP);
+		if (!port)
 		    goto failure;
-		}
 		else {
 		    write_sys_msg_to_port(receiver,
 					  port,
@@ -3352,7 +3425,7 @@ sys_msg_dispatcher_func(void *unused)
 #ifdef DEBUG_PRINTOUTS
 		    erts_fprintf(stderr, "delivered\n");
 #endif
-		    erts_port_release(port);
+		    erts_thr_port_release(port);
 		    if (smqp->bp)
 			free_message_buffer(smqp->bp);
 		}
@@ -3372,7 +3445,6 @@ sys_msg_dispatcher_func(void *unused)
 	}
     }
 
-    erts_smp_activity_end(ERTS_ACTIVITY_IO, NULL, NULL, NULL);
     return NULL;
 }
 
@@ -3416,13 +3488,20 @@ static void
 init_sys_msg_dispatcher(void)
 {
     erts_smp_thr_opts_t thr_opts = ERTS_SMP_THR_OPTS_DEFAULT_INITER;
+#ifdef __OSE__
+    thr_opts.coreNo   = 0;
+#endif
     thr_opts.detached = 1;
     init_smq_element_alloc();
     sys_message_queue = NULL;
     sys_message_queue_end = NULL;
     erts_smp_cnd_init(&smq_cnd);
     erts_smp_mtx_init(&smq_mtx, "sys_msg_q");
-    dispatcher_waiting = 0;
+
+#ifdef ETHR_HAVE_THREAD_NAMES
+    thr_opts.name = "sys_msg_dispatcher";
+#endif
+
     erts_smp_thr_create(&sys_msg_dispatcher_tid,
 			sys_msg_dispatcher_func,
 			NULL,

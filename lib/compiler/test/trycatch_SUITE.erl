@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %% 
-%% Copyright Ericsson AB 2003-2011. All Rights Reserved.
+%% Copyright Ericsson AB 2003-2012. All Rights Reserved.
 %% 
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -24,7 +24,7 @@
 	 catch_oops/1,after_oops/1,eclectic/1,rethrow/1,
 	 nested_of/1,nested_catch/1,nested_after/1,
 	 nested_horrid/1,last_call_optimization/1,bool/1,
-	 plain_catch_coverage/1,andalso_orelse/1]).
+	 plain_catch_coverage/1,andalso_orelse/1,get_in_try/1]).
 
 -include_lib("test_server/include/test_server.hrl").
 
@@ -32,13 +32,15 @@ suite() -> [{ct_hooks,[ts_install_cth]}].
 
 all() -> 
     test_lib:recompile(?MODULE),
-    [basic, lean_throw, try_of, try_after, catch_oops,
-     after_oops, eclectic, rethrow, nested_of, nested_catch,
-     nested_after, nested_horrid, last_call_optimization,
-     bool, plain_catch_coverage, andalso_orelse].
+    [{group,p}].
 
 groups() -> 
-    [].
+    [{p,test_lib:parallel(),
+      [basic,lean_throw,try_of,try_after,catch_oops,
+       after_oops,eclectic,rethrow,nested_of,nested_catch,
+       nested_after,nested_horrid,last_call_optimization,
+       bool,plain_catch_coverage,andalso_orelse,get_in_try]}].
+
 
 init_per_suite(Config) ->
     Config.
@@ -314,19 +316,19 @@ eclectic(Conf) when is_list(Conf) ->
     V = {make_ref(),3.1415926535,[[]|{}]},
     ?line {{value,{value,V},V},V} = 
 	eclectic_1({foo,{value,{value,V}}}, undefined, {value,V}),
-    ?line {{'EXIT',{V,[{?MODULE,foo,1}|_]}},V} = 
+    ?line {{'EXIT',{V,[{?MODULE,foo,1,_}|_]}},V} =
 	eclectic_1({catch_foo,{error,V}}, undefined, {value,V}),
     ?line {{error,{exit,V},{'EXIT',V}},V} =
 	eclectic_1({foo,{error,{exit,V}}}, error, {value,V}),
     ?line {{value,{value,V},V},
-	   {'EXIT',{badarith,[{?MODULE,my_add,2}|_]}}} =
+	   {'EXIT',{badarith,[{?MODULE,my_add,2,_}|_]}}} =
 	eclectic_1({foo,{value,{value,V}}}, undefined, {'add',{0,a}}),
     ?line {{'EXIT',V},V} =
 	eclectic_1({catch_foo,{exit,V}}, undefined, {throw,V}),
-    ?line {{error,{'div',{1,0}},{'EXIT',{badarith,[{?MODULE,my_div,2}|_]}}},
+    ?line {{error,{'div',{1,0}},{'EXIT',{badarith,[{?MODULE,my_div,2,_}|_]}}},
 	   {'EXIT',V}} =
 	eclectic_1({foo,{error,{'div',{1,0}}}}, error, {exit,V}),
-    ?line {{{error,V},{'EXIT',{V,[{?MODULE,foo,1}|_]}}},
+    ?line {{{error,V},{'EXIT',{V,[{?MODULE,foo,1,_}|_]}}},
 	   {'EXIT',V}} =
 	eclectic_1({catch_foo,{throw,{error,V}}}, undefined, {exit,V}),
     %%
@@ -336,15 +338,15 @@ eclectic(Conf) when is_list(Conf) ->
 	eclectic_2({throw,{value,V}}, throw, {value,V}),
     ?line {{caught,{'EXIT',V}},undefined} =
 	eclectic_2({value,{value,V}}, undefined, {exit,V}),
-    ?line {{caught,{'EXIT',{V,[{?MODULE,foo,1}|_]}}},undefined} =
+    ?line {{caught,{'EXIT',{V,[{?MODULE,foo,1,_}|_]}}},undefined} =
 	eclectic_2({error,{value,V}}, throw, {error,V}),
-    ?line {{caught,{'EXIT',{badarg,[{erlang,abs,[V]}|_]}}},V} =
+    ?line {{caught,{'EXIT',{badarg,[{erlang,abs,[V],_}|_]}}},V} =
 	eclectic_2({value,{'abs',V}}, undefined, {value,V}),
-    ?line {{caught,{'EXIT',{badarith,[{?MODULE,my_add,2}|_]}}},V} =
+    ?line {{caught,{'EXIT',{badarith,[{?MODULE,my_add,2,_}|_]}}},V} =
 	eclectic_2({exit,{'add',{0,a}}}, exit, {value,V}),
     ?line {{caught,{'EXIT',V}},undefined} =
 	eclectic_2({value,{error,V}}, undefined, {exit,V}),
-    ?line {{caught,{'EXIT',{V,[{?MODULE,foo,1}|_]}}},undefined} =
+    ?line {{caught,{'EXIT',{V,[{?MODULE,foo,1,_}|_]}}},undefined} =
 	eclectic_2({throw,{'div',{1,0}}}, throw, {error,V}),
     ok.
 
@@ -928,3 +930,17 @@ andalso_orelse_2({Type,Keyval}) ->
 
 zero() ->
     0.0.
+
+get_in_try(_) ->
+    undefined = get_valid_line([a], []),
+    ok.
+
+get_valid_line([_|T]=Path, Annotations) ->
+    try
+        get(Path)
+	%% beam_dead used to optimize away an assignment to {y,1}
+	%% because it didn't appear to be used.
+    catch
+        _:not_found ->
+            get_valid_line(T, Annotations)
+    end.

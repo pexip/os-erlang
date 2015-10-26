@@ -1,7 +1,7 @@
 /*
  * %CopyrightBegin%
  *
- * Copyright Ericsson AB 1996-2011. All Rights Reserved.
+ * Copyright Ericsson AB 1996-2013. All Rights Reserved.
  *
  * The contents of this file are subject to the Erlang Public License,
  * Version 1.1, (the "License"); you may not use this file except in
@@ -50,7 +50,10 @@
 #define LARGE_BIG_EXT     'o'
 #define NEW_FUN_EXT       'p'
 #define EXPORT_EXT        'q'
+#define MAP_EXT           't'
 #define FUN_EXT           'u'
+#define ATOM_UTF8_EXT     'v'
+#define SMALL_ATOM_UTF8_EXT 'w'
 
 #define DIST_HEADER       'D'
 #define ATOM_CACHE_REF    'R'
@@ -90,6 +93,7 @@ typedef struct cache {
 typedef struct {
     int hdr_sz;
     int sz;
+    int long_atoms;
     int cix[ERTS_ATOM_CACHE_SIZE];
     struct {
 	Eterm atom;
@@ -135,14 +139,15 @@ typedef struct {
 #define ERTS_DIST_EXT_SIZE(EDEP) \
   (sizeof(ErtsDistExternal) \
    - (((EDEP)->flags & ERTS_DIST_EXT_ATOM_TRANS_TAB) \
-      ? (ASSERT_EXPR(0 <= (EDEP)->attab.size \
-		     && (EDEP)->attab.size <= ERTS_ATOM_CACHE_SIZE), \
+      ? (ASSERT(0 <= (EDEP)->attab.size \
+		&& (EDEP)->attab.size <= ERTS_ATOM_CACHE_SIZE), \
 	 sizeof(Eterm)*(ERTS_ATOM_CACHE_SIZE - (EDEP)->attab.size)) \
       : sizeof(ErtsAtomTranslationTable)))
 
 typedef struct {
     byte *extp;
     int exttmp;
+    Uint extsize;
 } ErtsBinary2TermState;
 
 /* -------------------------------------------------------------------------- */
@@ -150,12 +155,12 @@ typedef struct {
 void erts_init_atom_cache_map(ErtsAtomCacheMap *);
 void erts_reset_atom_cache_map(ErtsAtomCacheMap *);
 void erts_destroy_atom_cache_map(ErtsAtomCacheMap *);
-void erts_finalize_atom_cache_map(ErtsAtomCacheMap *);
+void erts_finalize_atom_cache_map(ErtsAtomCacheMap *, Uint32);
 Uint erts_encode_ext_dist_header_size(ErtsAtomCacheMap *);
 
 Uint erts_encode_ext_dist_header_size(ErtsAtomCacheMap *);
 byte *erts_encode_ext_dist_header_setup(byte *, ErtsAtomCacheMap *);
-byte *erts_encode_ext_dist_header_finalize(byte *, ErtsAtomCache *);
+byte *erts_encode_ext_dist_header_finalize(byte *, ErtsAtomCache *, Uint32);
 Uint erts_encode_dist_ext_size(Eterm, Uint32, ErtsAtomCacheMap *);
 void erts_encode_dist_ext(Eterm, byte **, Uint32, ErtsAtomCacheMap *);
 
@@ -175,10 +180,10 @@ void *erts_dist_ext_trailer(ErtsDistExternal *);
 void erts_destroy_dist_ext_copy(ErtsDistExternal *);
 int erts_prepare_dist_ext(ErtsDistExternal *, byte *, Uint,
 			  DistEntry *, ErtsAtomCache *);
-Sint erts_decode_dist_ext_size(ErtsDistExternal *, int);
+Sint erts_decode_dist_ext_size(ErtsDistExternal *);
 Eterm erts_decode_dist_ext(Eterm **, ErlOffHeap *, ErtsDistExternal *);
 
-Sint erts_decode_ext_size(byte*, Uint, int);
+Sint erts_decode_ext_size(byte*, Uint);
 Sint erts_decode_ext_size_ets(byte*, Uint);
 Eterm erts_decode_ext(Eterm **, ErlOffHeap *, byte**);
 Eterm erts_decode_ext_ets(Eterm **, ErlOffHeap *, byte*);

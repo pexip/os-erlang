@@ -25,17 +25,20 @@
 #
 # ----------------------------------------------------
 
+include $(ERL_TOP)/make/output.mk
 include $(ERL_TOP)/make/target.mk
 
-opt debug purify quantify purecov valgrind gcov gprof lcnt:
-	$(MAKE) -f $(TARGET)/Makefile TYPE=$@
+.PHONY: valgrind
 
-plain smp hybrid frag smp_frag:
-	$(MAKE) -f $(TARGET)/Makefile FLAVOR=$@
+opt debug purify quantify purecov valgrind gcov gprof lcnt frmptr:
+	$(make_verbose)$(MAKE) -f $(TARGET)/Makefile TYPE=$@
+
+plain smp frag smp_frag:
+	$(make_verbose)$(MAKE) -f $(TARGET)/Makefile FLAVOR=$@
 
 clean generate depend docs release release_spec release_docs release_docs_spec \
-  tests release_tests release_tests_spec:
-	$(MAKE) -f $(TARGET)/Makefile $@
+  tests release_tests release_tests_spec static_lib:
+	$(make_verbose)$(MAKE) -f $(TARGET)/Makefile $@
 
 
 

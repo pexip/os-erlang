@@ -1,7 +1,7 @@
 /*
  * %CopyrightBegin%
  * 
- * Copyright Ericsson AB 2005-2011. All Rights Reserved.
+ * Copyright Ericsson AB 2005-2012. All Rights Reserved.
  * 
  * The contents of this file are subject to the Erlang Public License,
  * Version 1.1, (the "License"); you may not use this file except in
@@ -173,6 +173,7 @@ typedef struct {
 static int
 write_sn(void *vwsnap, char* buf, size_t len)
 {
+    int rv = 0;
     write_sn_arg_t *wsnap = (write_sn_arg_t *) vwsnap;
     ASSERT(wsnap);
     ASSERT(len > 0);
@@ -180,12 +181,13 @@ write_sn(void *vwsnap, char* buf, size_t len)
 	size_t sz = len;
 	if (sz >= wsnap->len)
 	    sz = wsnap->len;
+	rv = (int)sz;
 	memcpy((void *) wsnap->buf, (void *) buf, sz);
 	wsnap->buf += sz;
 	wsnap->len -= sz;
 	return sz;
     }
-    return 0;
+    return rv;
 }
 
 static int

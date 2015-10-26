@@ -1,7 +1,7 @@
 #
 # %CopyrightBegin%
 # 
-# Copyright Ericsson AB 1997-2009. All Rights Reserved.
+# Copyright Ericsson AB 1997-2012. All Rights Reserved.
 # 
 # The contents of this file are subject to the Erlang Public License,
 # Version 1.1, (the "License"); you may not use this file except in
@@ -164,29 +164,31 @@ debug:
 	@${MAKE} TYPE=debug opt
 
 clean:
-	rm -f $(TARGET_FILES) $(GEN_FILES) $(APP_TARGET) $(APPUP_TARGET)
+	rm -f $(TARGET_FILES) $(GEN_FILES) $(APP_TARGET) $(APPUP_TARGET) IDL-GENERATED
 	rm -f errs core *~
 
 $(APP_TARGET): $(APP_SRC)
-	sed -e 's;%VSN%;$(VSN);' $(APP_SRC) > $(APP_TARGET)
+	$(vsn_verbose)sed -e 's;%VSN%;$(VSN);' $(APP_SRC) > $(APP_TARGET)
 $(APPUP_TARGET): $(APPUP_SRC)
-	sed -e 's;%VSN%;$(VSN);' $(APPUP_SRC) > $(APPUP_TARGET)
+	$(vsn_verbose)sed -e 's;%VSN%;$(VSN);' $(APPUP_SRC) > $(APPUP_TARGET)
 
 docs:
 
 # ----------------------------------------------------
 # Special Build Targets
 # ----------------------------------------------------
-$(GEN_ERL_FILES1) $(EXTERNAL_GEN_HRL_FILES1): CosEventChannelAdmin.idl
-	erlc $(ERL_IDL_FLAGS) +'{cfgfile,"CosEventChannelAdmin.cfg"}' CosEventChannelAdmin.idl
-	mv $(GEN_HRL_FILES1) $(EXTERNAL_INC_PATH)
 
-$(GEN_ERL_FILES2) $(GEN_HRL_FILES2): cosEventApp.idl
-	erlc $(ERL_IDL_FLAGS) +'{cfgfile,"cosEventApp.cfg"}' cosEventApp.idl
+IDL-GENERATED: CosEventChannelAdmin.idl cosEventApp.idl CosEventComm.idl
+	$(gen_verbose)erlc $(ERL_IDL_FLAGS) +'{cfgfile,"CosEventChannelAdmin.cfg"}' CosEventChannelAdmin.idl
+	$(V_at)mv $(GEN_HRL_FILES1) $(EXTERNAL_INC_PATH)
+	$(V_at)erlc $(ERL_IDL_FLAGS) +'{cfgfile,"cosEventApp.cfg"}' cosEventApp.idl
+	$(V_at)erlc $(ERL_IDL_FLAGS) CosEventComm.idl
+	$(V_at)mv $(GEN_HRL_FILES3) $(EXTERNAL_INC_PATH)
+	$(V_at)>IDL-GENERATED
 
-$(GEN_ERL_FILES3) $(EXTERNAL_GEN_HRL_FILES3): CosEventComm.idl
-	erlc $(ERL_IDL_FLAGS) CosEventComm.idl
-	mv $(GEN_HRL_FILES3) $(EXTERNAL_INC_PATH)
+$(GEN_FILES): IDL-GENERATED
+
+$(TARGET_FILES): IDL-GENERATED
 
 # ----------------------------------------------------
 # Release Target
@@ -195,14 +197,14 @@ include $(ERL_TOP)/make/otp_release_targets.mk
 
 
 release_spec: opt
-	$(INSTALL_DIR) $(RELSYSDIR)
-	$(INSTALL_DATA) ../info $(RELSYSDIR)
-	$(INSTALL_DIR) $(RELSYSDIR)/ebin
-	$(INSTALL_DATA) $(TARGET_FILES) $(APP_TARGET) $(APPUP_TARGET) $(RELSYSDIR)/ebin
-	$(INSTALL_DIR) $(RELSYSDIR)/src
-	$(INSTALL_DATA) $(ERL_FILES) $(HRL_FILES) $(GEN_ERL_FILES) $(IDL_FILES) $(RELSYSDIR)/src
-	$(INSTALL_DIR) $(RELSYSDIR)/include
-	$(INSTALL_DATA) $(GEN_HRL_FILES) $(RELSYSDIR)/include
+	$(INSTALL_DIR) "$(RELSYSDIR)"
+	$(INSTALL_DATA) ../info "$(RELSYSDIR)"
+	$(INSTALL_DIR) "$(RELSYSDIR)/ebin"
+	$(INSTALL_DATA) $(TARGET_FILES) $(APP_TARGET) $(APPUP_TARGET) "$(RELSYSDIR)/ebin"
+	$(INSTALL_DIR) "$(RELSYSDIR)/src"
+	$(INSTALL_DATA) $(ERL_FILES) $(HRL_FILES) $(GEN_ERL_FILES) $(IDL_FILES) "$(RELSYSDIR)/src"
+	$(INSTALL_DIR) "$(RELSYSDIR)/include"
+	$(INSTALL_DATA) $(GEN_HRL_FILES) "$(RELSYSDIR)/include"
 
 
 release_docs_spec:

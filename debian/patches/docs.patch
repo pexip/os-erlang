@@ -3,9 +3,9 @@ Description: Fixes a bug with .RE macro in the Erlang manpages
  and a few bugs with docs installation.
 Last-modified: Thu, 09 Dec 2010 10:45:56 +0300
 
---- erlang-14.b.4-dfsg.orig/lib/erl_docgen/priv/xsl/db_man.xsl
-+++ erlang-14.b.4-dfsg/lib/erl_docgen/priv/xsl/db_man.xsl
-@@ -505,7 +505,7 @@
+--- a/lib/erl_docgen/priv/xsl/db_man.xsl
++++ b/lib/erl_docgen/priv/xsl/db_man.xsl
+@@ -516,7 +516,7 @@
          <xsl:text>&#10;.RS 2</xsl:text>
          <xsl:text>&#10;.LP&#10;</xsl:text>
          <xsl:value-of select="$content"/>
@@ -14,16 +14,7 @@ Last-modified: Thu, 09 Dec 2010 10:45:56 +0300
        </xsl:otherwise>
      </xsl:choose>
    </xsl:template>
-@@ -760,7 +760,7 @@
-       <xsl:text>&#10;.TP 3</xsl:text>
-       <xsl:text>&#10;Types:&#10;</xsl:text>
-       <xsl:apply-templates/>
--      <xsl:text>&#10;.RE</xsl:text>
-+      <xsl:text>&#10;.RE&#10;</xsl:text>
-     </xsl:if>
-   </xsl:template>
- 
-@@ -781,7 +781,7 @@
+@@ -824,7 +824,7 @@
    <xsl:template match="desc">
      <xsl:text>&#10;.RS</xsl:text>
      <xsl:apply-templates/>
@@ -32,29 +23,20 @@ Last-modified: Thu, 09 Dec 2010 10:45:56 +0300
    </xsl:template>
  
  
---- erlang-14.b.4-dfsg.orig/lib/megaco/doc/src/Makefile
-+++ erlang-14.b.4-dfsg/lib/megaco/doc/src/Makefile
-@@ -247,8 +247,6 @@
- 	$(INSTALL_DATA) $(INFO_FILE) $(RELSYSDIR)
- 	$(INSTALL_DIR) $(RELEASE_PATH)/man/man3
- 	$(INSTALL_DATA) $(MAN3DIR)/* $(RELEASE_PATH)/man/man3
--	$(INSTALL_DIR)  $(RELSYSDIR)/doc/standard
--	$(INSTALL_DATA) $(STANDARDS) $(RELSYSDIR)/doc/standard
+--- a/lib/megaco/doc/src/Makefile
++++ b/lib/megaco/doc/src/Makefile
+@@ -169,8 +169,6 @@
+ 	$(INSTALL_DATA) $(INFO_FILE) "$(RELSYSDIR)"
+ 	$(INSTALL_DIR) "$(RELEASE_PATH)/man/man3"
+ 	$(INSTALL_DATA) $(MAN3DIR)/* "$(RELEASE_PATH)/man/man3"
+-	$(INSTALL_DIR)  "$(RELSYSDIR)/doc/standard"
+-	$(INSTALL_DATA) $(STANDARDS) "$(RELSYSDIR)/doc/standard"
  
- else
+ release_spec:
  
-@@ -270,8 +268,6 @@
- 	$(INSTALL_DIR)  $(RELEASE_PATH)/man/man3
- 	$(INSTALL_DATA) $(MAN3_FILES) $(RELEASE_PATH)/man/man3
- 	$(INSTALL_DATA) $(TOP_HTML_FILES) $(RELSYSDIR)/doc
--	$(INSTALL_DIR)  $(RELSYSDIR)/doc/standard
--	$(INSTALL_DATA) $(STANDARDS) $(RELSYSDIR)/doc/standard
- endif
- endif
- 
---- erlang-14.b.4-dfsg.orig/lib/stdlib/doc/src/re.xml
-+++ erlang-14.b.4-dfsg/lib/stdlib/doc/src/re.xml
-@@ -345,7 +345,7 @@
+--- a/lib/stdlib/doc/src/re.xml
++++ b/lib/stdlib/doc/src/re.xml
+@@ -372,7 +372,7 @@
        metacharacter should not match before it. Setting this without
        <c>multiline</c> (at compile time) causes circumflex never to
        match. This option only affects the behavior of the circumflex
@@ -63,7 +45,7 @@ Last-modified: Thu, 09 Dec 2010 10:45:56 +0300
  
        <tag><c>noteol</c></tag>
  
-@@ -354,8 +354,8 @@
+@@ -381,8 +381,8 @@
        match it nor (except in multiline mode) a newline immediately
        before it. Setting this without <c>multiline</c> (at compile time)
        causes dollar never to match. This option affects only the
@@ -72,5 +54,27 @@ Last-modified: Thu, 09 Dec 2010 10:45:56 +0300
 +      behavior of the dollar metacharacter. It does not affect \\Z or
 +      \\z.</item>
  
-       <tag><c>{offset, integer() >= 0}</c></tag>
+       <tag><c>report_errors</c></tag>
+ 
+--- a/lib/tools/Makefile
++++ b/lib/tools/Makefile
+@@ -23,7 +23,7 @@
+ # Macros
+ # ----------------------------------------------------
+ 
+-SUB_DIRECTORIES = c_src src doc/src examples priv emacs
++SUB_DIRECTORIES = c_src src examples priv emacs doc/src
+ 
+ include vsn.mk
+ VSN = $(TOOLS_VSN)
+--- a/system/doc/top/Makefile
++++ b/system/doc/top/Makefile
+@@ -34,7 +34,7 @@
+ 
+ GIF_FILES = 
+ 
+-INFO_FILES = ../../README ../../COPYRIGHT PR.template
++INFO_FILES = ../../COPYRIGHT PR.template
+ 
+ TOPDOCDIR=.
  

@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 1999-2011. All Rights Reserved.
+%% Copyright Ericsson AB 1999-2012. All Rights Reserved.
 %%
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -53,7 +53,6 @@
 
 %% Main codegen structure.
 -record(cg, {lcount=1,				%Label counter
-	     finfo,				%Function info label
 	     bfail,				%Fail label for BIFs
 	     break,				%Break label
 	     recv,				%Receive label
@@ -79,9 +78,10 @@ module({Mod,Exp,Attr,Forms}, Options) ->
 functions(Forms, AtomMod) ->
     mapfoldl(fun (F, St) -> function(F, AtomMod, St) end, #cg{lcount=1}, Forms).
 
-function({function,Name,Arity,Asm0,Vb,Vdb}, AtomMod, St0) ->
+function({function,Name,Arity,Asm0,Vb,Vdb,Anno}, AtomMod, St0) ->
     try
-	{Asm,EntryLabel,St} = cg_fun(Vb, Asm0, Vdb, AtomMod, {Name,Arity}, St0),
+	{Asm,EntryLabel,St} = cg_fun(Vb, Asm0, Vdb, AtomMod,
+				     {Name,Arity}, Anno, St0),
 	Func = {function,Name,Arity,EntryLabel,Asm},
 	{Func,St}
     catch
@@ -93,7 +93,7 @@ function({function,Name,Arity,Asm0,Vb,Vdb}, AtomMod, St0) ->
 
 %% cg_fun([Lkexpr], [HeadVar], Vdb, State) -> {[Ainstr],State}
 
-cg_fun(Les, Hvs, Vdb, AtomMod, NameArity, St0) ->
+cg_fun(Les, Hvs, Vdb, AtomMod, NameArity, Anno, St0) ->
     {Fi,St1} = new_label(St0),			%FuncInfo label
     {Fl,St2} = local_func_label(NameArity, St1),
 
@@ -123,15 +123,23 @@ cg_fun(Les, Hvs, Vdb, AtomMod, NameArity, St0) ->
 					   put_reg(V, Reg)
 				   end, [], Hvs),
 			 stk=[]}, 0, Vdb),
-    {B,_Aft,St} = cg_list(Les, 0, Vdb, Bef,
+    {B0,_Aft,St} = cg_list(Les, 0, Vdb, Bef,
 			  St3#cg{bfail=0,
-				 finfo=Fi,
 				 ultimate_failure=UltimateMatchFail,
 				 is_top_block=true}),
+    B = fix_bs_match_strings(B0),
     {Name,Arity} = NameArity,
-    Asm = [{label,Fi},{func_info,AtomMod,{atom,Name},Arity},
+    Asm = [{label,Fi},line(Anno),{func_info,AtomMod,{atom,Name},Arity},
 	   {label,Fl}|B++[{label,UltimateMatchFail},if_end]],
     {Asm,Fl,St}.
+
+fix_bs_match_strings([{test,bs_match_string,F,[Ctx,BinList]}|Is])
+  when is_list(BinList) ->
+    I = {test,bs_match_string,F,[Ctx,list_to_bitstring(BinList)]},
+    [I|fix_bs_match_strings(Is)];
+fix_bs_match_strings([I|Is]) ->
+    [I|fix_bs_match_strings(Is)];
+fix_bs_match_strings([]) -> [].
 
 %% cg(Lkexpr, Vdb, StackReg, State) -> {[Ainstr],StackReg,State}.
 %%  Generate code for a kexpr.
@@ -146,8 +154,6 @@ cg({match,M,Rs}, Le, Vdb, Bef, St) ->
     match_cg(M, Rs, Le, Vdb, Bef, St);
 cg({guard_match,M,Rs}, Le, Vdb, Bef, St) ->
     guard_match_cg(M, Rs, Le, Vdb, Bef, St);
-cg({match_fail,F}, Le, Vdb, Bef, St) ->
-    match_fail_cg(F, Le, Vdb, Bef, St);
 cg({call,Func,As,Rs}, Le, Vdb, Bef, St) ->
     call_cg(Func, As, Rs, Le, Vdb, Bef, St);
 cg({enter,Func,As}, Le, Vdb, Bef, St) ->
@@ -203,6 +209,8 @@ need_heap_0([], H, Acc) ->
     {Acc,H}.
 
 need_heap_1(#l{ke={set,_,{binary,_}},i=I}, H) ->
+    {need_heap_need(I, H),0};
+need_heap_1(#l{ke={set,_,{map,_,_}},i=I}, H) ->
     {need_heap_need(I, H),0};
 need_heap_1(#l{ke={set,_,Val}}, H) ->
     %% Just pass through adding to needed heap.
@@ -293,39 +301,6 @@ match_cg({block,Es}, Le, _Fail, Bef, St) ->
     Int = clear_dead(Bef, Le#l.i, Le#l.vdb),
     block_cg(Es, Le, Int, St).
 
-%% match_fail_cg(FailReason, Le, Vdb, StackReg, State) ->
-%%	{[Ainstr],StackReg,State}.
-%%  Generate code for the match_fail "call".  N.B. there is no generic
-%%  case for when the fail value has been created elsewhere.
-
-match_fail_cg({function_clause,As}, Le, Vdb, Bef, St) ->
-    %% Must have the args in {x,0}, {x,1},...
-    {Sis,Int} = cg_setup_call(As, Bef, Le#l.i, Vdb),
-    {Sis ++ [{jump,{f,St#cg.finfo}}],
-     Int#sr{reg=clear_regs(Int#sr.reg)},St};
-match_fail_cg({badmatch,Term}, Le, Vdb, Bef, St) ->
-    R = cg_reg_arg(Term, Bef),
-    Int0 = clear_dead(Bef, Le#l.i, Vdb),
-    {Sis,Int} = adjust_stack(Int0, Le#l.i, Le#l.i+1, Vdb),
-    {Sis ++ [{badmatch,R}],
-     Int#sr{reg=clear_regs(Int0#sr.reg)},St};
-match_fail_cg({case_clause,Reason}, Le, Vdb, Bef, St) ->
-    R = cg_reg_arg(Reason, Bef),
-    Int0 = clear_dead(Bef, Le#l.i, Vdb),
-    {Sis,Int} = adjust_stack(Int0, Le#l.i, Le#l.i+1, Vdb),
-    {Sis++[{case_end,R}],
-     Int#sr{reg=clear_regs(Bef#sr.reg)},St};
-match_fail_cg(if_clause, Le, Vdb, Bef, St) ->
-    Int0 = clear_dead(Bef, Le#l.i, Vdb),
-    {Sis,Int1} = adjust_stack(Int0, Le#l.i, Le#l.i+1, Vdb),
-    {Sis++[if_end],Int1#sr{reg=clear_regs(Int1#sr.reg)},St};
-match_fail_cg({try_clause,Reason}, Le, Vdb, Bef, St) ->
-    R = cg_reg_arg(Reason, Bef),
-    Int0 = clear_dead(Bef, Le#l.i, Vdb),
-    {Sis,Int} = adjust_stack(Int0, Le#l.i, Le#l.i+1, Vdb),
-    {Sis ++ [{try_case_end,R}],
-     Int#sr{reg=clear_regs(Int0#sr.reg)},St}.
-
 %% bsm_rename_ctx([Clause], Var) -> [Clause]
 %%  We know from an annotation that the register for a binary can
 %%  be reused for the match context because the two are not truly
@@ -406,6 +381,7 @@ bsm_rename_ctx(#l{ke={test,_,_}}=L, _, _, _) -> L;
 bsm_rename_ctx(#l{ke={bif,_,_,_}}=L, _, _, _) -> L;
 bsm_rename_ctx(#l{ke={gc_bif,_,_,_}}=L, _, _, _) -> L;
 bsm_rename_ctx(#l{ke={set,_,_}}=L, _, _, _) -> L;
+bsm_rename_ctx(#l{ke={call,_,_,_}}=L, _, _, _) -> L;
 bsm_rename_ctx(#l{ke={block,_}}=L, Old, _, false) ->
     %% This block is not inside a protected. The match context variable cannot
     %% possibly be live inside the block.
@@ -479,8 +455,11 @@ basic_block([Le|Les], Acc) ->
 	    end;
 	no_block -> {reverse(Acc, [Le]),Les}
     end.
+
+%% sets that may garbage collect are not allowed in basic blocks.
 	
 collect_block({set,_,{binary,_}})    -> no_block;
+collect_block({set,_,{map,_,_,_}})   -> no_block;
 collect_block({set,_,_})             -> include;
 collect_block({call,{var,_}=Var,As,_Rs}) -> {block_end,As++[Var]};
 collect_block({call,Func,As,_Rs})   -> {block_end,As++func_vars(Func)};
@@ -620,14 +599,13 @@ top_level_block(Keis, Bef, MaxRegs, _St) ->
 %%   number to the outer catch, which is wrong.
 
 turn_yregs(0, Tp, _) -> Tp;
-turn_yregs(El, Tp, MaxY) when element(1, element(El, Tp)) =:= yy ->
-    turn_yregs(El-1, setelement(El, Tp, {y,MaxY-element(2, element(El, Tp))}), MaxY);
-turn_yregs(El, Tp, MaxY) when is_list(element(El, Tp)) ->
-    New = map(fun ({yy,YY}) -> {y,MaxY-YY};
-		  (Other) -> Other end, element(El, Tp)),
-    turn_yregs(El-1, setelement(El, Tp, New), MaxY);
 turn_yregs(El, Tp, MaxY) ->
-    turn_yregs(El-1, Tp, MaxY).
+    turn_yregs(El-1,setelement(El,Tp,turn_yreg(element(El,Tp),MaxY)),MaxY).
+
+turn_yreg({yy,YY},MaxY) -> {y,MaxY-YY};
+turn_yreg({list,Ls},MaxY) -> {list, turn_yreg(Ls,MaxY)};
+turn_yreg(Ts,MaxY) when is_list(Ts) -> [turn_yreg(T,MaxY)||T<-Ts];
+turn_yreg(Other,_MaxY) -> Other.
 
 %% select_cg(Sclause, V, TypeFail, ValueFail, StackReg, State) ->
 %%      {Is,StackReg,State}.
@@ -649,6 +627,8 @@ select_cg(#l{ke={type_clause,bin_int,S}}, {var,V}, Tf, _Vf, Bef, St) ->
     select_bin_segs(S, V, Tf, Bef, St);
 select_cg(#l{ke={type_clause,bin_end,[S]}}, {var,V}, Tf, _Vf, Bef, St) ->
     select_bin_end(S, V, Tf, Bef, St);
+select_cg(#l{ke={type_clause,map,S}}, {var,V}, Tf, Vf, Bef, St) ->
+    select_map(S, V, Tf, Vf, Bef, St);
 select_cg(#l{ke={type_clause,Type,Scs}}, {var,V}, Tf, Vf, Bef, St0) ->
     {Vis,{Aft,St1}} =
 	mapfoldl(fun (S, {Int,Sta}) ->
@@ -663,6 +643,10 @@ select_val_cg(tuple, R, [Arity,{f,Lbl}], Tf, Vf, [{label,Lbl}|Sis]) ->
     [{test,is_tuple,{f,Tf},[R]},{test,test_arity,{f,Vf},[R,Arity]}|Sis];
 select_val_cg(tuple, R, Vls, Tf, Vf, Sis) ->
     [{test,is_tuple,{f,Tf},[R]},{select_tuple_arity,R,{f,Vf},{list,Vls}}|Sis];
+select_val_cg(map, R, [_Val,{f,Lbl}], Fail, Fail, [{label,Lbl}|Sis]) ->
+    [{test,is_map,{f,Fail},[R]}|Sis];
+select_val_cg(map, R, [_Val,{f,Lbl}|_], Tf, _Vf, [{label,Lbl}|Sis]) ->
+    [{test,is_map,{f,Tf},[R]}|Sis];
 select_val_cg(Type, R, [Val, {f,Lbl}], Fail, Fail, [{label,Lbl}|Sis]) ->
     [{test,is_eq_exact,{f,Fail},[R,{Type,Val}]}|Sis];
 select_val_cg(Type, R, [Val, {f,Lbl}], Tf, Vf, [{label,Lbl}|Sis]) ->
@@ -749,7 +733,22 @@ select_bin_seg(#l{ke={val_clause,{bin_int,Ctx,Sz,U,Fs,Val,Es},B},i=I,vdb=Vdb},
 				       I, Vdb, Bef, Ctx, St0),
     {Bis,Aft,St2} = match_cg(B, Fail, Int, St1),
     CtxReg = fetch_var(Ctx, Bef),
-    {[{bs_restore2,CtxReg,{Ctx,Ivar}}|Mis] ++ Bis,Aft,St2}.
+    Is = case Mis ++ Bis of
+	     [{test,bs_match_string,F,[OtherCtx,Bin1]},
+	      {bs_save2,OtherCtx,_},
+	      {bs_restore2,OtherCtx,_},
+	      {test,bs_match_string,F,[OtherCtx,Bin2]}|Is0] ->
+		 %% We used to do this optimization later, but it
+		 %% turns out that in huge functions with many
+		 %% bs_match_string instructions, it's a big win
+		 %% to do the combination now. To avoid copying the
+		 %% binary data again and again, we'll combine bitstrings
+		 %% in a list and convert all of it to a bitstring later.
+		 [{test,bs_match_string,F,[OtherCtx,[Bin1,Bin2]]}|Is0];
+	     Is0 ->
+		 Is0
+	 end,
+    {[{bs_restore2,CtxReg,{Ctx,Ivar}}|Is],Aft,St2}.
 
 select_extract_int([{var,Tl}], Val, {integer,Sz}, U, Fs, Vf,
 		   I, Vdb, Bef, Ctx, St) ->
@@ -926,6 +925,52 @@ select_extract_tuple(Src, Vs, I, Vdb, Bef, St) ->
     {Es,{Aft,_}} = flatmapfoldl(F, {Bef,0}, Vs),
     {Es,Aft,St}.
 
+select_map(Scs, V, Tf, Vf, Bef, St0) ->
+    Reg = fetch_var(V, Bef),
+    {Is,Aft,St1} =
+	match_fmf(fun(#l{ke={val_clause,{map,_,Es},B},i=I,vdb=Vdb}, Fail, St1) ->
+			  select_map_val(V, Es, B, Fail, I, Vdb, Bef, St1)
+		  end, Vf, St0, Scs),
+    {[{test,is_map,{f,Tf},[Reg]}|Is],Aft,St1}.
+
+select_map_val(V, Es, B, Fail, I, Vdb, Bef, St0) ->
+    {Eis,Int,St1} = select_extract_map(V, Es, Fail, I, Vdb, Bef, St0),
+    {Bis,Aft,St2} = match_cg(B, Fail, Int, St1),
+    {Eis++Bis,Aft,St2}.
+
+select_extract_map(_, [], _, _, _, Bef, St) -> {[],Bef,St};
+select_extract_map(Src, Vs, Fail, I, Vdb, Bef, St) ->
+    %% First split the instruction flow
+    %% We want one set of each
+    %% 1) has_map_fields (no target registers)
+    %% 2) get_map_elements (with target registers)
+    %% Assume keys are term-sorted
+    Rsrc = fetch_var(Src, Bef),
+
+    {{HasKs,GetVs},Aft} = lists:foldr(fun
+	    ({map_pair,Key,{var,V}},{{HasKsi,GetVsi},Int0}) ->
+		case vdb_find(V, Vdb) of
+		    {V,_,L} when L =< I ->
+			{{[Key|HasKsi],GetVsi},Int0};
+		    _Other ->
+			Reg1 = put_reg(V, Int0#sr.reg),
+			Int1 = Int0#sr{reg=Reg1},
+			{{HasKsi,[Key,fetch_reg(V, Reg1)|GetVsi]},Int1}
+		end
+	end, {{[],[]},Bef}, Vs),
+
+    Code = case {HasKs,GetVs} of
+	{HasKs,[]} ->
+	    [{test,has_map_fields,{f,Fail},Rsrc,{list,HasKs}}];
+	{[],GetVs} ->
+	    [{get_map_elements,   {f,Fail},Rsrc,{list,GetVs}}];
+	{HasKs,GetVs} ->
+	    [{test,has_map_fields,{f,Fail},Rsrc,{list,HasKs}},
+	     {get_map_elements,   {f,Fail},Rsrc,{list,GetVs}}]
+    end,
+    {Code, Aft, St}.
+
+
 select_extract_cons(Src, [{var,Hd}, {var,Tl}], I, Vdb, Bef, St) ->
     {Es,Aft} = case {vdb_find(Hd, Vdb), vdb_find(Tl, Vdb)} of
 		   {{_,_,Lhd}, {_,_,Ltl}} when Lhd =< I, Ltl =< I ->
@@ -1047,7 +1092,7 @@ call_cg({var,_V} = Var, As, Rs, Le, Vdb, Bef, St0) ->
     %% Build complete code and final stack/register state.
     Arity = length(As),
     {Frees,Aft} = free_dead(clear_dead(Int#sr{reg=Reg}, Le#l.i, Vdb)),
-    {Sis ++ Frees ++ [{call_fun,Arity}],Aft,
+    {Sis ++ Frees ++ [line(Le),{call_fun,Arity}],Aft,
      need_stack_frame(St0)};
 call_cg({remote,Mod,Name}, As, Rs, Le, Vdb, Bef, St0)
   when element(1, Mod) =:= var;
@@ -1057,11 +1102,10 @@ call_cg({remote,Mod,Name}, As, Rs, Le, Vdb, Bef, St0)
     Reg = load_vars(Rs, clear_regs(Int#sr.reg)),
     %% Build complete code and final stack/register state.
     Arity = length(As),
-    Call = {apply,Arity},
     St = need_stack_frame(St0),
     %%{Call,St1} = build_call(Func, Arity, St0),
     {Frees,Aft} = free_dead(clear_dead(Int#sr{reg=Reg}, Le#l.i, Vdb)),
-    {Sis ++ Frees ++ [Call],Aft,St};
+    {Sis ++ Frees ++ [line(Le),{apply,Arity}],Aft,St};
 call_cg(Func, As, Rs, Le, Vdb, Bef, St0) ->
     case St0 of
 	#cg{bfail=Fail} when Fail =/= 0 ->
@@ -1091,7 +1135,7 @@ call_cg(Func, As, Rs, Le, Vdb, Bef, St0) ->
 	    Arity = length(As),
 	    {Call,St1} = build_call(Func, Arity, St0),
 	    {Frees,Aft} = free_dead(clear_dead(Int#sr{reg=Reg}, Le#l.i, Vdb)),
-	    {Sis ++ Frees ++ Call,Aft,St1}
+	    {Sis ++ Frees ++ [line(Le)|Call],Aft,St1}
     end.
 
 build_call({remote,{atom,erlang},{atom,'!'}}, 2, St0) ->
@@ -1118,7 +1162,7 @@ enter_cg({var,_V} = Var, As, Le, Vdb, Bef, St0) ->
     {Sis,Int} = cg_setup_call(As++[Var], Bef, Le#l.i, Vdb),
     %% Build complete code and final stack/register state.
     Arity = length(As),
-    {Sis ++ [{call_fun,Arity},return],
+    {Sis ++ [line(Le),{call_fun,Arity},return],
      clear_dead(Int#sr{reg=clear_regs(Int#sr.reg)}, Le#l.i, Vdb),
      need_stack_frame(St0)};
 enter_cg({remote,Mod,Name}, As, Le, Vdb, Bef, St0)
@@ -1127,9 +1171,8 @@ enter_cg({remote,Mod,Name}, As, Le, Vdb, Bef, St0)
     {Sis,Int} = cg_setup_call(As++[Mod,Name], Bef, Le#l.i, Vdb),
     %% Build complete code and final stack/register state.
     Arity = length(As),
-    Call = {apply_only,Arity},
     St = need_stack_frame(St0),
-    {Sis ++ [Call],
+    {Sis ++ [line(Le),{apply_only,Arity}],
      clear_dead(Int#sr{reg=clear_regs(Int#sr.reg)}, Le#l.i, Vdb),
      St};
 enter_cg(Func, As, Le, Vdb, Bef, St0) ->
@@ -1137,7 +1180,8 @@ enter_cg(Func, As, Le, Vdb, Bef, St0) ->
     %% Build complete code and final stack/register state.
     Arity = length(As),
     {Call,St1} = build_enter(Func, Arity, St0),
-    {Sis ++ Call,
+    Line = enter_line(Func, Arity, Le),
+    {Sis ++ Line ++ Call,
      clear_dead(Int#sr{reg=clear_regs(Int#sr.reg)}, Le#l.i, Vdb),
      St1}.
 
@@ -1152,6 +1196,23 @@ build_enter({remote,{atom,Mod},{atom,Name}}, Arity, St0) ->
 build_enter(Name, Arity, St0) when is_atom(Name) ->
     {Lbl,St1} = local_func_label(Name, Arity, St0),
     {[{call_only,Arity,{f,Lbl}}],St1}.
+
+enter_line({remote,{atom,Mod},{atom,Name}}, Arity, Le) ->
+    case erl_bifs:is_safe(Mod, Name, Arity) of
+	false ->
+	    %% Tail-recursive call, possibly to a BIF.
+	    %% We'll need a line instruction in case the
+	    %% BIF call fails.
+	    [line(Le)];
+	true ->
+	    %% Call to a safe BIF. Since it cannot fail,
+	    %% we don't need any line instruction here.
+	    []
+    end;
+enter_line(_, _, _) ->
+    %% Tail-recursive call to a local function. A line
+    %% instruction will not be useful.
+    [].
 
 %% local_func_label(Name, Arity, State) -> {Label,State'}
 %% local_func_label({Name,Arity}, State) -> {Label,State'}
@@ -1226,9 +1287,10 @@ bif_cg(Bif, As, [{var,V}], Le, Vdb, Bef, St0) ->
     %%   Currently, we are somewhat pessimistic in
     %% that we save any variable that will be live after this BIF call.
 
+    MayFail = not erl_bifs:is_safe(erlang, Bif, length(As)),
     {Sis,Int0} = case St0#cg.in_catch andalso
 		     St0#cg.bfail =:= 0 andalso
-		     not erl_bifs:is_safe(erlang, Bif, length(As)) of
+		     MayFail of
 		     true -> adjust_stack(Bef, Le#l.i, Le#l.i+1, Vdb);
 		     false -> {[],Bef}
 		 end,
@@ -1237,7 +1299,14 @@ bif_cg(Bif, As, [{var,V}], Le, Vdb, Bef, St0) ->
     Int = Int1#sr{reg=Reg},
     Dst = fetch_reg(V, Reg),
     BifFail = {f,St0#cg.bfail},
-    {Sis++[{bif,Bif,BifFail,Ars,Dst}],
+    %% We need a line instructions for BIFs that may fail in a body.
+    Line = case BifFail of
+	       {f,0} when MayFail ->
+		   [line(Le)];
+	       _ ->
+		   []
+	   end,
+    {Sis++Line++[{bif,Bif,BifFail,Ars,Dst}],
      clear_dead(Int, Le#l.i, Vdb), St0}.
 
 
@@ -1266,7 +1335,11 @@ gc_bif_cg(Bif, As, [{var,V}], Le, Vdb, Bef, St0) ->
     Int = Int1#sr{reg=Reg},
     Dst = fetch_reg(V, Reg),
     BifFail = {f,St0#cg.bfail},
-    {Sis++[{gc_bif,Bif,BifFail,max_reg(Bef#sr.reg),Ars,Dst}],
+    Line = case BifFail of
+	       {f,0} -> [line(Le)];
+	       {f,_} -> []
+	   end,
+    {Sis++Line++[{gc_bif,Bif,BifFail,max_reg(Bef#sr.reg),Ars,Dst}],
      clear_dead(Int, Le#l.i, Vdb), St0}.
 
 %% recv_loop_cg(TimeOut, ReceiveVar, ReceiveMatch, TimeOutExprs,
@@ -1284,7 +1357,7 @@ recv_loop_cg(Te, Rvar, Rm, Tes, Rs, Le, Vdb, Bef, St0) ->
     {Wis,Taft,St6} = cg_recv_wait(Te, Tes, Le#l.i, Int1, St5),
     Int2 = sr_merge(Raft, Taft),		%Merge stack/registers
     Reg = load_vars(Rs, Int2#sr.reg),
-    {Sis ++ Ris ++ [{label,Tl}] ++ Wis ++ [{label,Bl}],
+    {Sis ++ [line(Le)] ++ Ris ++ [{label,Tl}] ++ Wis ++ [{label,Bl}],
      clear_dead(Int2#sr{reg=Reg}, Le#l.i, Vdb),
      St6#cg{break=St0#cg.break,recv=St0#cg.recv}}.
 
@@ -1391,24 +1464,34 @@ catch_cg(C, {var,R}, Le, Vdb, Bef, St0) ->
 %%  annotation must reflect this and make sure that the return
 %%  variable is allocated first.
 %%
-%%  put_list for constructing a cons is an atomic instruction
+%%  put_list and put_map are atomic instructions, both of
 %%  which can safely resuse one of the source registers as target.
-%%  Also binaries can reuse a source register as target.
 
 set_cg([{var,R}], {cons,Es}, Le, Vdb, Bef, St) ->
-    [S1,S2] = map(fun ({var,V}) -> fetch_var(V, Bef);
-		      (Other) -> Other
-		  end, Es),
+    [S1,S2] = cg_reg_args(Es, Bef),
     Int0 = clear_dead(Bef, Le#l.i, Vdb),
     Int1 = Int0#sr{reg=put_reg(R, Int0#sr.reg)},
     Ret = fetch_reg(R, Int1#sr.reg),
     {[{put_list,S1,S2,Ret}], Int1, St};
 set_cg([{var,R}], {binary,Segs}, Le, Vdb, Bef,
        #cg{in_catch=InCatch, bfail=Bfail}=St) ->
+    %% At run-time, binaries are constructed in three stages:
+    %% 1) First the size of the binary is calculated.
+    %% 2) Then the binary is allocated.
+    %% 3) Then each field in the binary is constructed.
+    %% For simplicity, we use the target register to also hold the
+    %% size of the binary. Therefore the target register must *not*
+    %% be one of the source registers.
+
+    %% First allocate the target register.
     Int0 = Bef#sr{reg=put_reg(R, Bef#sr.reg)},
     Target = fetch_reg(R, Int0#sr.reg),
-    Fail = {f,Bfail},
+
+    %% Also allocate a scratch register for size calculations.
     Temp = find_scratch_reg(Int0#sr.reg),
+
+    %% First generate the code that constructs each field.
+    Fail = {f,Bfail},
     PutCode = cg_bin_put(Segs, Fail, Bef),
     {Sis,Int1} =
 	case InCatch of
@@ -1417,8 +1500,39 @@ set_cg([{var,R}], {binary,Segs}, Le, Vdb, Bef,
 	end,
     MaxRegs = max_reg(Bef#sr.reg),
     Aft = clear_dead(Int1, Le#l.i, Vdb),
+
+    %% Now generate the complete code for constructing the binary.
     Code = cg_binary(PutCode, Target, Temp, Fail, MaxRegs, Le#l.a),
     {Sis++Code,Aft,St};
+set_cg([{var,R}], {map,Op,Map,Es}, Le, Vdb, Bef,
+       #cg{in_catch=InCatch,bfail=Bfail}=St) ->
+
+    Fail = {f,Bfail},
+    {Sis,Int0} =
+	case InCatch of
+	    true -> adjust_stack(Bef, Le#l.i, Le#l.i+1, Vdb);
+	    false -> {[],Bef}
+	end,
+    SrcReg = cg_reg_arg(Map,Int0),
+    Line = line(Le#l.a),
+
+    %% The instruction needs to store keys in term sorted order
+    %% All keys has to be unique here
+    Pairs = map_pair_strip_and_termsort(Es),
+
+    %% fetch registers for values to be put into the map
+    List = flatmap(fun({K,V}) -> [K,cg_reg_arg(V,Int0)] end, Pairs),
+
+    Live = max_reg(Bef#sr.reg),
+    Int1 = Int0#sr{reg=put_reg(R, Int0#sr.reg)},
+    Aft = clear_dead(Int1, Le#l.i, Vdb),
+    Target = fetch_reg(R, Int1#sr.reg),
+
+    I = case Op of
+	assoc -> put_map_assoc;
+	exact -> put_map_exact
+    end,
+    {Sis++[Line]++[{I,Fail,SrcReg,Target,Live,{list,List}}],Aft,St};
 set_cg([{var,R}], Con, Le, Vdb, Bef, St) ->
     %% Find a place for the return register first.
     Int = Bef#sr{reg=put_reg(R, Bef#sr.reg)},
@@ -1426,25 +1540,20 @@ set_cg([{var,R}], Con, Le, Vdb, Bef, St) ->
     Ais = case Con of
 	      {tuple,Es} ->
 		  [{put_tuple,length(Es),Ret}] ++ cg_build_args(Es, Bef);
-	      {var,V} ->	  % Normally removed by kernel optimizer.
-		  [{move,fetch_var(V, Int),Ret}];
 	      Other ->
-		  [{move,Other,Ret}]
+		  [{move,cg_reg_arg(Other, Int),Ret}]
 	  end,
-    {Ais,clear_dead(Int, Le#l.i, Vdb),St};
-set_cg([], {binary,Segs}, Le, Vdb, Bef, St) ->
-    Fail = {f,St#cg.bfail},
-    Target = find_scratch_reg(Bef#sr.reg),
-    Temp = find_scratch_reg(put_reg(Target, Bef#sr.reg)),
-    PutCode = cg_bin_put(Segs, Fail, Bef),
-    MaxRegs = max_reg(Bef#sr.reg),
-    Code = cg_binary(PutCode, Target, Temp, Fail, MaxRegs, Le#l.a),
-    Aft = clear_dead(Bef, Le#l.i, Vdb),
-    {Code,Aft,St};
-set_cg([], _, Le, Vdb, Bef, St) ->
-    %% This should have been stripped by compiler, just cleanup.
-    {[],clear_dead(Bef, Le#l.i, Vdb), St}.
+    {Ais,clear_dead(Int, Le#l.i, Vdb),St}.
 
+map_pair_strip_and_termsort(Es) ->
+    %% format in
+    %%    [{map_pair,K,V}]
+    %% where K is for example {integer, 1} and we want to sort on 1.
+    Ls = [{K,V}||{_,K,V}<-Es],
+    lists:sort(fun ({{_,A},_}, {{_,B},_}) -> erts_internal:cmp_term(A,B) =< 0;
+                   ({nil,_},   {{_,B},_}) -> [] =< B;
+                   ({{_,A},_}, {nil,_})   -> A =< []
+               end, Ls).
 
 %%%
 %%% Code generation for constructing binaries.
@@ -1452,10 +1561,11 @@ set_cg([], _, Le, Vdb, Bef, St) ->
 
 cg_binary([{bs_put_binary,Fail,{atom,all},U,_Flags,Src}|PutCode],
 	  Target, Temp, Fail, MaxRegs, Anno) ->
+    Line = line(Anno),
     Live = cg_live(Target, MaxRegs),
     SzCode = cg_bitstr_size(PutCode, Target, Temp, Fail, Live),
     BinFlags = {field_flags,[]},
-    Code = SzCode ++
+    Code = [Line|SzCode] ++
 	[case member(single_use, Anno) of
 	     true ->
 		 {bs_private_append,Fail,Target,U,Src,BinFlags,Target};
@@ -1463,12 +1573,13 @@ cg_binary([{bs_put_binary,Fail,{atom,all},U,_Flags,Src}|PutCode],
 		 {bs_append,Fail,Target,0,MaxRegs,U,Src,BinFlags,Target}
 	 end] ++ PutCode,
     cg_bin_opt(Code);
-cg_binary(PutCode, Target, Temp, Fail, MaxRegs, _Anno) ->
+cg_binary(PutCode, Target, Temp, Fail, MaxRegs, Anno) ->
+    Line = line(Anno),
     Live = cg_live(Target, MaxRegs),
     {InitOp,SzCode} = cg_binary_size(PutCode, Target, Temp, Fail, Live),
 
-    Code = SzCode ++ [{InitOp,Fail,Target,0,MaxRegs,
-		       {field_flags,[]},Target}|PutCode],
+    Code = [Line|SzCode] ++ [{InitOp,Fail,Target,0,MaxRegs,
+			      {field_flags,[]},Target}|PutCode],
     cg_bin_opt(Code).
 
 cg_live({x,X}, MaxRegs) when X =:= MaxRegs -> MaxRegs+1;
@@ -1595,8 +1706,7 @@ cg_gen_binsize([], _, _, _, _, Acc) -> Acc.
 %% cg_bin_opt(Code0) -> Code
 %%  Optimize the size calculations for binary construction.
 
-cg_bin_opt([{move,Size,D},{bs_append,Fail,D,Extra,Regs0,U,Bin,Flags,D}|Is]) ->
-    Regs = cg_bo_newregs(Regs0, D),
+cg_bin_opt([{move,Size,D},{bs_append,Fail,D,Extra,Regs,U,Bin,Flags,D}|Is]) ->
     cg_bin_opt([{bs_append,Fail,Size,Extra,Regs,U,Bin,Flags,D}|Is]);
 cg_bin_opt([{move,Size,D},{bs_private_append,Fail,D,U,Bin,Flags,D}|Is]) ->
     cg_bin_opt([{bs_private_append,Fail,Size,U,Bin,Flags,D}|Is]);
@@ -1604,9 +1714,8 @@ cg_bin_opt([{move,{integer,0},D},{bs_add,_,[D,{integer,_}=S,1],Dst}|Is]) ->
     cg_bin_opt([{move,S,Dst}|Is]);
 cg_bin_opt([{move,{integer,0},D},{bs_add,Fail,[D,S,U],Dst}|Is]) ->
     cg_bin_opt([{bs_add,Fail,[{integer,0},S,U],Dst}|Is]);
-cg_bin_opt([{move,{integer,Bytes},D},{Op,Fail,D,Extra,Regs0,Flags,D}|Is])
+cg_bin_opt([{move,{integer,Bytes},D},{Op,Fail,D,Extra,Regs,Flags,D}|Is])
   when Op =:= bs_init2; Op =:= bs_init_bits ->
-    Regs = cg_bo_newregs(Regs0, D),
     cg_bin_opt([{Op,Fail,Bytes,Extra,Regs,Flags,D}|Is]);
 cg_bin_opt([{move,Src1,Dst},{bs_add,Fail,[Dst,Src2,U],Dst}|Is]) ->
     cg_bin_opt([{bs_add,Fail,[Src1,Src2,U],Dst}|Is]);
@@ -1614,20 +1723,9 @@ cg_bin_opt([I|Is]) ->
     [I|cg_bin_opt(Is)];
 cg_bin_opt([]) -> [].
 
-cg_bo_newregs(R, {x,X}) when R-1 =:= X -> R-1;
-cg_bo_newregs(R, _) -> R.
-
-%% Common for new and old binary code generation.
-
 cg_bin_put({bin_seg,[],S0,U,T,Fs,[E0,Next]}, Fail, Bef) ->
-    S1 = case S0 of
-	     {var,Sv} -> fetch_var(Sv, Bef);
-	     _ -> S0
-	 end,
-    E1 = case E0 of
-	     {var,V} -> fetch_var(V, Bef);
-	     Other ->   Other
-	 end,
+    S1 = cg_reg_arg(S0, Bef),
+    E1 = cg_reg_arg(E0, Bef),
     {Format,Op} = case T of
 		      integer -> {plain,bs_put_integer};
 		      utf8 ->    {utf,bs_put_utf8};
@@ -1645,9 +1743,7 @@ cg_bin_put({bin_seg,[],S0,U,T,Fs,[E0,Next]}, Fail, Bef) ->
 cg_bin_put({bin_end,[]}, _, _) -> [].
 
 cg_build_args(As, Bef) ->
-    map(fun ({var,V}) -> {put,fetch_var(V, Bef)};
-	    (Other) -> {put,Other}
-	end, As).
+    [{put,cg_reg_arg(A, Bef)} || A <- As].
 
 %% return_cg([Val], Le, Vdb, Bef, St) -> {[Ainstr],Aft,St}.
 %% break_cg([Val], Le, Vdb, Bef, St) -> {[Ainstr],Aft,St}.
@@ -1926,27 +2022,13 @@ fetch_var(V, Sr) ->
 	error -> fetch_stack(V, Sr#sr.stk)
     end.
 
-% find_var(V, Sr) ->
-%     case find_reg(V, Sr#sr.reg) of
-% 	{ok,R} -> {ok,R};
-% 	error ->
-% 	    case find_stack(V, Sr#sr.stk) of
-% 		{ok,S} -> {ok,S};
-% 		error -> error
-% 	    end
-%     end.
-
 load_vars(Vs, Regs) ->
     foldl(fun ({var,V}, Rs) -> put_reg(V, Rs) end, Regs, Vs).
 
 %% put_reg(Val, Regs) -> Regs.
-%% free_reg(Val, Regs) -> Regs.
-%% find_reg(Val, Regs) -> ok{r{R}} | error.
+%% find_reg(Val, Regs) -> {ok,r{R}} | error.
 %% fetch_reg(Val, Regs) -> r{R}.
 %%  Functions to interface the registers.
-%%  put_reg puts a value into a free register,
-%%  load_reg loads a value into a fixed register
-%%  free_reg frees a register containing a specific value.
 
 % put_regs(Vs, Rs) -> foldl(fun put_reg/2, Rs, Vs).
 
@@ -1956,10 +2038,6 @@ put_reg_1(V, [free|Rs], I) -> [{I,V}|Rs];
 put_reg_1(V, [{reserved,I,V}|Rs], I) -> [{I,V}|Rs];
 put_reg_1(V, [R|Rs], I) -> [R|put_reg_1(V, Rs, I+1)];
 put_reg_1(V, [], I) -> [{I,V}].
-
-% free_reg(V, [{I,V}|Rs]) -> [free|Rs];
-% free_reg(V, [R|Rs]) -> [R|free_reg(V, Rs)];
-% free_reg(V, []) -> [].
 
 fetch_reg(V, [{I,V}|_]) -> {x,I};
 fetch_reg(V, [_|SRs]) -> fetch_reg(V, SRs).
@@ -1976,9 +2054,6 @@ find_scratch_reg(Rs) -> find_scratch_reg(Rs, 0).
 find_scratch_reg([free|_], I) -> {x,I};
 find_scratch_reg([_|Rs], I) -> find_scratch_reg(Rs, I+1);
 find_scratch_reg([], I) -> {x,I}.
-
-%%copy_reg(Val, R, Regs) -> load_reg(Val, R, Regs).
-%%move_reg(Val, R, Regs) -> load_reg(Val, R, free_reg(Val, Regs)).
 
 replace_reg_contents(Old, New, [{I,Old}|Rs]) -> [{I,New}|Rs];
 replace_reg_contents(Old, New, [R|Rs]) -> [R|replace_reg_contents(Old, New, Rs)].
@@ -2051,6 +2126,38 @@ drop_catch(Tag, [Other|Stk]) -> [Other|drop_catch(Tag, Stk)].
 
 new_label(#cg{lcount=Next}=St) ->
     {Next,St#cg{lcount=Next+1}}.
+
+%% line(Le) -> {line,[] | {location,File,Line}}
+%%  Create a line instruction, containing information about
+%%  the current filename and line number. A line information
+%%  instruction should be placed before any operation that could
+%%  cause an exception.
+
+line(#l{a=Anno}) ->
+    line(Anno);
+line([Line,{file,Name}]) when is_integer(Line) ->
+    line_1(Name, Line);
+line([_|_]=A) ->
+    {Name,Line} = find_loc(A, no_file, 0),
+    line_1(Name, Line);
+line([]) ->
+    {line,[]}.
+
+line_1(no_file, _) ->
+    {line,[]};
+line_1(_, 0) ->
+    %% Missing line number or line number 0.
+    {line,[]};
+line_1(Name, Line) ->
+    {line,[{location,Name,Line}]}.
+
+find_loc([Line|T], File, _) when is_integer(Line) ->
+    find_loc(T, File, Line);
+find_loc([{file,File}|T], _, Line) ->
+    find_loc(T, File, Line);
+find_loc([_|T], File, Line) ->
+    find_loc(T, File, Line);
+find_loc([], File, Line) -> {File,Line}.
 
 flatmapfoldl(F, Accu0, [Hd|Tail]) ->
     {R,Accu1} = F(Hd, Accu0),

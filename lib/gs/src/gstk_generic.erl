@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %% 
-%% Copyright Ericsson AB 1996-2009. All Rights Reserved.
+%% Copyright Ericsson AB 1996-2012. All Rights Reserved.
 %% 
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -20,6 +20,7 @@
 %%
 
 -module(gstk_generic).
+-compile([{nowarn_deprecated_function,{gs,assq,2}}]).
 
 -export([out_opts/8,
 	 read_option/5,
@@ -322,11 +323,11 @@ handle_external_opt_call([Opt|Options],Gstkid,TkW,DB,ExtraArg,ExtRes,S,P,C) ->
     end.
 
 handle_external_read(Res) ->
-    case Res of 
-	{bad_result,{Objtype,Reason,Option}} ->
-	    {error,{Objtype,Reason,Option}};
-	_ -> ok
-    end,
+    %% We have removed dead code here that attempted to translate
+    %% a bad return value from {bad_result,{A,B,C}} to {error,{A,B,C}}.
+    %% Since the gs application is deprecated, we don't want to introduce
+    %% a potential incompatibility; thus we have removed the dead code
+    %% instead of correcting it.
     Res.
 
 %%----------------------------------------------------------------------
@@ -414,7 +415,7 @@ gen_font(_Opt,Gstkid,_TkW,DB,_ExtraArg) ->
 gen_label({text,Text},Opts,Gstkid,TkW,DB,ExtraArg,S,P,C) ->
     out_opts(Opts,Gstkid,TkW,DB,ExtraArg,[" -text ", gstk:to_ascii(Text), " -bi {}"|S],P,C);
 gen_label({image,Img},Opts,Gstkid,TkW,DB,ExtraArg,S,P,C) ->
-    {ok, I2,_} = regexp:gsub(Img, [92,92], "/"),
+    I2 = re:replace(Img, [92,92], "/", [global,{return,list}]),
     out_opts(Opts,Gstkid,TkW,DB,ExtraArg,[" -bi \"@", I2, "\" -text {}"|S],P,C).
 gen_label(_Opt,_Gstkid,TkW,_DB,_ExtraArg) ->
     case gstk:call([TkW, " cg -bit"]) of

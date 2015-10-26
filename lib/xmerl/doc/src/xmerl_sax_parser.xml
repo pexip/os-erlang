@@ -1,11 +1,11 @@
-<?xml version="1.0" encoding="latin1" ?>
+<?xml version="1.0" encoding="utf-8" ?>
 <!DOCTYPE erlref SYSTEM "erlref.dtd">
 
 <erlref>
   <header>
     <copyright>
       <year>2008</year>
-      <year>2011</year>
+      <year>2013</year>
       <holder>Ericsson AB, All Rights Reserved</holder>
     </copyright>
     <legalnotice>
@@ -206,10 +206,15 @@
            Report the end of a CDATA section.
          </item>
 
-         <tag><c>startDTD</c></tag>
+         <tag><c>{startDTD, Name, PublicId, SystemId}</c></tag>
          <item>
            Report the start of DTD declarations, it's reporting the start of the DOCTYPE declaration.
            If the document has no DOCTYPE declaration, this event will not be sent.
+            <list>
+             <item><c>Name = string()</c></item>
+             <item><c>PublicId = string()</c></item>
+             <item><c>SystemId = string()</c></item>
+            </list>
          </item>
 
          <tag><c>endDTD</c></tag>

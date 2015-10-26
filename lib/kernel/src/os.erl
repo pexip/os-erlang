@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 1997-2011. All Rights Reserved.
+%% Copyright Ericsson AB 1997-2013. All Rights Reserved.
 %%
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -24,16 +24,54 @@
 
 -include("file.hrl").
 
--spec type() -> vxworks | {Osfamily, Osname} when
-      Osfamily :: unix | win32,
+%%% BIFs
+
+-export([getenv/0, getenv/1, getpid/0, putenv/2, timestamp/0, unsetenv/1]).
+
+-spec getenv() -> [string()].
+
+getenv() -> erlang:nif_error(undef).
+
+-spec getenv(VarName) -> Value | false when
+      VarName :: string(),
+      Value :: string().
+
+getenv(_) ->
+    erlang:nif_error(undef).
+
+-spec getpid() -> Value when
+      Value :: string().
+
+getpid() ->
+    erlang:nif_error(undef).
+
+-spec putenv(VarName, Value) -> true when
+      VarName :: string(),
+      Value :: string().
+
+putenv(_, _) ->
+    erlang:nif_error(undef).
+
+-spec timestamp() -> Timestamp when
+      Timestamp :: erlang:timestamp().
+
+timestamp() ->
+    erlang:nif_error(undef).
+
+-spec unsetenv(VarName) -> true when
+      VarName :: string().
+
+unsetenv(_) ->
+    erlang:nif_error(undef).
+
+%%% End of BIFs
+
+-spec type() -> {Osfamily, Osname} when
+      Osfamily :: unix | win32 | ose,
       Osname :: atom().
 
 type() ->
-    case erlang:system_info(os_type) of
-	{vxworks, _} ->
-	    vxworks;
-	Else -> Else
-    end.
+    erlang:system_info(os_type).
 
 -spec version() -> VersionString | {Major, Minor, Release} when
       VersionString :: string(),
@@ -83,29 +121,18 @@ find_executable1(_Name, [], _Extensions) ->
 
 verify_executable(Name0, [Ext|Rest], OrigExtensions) ->
     Name1 = Name0 ++ Ext,
-    case os:type() of
-	vxworks ->
-	    %% We consider all existing VxWorks files to be executable
-	    case file:read_file_info(Name1) of
-		{ok, _} ->
-		    {ok, Name1};
-		_ ->
-		    verify_executable(Name0, Rest, OrigExtensions)
-	    end;
+    case file:read_file_info(Name1) of
+	{ok, #file_info{type=regular,mode=Mode}}
+	when Mode band 8#111 =/= 0 ->
+	    %% XXX This test for execution permission is not fool-proof
+	    %% on Unix, since we test if any execution bit is set.
+	    {ok, Name1};
 	_ ->
-	    case file:read_file_info(Name1) of
-		{ok, #file_info{type=regular,mode=Mode}}
-		when Mode band 8#111 =/= 0 ->
-		    %% XXX This test for execution permission is not fool-proof
-		    %% on Unix, since we test if any execution bit is set.
-		    {ok, Name1};
-		_ ->
-		    verify_executable(Name0, Rest, OrigExtensions)
-	    end
+	    verify_executable(Name0, Rest, OrigExtensions)
     end;
 verify_executable(Name, [], OrigExtensions) when OrigExtensions =/= [""] -> %% Windows
     %% Will only happen on windows, hence case insensitivity
-    case can_be_full_name(string:to_lower(Name),OrigExtensions) of 
+    case can_be_full_name(string:to_lower(Name),OrigExtensions) of
 	true ->
 	    verify_executable(Name,[""],[""]);
 	_ ->
@@ -129,7 +156,7 @@ split_path(Path) ->
 	{win32, _} ->
 	    {ok,Curr} = file:get_cwd(),
 	    split_path(Path, $;, [], [Curr]);
-	_ -> 
+	_ ->
 	    split_path(Path, $:, [], [])
     end.
 
@@ -154,8 +181,7 @@ reverse_element(List) ->
 extensions() ->
     case type() of
 	{win32, _} -> [".exe",".com",".cmd",".bat"];
-	{unix, _} -> [""];
-	vxworks -> [""]
+	{unix, _} -> [""]
     end.
 
 %% Executes the given command in the default shell for the operating system.
@@ -163,22 +189,25 @@ extensions() ->
       Command :: atom() | io_lib:chars().
 cmd(Cmd) ->
     validate(Cmd),
-    case type() of
-	{unix, _} ->
-	    unix_cmd(Cmd);
-	{win32, Wtype} ->
-	    Command = case {os:getenv("COMSPEC"),Wtype} of
-			  {false,windows} -> lists:concat(["command.com /c", Cmd]);
-			  {false,_} -> lists:concat(["cmd /c", Cmd]);
-			  {Cspec,_} -> lists:concat([Cspec," /c",Cmd])
-		      end,
-	    Port = open_port({spawn, Command}, [stream, in, eof, hide]),
-	    get_data(Port, []);
-	%% VxWorks uses a 'sh -c hook' in 'vxcall.c' to run os:cmd.
-	vxworks ->
-	    Command = lists:concat(["sh -c '", Cmd, "'"]),
-	    Port = open_port({spawn, Command}, [stream, in, eof]),
-	    get_data(Port, [])
+    Bytes = case type() of
+		{unix, _} ->
+		    unix_cmd(Cmd);
+		{win32, Wtype} ->
+		    Command0 = case {os:getenv("COMSPEC"),Wtype} of
+				  {false,windows} -> lists:concat(["command.com /c", Cmd]);
+				  {false,_} -> lists:concat(["cmd /c", Cmd]);
+				  {Cspec,_} -> lists:concat([Cspec," /c",Cmd])
+			      end,
+		    %% open_port/2 awaits string() in Command, but io_lib:chars() can be
+		    %% deep lists according to io_lib module description.
+		    Command = lists:flatten(Command0),
+		    Port = open_port({spawn, Command}, [stream, in, eof, hide]),
+		    get_data(Port, [])
+	    end,
+    String = unicode:characters_to_list(list_to_binary(Bytes)),
+    if  %% Convert to unicode list if possible otherwise return bytes
+	is_list(String) -> String;
+	true -> Bytes
     end.
 
 unix_cmd(Cmd) ->
@@ -198,10 +227,12 @@ unix_cmd(Cmd) ->
     end.
 
 %% The -s flag implies that only the positional parameters are set,
-%% and the commands are read from standard input. We set the 
+%% and the commands are read from standard input. We set the
 %% $1 parameter for easy identification of the resident shell.
 %%
--define(SHELL, "/bin/sh -s unix:cmd 2>&1").
+-define(ROOT,          "/").
+-define(ROOT_ANDROID,  "/system").
+-define(SHELL, "bin/sh -s unix:cmd 2>&1").
 -define(PORT_CREATOR_NAME, os_cmd_port_creator).
 
 %%
@@ -211,7 +242,7 @@ unix_cmd(Cmd) ->
 -spec start_port() -> port().
 start_port() ->
     Ref = make_ref(),
-    Request = {Ref,self()},    
+    Request = {Ref,self()},
     {Pid, Mon} = case whereis(?PORT_CREATOR_NAME) of
 		     undefined ->
 			 spawn_monitor(fun() ->
@@ -251,17 +282,22 @@ start_port_srv(Request) ->
     end.
 
 start_port_srv_handle({Ref,Client}) ->
-    Reply = try open_port({spawn, ?SHELL},[stream]) of
+    Path  = case lists:reverse(erlang:system_info(system_architecture)) of
+      % androideabi
+      "ibaediordna" ++ _ -> filename:join([?ROOT_ANDROID, ?SHELL]);
+      _ -> filename:join([?ROOT, ?SHELL])
+    end,
+    Reply = try open_port({spawn, Path},[stream]) of
 		Port when is_port(Port) ->
 		    (catch port_connect(Port, Client)),
 		    unlink(Port),
 		    Port
 	    catch
 		error:Reason ->
-		    {Reason,erlang:get_stacktrace()}	    
+		    {Reason,erlang:get_stacktrace()}
 	    end,
-    Client ! {Ref,Reply}.
-
+    Client ! {Ref,Reply},
+    ok.
 
 start_port_srv_loop() ->
     receive
@@ -269,7 +305,7 @@ start_port_srv_loop() ->
 				     is_pid(Client) ->
 	    start_port_srv_handle(Request);
 	_Junk ->
-	    ignore
+	    ok
     end,
     start_port_srv_loop().
 
@@ -319,7 +355,7 @@ mk_cmd(Cmd) when is_atom(Cmd) ->		% backward comp.
 mk_cmd(Cmd) ->
     %% We insert a new line after the command, in case the command
     %% contains a comment character.
-    io_lib:format("(~s\n) </dev/null; echo  \"\^D\"\n", [Cmd]).
+    [$(, unicode:characters_to_binary(Cmd), "\n) </dev/null; echo  \"\^D\"\n"].
 
 
 validate(Atom) when is_atom(Atom) ->
@@ -327,7 +363,7 @@ validate(Atom) when is_atom(Atom) ->
 validate(List) when is_list(List) ->
     validate1(List).
 
-validate1([C|Rest]) when is_integer(C), 0 =< C, C < 256 ->
+validate1([C|Rest]) when is_integer(C) ->
     validate1(Rest);
 validate1([List|Rest]) when is_list(List) ->
     validate1(List),
@@ -340,16 +376,16 @@ get_data(Port, Sofar) ->
 	{Port, {data, Bytes}} ->
 	    get_data(Port, [Sofar|Bytes]);
 	{Port, eof} ->
-	    Port ! {self(), close}, 
+	    Port ! {self(), close},
 	    receive
 		{Port, closed} ->
 		    true
-	    end, 
+	    end,
 	    receive
-		{'EXIT',  Port,  _} -> 
+		{'EXIT',  Port,  _} ->
 		    ok
 	    after 1 ->				% force context switch
 		    ok
-	    end, 
+	    end,
 	    lists:flatten(Sofar)
     end.

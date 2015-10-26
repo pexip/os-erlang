@@ -1,4 +1,4 @@
-<?xml version="1.0" encoding="latin1" ?>
+<?xml version="1.0" encoding="utf-8" ?>
 <!DOCTYPE application SYSTEM "application.dtd">
 
 <application xmlns:xi="http://www.w3.org/2001/XInclude">
@@ -6,6 +6,7 @@
 <header>
 <copyright>
 <year>2011</year>
+<year>2013</year>
 <holder>Ericsson AB. All Rights Reserved.</holder>
 </copyright>
 <legalnotice>
@@ -38,9 +39,11 @@ applications on top of the Diameter protocol. </p>
 </description>
 
 <xi:include href="diameter.xml"/>
-<xi:include href="diameter_compile.xml"/>
+<xi:include href="diameterc.xml"/>
 <xi:include href="diameter_app.xml"/>
+<xi:include href="diameter_codec.xml"/>
 <xi:include href="diameter_dict.xml"/>
+<xi:include href="diameter_make.xml"/>
 <xi:include href="diameter_transport.xml"/>
 <xi:include href="diameter_tcp.xml"/>
 <xi:include href="diameter_sctp.xml"/>

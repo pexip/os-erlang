@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 1996-2011. All Rights Reserved.
+%% Copyright Ericsson AB 1996-2013. All Rights Reserved.
 %%
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -36,12 +36,12 @@
 	 add_handler/3, add_sup_handler/3, delete_handler/3, swap_handler/3,
 	 swap_sup_handler/3, which_handlers/1, call/3, call/4, wake_hib/4]).
 
--export([behaviour_info/1]).
-
 -export([init_it/6,
 	 system_continue/3,
 	 system_terminate/4,
 	 system_code_change/4,
+	 system_get_state/1,
+	 system_replace_state/2,
 	 format_status/2]).
 
 -export_type([handler/0, handler_args/0, add_handler_ret/0,
@@ -60,14 +60,6 @@
 %%%  API
 %%%=========================================================================
 
--spec behaviour_info(atom()) -> 'undefined' | [{atom(), arity()}].
-
-behaviour_info(callbacks) ->
-    [{init,1},{handle_event,2},{handle_call,2},{handle_info,2},
-     {terminate,2},{code_change,3}];
-behaviour_info(_Other) ->
-    undefined.
-
 %% gen_event:start(Handler) -> {ok, Pid} | {error, What}
 %%   gen_event:add_handler(Handler, Mod, Args) -> ok | Other
 %%      gen_event:notify(Handler, Event) -> ok
@@ -78,41 +70,37 @@ behaviour_info(_Other) ->
 %%   gen_event:which_handler(Handler) -> [Mod]
 %% gen_event:stop(Handler) -> ok 
 
-
-%% handlers must export
-%% Mod:init(Args) -> {ok, State} | Other
-%% Mod:handle_event(Event, State) -> 
-%%    {ok, State'} | remove_handler | {swap_handler,Args1,State1,Mod2,Args2}
-%% Mod:handle_info(Info, State) ->
-%%    {ok, State'} | remove_handler | {swap_handler,Args1,State1,Mod2,Args2}
-%% Mod:handle_call(Query, State) -> 
-%%    {ok, Reply, State'} | {remove_handler, Reply} | 
-%%    {swap_handler, Reply, Args1,State1,Mod2,Args2}
-%% Mod:terminate(Args, State) -> Val
-
-
-%% add_handler(H, Mod, Args) -> ok | Other
-%%    Mod:init(Args) -> {ok, State} | Other
-
-%% delete_handler(H, Mod, Args) -> Val
-%%    Mod:terminate(Args, State) -> Val
-
-%% notify(H, Event) 
-%%    Mod:handle_event(Event, State) ->
-%%         {ok, State1}
-%%         remove_handler
-%%               Mod:terminate(remove_handler, State) is called
-%%               the return value is ignored
-%%         {swap_handler, Args1, State1, Mod2, Args2}
-%%               State2 = Mod:terminate(Args1, State1) is called
-%%               the return value is chained into the new module and
-%%               Mod2:init({Args2, State2}) is called
-%%         Other
-%%               Mod:terminate({error, Other}, State) is called
-%%               The return value is ignored
-%% call(H, Mod, Query) -> Val
-%% call(H, Mod, Query, Timeout) -> Val
-%%      Mod:handle_call(Query, State) -> as above
+-callback init(InitArgs :: term()) ->
+    {ok, State :: term()} |
+    {ok, State :: term(), hibernate} |
+    {error, Reason :: term()}.
+-callback handle_event(Event :: term(), State :: term()) ->
+    {ok, NewState :: term()} |
+    {ok, NewState :: term(), hibernate} |
+    {swap_handler, Args1 :: term(), NewState :: term(),
+     Handler2 :: (atom() | {atom(), Id :: term()}), Args2 :: term()} |
+    remove_handler.
+-callback handle_call(Request :: term(), State :: term()) ->
+    {ok, Reply :: term(), NewState :: term()} |
+    {ok, Reply :: term(), NewState :: term(), hibernate} |
+    {swap_handler, Reply :: term(), Args1 :: term(), NewState :: term(),
+     Handler2 :: (atom() | {atom(), Id :: term()}), Args2 :: term()} |
+    {remove_handler, Reply :: term()}.
+-callback handle_info(Info :: term(), State :: term()) ->
+    {ok, NewState :: term()} |
+    {ok, NewState :: term(), hibernate} |
+    {swap_handler, Args1 :: term(), NewState :: term(),
+     Handler2 :: (atom() | {atom(), Id :: term()}), Args2 :: term()} |
+    remove_handler.
+-callback terminate(Args :: (term() | {stop, Reason :: term()} |
+                             stop | remove_handler |
+                             {error, {'EXIT', Reason :: term()}} |
+                             {error, term()}),
+                    State :: term()) ->
+    term().
+-callback code_change(OldVsn :: (term() | {down, term()}),
+                      State :: term(), Extra :: term()) ->
+    {ok, NewState :: term()}.
 
 %%---------------------------------------------------------------------------
 
@@ -121,8 +109,10 @@ behaviour_info(_Other) ->
 -type add_handler_ret()  :: ok | term() | {'EXIT',term()}.
 -type del_handler_ret()  :: ok | term() | {'EXIT',term()}.
 
--type emgr_name() :: {'local', atom()} | {'global', atom()}.
--type emgr_ref()  :: atom() | {atom(), atom()} |  {'global', atom()} | pid().
+-type emgr_name() :: {'local', atom()} | {'global', atom()}
+		   | {'via', atom(), term()}.
+-type emgr_ref()  :: atom() | {atom(), atom()} |  {'global', atom()}
+		   | {'via', atom(), term()} | pid().
 -type start_ret() :: {'ok', pid()} | {'error', term()}.
 
 %%---------------------------------------------------------------------------
@@ -157,6 +147,7 @@ init_it(Starter, Parent, Name0, _, _, Options) ->
 
 name({local,Name}) -> Name;
 name({global,Name}) -> Name;
+name({via,_, Name}) -> Name;
 name(Pid) when is_pid(Pid) -> Pid.
 
 -spec add_handler(emgr_ref(), handler(), term()) -> term().
@@ -222,6 +213,9 @@ call1(M, Handler, Query, Timeout) ->
 
 send({global, Name}, Cmd) ->
     catch global:send(Name, Cmd),
+    ok;
+send({via, Mod, Name}, Cmd) ->
+    catch Mod:send(Name, Cmd),
     ok;
 send(M, Cmd) ->
     M ! Cmd,
@@ -372,6 +366,23 @@ system_code_change([ServerName, MSL, Hib], Module, OldVsn, Extra) ->
 		    end,
 		    MSL),
     {ok, [ServerName, MSL1, Hib]}.
+
+system_get_state([_ServerName, MSL, _Hib]) ->
+    {ok, [{Mod,Id,State} || #handler{module=Mod, id=Id, state=State} <- MSL]}.
+
+system_replace_state(StateFun, [ServerName, MSL, Hib]) ->
+    {NMSL, NStates} =
+		lists:unzip([begin
+				 Cur = {Mod,Id,State},
+				 try
+				     NState = {Mod,Id,NS} = StateFun(Cur),
+				     {HS#handler{state=NS}, NState}
+				 catch
+				     _:_ ->
+					 {HS, Cur}
+				 end
+			     end || #handler{module=Mod, id=Id, state=State}=HS <- MSL]),
+    {ok, NStates, [ServerName, NMSL, Hib]}.
 
 %%-----------------------------------------------------------------
 %% Format debug messages.  Print them as the call-back module sees
@@ -667,16 +678,16 @@ report_error(_Handler, {swapped,_,_}, _, _, _)      -> ok;
 report_error(Handler, Reason, State, LastIn, SName) ->
     Reason1 = 
 	case Reason of
-	    {'EXIT',{undef,[{M,F,A}|MFAs]}} ->
+	    {'EXIT',{undef,[{M,F,A,L}|MFAs]}} ->
 		case code:is_loaded(M) of
 		    false ->
-			{'module could not be loaded',[{M,F,A}|MFAs]};
+			{'module could not be loaded',[{M,F,A,L}|MFAs]};
 		    _ ->
 			case erlang:function_exported(M, F, length(A)) of
 			    true ->
-				{undef,[{M,F,A}|MFAs]};
+				{undef,[{M,F,A,L}|MFAs]};
 			    false ->
-				{'function not exported',[{M,F,A}|MFAs]}
+				{'function not exported',[{M,F,A,L}|MFAs]}
 			end
 		end;
 	    {'EXIT',Why} ->

@@ -1,7 +1,7 @@
 /*
  * %CopyrightBegin%
  *
- * Copyright Ericsson AB 1998-2011. All Rights Reserved.
+ * Copyright Ericsson AB 1998-2012. All Rights Reserved.
  *
  * The contents of this file are subject to the Erlang Public License,
  * Version 1.1, (the "License"); you may not use this file except in
@@ -1141,14 +1141,12 @@ static Worker *pick_worker(void)
 static Worker *pick_worker_greedy(AddrByte *domainbuff)
 {
     int i;
-    int ql = 0;
     int found = -1;
     for (i=0; i < num_busy_workers; ++i) {
 	if (domaineq(busy_workers[i].domain, domainbuff)) {
 	    if ((found < 0) || (busy_workers[i].que_size < 
 				busy_workers[found].que_size)) {
 		found = i;
-		ql = busy_workers[i].que_size;
 	    }
 	}
     }
@@ -1211,7 +1209,7 @@ static void start_que_request(Worker *w)
 #endif
 }
 
-#ifndef WIN32    
+#ifndef WIN32
 /* Signal utilities */
 static RETSIGTYPE (*sys_sigset(int sig, RETSIGTYPE (*func)(int)))(int)
 {
@@ -1945,12 +1943,14 @@ static int worker_loop(void)
 	}
 	m = NULL;
 #else
-	write(1, reply, data_size); /* No signals expected */
+	/* expect no signals */
+	if (write(1, reply, data_size) < 0)
+	    goto fail;
 #endif
     } /* for (;;) */
 
-#ifdef WIN32
  fail:
+#ifdef WIN32
     if (m != NULL) {
 	FREE(m);
     }
@@ -1959,8 +1959,8 @@ static int worker_loop(void)
     if (reply) {
 	FREE(reply);
     }
-    return 1;
 #endif
+    return 1;
 }
 
 static int map_netdb_error(int netdb_code)
@@ -2522,7 +2522,7 @@ static char *format_address(int siz, AddrByte *addr)
     *buff='\0';
     if (siz <= 4) {
 	while(siz--) {
-	    sprintf(tmp,"%d",(int) *addr++);
+	    erts_snprintf(tmp, sizeof(tmp), "%d",(int) *addr++);
 	    strcat(buff,tmp);
 	    if(siz) {
 		strcat(buff,".");
@@ -2531,7 +2531,7 @@ static char *format_address(int siz, AddrByte *addr)
 	return buff;
     } 
     while(siz--) {
-	sprintf(tmp,"%02x",(int) *addr++);
+	erts_snprintf(tmp, sizeof(tmp), "%02x",(int) *addr++);
 	strcat(buff,tmp);
 	if(siz) {
 	    strcat(buff,":");
@@ -2548,9 +2548,9 @@ static void debugf(char *format, ...)
 
     va_start(ap,format);
 #ifdef WIN32
-	sprintf(buff,"%s[%d] (DEBUG):",program_name,(int) GetCurrentThreadId());
+    erts_snprintf(buff, sizeof(buff), "%s[%d] (DEBUG):",program_name,(int) GetCurrentThreadId());
 #else
-    sprintf(buff,"%s[%d] (DEBUG):",program_name,(int) getpid());
+    erts_snprintf(buff, sizeof(buff), "%s[%d] (DEBUG):",program_name,(int) getpid());
 #endif
     ptr = buff + strlen(buff);
     erts_vsnprintf(ptr,sizeof(buff)-strlen(buff)-2,format,ap);
@@ -2561,7 +2561,9 @@ static void debugf(char *format, ...)
 	WriteFile(debug_console_allocated,buff,strlen(buff),&res,NULL);
     }
 #else
-    write(2,buff,strlen(buff));
+    /* suppress warning with 'if' */
+    if(write(2,buff,strlen(buff)))
+	;
 #endif
     va_end(ap);
 }
@@ -2573,7 +2575,7 @@ static void warning(char *format, ...)
     va_list ap;
 
     va_start(ap,format);
-    sprintf(buff,"%s[%d]: WARNING:",program_name, (int) getpid());
+    erts_snprintf(buff, sizeof(buff), "%s[%d]: WARNING:",program_name, (int) getpid());
     ptr = buff + strlen(buff);
     erts_vsnprintf(ptr,sizeof(buff)-strlen(buff)-2,format,ap);
     strcat(ptr,"\r\n");
@@ -2583,7 +2585,9 @@ static void warning(char *format, ...)
 	WriteFile(GetStdHandle(STD_ERROR_HANDLE),buff,strlen(buff),&res,NULL);
     }
 #else
-    write(2,buff,strlen(buff));
+    /* suppress warning with 'if' */
+    if(write(2,buff,strlen(buff)))
+	;
 #endif
     va_end(ap);
 }
@@ -2595,7 +2599,7 @@ static void fatal(char *format, ...)
     va_list ap;
 
     va_start(ap,format);
-    sprintf(buff,"%s[%d]: FATAL ERROR:",program_name, (int) getpid());
+    erts_snprintf(buff, sizeof(buff), "%s[%d]: FATAL ERROR:",program_name, (int) getpid());
     ptr = buff + strlen(buff);
     erts_vsnprintf(ptr,sizeof(buff)-strlen(buff)-2,format,ap);
     strcat(ptr,"\r\n");
@@ -2605,7 +2609,9 @@ static void fatal(char *format, ...)
 	WriteFile(GetStdHandle(STD_ERROR_HANDLE),buff,strlen(buff),&res,NULL);
     }
 #else
-    write(2,buff,strlen(buff));
+    /* suppress warning with 'if' */
+    if(write(2,buff,strlen(buff)))
+	;
 #endif
     va_end(ap);
 #ifndef WIN32

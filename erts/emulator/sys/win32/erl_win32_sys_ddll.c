@@ -1,7 +1,7 @@
 /*
  * %CopyrightBegin%
  * 
- * Copyright Ericsson AB 2006-2009. All Rights Reserved.
+ * Copyright Ericsson AB 2006-2013. All Rights Reserved.
  * 
  * The contents of this file are subject to the Erlang Public License,
  * Version 1.1, (the "License"); you may not use this file except in
@@ -25,6 +25,9 @@
 #include <windows.h>
 
 #define GET_ERTS_ALC_TEST
+#ifdef HAVE_CONFIG_H
+#  include "config.h"
+#endif
 #include "sys.h"
 #include "global.h"
 #include "erl_alloc.h"
@@ -35,7 +38,7 @@
 #include "erl_nif.h"
 
 #define EXT_LEN          4
-#define FILE_EXT         ".dll"
+#define FILE_EXT_WCHAR   L".dll"
 
 static DWORD tls_index = 0;
 static TWinDynDriverCallbacks wddc;
@@ -54,11 +57,15 @@ void erl_sys_ddll_init(void) {
 
 /* 
  * Open a shared object
+ * Expecting 'full_name' as an UTF-8 string.
  */
-int erts_sys_ddll_open2(char *full_name, void **handle, ErtsSysDdllError* err)
+int erts_sys_ddll_open(const char *full_name, void **handle, ErtsSysDdllError* err)
 {
+    HINSTANCE hinstance;
     int len;
-    char dlname[MAXPATHLEN + 1];
+    wchar_t* wcp;
+    Sint used;
+    int code;
     
     if ((len = sys_strlen(full_name)) >= MAXPATHLEN - EXT_LEN) {
 	if (err != NULL) {
@@ -66,10 +73,26 @@ int erts_sys_ddll_open2(char *full_name, void **handle, ErtsSysDdllError* err)
 	}
 	return ERL_DE_LOAD_ERROR_NAME_TO_LONG;
     }
-    sys_strcpy(dlname, full_name);
-    sys_strcpy(dlname+len, FILE_EXT);
-    return erts_sys_ddll_open_noext(dlname, handle, err);
+
+    wcp = (wchar_t*)erts_convert_filename_to_wchar((byte*)full_name, len,
+						   NULL, 0,
+						   ERTS_ALC_T_TMP, &used, EXT_LEN);
+    wcscpy(&wcp[used/2 - 1], FILE_EXT_WCHAR);
+
+    if ((hinstance = LoadLibraryW(wcp)) == NULL) {
+	code = ERL_DE_DYNAMIC_ERROR_OFFSET - GetLastError();
+	if (err != NULL) {
+	    err->str = erts_sys_ddll_error(code);
+	}
+    }
+    else {
+        code = ERL_DE_NO_ERROR;
+	*handle = (void *) hinstance;
+    }
+    erts_free(ERTS_ALC_T_TMP, wcp);
+    return code;
 }
+
 int erts_sys_ddll_open_noext(char *dlname, void **handle, ErtsSysDdllError* err)
 {
     HINSTANCE hinstance;
@@ -89,7 +112,7 @@ int erts_sys_ddll_open_noext(char *dlname, void **handle, ErtsSysDdllError* err)
 /* 
  * Find a symbol in the shared object
  */
-int erts_sys_ddll_sym2(void *handle, char *func_name, void **function,
+int erts_sys_ddll_sym2(void *handle, const char *func_name, void **function,
 		       ErtsSysDdllError* err)
 {
     FARPROC proc;

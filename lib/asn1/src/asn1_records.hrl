@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 1997-2010. All Rights Reserved.
+%% Copyright Ericsson AB 1997-2013. All Rights Reserved.
 %%
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -24,12 +24,6 @@
 -define(dbg(Fmt, Args), no_debug).
 -endif.
 
--define('RT_BER_BIN',"asn1rt_ber_bin").
--define('RT_PER_BIN',"asn1rt_per_bin").
-
-%% Some encoding are common for BER and PER. Shared code are in RT_COMMON
--define('RT_COMMON',asn1rt_ber_bin).
-
 -define('COMPLETE_ENCODE',1).
 -define('TLV_DECODE',2).
 
@@ -43,7 +37,7 @@
 -record('ObjectClassFieldType',{classname,class,fieldname,type}).
 
 -record(typedef,{checked=false,pos,name,typespec}).
--record(classdef,{checked=false,pos,name,typespec}).
+-record(classdef, {checked=false,pos,name,module,typespec}).
 -record(valuedef,{checked=false,pos,name,type,value,module}).
 -record(ptypedef,{checked=false,pos,name,args,typespec}).
 -record(pvaluedef,{checked=false,pos,name,args,type,value}).
@@ -51,9 +45,6 @@
 -record(pobjectdef,{checked=false,pos,name,args,class,def}).
 -record(pobjectsetdef,{checked=false,pos,name,args,class,def}).
 
--record(typereference,{pos,val}).
--record(identifier,{pos,val}).
--record(constraint,{c,e}).
 -record('Constraint',{'SingleValue'=no,'SizeConstraint'=no,'ValueRange'=no,'PermittedAlphabet'=no,
 		      'ContainedSubtype'=no, 'TypeConstraint'=no,'InnerSubtyping'=no,e=no,'Other'=no}).
 -record(simpletableattributes,{objectsetname,c_name,c_index,usedclassfield,
@@ -80,6 +71,15 @@
 -record('Externaltypereference',{pos,module,type}).
 % Externalvaluereference -> modulename '.' typename
 -record('Externalvaluereference',{pos,module,value}).
+
+%% Used to hold a tag for a field in a SEQUENCE/SET. It can also
+%% be used for identifiers in OBJECT IDENTIFIER values, since the
+%% parser cannot always distinguish a SEQUENCE with one element from
+%% an OBJECT IDENTIFIER.
+-record(seqtag,
+	{pos :: integer(),
+	 module :: atom(),
+	 val :: atom()}).
 
 -record(state,{module,mname,type,tname,value,vname,erule,parameters=[],
 	       inputmodules,abscomppath=[],recordtopname=[],options,

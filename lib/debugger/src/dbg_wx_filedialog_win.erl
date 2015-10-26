@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2009-2010. All Rights Reserved.
+%% Copyright Ericsson AB 2009-2014. All Rights Reserved.
 %%
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -24,7 +24,7 @@
 -export([new/3, getFilename/1, getFilenames/1, getDirectory/1, destroy/1]).
 
 %% Internal 
--export([init/1, handle_call/3, handle_event/2, 
+-export([init/1, handle_call/3, handle_event/2, handle_cast/2,
 	 handle_info/2, code_change/3, terminate/2]).
 
 -include_lib("wx/include/wx.hrl").
@@ -151,7 +151,7 @@ init([Parent, Id, Options0]) ->
     Bott = wxDialog:createButtonSizer(Dlg, ?wxCANCEL bor ?wxOK),
     wxDialog:connect(Dlg, command_button_clicked), 
     
-    %% Ok done 
+    %% OK done
     Box  = wxBoxSizer:new(?wxVERTICAL),
     wxSizer:add(Box, Top,  [{border, 2}, {flag,?wxALL bor ?wxEXPAND}]),
     wxSizer:add(Box, Dir,  [{border, 2}, {flag,?wxALL bor ?wxEXPAND}]),
@@ -192,6 +192,9 @@ handle_call(getDirectory, _From, State = #state{path=Dir}) ->
 
 handle_call(destroy, _From, State) ->
     {stop, normal, ok, State}.
+
+handle_cast(_, State) ->
+    {noreply, State}.
 
 %%  events
 handle_event(#wx{id=?wxID_UP}, State0) ->
@@ -239,16 +242,13 @@ handle_event(#wx{event=#wxList{itemIndex=Index}},
 	    {noreply, State0}
     end;
 
-handle_event(#wx{event=#wxCommand{type=command_text_updated, cmdString=Wanted}}, 
+handle_event(#wx{event=#wxCommand{type=command_text_updated, cmdString=Wanted}},
 	     State = #state{ptext=Previous, completion=Comp}) ->
     case Previous =:= undefined orelse lists:prefix(Wanted, Previous) of
-	true -> 
-	    case Comp of
-		{Temp,_} -> wxWindow:destroy(Temp);
-		undefined -> ok
-	    end,
+	true ->
+	    destroy_completion(Comp),
 	    {noreply, State#state{ptext=Wanted,completion=undefined}};
-	false -> 
+	false ->
 	    {noreply, show_completion(Wanted, State)}
     end;
 
@@ -307,8 +307,7 @@ handle_event(#wx{event=#wxSize{size={Width,_}}}, State = #state{list=LC}) ->
 	     end),
     {noreply, State};
 	
-handle_event(Event,State) ->
-    io:format("~p Got ~p ~n",[self(), Event]),
+handle_event(_Event,State) ->
     {noreply, State}.
 
 handle_info(_Msg, State) ->
@@ -378,7 +377,6 @@ show_completion(Wanted, State = #state{text=TC, win=Win, list=LC, completion=Com
 	    Last = wxTextCtrl:getLastPosition(TC),
 	    wxTextCtrl:setSelection(TC, Start, Last),
 	    destroy_completion(Comp),
-	    wxWindow:setFocus(TC),
 	    State#state{ptext=Path, completion=undefined};
 	Paths when Comp =:= undefined ->
 	    {PosX,PosY} = wxListCtrl:getPosition(LC),
@@ -403,20 +401,23 @@ show_completion(Wanted, State = #state{text=TC, win=Win, list=LC, completion=Com
 	    %% wxListBox:connect(LB, command_listbox_doubleclicked),
 	    wxListBox:connect(LB, command_listbox_selected),
 	    wxWindow:show(Temp),
+	    %% setFocus does a select all on 2.9 sigh..
+	    {Start, Last} = wxTextCtrl:getSelection(TC),
 	    wxWindow:setFocus(TC),
+	    wxTextCtrl:setSelection(TC, Start, Last),
 	    State#state{completion = {Temp, LB}, ptext=Wanted};
 	Paths ->
 	    {_Temp, LB} = Comp,
 	    wxListBox:clear(LB),
 	    Files = [filename:basename(File) || File <- Paths],
-	    wxListBox:insertItems(LB,Files,0),
-	    wxWindow:setFocus(TC),
+	    Files /= [] andalso wxListBox:insertItems(LB,Files,0),
 	    State#state{ptext=Wanted}
     end.
 
 destroy_completion(undefined) -> ok;
-destroy_completion({Window, _}) ->
+destroy_completion({Window, _LB}) ->
     Parent = wxWindow:getParent(Window),
+    wxWindow:hide(Window),
     wxWindow:destroy(Window),
     wxWindow:refresh(Parent).
 

@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2002-2011. All Rights Reserved.
+%% Copyright Ericsson AB 2002-2014. All Rights Reserved.
 %%
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -26,16 +26,14 @@
 
 %% Test Controller interface
 -export([is_release_available/1]).
--export([start_remote_main_target/1,stop/1]).
 -export([start_tracer_node/2,trace_nodes/2,stop_tracer_node/1]).
--export([start_node/5, stop_node/2]).
--export([kill_nodes/1, nodedown/2]).
+-export([start_node/5, stop_node/1]).
+-export([kill_nodes/0, nodedown/1]).
 %% Internal export
 -export([node_started/1,trc/1,handle_debug/4]).
 
 -include("test_server_internal.hrl").
 -record(slave_info, {name,socket,client}).
--define(VXWORKS_ACCEPT_TIMEOUT,?ACCEPT_TIMEOUT).
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %%%                                                                  %%%
@@ -58,111 +56,15 @@ is_release_available(Rel) ->
 	    false
     end.
 
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-%%% Start main target node on remote host
-%%% The target node must not know the controller node via erlang distribution.
-start_remote_main_target(Parameters) ->
-    #par{type=TargetType,
-	 target=TargetHost,
-	 naming=Naming,
-	 master=MasterNode,
-	 cookie=MasterCookie,
-	 slave_targets=SlaveTargets} = Parameters,
-
-    lists:foreach(fun(T) -> maybe_reboot_target({TargetType,T}) end,
-		  [list_to_atom(TargetHost)|SlaveTargets]),
-
-    % Must give the targets a chance to reboot...
-    case TargetType of
-	vxworks ->
-	    receive after 15000 -> ok end;
-	_ ->
-	    ok
-    end,
-
-    Cmd0 = get_main_target_start_command(TargetType,TargetHost,Naming,
-					 MasterNode,MasterCookie),
-    Cmd = 
-	case os:getenv("TEST_SERVER_FRAMEWORK") of
-	    FW when FW =:= false; FW =:= "undefined" -> Cmd0;
-	    FW -> Cmd0 ++ " -env TEST_SERVER_FRAMEWORK " ++ FW
-	end,
-	
-    {ok,LSock} = gen_tcp:listen(?MAIN_PORT,[binary,{reuseaddr,true},{packet,2}]),
-    case start_target(TargetType,TargetHost,Cmd) of
-	{ok,TargetClient,AcceptTimeout} ->
-	    case gen_tcp:accept(LSock,AcceptTimeout) of
-		{ok,Sock} -> 
-		    gen_tcp:close(LSock),
-		    receive 
-			{tcp,Sock,Bin} when is_binary(Bin) ->
-			    case unpack(Bin) of
-				error ->
-				    gen_tcp:close(Sock),
-				    close_target_client(TargetClient),
-				    {error,bad_message};
-				{ok,{target_info,TI}} ->
-				    put(test_server_free_targets,SlaveTargets),
-				    {ok, TI#target_info{where=Sock,
-							host=TargetHost,
-							naming=Naming,
-							master=MasterNode,
-							target_client=TargetClient,
-							slave_targets=SlaveTargets}}
-			    end;
-			{tcp_closed,Sock} ->
-			    gen_tcp:close(Sock),
-			    close_target_client(TargetClient),
-			    {error,could_not_contact_target}
-		    after AcceptTimeout ->
-			    gen_tcp:close(Sock),
-			    close_target_client(TargetClient),
-			    {error,timeout}
-		    end;
-		Error -> 
-		    %%! maybe something like kill_target(...)???
-		    gen_tcp:close(LSock),
-		    close_target_client(TargetClient),
-		    {error,{could_not_contact_target,Error}}
-	    end;
-	Error ->
-	    gen_tcp:close(LSock),
-	    {error,{could_not_start_target,Error}}
-    end.
-
-stop(TI) ->
-    kill_nodes(TI),
-    case TI#target_info.where of
-	local -> % there is no remote target to stop
-	    ok;
-	Sock ->  % stop remote target
-	    gen_tcp:close(Sock),
-	    close_target_client(TI#target_info.target_client)	    
-    end.
-
-nodedown(Sock, TI) ->
+nodedown(Sock) ->
     Match = #slave_info{name='$1',socket=Sock,client='$2',_='_'},
     case ets:match(slave_tab,Match) of
-	[[Node,Client]] -> % Slave node died
+	[[Node,_Client]] -> % Slave node died
 	    gen_tcp:close(Sock),
 	    ets:delete(slave_tab,Node),
-	    close_target_client(Client),
-	    HostAtom = test_server_sup:hostatom(Node),
-	    case lists:member(HostAtom,TI#target_info.slave_targets) of
-		true -> 
-		    put(test_server_free_targets,
-			get(test_server_free_targets) ++ [HostAtom]);
-		false -> ok
-	    end,
 	    slave_died;
-	[] -> 
-	    case TI#target_info.where of
-		Sock ->
-		    %% test_server_ctrl will do the cleanup
-		    target_died;
-		_ -> 
-		    ignore
-	    end
+	[] ->
+	    ok
     end.
 
 
@@ -176,14 +78,11 @@ start_tracer_node(TraceFile,TI) ->
     Match = #slave_info{name='$1',_='_'},
     SlaveNodes = lists:map(fun([N]) -> [" ",N] end,
 			   ets:match(slave_tab,Match)),
-    TargetNode = case TI#target_info.where of
-		     local -> node();
-		     _ -> "test_server@" ++ TI#target_info.host
-		 end,
+    TargetNode = node(),
     Cookie = TI#target_info.cookie,
     {ok,LSock} = gen_tcp:listen(0,[binary,{reuseaddr,true},{packet,2}]),
     {ok,TracePort} = inet:port(LSock),
-    Prog = pick_erl_program(default),
+    Prog = quote_progname(pick_erl_program(default)),
     Cmd = lists:concat([Prog, " -sname tracer -hidden -setcookie ", Cookie, 
 			" -s ", ?MODULE, " trc ", TraceFile, " ", 
 			TracePort, " ", TI#target_info.os_family]),
@@ -389,9 +288,11 @@ start_node(_SlaveName, _Type, _Options, _From, _TI) ->
 
 %%
 %% Peer nodes are always started on the same host as test_server_ctrl
-%% Socket communication is used in case target and controller is
-%% not the same node (target must not know the controller node
-%% via erlang distribution)
+%%
+%% (Socket communication is used since in early days the test target
+%% and the test server controller node could be on different hosts and
+%% the target could not know the controller node via erlang
+%% distribution)
 %%
 start_node_peer(SlaveName, OptList, From, TI) ->
     SuppliedArgs = start_node_get_option_value(args, OptList, []),
@@ -407,11 +308,11 @@ start_node_peer(SlaveName, OptList, From, TI) ->
     % Support for erl_crash_dump files..
     CrashFile = filename:join([TI#target_info.test_server_dir,
 			       "erl_crash_dump."++cast_to_list(SlaveName)]),
-    CrashArgs = lists:concat([" -env ERL_CRASH_DUMP ",CrashFile," "]),
+    CrashArgs = lists:concat([" -env ERL_CRASH_DUMP \"",CrashFile,"\" "]),
     FailOnError = start_node_get_option_value(fail_on_error, OptList, true),
     Pa = TI#target_info.test_server_dir,
     Prog0 = start_node_get_option_value(erl, OptList, default),
-    Prog = pick_erl_program(Prog0),
+    Prog = quote_progname(pick_erl_program(Prog0)),
     Args = 
 	case string:str(SuppliedArgs,"-setcookie") of
 	    0 -> "-setcookie " ++ TI#target_info.cookie ++ " " ++ SuppliedArgs;
@@ -420,7 +321,7 @@ start_node_peer(SlaveName, OptList, From, TI) ->
     Cmd = lists:concat([Prog,
 			" -detached ",
 			TI#target_info.naming, " ", SlaveName,
-			" -pa ", Pa,
+			" -pa \"", Pa,"\"",
 			NodeStarted,
 			CrashArgs,
 			" ", Args]),
@@ -433,10 +334,12 @@ start_node_peer(SlaveName, OptList, From, TI) ->
     %% Bad environment can cause open port to fail. If this happens,
     %% we ignore it and let the testcase handle the situation...
     catch open_port({spawn, Cmd}, [stream|Opts]),
+
+    Tmo = 60000 * test_server:timetrap_scale_factor(),
     
     case start_node_get_option_value(wait, OptList, true) of
 	true ->
-	    Ret = wait_for_node_started(LSock,60000,undefined,Cleanup,TI,self()),
+	    Ret = wait_for_node_started(LSock,Tmo,undefined,Cleanup,TI,self()),
 	    case {Ret,FailOnError} of
 		{{{ok, Node}, Warning},_} ->
 		    gen_server:reply(From,{{ok,Node},HostStr,Cmd,[],Warning});
@@ -452,7 +355,7 @@ start_node_peer(SlaveName, OptList, From, TI) ->
 	    Self = self(),
 	    spawn_link(
 	      fun() -> 
-		      wait_for_node_started(LSock,60000,undefined,
+		      wait_for_node_started(LSock,Tmo,undefined,
 					    Cleanup,TI,Self),
 		      receive after infinity -> ok end
 	      end),
@@ -462,9 +365,6 @@ start_node_peer(SlaveName, OptList, From, TI) ->
 %%
 %% Slave nodes are started on a remote host if
 %% - the option remote is given when calling test_server:start_node/3
-%% or
-%% - the target type is vxworks, since only one erlang node
-%%   can be started on each vxworks host.
 %%
 start_node_slave(SlaveName, OptList, From, TI) ->
     SuppliedArgs = start_node_get_option_value(args, OptList, []),
@@ -472,138 +372,36 @@ start_node_slave(SlaveName, OptList, From, TI) ->
 
     CrashFile = filename:join([TI#target_info.test_server_dir,
 			       "erl_crash_dump."++cast_to_list(SlaveName)]),
-    CrashArgs = lists:concat([" -env ERL_CRASH_DUMP ",CrashFile," "]),
+    CrashArgs = lists:concat([" -env ERL_CRASH_DUMP \"",CrashFile,"\" "]),
     Pa = TI#target_info.test_server_dir,
-    Args = lists:concat([" -pa ", Pa, " ", SuppliedArgs, CrashArgs]),
+    Args = lists:concat([" -pa \"", Pa, "\" ", SuppliedArgs, CrashArgs]),
 
     Prog0 = start_node_get_option_value(erl, OptList, default),
     Prog = pick_erl_program(Prog0),
     Ret = 
 	case start_which_node(OptList) of
 	    {error,Reason} -> {{error,Reason},undefined,undefined};
-	    Host0 -> do_start_node_slave(Host0,SlaveName,Args,Prog,Cleanup,TI)
+	    Host0 -> do_start_node_slave(Host0,SlaveName,Args,Prog,Cleanup)
 	end,
     gen_server:reply(From,Ret).
 
 
-do_start_node_slave(Host0, SlaveName, Args, Prog, Cleanup, TI) ->
-    case TI#target_info.where of
-	local ->
-	    Host = 
-		case Host0 of
-		    local -> test_server_sup:hoststr();
-		    _ -> cast_to_list(Host0)
-		end,
-	    Cmd = Prog ++ " " ++ Args,
-	    %% Can use slave.erl here because I'm both controller and target
-	    %% so I will ping the new node anyway
-	    case slave:start(Host, SlaveName, Args, no_link, Prog) of
-		{ok,Nodename} -> 
-		    case Cleanup of
-			true -> ets:insert(slave_tab,#slave_info{name=Nodename});
-			false -> ok
-		    end,
-		    {{ok,Nodename}, Host, Cmd, [], []};
-		Ret -> 
-		    {Ret, Host, Cmd}
-	    end;
-    
-	_Sock ->
-	    %% Cannot use slave.erl here because I'm only controller, and will
-	    %% not ping the new node. Only target shall contact the new node!!
-	    no_contact_start_slave(Host0,SlaveName,Args,Prog,Cleanup,TI)
-    end.
-
-
-
-no_contact_start_slave(Host, Name, Args0, Prog, Cleanup,TI) ->
-    Args1 = case string:str(Args0,"-setcookie") of
-		0 -> "-setcookie " ++ TI#target_info.cookie ++ " " ++ Args0;
-		_ -> Args0
+do_start_node_slave(Host0, SlaveName, Args, Prog, Cleanup) ->
+    Host =
+	case Host0 of
+	    local -> test_server_sup:hoststr();
+	    _ -> cast_to_list(Host0)
+	end,
+    Cmd = Prog ++ " " ++ Args,
+    case slave:start(Host, SlaveName, Args, no_link, Prog) of
+	{ok,Nodename} ->
+	    case Cleanup of
+		true -> ets:insert(slave_tab,#slave_info{name=Nodename});
+		false -> ok
 	    end,
-    Args = TI#target_info.naming ++ " " ++ cast_to_list(Name) ++ " " ++ Args1,
-    case Host of
-	local ->
-	    case get(test_server_free_targets) of
-		[] ->
-		    io:format("Starting slave ~p on HOST~n", [Name]),
-		    TargetType = test_server_sup:get_os_family(),
-		    Cmd0 = get_slave_node_start_command(TargetType,
-							Prog,
-							TI#target_info.master),
-		    Cmd = Cmd0 ++ " " ++ Args,
-		    do_no_contact_start_slave(TargetType,
-					      test_server_sup:hoststr(),
-					      Cmd, Cleanup,TI, false);
-		[H|T] ->
-		    TargetType = TI#target_info.os_family,
-		    Cmd0 = get_slave_node_start_command(TargetType,
-							Prog,
-							TI#target_info.master),
-		    Cmd = Cmd0 ++ " " ++ Args,
-		    case do_no_contact_start_slave(TargetType,H,Cmd,Cleanup,
-						   TI,true) of
-			{error,remove} ->
-			    io:format("Cannot start node on ~p, "
-				      "removing from slave "
-				      "target list.", [H]),
-			    put(test_server_free_targets,T),
-			    no_contact_start_slave(Host,Name,Args,Prog,
-						   Cleanup,TI);
-			{error,keep} ->
-			    %% H is added to the END OF THE LIST 
-			    %% in order to avoid the same target to
-			    %% be selected each time
-			    put(test_server_free_targets,T++[H]),
-			    no_contact_start_slave(Host,Name,Args,Prog,
-						   Cleanup,TI);
-			R ->
-			    put(test_server_free_targets,T),
-			    R
-		    end
-	    end;
-	_ -> 
-	    TargetType = TI#target_info.os_family,
-	    Cmd0 = get_slave_node_start_command(TargetType,
-						Prog,
-						TI#target_info.master),
-	    Cmd = Cmd0 ++ " " ++ Args,
-	    do_no_contact_start_slave(TargetType, Host, Cmd, Cleanup, TI, false)
-    end.
-
-do_no_contact_start_slave(TargetType,Host0,Cmd0,Cleanup,TI,Retry) ->
-    %% Must use TargetType instead of TI#target_info.os_familiy here 
-    %% because if there were no free_targets we will be starting the 
-    %% slave node on host which might have a different os_familiy
-    Host = cast_to_list(Host0),
-    {ok,LSock} = gen_tcp:listen(0,[binary,
-				    {reuseaddr,true},
-				    {packet,2}]),
-    {ok,WaitPort} = inet:port(LSock),
-    Cmd = lists:concat([Cmd0, " -s ", ?MODULE, " node_started ", 
-			test_server_sup:hoststr(), " ", WaitPort]),
-
-    case start_target(TargetType,Host,Cmd) of
-	{ok,Client,AcceptTimeout} ->
-	    case wait_for_node_started(LSock,AcceptTimeout,
-				       Client,Cleanup,TI,self()) of
-		{error,_}=WaitError -> 
-		    if Retry ->
-			    case maybe_reboot_target(Client) of
-				{error,_} -> {error,remove};
-				ok -> {error,keep}
-			    end;
-		       true ->
-			    {WaitError,Host,Cmd}
-		    end;
-		{Ok,Warning} -> 
-		    {Ok,Host,Cmd,[],Warning}
-	    end;
-	StartError ->
-	    gen_tcp:close(LSock),
-	    if Retry -> {error,remove};
-	       true -> {{error,{could_not_start_target,StartError}},Host,Cmd}
-	    end
+	    {{ok,Nodename}, Host, Cmd, [], []};
+	Ret ->
+	    {Ret, Host, Cmd}
     end.
 
 
@@ -735,122 +533,36 @@ start_node_get_option_value(Key, List, Default) ->
 %% stop_node(Name) -> ok | {error,Reason}
 %%
 %% Clean up - test_server will stop this node
-stop_node(Name, TI) ->
+stop_node(Name) ->
     case ets:lookup(slave_tab,Name) of
-	[#slave_info{client=Client}] -> 
+	[#slave_info{}] ->
 	    ets:delete(slave_tab,Name),
-	    HostAtom = test_server_sup:hostatom(Name),
-	    case lists:member(HostAtom,TI#target_info.slave_targets) of
-		true -> 
-		    put(test_server_free_targets,
-			get(test_server_free_targets) ++ [HostAtom]);
-		false -> ok
-	    end,
-	    close_target_client(Client),
 	    ok;
 	[] -> 
 	    {error, not_a_slavenode}
     end.
 	    
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-%% kill_nodes(TI) -> ok
+%% kill_nodes() -> ok
 %%
 %% Brutally kill all slavenodes that were not stopped by test_server
-kill_nodes(TI) ->
+kill_nodes() ->
     case ets:match_object(slave_tab,'_') of
 	[] -> [];
 	List ->
-	    lists:map(fun(SI) -> kill_node(SI,TI) end, List)
+	    lists:map(fun(SI) -> kill_node(SI) end, List)
     end.
 
-kill_node(SI,TI) ->
+kill_node(SI) ->
     Name = SI#slave_info.name,
     ets:delete(slave_tab,Name),
-    HostAtom = test_server_sup:hostatom(Name),
-    case lists:member(HostAtom,TI#target_info.slave_targets) of
-	true ->
-	    put(test_server_free_targets,
-		get(test_server_free_targets) ++ [HostAtom]);
-	false -> ok
-    end,
     case SI#slave_info.socket of
 	undefined ->
 	    catch rpc:call(Name,erlang,halt,[]);
 	Sock ->
 	    gen_tcp:close(Sock)
     end,
-    close_target_client(SI#slave_info.client),
     Name.
-
-
-
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-%%% Platform specific code
-
-start_target(vxworks,TargetHost,Cmd) ->
-    case vxworks_client:open(TargetHost) of
-	{ok,P} ->
-	    case vxworks_client:send_data(P,Cmd,"start_erl called") of
-		{ok,_} -> 
-		    {ok,{vxworks,P},?VXWORKS_ACCEPT_TIMEOUT};
-		Error -> 
-		    Error
-	    end;
-	Error ->
-	    Error
-    end;
-
-start_target(unix,TargetHost,Cmd0) ->
-    Cmd = 
-	case test_server_sup:hoststr() of
-	    TargetHost -> Cmd0;
-	    _ -> lists:concat(["rsh ",TargetHost, " ", Cmd0])
-	end,
-    open_port({spawn, Cmd}, [stream]),
-    {ok,undefined,?ACCEPT_TIMEOUT}.
-
-maybe_reboot_target({vxworks,P}) when is_pid(P) ->
-    %% Reboot the vxworks card.
-    %% Client is also closed after this, even if reboot fails
-    vxworks_client:send_data_wait_for_close(P,"q");
-maybe_reboot_target({vxworks,T}) when is_atom(T) ->
-    %% Reboot the vxworks card.
-    %% Client is also closed after this, even if reboot fails
-    vxworks_client:reboot(T);
-maybe_reboot_target(_) ->
-    {error, cannot_reboot_target}.
-
-close_target_client({vxworks,P}) ->
-    vxworks_client:close(P);
-close_target_client(undefined) ->
-    ok.
-
-
-
-%%
-%% Command for starting main target
-%% 
-get_main_target_start_command(vxworks,_TargetHost,Naming,
-			      _MasterNode,_MasterCookie) ->
-    "e" ++ Naming ++ " test_server -boot start_sasl"
-	" -sasl errlog_type error"
-	" -s test_server start " ++ test_server_sup:hoststr();
-get_main_target_start_command(unix,_TargetHost,Naming,
-			      _MasterNode,_MasterCookie) ->
-    Prog = pick_erl_program(default),
-    Prog ++ " " ++  Naming ++ " test_server" ++
-	" -boot start_sasl -sasl errlog_type error"
-	" -s test_server start " ++ test_server_sup:hoststr().
-
-%% 
-%% Command for starting slave nodes
-%% 
-get_slave_node_start_command(vxworks, _Prog, _MasterNode) ->
-    "e";
-    %"e-noinput -master " ++ MasterNode;
-get_slave_node_start_command(unix, Prog, MasterNode) ->
-    cast_to_list(Prog) ++ " -detached -master " ++ MasterNode.
-
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %%% cast_to_list(X) -> string()
@@ -877,7 +589,32 @@ pick_erl_program(L) ->
 	{release, S} ->
 	    find_release(S);
 	this ->
-	    lib:progname()
+	    cast_to_list(lib:progname())
+    end.
+
+%% This is an attempt to distinguish between spaces in the program
+%% path and spaces that separate arguments. The program is quoted to
+%% allow spaces in the path.
+%%
+%% Arguments could exist either if the executable is excplicitly given
+%% ({prog,String}) or if the -program switch to beam is used and
+%% includes arguments (typically done by cerl in OTP test environment
+%% in order to ensure that slave/peer nodes are started with the same
+%% emulator and flags as the test node. The return from lib:progname()
+%% could then typically be '/<full_path_to>/cerl -gcov').
+quote_progname(Progname) ->
+    do_quote_progname(string:tokens(Progname," ")).
+
+do_quote_progname([Prog]) ->
+    "\""++Prog++"\"";
+do_quote_progname([Prog,Arg|Args]) ->
+    case os:find_executable(Prog) of
+	false ->
+	    do_quote_progname([Prog++" "++Arg | Args]);
+	_ ->
+	    %% this one has an executable - we assume the rest are arguments
+	    "\""++Prog++"\""++
+		lists:flatten(lists:map(fun(X) -> [" ",X] end, [Arg|Args]))
     end.
 
 random_element(L) ->
@@ -916,7 +653,7 @@ find_rel_linux(Rel) ->
     end.
 
 find_rel_suse(Rel, SuseRel) ->
-    Root = "/usr/local/otp/releases/otp_beam_linux_sles",
+    Root = "/usr/local/otp/releases/sles",
     case SuseRel of
 	"11" ->
 	    %% Try both SuSE 11, SuSE 10 and SuSe 9 in that order.
@@ -936,19 +673,30 @@ find_rel_suse(Rel, SuseRel) ->
 find_rel_suse_1(Rel, RootWc) ->
     case erlang:system_info(wordsize) of
 	4 ->
-	    find_rel_suse_2(Rel, RootWc++"_i386");
+	    find_rel_suse_2(Rel, RootWc++"_32");
 	8 ->
-	    find_rel_suse_2(Rel, RootWc++"_x64") ++
-		find_rel_suse_2(Rel, RootWc++"_i386")
+	    find_rel_suse_2(Rel, RootWc++"_64") ++
+		find_rel_suse_2(Rel, RootWc++"_32")
     end.
 
 find_rel_suse_2(Rel, RootWc) ->
-    Wc = RootWc ++ "_" ++ Rel,
-    case filelib:wildcard(Wc) of
-	[] ->
-	    [];
-	[R|_] ->
-	    [filename:join([R,"bin","erl"])]
+    RelDir = filename:dirname(RootWc),
+    Pat = filename:basename(RootWc ++ "_" ++ Rel) ++ ".*",
+    case file:list_dir(RelDir) of
+	{ok,Dirs} ->
+	    case lists:filter(fun(Dir) ->
+				      case re:run(Dir, Pat) of
+					  nomatch -> false;
+					  _       -> true
+				      end
+			      end, Dirs) of
+		[] ->
+		    [];
+		[R|_] ->
+		    [filename:join([RelDir,R,"bin","erl"])]
+	    end;
+	_ ->
+	    []
     end.
 
 %% suse_release() -> VersionString | none.

@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 1999-2010. All Rights Reserved.
+%% Copyright Ericsson AB 1999-2012. All Rights Reserved.
 %%
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -65,7 +65,7 @@ functions([], Acc) -> reverse(Acc).
 
 %% function(Kfunc) -> Func.
 
-function(#k_fdef{func=F,arity=Ar,vars=Vs,body=Kb}) ->
+function(#k_fdef{anno=#k{a=Anno},func=F,arity=Ar,vars=Vs,body=Kb}) ->
     try
 	As = var_list(Vs),
 	Vdb0 = foldl(fun ({var,N}, Vdb) -> new_var(N, 0, Vdb) end, [], As),
@@ -80,7 +80,7 @@ function(#k_fdef{func=F,arity=Ar,vars=Vs,body=Kb}) ->
 	put(guard_refc, 0),
 	{B1,_,Vdb1} = body(B0, 1, Vdb0),
 	erase(guard_refc),
-	{function,F,Ar,As,B1,Vdb1}
+	{function,F,Ar,As,B1,Vdb1,Anno}
     catch
 	Class:Error ->
 	    Stack = erlang:get_stacktrace(),
@@ -89,19 +89,8 @@ function(#k_fdef{func=F,arity=Ar,vars=Vs,body=Kb}) ->
     end.
 
 %% body(Kbody, I, Vdb) -> {[Expr],MaxI,Vdb}.
-%%  Handle a body, need special cases for transforming match_fails.
-%%  We KNOW that they only occur last in a body.
+%%  Handle a body.
 
-body(#k_seq{arg=#k_put{anno=Pa,arg=Arg,ret=[R]},
-	    body=#k_enter{anno=Ea,op=#k_internal{name=match_fail,arity=1},
-			  args=[R]}},
-      I, Vdb0) ->
-    Vdb1 = use_vars(Pa#k.us, I, Vdb0),		%All used here
-    {[match_fail(Arg, I, Pa#k.a ++ Ea#k.a)],I,Vdb1};
-body(#k_enter{anno=Ea,op=#k_internal{name=match_fail,arity=1},args=[Arg]},
-      I, Vdb0) ->
-    Vdb1 = use_vars(Ea#k.us, I, Vdb0),
-    {[match_fail(Arg, I, Ea#k.a)],I,Vdb1};
 body(#k_seq{arg=Ke,body=Kb}, I, Vdb0) ->
     %%ok = io:fwrite("life ~w:~p~n", [?LINE,{Ke,I,Vdb0}]),
     A = get_kanno(Ke),
@@ -123,53 +112,14 @@ guard(#k_try{anno=A,arg=Ts,vars=[#k_var{name=X}],body=#k_var{name=X},
     %% Lock variables that are alive before try and used afterwards.
     %% Don't lock variables that are only used inside the try expression.
     Pdb0 = vdb_sub(I, I+1, Vdb),
-    {T,MaxI,Pdb1} = guard_body(Ts, I+1, Pdb0),
+    {T,MaxI,Pdb1} = body(Ts, I+1, Pdb0),
     Pdb2 = use_vars(A#k.ns, MaxI+1, Pdb1),	%Save "return" values
-    #l{ke={protected,T,var_list(Rs)},i=I,a=A#k.a,vdb=Pdb2};
-guard(#k_seq{}=G, I, Vdb0) ->
-    {Es,_,Vdb1} = guard_body(G, I, Vdb0),
-    #l{ke={block,Es},i=I,vdb=Vdb1,a=[]};
-guard(G, I, Vdb) -> guard_expr(G, I, Vdb).
-
-%% guard_body(Kbody, I, Vdb) -> {[Expr],MaxI,Vdb}.
-
-guard_body(#k_seq{arg=Ke,body=Kb}, I, Vdb0) ->
-    A = get_kanno(Ke),
-    Vdb1 = use_vars(A#k.us, I, new_vars(A#k.ns, I, Vdb0)),
-    {Es,MaxI,Vdb2} = guard_body(Kb, I+1, Vdb1), 
-    E = guard_expr(Ke, I, Vdb2),
-    {[E|Es],MaxI,Vdb2};
-guard_body(Ke, I, Vdb0) ->
-    A = get_kanno(Ke),
-    Vdb1 = use_vars(A#k.us, I, new_vars(A#k.ns, I, Vdb0)),
-    E = guard_expr(Ke, I, Vdb1),
-    {[E],I,Vdb1}.
-
-%% guard_expr(Call, I, Vdb) -> Expr
-
-guard_expr(#k_test{anno=A,op=Op,args=As}, I, _Vdb) ->
-    #l{ke={test,test_op(Op),atomic_list(As)},i=I,a=A#k.a};
-guard_expr(#k_bif{anno=A,op=Op,args=As,ret=Rs}, I, _Vdb) ->
-    Name = bif_op(Op),
-    Ar = length(As),
-    case is_gc_bif(Name, Ar) of
-	false ->
-	    #l{ke={bif,Name,atomic_list(As),var_list(Rs)},i=I,a=A#k.a};
-	true ->
-	    #l{ke={gc_bif,Name,atomic_list(As),var_list(Rs)},i=I,a=A#k.a}
-    end;
-guard_expr(#k_put{anno=A,arg=Arg,ret=Rs}, I, _Vdb) ->
-    #l{ke={set,var_list(Rs),literal(Arg, [])},i=I,a=A#k.a};
-guard_expr(#k_guard_match{anno=A,body=Kb,ret=Rs}, I, Vdb) ->
-    %% Support for andalso/orelse in guards.
-    %% Work out imported variables which need to be locked.
-    Mdb = vdb_sub(I, I+1, Vdb),
-    M = match(Kb, A#k.us, I+1, [], Mdb),
-    #l{ke={guard_match,M,var_list(Rs)},i=I,vdb=use_vars(A#k.us, I+1, Mdb),a=A#k.a};
-guard_expr(G, I, Vdb) -> guard(G, I, Vdb).
+    #l{ke={protected,T,var_list(Rs)},i=I,a=A#k.a,vdb=Pdb2}.
 
 %% expr(Kexpr, I, Vdb) -> Expr.
 
+expr(#k_test{anno=A,op=Op,args=As}, I, _Vdb) ->
+    #l{ke={test,test_op(Op),atomic_list(As)},i=I,a=A#k.a};
 expr(#k_call{anno=A,op=Op,args=As,ret=Rs}, I, _Vdb) ->
     #l{ke={call,call_op(Op),atomic_list(As),var_list(Rs)},i=I,a=A#k.a};
 expr(#k_enter{anno=A,op=Op,args=As}, I, _Vdb) ->
@@ -187,25 +137,11 @@ expr(#k_guard_match{anno=A,body=Kb,ret=Rs}, I, Vdb) ->
     Mdb = vdb_sub(I, I+1, Vdb),
     M = match(Kb, A#k.us, I+1, [], Mdb),
     #l{ke={guard_match,M,var_list(Rs)},i=I,vdb=use_vars(A#k.us, I+1, Mdb),a=A#k.a};
-expr(#k_try{anno=A,arg=Ka,vars=Vs,body=Kb,evars=Evs,handler=Kh,ret=Rs}, I, Vdb) ->
-    %% Lock variables that are alive before the catch and used afterwards.
-    %% Don't lock variables that are only used inside the try.
-    Tdb0 = vdb_sub(I, I+1, Vdb),
-    %% This is the tricky bit. Lock variables in Arg that are used in
-    %% the body and handler. Add try tag 'variable'.
-    Ab = get_kanno(Kb),
-    Ah = get_kanno(Kh),
-    Tdb1 = use_vars(Ab#k.us, I+3, use_vars(Ah#k.us, I+3, Tdb0)),
-    Tdb2 = vdb_sub(I, I+2, Tdb1),
-    Vnames = fun (Kvar) -> Kvar#k_var.name end,	%Get the variable names
-    {Aes,_,Adb} = body(Ka, I+2, add_var({catch_tag,I+1}, I+1, locked, Tdb2)),
-    {Bes,_,Bdb} = body(Kb, I+4, new_vars(map(Vnames, Vs), I+3, Tdb2)),
-    {Hes,_,Hdb} = body(Kh, I+4, new_vars(map(Vnames, Evs), I+3, Tdb2)),
-    #l{ke={'try',#l{ke={block,Aes},i=I+1,vdb=Adb,a=[]},
-	   var_list(Vs),#l{ke={block,Bes},i=I+3,vdb=Bdb,a=[]},
-	   var_list(Evs),#l{ke={block,Hes},i=I+3,vdb=Hdb,a=[]},
-	   var_list(Rs)},
-       i=I,vdb=Tdb1,a=A#k.a};
+expr(#k_try{}=Try, I, Vdb) ->
+    case is_in_guard() of
+	false -> body_try(Try, I, Vdb);
+	true -> guard(Try, I, Vdb)
+    end;
 expr(#k_try_enter{anno=A,arg=Ka,vars=Vs,body=Kb,evars=Evs,handler=Kh}, I, Vdb) ->
     %% Lock variables that are alive before the catch and used afterwards.
     %% Don't lock variables that are only used inside the try.
@@ -253,6 +189,27 @@ expr(#k_guard_break{anno=A,args=As}, I, Vdb) ->
     #l{ke={guard_break,atomic_list(As),Locked},i=I,a=A#k.a};
 expr(#k_return{anno=A,args=As}, I, _Vdb) ->
     #l{ke={return,atomic_list(As)},i=I,a=A#k.a}.
+
+body_try(#k_try{anno=A,arg=Ka,vars=Vs,body=Kb,evars=Evs,handler=Kh,ret=Rs},
+	 I, Vdb) ->
+    %% Lock variables that are alive before the catch and used afterwards.
+    %% Don't lock variables that are only used inside the try.
+    Tdb0 = vdb_sub(I, I+1, Vdb),
+    %% This is the tricky bit. Lock variables in Arg that are used in
+    %% the body and handler. Add try tag 'variable'.
+    Ab = get_kanno(Kb),
+    Ah = get_kanno(Kh),
+    Tdb1 = use_vars(Ab#k.us, I+3, use_vars(Ah#k.us, I+3, Tdb0)),
+    Tdb2 = vdb_sub(I, I+2, Tdb1),
+    Vnames = fun (Kvar) -> Kvar#k_var.name end,	%Get the variable names
+    {Aes,_,Adb} = body(Ka, I+2, add_var({catch_tag,I+1}, I+1, locked, Tdb2)),
+    {Bes,_,Bdb} = body(Kb, I+4, new_vars(map(Vnames, Vs), I+3, Tdb2)),
+    {Hes,_,Hdb} = body(Kh, I+4, new_vars(map(Vnames, Evs), I+3, Tdb2)),
+    #l{ke={'try',#l{ke={block,Aes},i=I+1,vdb=Adb,a=[]},
+	   var_list(Vs),#l{ke={block,Bes},i=I+3,vdb=Bdb,a=[]},
+	   var_list(Evs),#l{ke={block,Hes},i=I+3,vdb=Hdb,a=[]},
+	   var_list(Rs)},
+       i=I,vdb=Tdb1,a=A#k.a}.
 
 %% call_op(Op) -> Op.
 %% bif_op(Op) -> Op.
@@ -353,25 +310,6 @@ guard_clause(#k_guard_clause{anno=A,guard=Kg,body=Kb}, Ls, I, Ctxt, Vdb0) ->
        i=I,vdb=use_vars((get_kanno(Kg))#k.us, I+2, Vdb1),
        a=A#k.a}.
 
-%% match_fail(FailValue, I, Anno) -> Expr.
-%%  Generate the correct match_fail instruction.  N.B. there is no
-%%  generic case for when the fail value has been created elsewhere.
-
-match_fail(#k_literal{anno=Anno,val={Atom,Val}}, I, A) when is_atom(Atom) ->
-    match_fail(#k_tuple{anno=Anno,es=[#k_atom{val=Atom},#k_literal{val=Val}]}, I, A);
-match_fail(#k_literal{anno=Anno,val={Atom}}, I, A) when is_atom(Atom) ->
-    match_fail(#k_tuple{anno=Anno,es=[#k_atom{val=Atom}]}, I, A);
-match_fail(#k_tuple{es=[#k_atom{val=function_clause}|As]}, I, A) ->
-    #l{ke={match_fail,{function_clause,literal_list(As, [])}},i=I,a=A};
-match_fail(#k_tuple{es=[#k_atom{val=badmatch},Val]}, I, A) ->
-    #l{ke={match_fail,{badmatch,literal(Val, [])}},i=I,a=A};
-match_fail(#k_tuple{es=[#k_atom{val=case_clause},Val]}, I, A) ->
-    #l{ke={match_fail,{case_clause,literal(Val, [])}},i=I,a=A};
-match_fail(#k_atom{val=if_clause}, I, A) ->
-    #l{ke={match_fail,if_clause},i=I,a=A};
-match_fail(#k_tuple{es=[#k_atom{val=try_clause},Val]}, I, A) ->
-    #l{ke={match_fail,{try_clause,literal(Val, [])}},i=I,a=A}.
-
 %% type(Ktype) -> Type.
 
 type(k_literal) -> literal;
@@ -385,7 +323,8 @@ type(k_tuple) -> tuple;
 type(k_binary) -> binary;
 type(k_bin_seg) -> bin_seg;
 type(k_bin_int) -> bin_int;
-type(k_bin_end) -> bin_end.
+type(k_bin_end) -> bin_end;
+type(k_map) -> map.
 
 %% variable(Klit) -> Lit.
 %% var_list([Klit]) -> [Lit].
@@ -403,7 +342,6 @@ atomic(#k_int{val=I}) -> {integer,I};
 atomic(#k_float{val=F}) -> {float,F};
 atomic(#k_atom{val=N}) -> {atom,N};
 %%atomic(#k_char{val=C}) -> {char,C};
-%%atomic(#k_string{val=S}) -> {string,S};
 atomic(#k_nil{}) -> nil.
 
 atomic_list(Ks) -> [atomic(K) || K <- Ks].
@@ -428,6 +366,10 @@ literal(#k_bin_end{}, Ctxt) ->
     {bin_end,Ctxt};
 literal(#k_tuple{es=Es}, Ctxt) ->
     {tuple,literal_list(Es, Ctxt)};
+literal(#k_map{op=Op,var=Var,es=Es}, Ctxt) ->
+    {map,Op,literal(Var, Ctxt),literal_list(Es, Ctxt)};
+literal(#k_map_pair{key=K,val=V}, Ctxt) ->
+    {map_pair,literal(K, Ctxt),literal(V, Ctxt)};
 literal(#k_literal{val=V}, _Ctxt) ->
     {literal,V}.
 
@@ -456,7 +398,11 @@ literal2(#k_bin_int{size=S,unit=U,flags=Fs,val=Int,next=N}, Ctxt) ->
 literal2(#k_bin_end{}, Ctxt) ->
     {bin_end,Ctxt};
 literal2(#k_tuple{es=Es}, Ctxt) ->
-    {tuple,literal_list2(Es, Ctxt)}.
+    {tuple,literal_list2(Es, Ctxt)};
+literal2(#k_map{op=Op,es=Es}, Ctxt) ->
+    {map,Op,literal_list2(Es, Ctxt)};
+literal2(#k_map_pair{key=K,val=V}, Ctxt) ->
+    {map_pair,literal2(K, Ctxt),literal2(V, Ctxt)}.
 
 literal_list2(Ks, Ctxt) ->
     [literal2(K, Ctxt) || K <- Ks].
@@ -565,3 +511,7 @@ vdb_sub(Min, Max, Vdb) ->
 	 true -> Vd
       end || {V,F,L}=Vd <- Vdb, F < Min, L >= Min ].
 
+%% is_in_guard() -> true|false.
+
+is_in_guard() ->
+    get(guard_refc) > 0.

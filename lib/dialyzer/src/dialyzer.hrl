@@ -2,7 +2,7 @@
 %%%
 %%% %CopyrightBegin%
 %%%
-%%% Copyright Ericsson AB 2006-2011. All Rights Reserved.
+%%% Copyright Ericsson AB 2006-2014. All Rights Reserved.
 %%%
 %%% The contents of this file are subject to the Erlang Public License,
 %%% Version 1.1, (the "License"); you may not use this file except in
@@ -57,6 +57,8 @@
 -define(WARN_UNMATCHED_RETURN, warn_umatched_return).
 -define(WARN_RACE_CONDITION, warn_race_condition).
 -define(WARN_BEHAVIOUR, warn_behaviour).
+-define(WARN_UNDEFINED_CALLBACK, warn_undefined_callbacks).
+-define(WARN_UNKNOWN, warn_unknown).
 
 %%
 %% The following type has double role:
@@ -71,7 +73,8 @@
                        | ?WARN_CONTRACT_NOT_EQUAL | ?WARN_CONTRACT_SUBTYPE
                        | ?WARN_CONTRACT_SUPERTYPE | ?WARN_CALLGRAPH
                        | ?WARN_UNMATCHED_RETURN | ?WARN_RACE_CONDITION
-                       | ?WARN_BEHAVIOUR | ?WARN_CONTRACT_RANGE.
+                       | ?WARN_BEHAVIOUR | ?WARN_CONTRACT_RANGE
+		       | ?WARN_UNDEFINED_CALLBACK | ?WARN_UNKNOWN.
 
 %%
 %% This is the representation of each warning as they will be returned
@@ -84,12 +87,6 @@
 %% This is the representation of dialyzer's internal errors
 %%
 -type dial_error()   :: any().    %% XXX: underspecified
-
-%%--------------------------------------------------------------------
-%% THIS TYPE SHOULD ONE DAY DISAPPEAR -- IT DOES NOT BELONG HERE
-%%--------------------------------------------------------------------
-
--type ordset(T)      :: [T] .      %% XXX: temporarily
 
 %%--------------------------------------------------------------------
 %% Basic types used either in the record definitions below or in other
@@ -108,6 +105,8 @@
 -type label()	      :: non_neg_integer().
 -type rep_mode()      :: 'quiet' | 'normal' | 'verbose'.
 -type start_from()    :: 'byte_code' | 'src_code'.
+-type mfa_or_funlbl() :: label() | mfa().
+-type solver()        :: 'v1' | 'v2'.
 
 %%--------------------------------------------------------------------
 %% Record declarations used by various files
@@ -124,18 +123,22 @@
 		   use_contracts  = true           :: boolean(),
 		   race_detection = false	   :: boolean(),
 		   behaviours_chk = false          :: boolean(),
-		   callgraph_file = ""             :: file:filename()}).
+		   timing         = false          :: boolean() | 'debug',
+		   timing_server             :: dialyzer_timing:timing_server(),
+		   callgraph_file = ""             :: file:filename(),
+                   solvers                         :: [solver()]}).
 
 -record(options, {files           = []		   :: [file:filename()],
 		  files_rec       = []		   :: [file:filename()],
 		  analysis_type   = succ_typings   :: anal_type1(),
+		  timing          = false          :: boolean() | 'debug',
 		  defines         = []		   :: [dial_define()],
 		  from            = byte_code	   :: start_from(),
 		  get_warnings    = maybe          :: boolean() | 'maybe',
 		  init_plts       = []	           :: [file:filename()],
 		  include_dirs    = []		   :: [file:filename()],
 		  output_plt      = none           :: 'none' | file:filename(),
-		  legal_warnings  = ordsets:new()  :: ordset(dial_warn_tag()),
+		  legal_warnings  = ordsets:new()  :: ordsets:ordset(dial_warn_tag()),
 		  report_mode     = normal	   :: rep_mode(),
 		  erlang_mode     = false	   :: boolean(),
 		  use_contracts   = true           :: boolean(),
@@ -143,10 +146,20 @@
 		  output_format   = formatted      :: format(),
 		  filename_opt	  = basename       :: fopt(),
 		  callgraph_file  = ""             :: file:filename(),
-		  check_plt       = true           :: boolean()}).
+		  check_plt       = true           :: boolean(),
+                  solvers         = []             :: [solver()]}).
 
 -record(contract, {contracts	  = []		   :: [contract_pair()],
 		   args		  = []		   :: [erl_types:erl_type()],
 		   forms	  = []		   :: [{_, _}]}).
 
 %%--------------------------------------------------------------------
+
+-define(timing(Server, Msg, Var, Expr),
+	begin
+	    dialyzer_timing:start_stamp(Server, Msg),
+	    Var = Expr,
+	    dialyzer_timing:end_stamp(Server),
+	    Var
+	end).
+-define(timing(Server, Msg, Expr), ?timing(Server, Msg, _T, Expr)).

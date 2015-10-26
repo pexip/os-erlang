@@ -1,7 +1,7 @@
 /*
  * %CopyrightBegin%
  *
- * Copyright Ericsson AB 2008-2010. All Rights Reserved.
+ * Copyright Ericsson AB 2008-2014. All Rights Reserved.
  *
  * The contents of this file are subject to the Erlang Public License,
  * Version 1.1, (the "License"); you may not use this file except in
@@ -43,7 +43,8 @@ typedef struct wxe_bin_ref {
 typedef struct wxe_data_def {   
    void * driver_data;
    WXEBinRef * bin;		/* Argument binaries */
-   ErlDrvPort port;
+   ErlDrvPort port_handle;
+   ErlDrvTermData port;
    int is_cbport;
    ErlDrvPDL pdl;
 } wxe_data;
@@ -66,9 +67,11 @@ void push_command(int op,char * buf,int len, wxe_data *);
 void meta_command(int what, wxe_data *sd);
 
 void * wxe_ps_init();
+void * wxe_ps_init2();
 
-extern ErlDrvPort WXE_DRV_PORT; 
-extern int wxe_debug; 
+extern ErlDrvPort WXE_DRV_PORT_HANDLE;
+extern ErlDrvTermData WXE_DRV_PORT;
+extern int wxe_debug;
 
 extern char * erl_wx_privdir;
 
@@ -86,6 +89,7 @@ extern char * erl_wx_privdir;
 #define WXE_BIN_INCR        11
 #define WXE_BIN_DECR        12
 #define WXE_INIT_OPENGL     13
+#define WXE_CB_DIED         14
 
 #define OPENGL_START        5000
 

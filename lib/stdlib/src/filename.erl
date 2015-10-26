@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 1997-2011. All Rights Reserved.
+%% Copyright Ericsson AB 1997-2013. All Rights Reserved.
 %%
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -61,15 +61,15 @@
 %% (for WIN32): absname("/") -> "D:/"
 
 
--spec absname(Filename) -> file:filename() when
-      Filename :: file:name().
+-spec absname(Filename) -> file:filename_all() when
+      Filename :: file:name_all().
 absname(Name) ->
     {ok, Cwd} = file:get_cwd(),
     absname(Name, Cwd).
 
--spec absname(Filename, Dir) -> file:filename() when
-      Filename :: file:name(),
-      Dir :: file:filename().
+-spec absname(Filename, Dir) -> file:filename_all() when
+      Filename :: file:name_all(),
+      Dir :: file:name_all().
 absname(Name, AbsBase) when is_binary(Name), is_list(AbsBase) ->
     absname(Name,filename_string_to_binary(AbsBase));
 absname(Name, AbsBase) when is_list(Name), is_binary(AbsBase) ->
@@ -122,9 +122,9 @@ absname_vr([[X, $:]|Name], _, _AbsBase) ->
 %% This is just a join/2, but assumes that 
 %% AbsBase must be absolute and Name must be relative.
 
--spec absname_join(Dir, Filename) -> file:filename() when
-      Dir :: file:filename(),
-      Filename :: file:name().
+-spec absname_join(Dir, Filename) -> file:filename_all() when
+      Dir :: file:name_all(),
+      Filename :: file:name_all().
 absname_join(AbsBase, Name) ->
     join(AbsBase, flatten(Name)).
 
@@ -136,8 +136,8 @@ absname_join(AbsBase, Name) ->
 %%           basename("/usr/foo/") -> "foo"  (trailing slashes ignored)
 %%           basename("/") -> []
 
--spec basename(Filename) -> file:filename() when
-      Filename :: file:name().
+-spec basename(Filename) -> file:filename_all() when
+      Filename :: file:name_all().
 basename(Name) when is_binary(Name) ->
     case os:type() of
 	{win32,_} ->
@@ -147,9 +147,10 @@ basename(Name) when is_binary(Name) ->
     end;
     
 basename(Name0) ->
-    Name = flatten(Name0),
+    Name1 = flatten(Name0),
     {DirSep2, DrvSep} = separators(),
-    basename1(skip_prefix(Name, DrvSep), [], DirSep2).
+    Name = skip_prefix(Name1, DrvSep),
+    basename1(Name, Name, DirSep2).
 
 win_basenameb(<<Letter,$:,Rest/binary>>) when ?IS_DRIVELETTER(Letter) ->
     basenameb(Rest,[<<"/">>,<<"\\">>]);
@@ -167,16 +168,18 @@ basenameb(Bin,Sep) ->
     
 
 
-basename1([$/|[]], Tail, DirSep2) ->
-    basename1([], Tail, DirSep2);
+basename1([$/], Tail0, _DirSep2) ->
+    %% End of filename -- must get rid of trailing directory separator.
+    [_|Tail] = lists:reverse(Tail0),
+    lists:reverse(Tail);
 basename1([$/|Rest], _Tail, DirSep2) ->
-    basename1(Rest, [], DirSep2);
+    basename1(Rest, Rest, DirSep2);
 basename1([DirSep2|Rest], Tail, DirSep2) when is_integer(DirSep2) ->
     basename1([$/|Rest], Tail, DirSep2);
 basename1([Char|Rest], Tail, DirSep2) when is_integer(Char) ->
-    basename1(Rest, [Char|Tail], DirSep2);
+    basename1(Rest, Tail, DirSep2);
 basename1([], Tail, _DirSep2) ->
-    lists:reverse(Tail).
+    Tail.
 
 skip_prefix(Name, false) ->
     Name;
@@ -198,9 +201,9 @@ skip_prefix(Name, _) ->
 %%	    rootname(basename("xxx.jam")) -> "xxx"
 %%	    rootname(basename("xxx.erl")) -> "xxx"
 
--spec basename(Filename, Ext) -> file:filename() when
-      Filename :: file:name(),
-      Ext :: file:name().
+-spec basename(Filename, Ext) -> file:filename_all() when
+      Filename :: file:name_all(),
+      Ext :: file:name_all().
 basename(Name, Ext) when is_binary(Name), is_list(Ext) ->
     basename(Name,filename_string_to_binary(Ext));
 basename(Name, Ext) when is_list(Name), is_binary(Ext) ->
@@ -248,8 +251,8 @@ basename([], _Ext, Tail, _DrvSep2) ->
 %% Example: dirname("/usr/src/kalle.erl") -> "/usr/src",
 %%	    dirname("kalle.erl") -> "."
 
--spec dirname(Filename) -> file:filename() when
-      Filename :: file:name().
+-spec dirname(Filename) -> file:filename_all() when
+      Filename :: file:name_all().
 dirname(Name) when is_binary(Name) ->
     {Dsep,Drivesep} = separators(),
     SList = case Dsep of
@@ -341,8 +344,8 @@ dirjoin1([H|T],Acc,Sep) ->
 %%
 %% On Windows:  fn:dirname("\\usr\\src/kalle.erl") -> "/usr/src"
 
--spec extension(Filename) -> file:filename() when
-      Filename :: file:name().
+-spec extension(Filename) -> file:filename_all() when
+      Filename :: file:name_all().
 extension(Name) when is_binary(Name) ->
     {Dsep,_} = separators(),
     SList = case Dsep of
@@ -369,8 +372,8 @@ extension(Name0) ->
     Name = flatten(Name0),
     extension(Name, [], major_os_type()).
 
-extension([$.|Rest], _Result, OsType) ->
-    extension(Rest, [$.], OsType);
+extension([$.|Rest]=Result, _Result, OsType) ->
+    extension(Rest, Result, OsType);
 extension([Char|Rest], [], OsType) when is_integer(Char) ->
     extension(Rest, [], OsType);
 extension([$/|Rest], _Result, OsType) ->
@@ -378,14 +381,14 @@ extension([$/|Rest], _Result, OsType) ->
 extension([$\\|Rest], _Result, win32) ->
     extension(Rest, [], win32);
 extension([Char|Rest], Result, OsType) when is_integer(Char) ->
-    extension(Rest, [Char|Result], OsType);
+    extension(Rest, Result, OsType);
 extension([], Result, _OsType) ->
-    lists:reverse(Result).
+    Result.
 
 %% Joins a list of filenames with directory separators.
 
--spec join(Components) -> file:filename() when
-      Components :: [file:filename()].
+-spec join(Components) -> file:filename_all() when
+      Components :: [file:name_all()].
 join([Name1, Name2|Rest]) ->
     join([join(Name1, Name2)|Rest]);
 join([Name]) when is_list(Name) ->
@@ -397,9 +400,9 @@ join([Name]) when is_atom(Name) ->
 
 %% Joins two filenames with directory separators.
 
--spec join(Name1, Name2) -> file:filename() when
-      Name1 :: file:filename(),
-      Name2 :: file:filename().
+-spec join(Name1, Name2) -> file:filename_all() when
+      Name1 :: file:name_all(),
+      Name2 :: file:name_all().
 join(Name1, Name2) when is_list(Name1), is_list(Name2) ->
     OsType = major_os_type(),
     case pathtype(Name2) of
@@ -485,7 +488,7 @@ maybe_remove_dirsep(Name, _) ->
 %% a given base directory, which is is assumed to be normalised
 %% by a previous call to join/{1,2}.
 
--spec append(file:filename(), file:name()) -> file:filename().
+-spec append(file:filename_all(), file:name_all()) -> file:filename_all().
 append(Dir, Name) when is_binary(Dir), is_binary(Name) ->
     <<Dir/binary,$/:8,Name/binary>>;
 append(Dir, Name) when is_binary(Dir) ->
@@ -508,13 +511,15 @@ append(Dir, Name) ->
 %%		Example: a:bar.erl, /temp/foo.erl
 
 -spec pathtype(Path) -> 'absolute' | 'relative' | 'volumerelative' when
-      Path :: file:name().
+      Path :: file:name_all().
 pathtype(Atom) when is_atom(Atom) ->
     pathtype(atom_to_list(Atom));
 pathtype(Name) when is_list(Name) or is_binary(Name) ->
     case os:type() of
-	{unix, _}  -> unix_pathtype(Name);
-	{win32, _} -> win32_pathtype(Name)
+	{win32, _} ->
+	    win32_pathtype(Name);
+	{_, _}  ->
+	    unix_pathtype(Name)
     end.
 
 unix_pathtype(<<$/,_/binary>>) ->
@@ -561,8 +566,8 @@ win32_pathtype(_) 		  -> relative.
 %% Examples: rootname("/jam.src/kalle") -> "/jam.src/kalle"
 %%           rootname("/jam.src/foo.erl") -> "/jam.src/foo"
 
--spec rootname(Filename) -> file:filename() when
-      Filename :: file:name().
+-spec rootname(Filename) -> file:filename_all() when
+      Filename :: file:name_all().
 rootname(Name) when is_binary(Name) ->
     list_to_binary(rootname(binary_to_list(Name))); % No need to handle unicode, . is < 128
 rootname(Name0) ->
@@ -591,9 +596,9 @@ rootname([], Root, _Ext, _OsType) ->
 %% Examples: rootname("/jam.src/kalle.jam", ".erl") -> "/jam.src/kalle.jam"
 %%           rootname("/jam.src/foo.erl", ".erl") -> "/jam.src/foo"
 
--spec rootname(Filename, Ext) -> file:filename() when
-      Filename :: file:name(),
-      Ext :: file:name().
+-spec rootname(Filename, Ext) -> file:filename_all() when
+      Filename :: file:name_all(),
+      Ext :: file:name_all().
 rootname(Name, Ext) when is_binary(Name), is_binary(Ext) ->
     list_to_binary(rootname(binary_to_list(Name),binary_to_list(Ext)));
 rootname(Name, Ext) when is_binary(Name) ->
@@ -620,8 +625,8 @@ rootname2([Char|Rest], Ext, Result) when is_integer(Char) ->
 %% split("a:\\msdev\\include") -> ["a:/", "msdev", "include"]
 
 -spec split(Filename) -> Components when
-      Filename :: file:name(),
-      Components :: [file:filename()].
+      Filename :: file:name_all(),
+      Components :: [file:name_all()].
 split(Name) when is_binary(Name) ->
     case os:type() of
 	{win32, _} -> win32_splitb(Name);
@@ -714,8 +719,8 @@ split([], Comp, Components, OsType) ->
 %% will be converted to backslashes.  On all platforms, the
 %% name will be normalized as done by join/1.
 
--spec nativename(Path) -> file:filename() when
-      Path :: file:filename().
+-spec nativename(Path) -> file:filename_all() when
+      Path :: file:name_all().
 nativename(Name0) ->
     Name = join([Name0]),			%Normalize.
     case os:type() of
@@ -723,6 +728,8 @@ nativename(Name0) ->
 	_          -> Name
     end.
 
+win32_nativename(Name) when is_binary(Name) ->
+    binary:replace(Name, <<"/">>, <<"\\">>, [global]);
 win32_nativename([$/|Rest]) ->
     [$\\|win32_nativename(Rest)];
 win32_nativename([C|Rest]) ->
@@ -833,16 +840,18 @@ try_file(undefined, ObjFilename, Mod, Rules) ->
 	Error -> Error
     end;
 try_file(Src, _ObjFilename, Mod, _Rules) ->
-    List = Mod:module_info(compile),
-    {options, Options} = lists:keyfind(options, 1, List),
+    List = case Mod:module_info(compile) of
+	       none -> [];
+	       List0 -> List0
+	   end,
+    Options = proplists:get_value(options, List, []),
     {ok, Cwd} = file:get_cwd(),
     AbsPath = make_abs_path(Cwd, Src),
     {AbsPath, filter_options(dirname(AbsPath), Options, [])}.
 
 %% Filters the options.
 %%
-%% 1) Remove options that have no effect on the generated code,
-%%    such as report and verbose.
+%% 1) Only keep options that have any effect on code generation.
 %%
 %% 2) The paths found in {i, Path} and {outdir, Path} are converted
 %%    to absolute paths.  When doing this, it is assumed that relatives
@@ -854,13 +863,9 @@ filter_options(Base, [{outdir, Path}|Rest], Result) ->
     filter_options(Base, Rest, [{outdir, make_abs_path(Base, Path)}|Result]);
 filter_options(Base, [{i, Path}|Rest], Result) ->
     filter_options(Base, Rest, [{i, make_abs_path(Base, Path)}|Result]);
-filter_options(Base, [Option|Rest], Result) when Option =:= trace ->
-    filter_options(Base, Rest, [Option|Result]);
 filter_options(Base, [Option|Rest], Result) when Option =:= export_all ->
     filter_options(Base, Rest, [Option|Result]);
 filter_options(Base, [Option|Rest], Result) when Option =:= binary ->
-    filter_options(Base, Rest, [Option|Result]);
-filter_options(Base, [Option|Rest], Result) when Option =:= fast ->
     filter_options(Base, Rest, [Option|Result]);
 filter_options(Base, [Tuple|Rest], Result) when element(1, Tuple) =:= d ->
     filter_options(Base, Rest, [Tuple|Result]);
@@ -875,12 +880,7 @@ filter_options(_Base, [], Result) ->
 %% Gets the source file given path of object code and module name.
 
 get_source_file(Obj, Mod, Rules) ->
-    case catch Mod:module_info(source_file) of
-	{'EXIT', _Reason} ->
-	    source_by_rules(dirname(Obj), packages:last(Mod), Rules);
-	File ->
-	    {ok, File}
-    end.
+    source_by_rules(dirname(Obj), atom_to_list(Mod), Rules).
 
 source_by_rules(Dir, Base, [{From, To}|Rest]) ->
     case try_rule(Dir, Base, From, To) of
@@ -917,16 +917,14 @@ make_abs_path(BasePath, Path) ->
     join(BasePath, Path).
 
 major_os_type() ->
-    case os:type() of
-	{OsT, _} -> OsT;
-	OsT -> OsT
-    end.
+    {OsT, _} = os:type(),
+    OsT.
 
 %% flatten(List)
 %%  Flatten a list, also accepting atoms.
 
--spec flatten(Filename) -> file:filename() when
-      Filename :: file:name().
+-spec flatten(Filename) -> file:filename_all() when
+      Filename :: file:name_all().
 flatten(Bin) when is_binary(Bin) ->
     Bin;
 flatten(List) ->

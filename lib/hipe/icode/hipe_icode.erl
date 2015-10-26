@@ -2,7 +2,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2001-2010. All Rights Reserved.
+%% Copyright Ericsson AB 2001-2013. All Rights Reserved.
 %%
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -261,7 +261,6 @@
 %%    {tuple, N}
 %%    atom
 %%    {atom, Atom}
-%%    constant
 %%    number
 %%    integer
 %%    {integer, N}
@@ -380,7 +379,6 @@
 %%    | {tuple, integer()}
 %%    | atom
 %%    | {atom, atom()}
-%%    | constant
 %%    | number
 %%    | integer
 %%    | {integer, integer()}
@@ -505,7 +503,6 @@
 	 enter_args_update/2,
 	 enter_type/1,
 	 is_enter/1,
-	 
 
 	 mk_return/1,            %% mk_return(Vars)
 	 %% mk_fail/1,	         %% mk_fail(Args) class = exit
@@ -608,6 +605,12 @@
 
 -export([highest_var/1, highest_label/1]).
 
+%%
+%% Exported types
+%%
+
+-export_type([icode/0]).
+
 %%---------------------------------------------------------------------
 %% 
 %% Icode
@@ -616,7 +619,7 @@
 
 -spec mk_icode(mfa(), [icode_var()], boolean(), boolean(), [icode_instr()],
 	       {non_neg_integer(),non_neg_integer()}, 
-	       {icode_lbl(),icode_lbl()}) -> #icode{}.
+	       {icode_lbl(),icode_lbl()}) -> icode().
 mk_icode(Fun, Params, IsClosure, IsLeaf, Code, VarRange, LabelRange) ->
   #icode{'fun'=Fun, params=Params, code=Code,
 	 is_closure=IsClosure,
@@ -1436,8 +1439,8 @@ subst1([_|Pairs], I) -> subst1(Pairs, I).
 %%
 %% @doc Returns the successors of an Icode instruction.
 %%      In CFG form only branch instructions have successors,
-%%	but in linear form other instructions like e.g. moves and
-%%	others might be the last instruction of some basic block.
+%%	but in linear form other instructions like e.g. moves
+%%	might be the last instruction of some basic block.
 %%
 
 -spec successors(icode_instr()) -> [icode_lbl()].
@@ -1466,6 +1469,7 @@ successors(I) ->
       case fail_label(I) of [] -> []; L when is_integer(L) -> [L] end;
     #icode_enter{} -> [];
     #icode_return{} -> [];
+    #icode_comment{} -> [];
     %% the following are included here for handling linear code
     #icode_move{} -> [];
     #icode_begin_handler{} -> []

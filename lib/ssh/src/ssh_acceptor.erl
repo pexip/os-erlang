@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2008-2011. All Rights Reserved.
+%% Copyright Ericsson AB 2008-2013. All Rights Reserved.
 %%
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -25,7 +25,6 @@
 -export([start_link/5]).
 
 %% spawn export  
-%% TODO: system messages
 -export([acceptor_init/6, acceptor_loop/6]).
 
 -define(SLEEP_TIME, 200).
@@ -83,14 +82,33 @@ acceptor_loop(Callback, Port, Address, Opts, ListenSocket, AcceptTimeout) ->
 
 handle_connection(Callback, Address, Port, Options, Socket) ->
     SystemSup = ssh_system_sup:system_supervisor(Address, Port),
-    {ok, SubSysSup} = ssh_system_sup:start_subsystem(SystemSup, Options),
-    ConnectionSup = ssh_system_sup:connection_supervisor(SystemSup),
-    {ok, Pid} = 
-	ssh_connection_controler:start_manager_child(ConnectionSup,
-					       [server, Socket, Options, SubSysSup]),
-    Callback:controlling_process(Socket, Pid),
-    SshOpts = proplists:get_value(ssh_opts, Options),
-    Pid ! {start_connection, server, [Address, Port, Socket, SshOpts]}.
+    SSHopts = proplists:get_value(ssh_opts, Options, []),
+    MaxSessions = proplists:get_value(max_sessions,SSHopts,infinity),
+    case number_of_connections(SystemSup) < MaxSessions of
+	true ->
+	    {ok, SubSysSup} = ssh_system_sup:start_subsystem(SystemSup, Options),
+	    ConnectionSup = ssh_subsystem_sup:connection_supervisor(SubSysSup),
+	    Timeout = proplists:get_value(negotiation_timeout, SSHopts, 2*60*1000),
+	    ssh_connection_handler:start_connection(server, Socket,
+						    [{supervisors, [{system_sup, SystemSup},
+								    {subsystem_sup, SubSysSup},
+								    {connection_sup, ConnectionSup}]}
+						     | Options], Timeout);
+	false ->
+	    Callback:close(Socket),
+	    IPstr = if is_tuple(Address) -> inet:ntoa(Address);
+		     true -> Address
+		  end,
+	    Str = try io_lib:format('~s:~p',[IPstr,Port])
+		  catch _:_ -> "port "++integer_to_list(Port)
+		  end,
+	    error_logger:info_report("Ssh login attempt to "++Str++" denied due to option "
+				     "max_sessions limits to "++ io_lib:write(MaxSessions) ++
+				     " sessions."
+				     ),
+	    {error,max_sessions}
+    end.
+
 
 handle_error(timeout) ->
     ok;
@@ -117,3 +135,10 @@ handle_error(Reason) ->
     String = lists:flatten(io_lib:format("Accept error: ~p", [Reason])),
     error_logger:error_report(String),
     exit({accept_failed, String}).    
+
+
+number_of_connections(SystemSup) ->
+    length([X || 
+	       {R,X,supervisor,[ssh_subsystem_sup]} <- supervisor:which_children(SystemSup),
+	       is_reference(R)
+	  ]).

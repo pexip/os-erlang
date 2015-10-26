@@ -1,7 +1,7 @@
 /*
  * %CopyrightBegin%
  *
- * Copyright Ericsson AB 1996-2011. All Rights Reserved.
+ * Copyright Ericsson AB 1996-2014. All Rights Reserved.
  *
  * The contents of this file are subject to the Erlang Public License,
  * Version 1.1, (the "License"); you may not use this file except in
@@ -31,6 +31,7 @@
 #include "bif.h"
 #include "erl_binary.h"
 #include "erl_bits.h"
+#include "erl_map.h"
 #include "packet_parser.h"
 #include "erl_gc.h"
 #define ERTS_WANT_DB_INTERNAL__
@@ -42,6 +43,11 @@
 #include "erl_threads.h"
 #include "erl_smp.h"
 #include "erl_time.h"
+#include "erl_thr_progress.h"
+#include "erl_thr_queue.h"
+#include "erl_sched_spec_pre_alloc.h"
+#include "beam_bp.h"
+#include "erl_ptab.h"
 
 #undef M_TRIM_THRESHOLD
 #undef M_TOP_PAD
@@ -75,6 +81,7 @@ typedef struct {
 
 #ifdef ERTS_SMP
 
+#if 0 /* Unused */
 static void 
 dispatch_profile_msg_q(profile_sched_msg_q *psmq)
 {
@@ -86,6 +93,7 @@ dispatch_profile_msg_q(profile_sched_msg_q *psmq)
 	profile_scheduler_q(make_small(msg->scheduler_id), msg->state, am_undefined, msg->Ms, msg->s, msg->us);
     }
 }
+#endif
 
 #endif
 
@@ -178,39 +186,41 @@ erts_set_hole_marker(Eterm* ptr, Uint sz)
  * Helper function for the ESTACK macros defined in global.h.
  */
 void
-erl_grow_stack(Eterm** start, Eterm** sp, Eterm** end)
+erl_grow_estack(ErtsEStack* s, Eterm* default_estack)
 {
-    Uint old_size = (*end - *start);
+    Uint old_size = (s->end - s->start);
     Uint new_size = old_size * 2;
-    Uint sp_offs = *sp - *start;
-    if (new_size > 2 * DEF_ESTACK_SIZE) {
-	*start = erts_realloc(ERTS_ALC_T_ESTACK, (void *) *start, new_size*sizeof(Eterm));
+    Uint sp_offs = s->sp - s->start;
+    if (s->start != default_estack) {
+	s->start = erts_realloc(s->alloc_type, s->start,
+				new_size*sizeof(Eterm));
     } else {
-	Eterm* new_ptr = erts_alloc(ERTS_ALC_T_ESTACK, new_size*sizeof(Eterm));
-	sys_memcpy(new_ptr, *start, old_size*sizeof(Eterm));
-	*start = new_ptr;
+	Eterm* new_ptr = erts_alloc(s->alloc_type, new_size*sizeof(Eterm));
+	sys_memcpy(new_ptr, s->start, old_size*sizeof(Eterm));
+	s->start = new_ptr;
     }
-    *end = *start + new_size;
-    *sp = *start + sp_offs;
+    s->end = s->start + new_size;
+    s->sp = s->start + sp_offs;
 }
 /*
- * Helper function for the ESTACK macros defined in global.h.
+ * Helper function for the WSTACK macros defined in global.h.
  */
 void
-erl_grow_wstack(UWord** start, UWord** sp, UWord** end)
+erl_grow_wstack(ErtsWStack* s, UWord* default_wstack)
 {
-    Uint old_size = (*end - *start);
+    Uint old_size = (s->wend - s->wstart);
     Uint new_size = old_size * 2;
-    Uint sp_offs = *sp - *start;
-    if (new_size > 2 * DEF_ESTACK_SIZE) {
-	*start = erts_realloc(ERTS_ALC_T_ESTACK, (void *) *start, new_size*sizeof(UWord));
+    Uint sp_offs = s->wsp - s->wstart;
+    if (s->wstart != default_wstack) {
+	s->wstart = erts_realloc(s->alloc_type, s->wstart,
+				 new_size*sizeof(UWord));
     } else {
-	UWord* new_ptr = erts_alloc(ERTS_ALC_T_ESTACK, new_size*sizeof(UWord));
-	sys_memcpy(new_ptr, *start, old_size*sizeof(UWord));
-	*start = new_ptr;
+	UWord* new_ptr = erts_alloc(s->alloc_type, new_size*sizeof(UWord));
+	sys_memcpy(new_ptr, s->wstart, old_size*sizeof(UWord));
+	s->wstart = new_ptr;
     }
-    *end = *start + new_size;
-    *sp = *start + sp_offs;
+    s->wend = s->wstart + new_size;
+    s->wsp = s->wstart + sp_offs;
 }
 
 /* CTYPE macros */
@@ -248,7 +258,7 @@ erl_grow_wstack(UWord** start, UWord** sp, UWord** end)
  * Returns -1 if not a proper list (i.e. not terminated with NIL)
  */
 int
-list_length(Eterm list)
+erts_list_length(Eterm list)
 {
     int i = 0;
 
@@ -262,16 +272,42 @@ list_length(Eterm list)
     return i;
 }
 
-Uint erts_fit_in_bits(Uint n)
-{
-   Uint i;
+static const struct {
+    Sint64 mask;
+    int bits;
+} fib_data[] = {{ERTS_I64_LITERAL(0x2), 1},
+		{ERTS_I64_LITERAL(0xc), 2},
+		{ERTS_I64_LITERAL(0xf0), 4},
+		{ERTS_I64_LITERAL(0xff00), 8},
+		{ERTS_I64_LITERAL(0xffff0000), 16},
+		{ERTS_I64_LITERAL(0xffffffff00000000), 32}};
 
-   i = 0;
-   while (n > 0) {
-      i++;
-      n >>= 1;
-   }
-   return i;
+static ERTS_INLINE int
+fit_in_bits(Sint64 value, int start)
+{
+    int bits = 0;
+    int i;
+
+    for (i = start; i >= 0; i--) {
+	if (value & fib_data[i].mask) {
+	    value >>= fib_data[i].bits;
+	    bits |= fib_data[i].bits;
+	}
+    }
+
+    bits++;
+
+    return bits;
+}
+
+int erts_fit_in_bits_int64(Sint64 value)
+{
+    return fit_in_bits(value, 5);
+}
+
+int erts_fit_in_bits_int32(Sint32 value)
+{
+    return fit_in_bits((Sint64) (Uint32) value, 4);
 }
 
 int
@@ -338,7 +374,7 @@ Eterm
 erts_bld_atom(Uint **hpp, Uint *szp, char *str)
 {
     if (hpp)
-	return am_atom_put(str, sys_strlen(str));
+	return erts_atom_put((byte *) str, sys_strlen(str), ERTS_ATOM_ENC_LATIN1, 1);
     else
 	return THE_NON_VALUE;
 }
@@ -543,8 +579,8 @@ erts_bld_2tup_list(Uint **hpp, Uint *szp,
 }
 
 Eterm
-erts_bld_atom_uint_2tup_list(Uint **hpp, Uint *szp,
-			     Sint length, Eterm atoms[], Uint uints[])
+erts_bld_atom_uword_2tup_list(Uint **hpp, Uint *szp,
+                              Sint length, Eterm atoms[], UWord uints[])
 {
     Sint i;
     Eterm res = THE_NON_VALUE;
@@ -699,6 +735,8 @@ erts_bld_atom_2uint_3tup_list(Uint **hpp, Uint *szp, Sint length,
 #define FUNNY_NUMBER10 268440479
 #define FUNNY_NUMBER11 268440577
 #define FUNNY_NUMBER12 268440581
+#define FUNNY_NUMBER13 268440593
+#define FUNNY_NUMBER14 268440611
 
 static Uint32
 hash_binary_bytes(Eterm bin, Uint sz, Uint32 hash)
@@ -750,10 +788,10 @@ Uint32 make_hash(Eterm term_arg)
     unsigned op;
 
     /* Must not collide with the real tag_val_def's: */
-#define MAKE_HASH_TUPLE_OP 0x10
-#define MAKE_HASH_FUN_OP 0x11
-#define MAKE_HASH_CDR_PRE_OP 0x12
-#define	MAKE_HASH_CDR_POST_OP 0x13
+#define MAKE_HASH_TUPLE_OP 0x11
+#define MAKE_HASH_TERM_ARRAY_OP 0x12
+#define MAKE_HASH_CDR_PRE_OP 0x13
+#define	MAKE_HASH_CDR_POST_OP 0x14
 
     /* 
     ** Convenience macro for calculating a bytewise hash on an unsigned 32 bit 
@@ -842,7 +880,7 @@ tail_recur:
 	    hash = hash*FUNNY_NUMBER2 + funp->fe->old_uniq;
 	    if (num_free > 0) {
 		if (num_free > 1) {
-		    WSTACK_PUSH3(stack, (UWord) &funp->env[1], (num_free-1), MAKE_HASH_FUN_OP);
+		    WSTACK_PUSH3(stack, (UWord) &funp->env[1], (num_free-1), MAKE_HASH_TERM_ARRAY_OP);
 		}
 		term = funp->env[0];
 		goto tail_recur;
@@ -932,6 +970,24 @@ tail_recur:
 	    hash *= is_neg ? FUNNY_NUMBER4 : FUNNY_NUMBER3;
 	    break;
 	}	
+    case MAP_DEF:
+	{
+	    map_t *mp = (map_t *)map_val(term);
+	    int size  = map_get_size(mp);
+	    Eterm *ks = map_get_keys(mp);
+	    Eterm *vs = map_get_values(mp);
+
+	    /* Use a prime with size to remedy some of
+	     * the {} and <<>> hash problems */
+	    hash = hash*FUNNY_NUMBER13 + FUNNY_NUMBER14 + size;
+	    if (size == 0)
+		break;
+
+	    /* push values first */
+	    WSTACK_PUSH3(stack, (UWord)vs, (UWord) size, MAKE_HASH_TERM_ARRAY_OP);
+	    WSTACK_PUSH3(stack, (UWord)ks, (UWord) size, MAKE_HASH_TERM_ARRAY_OP);
+	    break;
+	}
     case TUPLE_DEF: 
 	{
 	    Eterm* ptr = tuple_val(term);
@@ -941,7 +997,7 @@ tail_recur:
 	    op = MAKE_HASH_TUPLE_OP;	    
 	}/*fall through*/
     case MAKE_HASH_TUPLE_OP:
-    case MAKE_HASH_FUN_OP:
+    case MAKE_HASH_TERM_ARRAY_OP:
 	{
 	    Uint i = (Uint) WSTACK_POP(stack);
 	    Eterm* ptr = (Eterm*) WSTACK_POP(stack);
@@ -1035,9 +1091,11 @@ Uint32
 make_hash2(Eterm term)
 {
     Uint32 hash;
+    Uint32 hash_xor_keys   = 0;
+    Uint32 hash_xor_values = 0;
     DeclareTmpHeapNoproc(tmp_big,2);
 
-/* (HCONST * {2, ..., 14}) mod 2^32 */
+/* (HCONST * {2, ..., 16}) mod 2^32 */
 #define HCONST_2 0x3c6ef372UL
 #define HCONST_3 0xdaa66d2bUL
 #define HCONST_4 0x78dde6e4UL
@@ -1052,6 +1110,11 @@ make_hash2(Eterm term)
 #define HCONST_13 0x08d12e65UL
 #define HCONST_14 0xa708a81eUL
 #define HCONST_15 0x454021d7UL
+#define HCONST_16 0xe3779b90UL
+
+#define HASH_MAP_TAIL (_make_header(1,_TAG_HEADER_REF))
+#define HASH_MAP_KEY  (_make_header(2,_TAG_HEADER_REF))
+#define HASH_MAP_VAL  (_make_header(3,_TAG_HEADER_REF))
 
 #define UINT32_HASH_2(Expr1, Expr2, AConst)       \
          do {                                     \
@@ -1147,11 +1210,45 @@ make_hash2(Eterm term)
 		UINT32_HASH(arity, HCONST_9);
 		if (arity == 0) /* Empty tuple */ 
 		    goto hash2_common;
-		for (i = arity; i >= 2; i--) {
+		for (i = arity; i >= 1; i--) {
 		    tmp = elem[i];
 		    ESTACK_PUSH(s, tmp);
 		}
-		term = elem[1];
+		goto hash2_common;
+	    }
+	    break;
+	    case MAP_SUBTAG:
+	    {
+		map_t *mp = (map_t *)map_val(term);
+		int i;
+		int size  = map_get_size(mp);
+		Eterm *ks = map_get_keys(mp);
+		Eterm *vs = map_get_values(mp);
+		UINT32_HASH(size, HCONST_16);
+		if (size == 0) {
+		    goto hash2_common;
+		}
+		ESTACK_PUSH(s, hash_xor_values);
+		ESTACK_PUSH(s, hash_xor_keys);
+		ESTACK_PUSH(s, hash);
+		ESTACK_PUSH(s, HASH_MAP_TAIL);
+		hash = 0;
+		hash_xor_keys = 0;
+		hash_xor_values = 0;
+		for (i = size - 1; i >= 0; i--) {
+		    tmp = vs[i];
+		    ESTACK_PUSH(s, HASH_MAP_VAL);
+		    ESTACK_PUSH(s, tmp);
+		}
+		/* We do not want to expose the tuple representation.
+		 * Do not push the keys as a tuple.
+		 */
+		for (i = size - 1; i >= 0; i--) {
+		    tmp = ks[i];
+		    ESTACK_PUSH(s, HASH_MAP_KEY);
+		    ESTACK_PUSH(s, tmp);
+		}
+		goto hash2_common;
 	    }
 	    break;
 	    case EXPORT_SUBTAG:
@@ -1286,7 +1383,7 @@ make_hash2(Eterm term)
 	    {
 		FloatDef ff;
 		GET_DOUBLE(term, ff);
-#if defined(WORDS_BIGENDIAN)
+#if defined(WORDS_BIGENDIAN) || defined(DOUBLE_MIDDLE_ENDIAN)
 		UINT32_HASH_2(ff.fw[0], ff.fw[1], HCONST_12);
 #else
 		UINT32_HASH_2(ff.fw[1], ff.fw[0], HCONST_12);
@@ -1345,15 +1442,47 @@ make_hash2(Eterm term)
 	default:
 	    erl_exit(1, "Invalid tag in make_hash2(0x%X)\n", term);
 	hash2_common:
+
+	    /* Uint32 hash always has the hash value of the previous term,
+	     * compounded or otherwise.
+	     */
+
 	    if (ESTACK_ISEMPTY(s)) {
 		DESTROY_ESTACK(s);
 		UnUseTmpHeapNoproc(2);
 		return hash;
 	    }
+
 	    term = ESTACK_POP(s);
+
+	    switch (term) {
+		case HASH_MAP_TAIL: {
+		    hash = (Uint32) ESTACK_POP(s);
+		    UINT32_HASH(hash_xor_keys, HCONST_16);
+		    UINT32_HASH(hash_xor_values, HCONST_16);
+		    hash_xor_keys = (Uint32) ESTACK_POP(s);
+		    hash_xor_values = (Uint32) ESTACK_POP(s);
+		    goto hash2_common;
+		}
+		case HASH_MAP_KEY:
+		    hash_xor_keys ^= hash;
+		    hash = 0;
+		    goto hash2_common;
+		case HASH_MAP_VAL:
+		    hash_xor_values ^= hash;
+		    hash = 0;
+		    goto hash2_common;
+		default:
+		    break;
+	    }
 	}
     }
     }
+
+#undef HASH_MAP_TAIL
+#undef HASH_MAP_KEY
+#undef HASH_MAP_VAL
+
 #undef UINT32_HASH_2
 #undef UINT32_HASH
 #undef SINT32_HASH
@@ -1455,7 +1584,7 @@ tail_recur:
 	    hash = hash*FUNNY_NUMBER2 + funp->fe->old_uniq;
 	    if (num_free > 0) {
 		if (num_free > 1) {
-		    WSTACK_PUSH3(stack, (UWord) &funp->env[1], (num_free-1), MAKE_HASH_FUN_OP);
+		    WSTACK_PUSH3(stack, (UWord) &funp->env[1], (num_free-1), MAKE_HASH_TERM_ARRAY_OP);
 		}
 		term = funp->env[0];
 		goto tail_recur;
@@ -1568,6 +1697,24 @@ tail_recur:
 	}
 	break;
 
+    case MAP_DEF:
+	{
+	    map_t *mp = (map_t *)map_val(term);
+	    int size  = map_get_size(mp);
+	    Eterm *ks = map_get_keys(mp);
+	    Eterm *vs = map_get_values(mp);
+
+	    /* Use a prime with size to remedy some of
+	     * the {} and <<>> hash problems */
+	    hash = hash*FUNNY_NUMBER13 + FUNNY_NUMBER14 + size;
+	    if (size == 0)
+		break;
+
+	    /* push values first */
+	    WSTACK_PUSH3(stack, (UWord)vs, (UWord) size, MAKE_HASH_TERM_ARRAY_OP);
+	    WSTACK_PUSH3(stack, (UWord)ks, (UWord) size, MAKE_HASH_TERM_ARRAY_OP);
+	    break;
+	}
     case TUPLE_DEF: 
 	{
 	    Eterm* ptr = tuple_val(term);
@@ -1577,7 +1724,7 @@ tail_recur:
 	    op = MAKE_HASH_TUPLE_OP;
 	}/*fall through*/ 
     case MAKE_HASH_TUPLE_OP:
-    case MAKE_HASH_FUN_OP:
+    case MAKE_HASH_TERM_ARRAY_OP:
 	{
 	    Uint i = (Uint) WSTACK_POP(stack);
 	    Eterm* ptr = (Eterm*) WSTACK_POP(stack);
@@ -1605,7 +1752,7 @@ tail_recur:
     return hash;
     
 #undef MAKE_HASH_TUPLE_OP
-#undef MAKE_HASH_FUN_OP
+#undef MAKE_HASH_TERM_ARRAY_OP
 #undef MAKE_HASH_CDR_PRE_OP
 #undef MAKE_HASH_CDR_POST_OP
 }
@@ -1634,12 +1781,20 @@ static int do_send_to_logger(Eterm tag, Eterm gleader, char *buf, int len)
     }
 
 #ifndef ERTS_SMP
-    if (
 #ifdef USE_THREADS
-	!erts_get_scheduler_data() || /* Must be scheduler thread */
+    p = NULL;
+    if (erts_get_scheduler_data()) /* Must be scheduler thread */
 #endif
-	(p = erts_whereis_process(NULL, 0, am_error_logger, 0, 0)) == NULL
-	|| p->status == P_RUNNING) {
+    {
+	p = erts_whereis_process(NULL, 0, am_error_logger, 0, 0);
+	if (p) {
+	    erts_aint32_t state = erts_smp_atomic32_read_acqb(&p->state);
+	    if (state & (ERTS_PSFLG_RUNNING|ERTS_PSFLG_RUNNING_SYS))
+		p = NULL;
+	}
+    }
+
+    if (!p) {
 	/* buf *always* points to a null terminated string */
 	erts_fprintf(stderr, "(no error logger present) %T: \"%s\"\n",
 		     tag, buf);
@@ -1691,7 +1846,11 @@ static int do_send_to_logger(Eterm tag, Eterm gleader, char *buf, int len)
 	erts_queue_error_logger_message(from, tuple3, bp);
     }
 #else
-    erts_queue_message(p, NULL /* only used for smp build */, bp, tuple3, NIL);
+    erts_queue_message(p, NULL /* only used for smp build */, bp, tuple3, NIL
+#ifdef USE_VM_PROBES
+		       , NIL
+#endif
+		       );
 #endif
     return 0;
 }
@@ -1958,6 +2117,22 @@ tailrecur_ne:
 		    if ((sz = arityval(*aa)) == 0) goto pop_next;
 		    ++aa;
 		    ++bb;
+		    goto term_array;
+		}
+	    case MAP_SUBTAG:
+		{
+		    aa = map_val_rel(a, a_base);
+		    if (!is_boxed(b) || *boxed_val_rel(b,b_base) != *aa)
+			goto not_equal;
+		    bb = map_val_rel(b,b_base);
+		    sz = map_get_size((map_t*)aa);
+
+		    if (sz != map_get_size((map_t*)bb)) goto not_equal;
+		    if (sz == 0) goto pop_next;
+
+		    aa += 2;
+		    bb += 2;
+		    sz += 1; /* increment for tuple-keys */
 		    goto term_array;
 		}
 	    case REFC_BINARY_SUBTAG:
@@ -2234,7 +2409,7 @@ static int cmpbytes(byte *s1, int l1, byte *s2, int l2)
  *
  * According to the Erlang Standard, types are orderered as follows:
  *   numbers < (characters) < atoms < refs < funs < ports < pids <
- *   tuples < [] < conses < binaries.
+ *   tuples < maps < [] < conses < binaries.
  *
  * Note that characters are currently not implemented.
  *
@@ -2254,10 +2429,24 @@ static int cmp_atoms(Eterm a, Eterm b)
 		    bb->name+3, bb->len-3);
 }
 
-#if HALFWORD_HEAP
-Sint cmp_rel(Eterm a, Eterm* a_base, Eterm b, Eterm* b_base)
-#else
+#if !HALFWORD_HEAP
+/* cmp(Eterm a, Eterm b)
+ *  For compatibility with HiPE - arith-based compare.
+ */
 Sint cmp(Eterm a, Eterm b)
+{
+    return erts_cmp(a, b, 0);
+}
+#endif
+
+/* erts_cmp(Eterm a, Eterm b, int exact)
+ * exact = 1 -> term-based compare
+ * exact = 0 -> arith-based compare
+ */
+#if HALFWORD_HEAP
+Sint erts_cmp_rel_opt(Eterm a, Eterm* a_base, Eterm b, Eterm* b_base, int exact)
+#else
+Sint erts_cmp(Eterm a, Eterm b, int exact)
 #endif
 {
     DECLARE_WSTACK(stack);
@@ -2417,7 +2606,25 @@ tailrecur_ne:
 		++aa;
 		++bb;
 		goto term_array;
+	    case (_TAG_HEADER_MAP >> _TAG_PRIMARY_SIZE) :
+		if (!is_map_rel(b,b_base)) {
+		    a_tag = MAP_DEF;
+		    goto mixed_types;
+		}
+		aa = (Eterm *)map_val_rel(a,a_base);
+		bb = (Eterm *)map_val_rel(b,b_base);
 
+		i = map_get_size((map_t*)aa);
+		if (i != map_get_size((map_t*)bb)) {
+		    RETURN_NEQ((int)(i - map_get_size((map_t*)bb)));
+		}
+		if (i == 0) {
+		    goto pop_next;
+		}
+		aa += 2;
+		bb += 2;
+		i  += 1; /* increment for tuple-keys */
+		goto term_array;
 	    case (_TAG_HEADER_FLOAT >> _TAG_PRIMARY_SIZE):
 		if (!is_float_rel(b,b_base)) {
 		    a_tag = FLOAT_DEF;
@@ -2641,11 +2848,6 @@ tailrecur_ne:
     {
 	FloatDef f1, f2;
 	Eterm big;
-#if HEAP_ON_C_STACK
-	Eterm big_buf[2]; /* If HEAP_ON_C_STACK */
-#else
-	Eterm *big_buf = erts_get_scheduler_data()->cmp_tmp_heap;
-#endif
 #if HALFWORD_HEAP
 	Wterm aw = is_immed(a) ? a : rterm2wterm(a,a_base);
 	Wterm bw = is_immed(b) ? b : rterm2wterm(b,b_base);
@@ -2653,43 +2855,110 @@ tailrecur_ne:
 	Eterm aw = a;
 	Eterm bw = b;
 #endif
+#define MAX_LOSSLESS_FLOAT ((double)((1LL << 53) - 2))
+#define MIN_LOSSLESS_FLOAT ((double)(((1LL << 53) - 2)*-1))
+#define BIG_ARITY_FLOAT_MAX (1024 / D_EXP) /* arity of max float as a bignum */
+	Eterm big_buf[BIG_NEED_SIZE(BIG_ARITY_FLOAT_MAX)];
+
 	b_tag = tag_val_def(bw);
 
 	switch(_NUMBER_CODE(a_tag, b_tag)) {
 	case SMALL_BIG:
-	    big = small_to_big(signed_val(a), big_buf);
-	    j = big_comp(big, bw);
-	    break;
-	case SMALL_FLOAT:
-	    f1.fd = signed_val(a);
-	    GET_DOUBLE(bw, f2);
-	    j = float_comp(f1.fd, f2.fd);
+	    j = big_sign(bw) ? 1 : -1;
 	    break;
 	case BIG_SMALL:
-	    big = small_to_big(signed_val(b), big_buf);
-	    j = big_comp(aw, big);
+	    j = big_sign(aw) ? -1 : 1;
 	    break;
-	case BIG_FLOAT:
-	    if (big_to_double(aw, &f1.fd) < 0) {
-		j = big_sign(a) ? -1 : 1;
-	    } else {
-		GET_DOUBLE(bw, f2);
+	case SMALL_FLOAT:
+	    if (exact) goto exact_fall_through;
+	    GET_DOUBLE(bw, f2);
+	    if (f2.fd < MAX_LOSSLESS_FLOAT && f2.fd > MIN_LOSSLESS_FLOAT) {
+		/* Float is within the no loss limit */
+		f1.fd = signed_val(aw);
 		j = float_comp(f1.fd, f2.fd);
+	    }
+#if ERTS_SIZEOF_ETERM == 8
+	    else if (f2.fd > (double) (MAX_SMALL + 1)) {
+		/* Float is a positive bignum, i.e. bigger */
+		j = -1;
+	    } else if (f2.fd < (double) (MIN_SMALL - 1)) {
+		/* Float is a negative bignum, i.e. smaller */
+		j = 1;
+	    } else {
+		/* Float is a Sint but less precise */
+		j = signed_val(aw) - (Sint) f2.fd;
+	    }
+#else
+	    else {
+		/* If float is positive it is bigger than small */
+		j = (f2.fd > 0.0) ? -1 : 1;
+	    }
+#endif /* ERTS_SIZEOF_ETERM == 8 */
+	    break;
+        case FLOAT_BIG:
+	    if (exact) goto exact_fall_through;
+	{
+	    Wterm tmp = aw;
+	    aw = bw;
+	    bw = tmp;
+	}/* fall through */
+	case BIG_FLOAT:
+	    if (exact) goto exact_fall_through;
+	    GET_DOUBLE(bw, f2);
+	    if ((f2.fd < (double) (MAX_SMALL + 1))
+		    && (f2.fd > (double) (MIN_SMALL - 1))) {
+		/* Float is a Sint */
+		j = big_sign(aw) ? -1 : 1;
+	    } else if (big_arity(aw) > BIG_ARITY_FLOAT_MAX
+		       || pow(2.0,(big_arity(aw)-1)*D_EXP) > fabs(f2.fd)) {
+		/* If bignum size shows that it is bigger than the abs float */
+		j = big_sign(aw) ? -1 : 1;
+	    } else if (big_arity(aw) < BIG_ARITY_FLOAT_MAX
+		       && (pow(2.0,(big_arity(aw))*D_EXP)-1.0) < fabs(f2.fd)) {
+		/* If bignum size shows that it is smaller than the abs float */
+		j = f2.fd < 0 ? 1 : -1;
+	    } else if (f2.fd < MAX_LOSSLESS_FLOAT && f2.fd > MIN_LOSSLESS_FLOAT) {
+		/* Float is within the no loss limit */
+		if (big_to_double(aw, &f1.fd) < 0) {
+		    j = big_sign(aw) ? -1 : 1;
+		} else {
+		    j = float_comp(f1.fd, f2.fd);
+		}
+	    } else {
+		big = double_to_big(f2.fd, big_buf, sizeof(big_buf)/sizeof(Eterm));
+		j = big_comp(aw, rterm2wterm(big,big_buf));
+	    }
+	    if (_NUMBER_CODE(a_tag, b_tag) == FLOAT_BIG) {
+		j = -j;
 	    }
 	    break;
 	case FLOAT_SMALL:
+	    if (exact) goto exact_fall_through;
 	    GET_DOUBLE(aw, f1);
-	    f2.fd = signed_val(b);
-	    j = float_comp(f1.fd, f2.fd);
-	    break;
-	case FLOAT_BIG:
-	    if (big_to_double(bw, &f2.fd) < 0) {
-		j = big_sign(b) ? 1 : -1;
-	    } else {
-		GET_DOUBLE(aw, f1);
+	    if (f1.fd < MAX_LOSSLESS_FLOAT && f1.fd > MIN_LOSSLESS_FLOAT) {
+		/* Float is within the no loss limit */
+		f2.fd = signed_val(bw);
 		j = float_comp(f1.fd, f2.fd);
 	    }
+#if ERTS_SIZEOF_ETERM == 8
+	    else if (f1.fd > (double) (MAX_SMALL + 1)) {
+		/* Float is a positive bignum, i.e. bigger */
+		j = 1;
+	    } else if (f1.fd < (double) (MIN_SMALL - 1)) {
+		/* Float is a negative bignum, i.e. smaller */
+		j = -1;
+	    } else {
+		/* Float is a Sint but less precise it */
+		j = (Sint) f1.fd - signed_val(bw);
+	    }
+#else
+	    else {
+		/* If float is positive it is bigger than small */
+		j = (f1.fd > 0.0) ? 1 : -1;
+	    }
+#endif /* ERTS_SIZEOF_ETERM == 8 */
 	    break;
+exact_fall_through:
 	default:
 	    j = b_tag - a_tag;
 	}
@@ -2743,7 +3012,7 @@ pop_next:
     return 0;
 
 not_equal:
-    DESTROY_ESTACK(stack);
+    DESTROY_WSTACK(stack);
     return j;
 
 #undef CMP_NODES
@@ -2803,9 +3072,9 @@ store_external_or_ref_in_proc_(Process *proc, Eterm ns)
     return store_external_or_ref_(&hp, &MSO(proc), ns);
 }
 
-void bin_write(int to, void *to_arg, byte* buf, int sz)
+void bin_write(int to, void *to_arg, byte* buf, size_t sz)
 {
-    int i;
+    size_t i;
 
     for (i=0;i<sz;i++) {
 	if (IS_DIGIT(buf[i]))
@@ -2880,17 +3149,17 @@ char* Sint_to_buf(Sint n, struct Sint_buf *buf)
 */
 
 Eterm
-buf_to_intlist(Eterm** hpp, char *buf, int len, Eterm tail)
+buf_to_intlist(Eterm** hpp, const char *buf, size_t len, Eterm tail)
 {
     Eterm* hp = *hpp;
+    size_t i = len;
 
-    buf += (len-1);
-    while(len > 0) {
-	tail = CONS(hp, make_small((byte)*buf), tail);
+    while(i != 0) {
+	--i;
+	tail = CONS(hp, make_small((Uint)(byte)buf[i]), tail);
 	hp += 2;
-	buf--;
-	len--;
     }
+
     *hpp = hp;
     return tail;
 }
@@ -2916,119 +3185,351 @@ buf_to_intlist(Eterm** hpp, char *buf, int len, Eterm tail)
 **        ;
 ** 
 ** Return remaining bytes in buffer on success
-**        -1 on overflow
-**        -2 on type error (including that result would not be a whole number of bytes)
+**        ERTS_IOLIST_TO_BUF_OVERFLOW on overflow
+**        ERTS_IOLIST_TO_BUF_TYPE_ERROR on type error (including that result would not be a whole number of bytes)
+**
+** Note! 
+** Do not detect indata errors in this fiunction that are not detected by erts_iolist_size!
+**
+** A caller should be able to rely on a successful return from erts_iolist_to_buf
+** if erts_iolist_size is previously successfully called and erts_iolist_to_buf 
+** is called with a buffer at least as large as the value given by erts_iolist_size.
+** 
 */
 
-int io_list_to_buf(Eterm obj, char* buf, int len)
+typedef enum {
+    ERTS_IL2B_BCOPY_OK,
+    ERTS_IL2B_BCOPY_YIELD,
+    ERTS_IL2B_BCOPY_OVERFLOW,
+    ERTS_IL2B_BCOPY_TYPE_ERROR
+} ErtsIL2BBCopyRes;
+
+static ErtsIL2BBCopyRes
+iolist_to_buf_bcopy(ErtsIOList2BufState *state, Eterm obj, int *yield_countp);
+
+static ERTS_INLINE ErlDrvSizeT
+iolist_to_buf(const int yield_support,
+	      ErtsIOList2BufState *state,
+	      Eterm obj,
+	      char* buf,
+	      ErlDrvSizeT alloced_len)
 {
-    Eterm* objp;
+#undef IOLIST_TO_BUF_BCOPY
+#define IOLIST_TO_BUF_BCOPY(CONSP)					\
+do {									\
+    size_t size = binary_size(obj);					\
+    if (size > 0) {							\
+	Uint bitsize;							\
+	byte* bptr;							\
+	Uint bitoffs;							\
+	Uint num_bits;							\
+	if (yield_support) {						\
+	    size_t max_size = ERTS_IOLIST_TO_BUF_BYTES_PER_YIELD_COUNT;	\
+	    if (yield_count > 0)					\
+		max_size *= yield_count+1;				\
+	    if (size > max_size) {					\
+		state->objp = CONSP;					\
+		goto L_bcopy_yield;					\
+	    }								\
+	    if (size >= ERTS_IOLIST_TO_BUF_BYTES_PER_YIELD_COUNT) {	\
+		int cost = (int) size;					\
+		cost /= ERTS_IOLIST_TO_BUF_BYTES_PER_YIELD_COUNT;	\
+		yield_count -= cost;					\
+	    }								\
+	}								\
+	if (len < size)							\
+	    goto L_overflow;						\
+	ERTS_GET_BINARY_BYTES(obj, bptr, bitoffs, bitsize);		\
+	if (bitsize != 0)						\
+	    goto L_type_error;						\
+	num_bits = 8*size;						\
+	copy_binary_to_buffer(buf, 0, bptr, bitoffs, num_bits);		\
+	buf += size;							\
+	len -= size;							\
+    }									\
+} while (0)
+
+    ErlDrvSizeT res, len;
+    Eterm* objp = NULL;
+    int init_yield_count;
+    int yield_count;
     DECLARE_ESTACK(s);
-    goto L_again;
-    
+
+    len = (ErlDrvSizeT) alloced_len;
+
+    if (!yield_support) {
+	yield_count = init_yield_count = 0; /* Shut up faulty warning... >:-( */
+	goto L_again;
+    }
+    else {
+
+	if (state->iolist.reds_left <= 0)
+	    return ERTS_IOLIST_TO_BUF_YIELD;
+
+	ESTACK_CHANGE_ALLOCATOR(s, ERTS_ALC_T_SAVED_ESTACK);
+	init_yield_count = (ERTS_IOLIST_TO_BUF_YIELD_COUNT_PER_RED
+			   * state->iolist.reds_left);
+	yield_count = init_yield_count;
+
+	if (!state->iolist.estack.start)
+	    goto L_again;
+	else {
+	    int chk_stack;
+	    /* Restart; restore state... */
+	    ESTACK_RESTORE(s, &state->iolist.estack);
+
+	    if (!state->bcopy.bptr)
+		chk_stack = 0;
+	    else {
+		chk_stack = 1;
+		switch (iolist_to_buf_bcopy(state, THE_NON_VALUE, &yield_count)) {
+		case ERTS_IL2B_BCOPY_OK:
+		    break;
+		case ERTS_IL2B_BCOPY_YIELD:
+		    BUMP_ALL_REDS(state->iolist.c_p);
+		    state->iolist.reds_left = 0;
+		    ESTACK_SAVE(s, &state->iolist.estack);
+		    return ERTS_IOLIST_TO_BUF_YIELD;
+		case ERTS_IL2B_BCOPY_OVERFLOW:
+		    goto L_overflow;
+		case ERTS_IL2B_BCOPY_TYPE_ERROR:
+		    goto L_type_error;
+		}
+	    }
+
+	    obj = state->iolist.obj;
+	    buf = state->buf;
+	    len = state->len;
+	    objp = state->objp;
+	    state->objp = NULL;
+	    if (objp)
+		goto L_tail;
+	    if (!chk_stack)
+		goto L_again;
+	    /* check stack */
+	}
+    }
+
     while (!ESTACK_ISEMPTY(s)) {
 	obj = ESTACK_POP(s);
     L_again:
 	if (is_list(obj)) {
-	L_iter_list:
-	    objp = list_val(obj);
-	    obj = CAR(objp);
-	    if (is_byte(obj)) {
-		if (len == 0) {
-		    goto L_overflow;
+	    while (1) { /* Tail loop */
+		while (1) { /* Head loop */
+		    if (yield_support && --yield_count <= 0)
+			goto L_yield;
+		    objp = list_val(obj);
+		    obj = CAR(objp);
+		    if (is_byte(obj)) {
+			if (len == 0) {
+			    goto L_overflow;
+			}
+			*buf++ = unsigned_val(obj);
+			len--;
+		    } else if (is_binary(obj)) {
+			IOLIST_TO_BUF_BCOPY(objp);
+		    } else if (is_list(obj)) {
+			ESTACK_PUSH(s, CDR(objp));
+			continue; /* Head loop */
+		    } else if (is_not_nil(obj)) {
+			goto L_type_error;
+		    }
+		    break;
 		}
-		*buf++ = unsigned_val(obj);
-		len--;
-	    } else if (is_binary(obj)) {
-		byte* bptr;
-		size_t size = binary_size(obj);
-		Uint bitsize;
-		Uint bitoffs;
-		Uint num_bits;
-		
-		if (len < size) {
-		    goto L_overflow;
-		}
-		ERTS_GET_BINARY_BYTES(obj, bptr, bitoffs, bitsize);
-		if (bitsize != 0) {
-		    goto L_type_error;
-		}
-		num_bits = 8*size;
-		copy_binary_to_buffer(buf, 0, bptr, bitoffs, num_bits);
-		buf += size;
-		len -= size;
-	    } else if (is_list(obj)) {
-		ESTACK_PUSH(s, CDR(objp));
-		goto L_iter_list; /* on head */
-	    } else if (is_not_nil(obj)) {
-		goto L_type_error;
-	    }
 
-	    obj = CDR(objp);
-	    if (is_list(obj)) {
-		goto L_iter_list; /* on tail */
-	    } else if (is_binary(obj)) {
-		byte* bptr;
-		size_t size = binary_size(obj);
-		Uint bitsize;
-		Uint bitoffs;
-		Uint num_bits;
-		if (len < size) {
-		    goto L_overflow;
-		}
-		ERTS_GET_BINARY_BYTES(obj, bptr, bitoffs, bitsize);
-		if (bitsize != 0) {
+	    L_tail:
+
+		obj = CDR(objp);
+
+		if (is_list(obj)) {
+		    continue; /* Tail loop */
+		} else if (is_binary(obj)) {
+		    IOLIST_TO_BUF_BCOPY(NULL);
+		} else if (is_not_nil(obj)) {
 		    goto L_type_error;
 		}
-		num_bits = 8*size;
-		copy_binary_to_buffer(buf, 0, bptr, bitoffs, num_bits);
-		buf += size;
-		len -= size;
-	    } else if (is_not_nil(obj)) {
-		goto L_type_error;
+		break;
 	    }
 	} else if (is_binary(obj)) {
-	    byte* bptr;
-	    size_t size = binary_size(obj);
-	    Uint bitsize;
-	    Uint bitoffs;
-	    Uint num_bits;
-	    if (len < size) {
-		goto L_overflow;
-	    }
-	    ERTS_GET_BINARY_BYTES(obj, bptr, bitoffs, bitsize);
-	    if (bitsize != 0) {
-		goto L_type_error;
-	    }
-	    num_bits = 8*size;
-	    copy_binary_to_buffer(buf, 0, bptr, bitoffs, num_bits);
-	    buf += size;
-	    len -= size;
+	    IOLIST_TO_BUF_BCOPY(NULL);
 	} else if (is_not_nil(obj)) {
 	    goto L_type_error;
-	}
+	} else if (yield_support && --yield_count <= 0)
+	    goto L_yield;
     }
       
+    res = len;
+
+ L_return: 
+
     DESTROY_ESTACK(s);
-    return len;
+
+    if (yield_support) {
+	int reds;
+	CLEAR_SAVED_ESTACK(&state->iolist.estack);
+	reds = ((init_yield_count - yield_count - 1)
+		/ ERTS_IOLIST_TO_BUF_YIELD_COUNT_PER_RED) + 1;
+	BUMP_REDS(state->iolist.c_p, reds);
+	state->iolist.reds_left -= reds;
+	if (state->iolist.reds_left < 0)
+	    state->iolist.reds_left = 0;
+    }
+
+
+    return res;
 
  L_type_error:
-    DESTROY_ESTACK(s);
-    return -2;
+    res = ERTS_IOLIST_TO_BUF_TYPE_ERROR;
+    goto L_return;
 
  L_overflow:
-    DESTROY_ESTACK(s);
-    return -1;
+    res = ERTS_IOLIST_TO_BUF_OVERFLOW;
+    goto L_return;
+
+ L_bcopy_yield:
+
+    state->buf = buf;
+    state->len = len;
+
+    switch (iolist_to_buf_bcopy(state, obj, &yield_count)) {
+    case ERTS_IL2B_BCOPY_OK:
+	ERTS_INTERNAL_ERROR("Missing yield");
+    case ERTS_IL2B_BCOPY_YIELD:
+	BUMP_ALL_REDS(state->iolist.c_p);
+	state->iolist.reds_left = 0;
+	ESTACK_SAVE(s, &state->iolist.estack);
+	return ERTS_IOLIST_TO_BUF_YIELD;
+    case ERTS_IL2B_BCOPY_OVERFLOW:
+	goto L_overflow;
+    case ERTS_IL2B_BCOPY_TYPE_ERROR:
+	goto L_type_error;
+    }
+
+ L_yield:
+
+    BUMP_ALL_REDS(state->iolist.c_p);
+    state->iolist.reds_left = 0;
+    state->iolist.obj = obj;
+    state->buf = buf;
+    state->len = len;
+    ESTACK_SAVE(s, &state->iolist.estack);
+    return ERTS_IOLIST_TO_BUF_YIELD;
+
+#undef IOLIST_TO_BUF_BCOPY
+}
+
+static ErtsIL2BBCopyRes
+iolist_to_buf_bcopy(ErtsIOList2BufState *state, Eterm obj, int *yield_countp)
+{
+    ErtsIL2BBCopyRes res;
+    char *buf = state->buf;
+    ErlDrvSizeT len = state->len;
+    byte* bptr;
+    size_t size;
+    size_t max_size;
+    Uint bitoffs;
+    Uint num_bits;
+    int yield_count = *yield_countp;
+
+    if (state->bcopy.bptr) {
+	bptr = state->bcopy.bptr;
+	size = state->bcopy.size;
+	bitoffs = state->bcopy.bitoffs;
+	state->bcopy.bptr = NULL;
+    }
+    else {
+	Uint bitsize;
+
+	ASSERT(is_binary(obj));
+
+	size = binary_size(obj);
+	if (size <= 0)
+	    return ERTS_IL2B_BCOPY_OK;
+
+	if (len < size)
+	    return ERTS_IL2B_BCOPY_OVERFLOW;
+
+	ERTS_GET_BINARY_BYTES(obj, bptr, bitoffs, bitsize);
+	if (bitsize != 0)
+	    return ERTS_IL2B_BCOPY_TYPE_ERROR;
+    }
+
+    ASSERT(size > 0);
+    max_size = (size_t) ERTS_IOLIST_TO_BUF_BYTES_PER_YIELD_COUNT;
+    if (yield_count > 0)
+	max_size *= (size_t) (yield_count+1);
+
+    if (size <= max_size) {
+	if (size >= ERTS_IOLIST_TO_BUF_BYTES_PER_YIELD_COUNT) {
+	    int cost = (int) size;
+	    cost /= ERTS_IOLIST_TO_BUF_BYTES_PER_YIELD_COUNT;
+	    yield_count -= cost;
+	}
+	res = ERTS_IL2B_BCOPY_OK;
+    }
+    else {
+	ASSERT(0 < max_size && max_size < size);
+	yield_count = 0;
+	state->bcopy.bptr = bptr + max_size;
+	state->bcopy.bitoffs = bitoffs;
+	state->bcopy.size = size - max_size;
+	size = max_size;
+	res = ERTS_IL2B_BCOPY_YIELD;
+    }
+
+    num_bits = 8*size;
+    copy_binary_to_buffer(buf, 0, bptr, bitoffs, num_bits);
+    state->buf += size;
+    state->len -= size;
+    *yield_countp = yield_count;
+
+    return res;
+}
+
+ErlDrvSizeT erts_iolist_to_buf_yielding(ErtsIOList2BufState *state)
+{
+    return iolist_to_buf(1, state, state->iolist.obj, state->buf, state->len);
+}
+
+ErlDrvSizeT erts_iolist_to_buf(Eterm obj, char* buf, ErlDrvSizeT alloced_len)
+{
+    return iolist_to_buf(0, NULL, obj, buf, alloced_len);
 }
 
 /*
  * Return 0 if successful, and non-zero if unsuccessful.
+ *
+ * It is vital that if erts_iolist_to_buf would return an error for
+ * any type of term data, this function should do so as well.
+ * Any input term error detected in erts_iolist_to_buf should also
+ * be detected in this function!
  */
-int erts_iolist_size(Eterm obj, Uint* sizep)
+
+static ERTS_INLINE int
+iolist_size(const int yield_support, ErtsIOListState *state, Eterm obj, ErlDrvSizeT* sizep)
 {
+    int res, init_yield_count, yield_count;
     Eterm* objp;
-    Uint size = 0;
+    Uint size = (Uint) *sizep; /* Intentionally Uint due to halfword heap */
     DECLARE_ESTACK(s);
+
+    if (!yield_support)
+	yield_count = init_yield_count = 0; /* Shut up faulty warning... >:-( */
+    else {
+	if (state->reds_left <= 0)
+	    return ERTS_IOLIST_YIELD;
+	ESTACK_CHANGE_ALLOCATOR(s, ERTS_ALC_T_SAVED_ESTACK);
+	init_yield_count = ERTS_IOLIST_SIZE_YIELDS_COUNT_PER_RED;
+	init_yield_count *= state->reds_left;
+	yield_count = init_yield_count;
+	if (state->estack.start) {
+	    /* Restart; restore state... */
+	    ESTACK_RESTORE(s, &state->estack);
+	    size = (Uint) state->size;
+	    obj = state->obj;
+	}
+    }
+
     goto L_again;
 
 #define SAFE_ADD(Var, Val)			\
@@ -3044,51 +3545,101 @@ int erts_iolist_size(Eterm obj, Uint* sizep)
 	obj = ESTACK_POP(s);
     L_again:
 	if (is_list(obj)) {
-	L_iter_list:
-	    objp = list_val(obj);
-	    /* Head */
-	    obj = CAR(objp);
-	    if (is_byte(obj)) {
-		size++;
-		if (size == 0) {
-		    goto L_overflow_error;
+	    while (1) { /* Tail loop */
+		while (1) { /* Head loop */
+		    if (yield_support && --yield_count <= 0)
+			goto L_yield;
+		    objp = list_val(obj);
+		    /* Head */
+		    obj = CAR(objp);
+		    if (is_byte(obj)) {
+			size++;
+			if (size == 0) {
+			    goto L_overflow_error;
+			}
+		    } else if (is_binary(obj) && binary_bitsize(obj) == 0) {
+			SAFE_ADD(size, binary_size(obj));
+		    } else if (is_list(obj)) {
+			ESTACK_PUSH(s, CDR(objp));
+			continue; /* Head loop */
+		    } else if (is_not_nil(obj)) {
+			goto L_type_error;
+		    }
+		    break;
 		}
-	    } else if (is_binary(obj) && binary_bitsize(obj) == 0) {
+		/* Tail */
+		obj = CDR(objp);
+		if (is_list(obj))
+		    continue; /* Tail loop */
+		else if (is_binary(obj) && binary_bitsize(obj) == 0) {
+		    SAFE_ADD(size, binary_size(obj));
+		} else if (is_not_nil(obj)) {
+		    goto L_type_error;
+		}
+		break;
+	    }
+	} else {
+	    if (yield_support && --yield_count <= 0)
+		goto L_yield;
+	    if (is_binary(obj) && binary_bitsize(obj) == 0) { /* Tail was binary */
 		SAFE_ADD(size, binary_size(obj));
-	    } else if (is_list(obj)) {
-		ESTACK_PUSH(s, CDR(objp));
-		goto L_iter_list; /* on head */
 	    } else if (is_not_nil(obj)) {
 		goto L_type_error;
 	    }
-	    /* Tail */
-	    obj = CDR(objp);
-	    if (is_list(obj))
-		goto L_iter_list; /* on tail */
-	    else if (is_binary(obj) && binary_bitsize(obj) == 0) {
-		SAFE_ADD(size, binary_size(obj));
-	    } else if (is_not_nil(obj)) {
-		goto L_type_error;
-	    }
-	} else if (is_binary(obj) && binary_bitsize(obj) == 0) { /* Tail was binary */
-	    SAFE_ADD(size, binary_size(obj));
-	} else if (is_not_nil(obj)) {
-	    goto L_type_error;
 	}
     }
 #undef SAFE_ADD
 
+    *sizep = (ErlDrvSizeT) size;
+
+    res = ERTS_IOLIST_OK;
+
+ L_return:
+
     DESTROY_ESTACK(s);
-    *sizep = size;
-    return ERTS_IOLIST_OK;
+
+    if (yield_support) {
+	int yc, reds;
+	CLEAR_SAVED_ESTACK(&state->estack);
+	yc = init_yield_count - yield_count;
+	reds = ((yc - 1) / ERTS_IOLIST_SIZE_YIELDS_COUNT_PER_RED) + 1;
+	BUMP_REDS(state->c_p, reds);
+	state->reds_left -= reds;
+	state->size = (ErlDrvSizeT) size;
+	state->have_size = 1;
+    }
+
+    return res;
 
  L_overflow_error:
-    DESTROY_ESTACK(s);
-    return ERTS_IOLIST_OVERFLOW;
+    res = ERTS_IOLIST_OVERFLOW;
+    size = 0;
+    goto L_return;
 
  L_type_error:
-    DESTROY_ESTACK(s);
-    return ERTS_IOLIST_TYPE;
+    res = ERTS_IOLIST_TYPE;
+    size = 0;
+    goto L_return;
+
+ L_yield:
+    BUMP_ALL_REDS(state->c_p);
+    state->reds_left = 0;
+    state->size = size;
+    state->obj = obj;
+    ESTACK_SAVE(s, &state->estack);
+    return ERTS_IOLIST_YIELD;
+}
+
+int erts_iolist_size_yielding(ErtsIOListState *state)
+{
+    ErlDrvSizeT size = state->size;
+    return iolist_size(1, state, state->obj, &size);
+}
+
+int erts_iolist_size(Eterm obj, ErlDrvSizeT* sizep)
+{
+    *sizep = 0;
+    return iolist_size(0, NULL, obj, sizep);
 }
 
 /* return 0 if item is not a non-empty flat list of bytes */
@@ -3174,7 +3725,7 @@ ptimer_timeout(ErtsSmpPTimer *ptimer)
 			      ERTS_PROC_LOCK_MAIN|ERTS_PROC_LOCK_STATUS,
 			      ERTS_P2P_FLG_ALLOW_OTHER_X);
 	if (p) {
-	    if (!p->is_exiting
+	    if (!ERTS_PROC_IS_EXITING(p)
 		&& !(ptimer->timer.flags & ERTS_PTMR_FLG_CANCELLED)) {
 		ASSERT(*ptimer->timer.timer_ref == ptimer);
 		*ptimer->timer.timer_ref = NULL;
@@ -3250,10 +3801,10 @@ erts_cancel_smp_ptimer(ErtsSmpPTimer *ptimer)
 
 #endif
 
-static Sint trim_threshold;
-static Sint top_pad;
-static Sint mmap_threshold;
-static Sint mmap_max;
+static int trim_threshold;
+static int top_pad;
+static int mmap_threshold;
+static int mmap_max;
 
 Uint tot_bin_allocated;
 
@@ -3276,8 +3827,8 @@ int
 sys_alloc_opt(int opt, int value)
 {
 #if HAVE_MALLOPT
-  Sint m_opt;
-  Sint *curr_val;
+  int m_opt;
+  int *curr_val;
 
   switch(opt) {
   case SYS_ALLOC_OPT_TRIM_THRESHOLD:
@@ -3317,7 +3868,7 @@ sys_alloc_opt(int opt, int value)
   }
 
   if(mallopt(m_opt, value)) {
-    *curr_val = (Sint) value;
+    *curr_val = value;
     return 1;
   }
 
@@ -3336,686 +3887,6 @@ sys_alloc_stat(SysAllocStat *sasp)
 
 }
 
-#ifdef ERTS_SMP
-
-/* Local system block state */
-
-struct {
-    int emergency;
-    long emergency_timeout;
-    erts_smp_cnd_t watchdog_cnd;
-    erts_smp_tid_t watchdog_tid;
-    int threads_to_block;
-    int have_blocker;
-    erts_smp_tid_t blocker_tid;
-    int recursive_block;
-    Uint32 allowed_activities;
-    erts_smp_tsd_key_t blockable_key;
-    erts_smp_mtx_t mtx;
-    erts_smp_cnd_t cnd;
-#ifdef ERTS_ENABLE_LOCK_CHECK
-    int activity_changing;
-    int checking;
-#endif
-} system_block_state;
-
-/* Global system block state */
-erts_system_block_state_t erts_system_block_state;
-
-
-static ERTS_INLINE int
-is_blockable_thread(void)
-{
-    return erts_smp_tsd_get(system_block_state.blockable_key) != NULL;
-}
-
-static ERTS_INLINE int
-is_blocker(void)
-{
-    return (system_block_state.have_blocker
-	    && erts_smp_equal_tids(system_block_state.blocker_tid,
-				   erts_smp_thr_self()));
-}
-
-#ifdef ERTS_ENABLE_LOCK_CHECK
-int
-erts_lc_is_blocking(void)
-{
-    int res;
-    erts_smp_mtx_lock(&system_block_state.mtx);
-    res = erts_smp_pending_system_block() && is_blocker();
-    erts_smp_mtx_unlock(&system_block_state.mtx);
-    return res;
-}
-#endif
-
-static ERTS_INLINE void
-block_me(void (*prepare)(void *),
-	 void (*resume)(void *),
-	 void *arg,
-	 int mtx_locked,
-	 int want_to_block,
-	 int update_act_changing,
-	 profile_sched_msg_q *psmq)
-{
-    if (prepare)
-	(*prepare)(arg);
-
-    /* Locks might be held... */
-
-    if (!mtx_locked)
-	erts_smp_mtx_lock(&system_block_state.mtx);
-
-    if (erts_smp_pending_system_block() && !is_blocker()) {
-	int is_blockable = is_blockable_thread();
-	ASSERT(is_blockable);
-
-	if (is_blockable)
-	    system_block_state.threads_to_block--;
-
-	if (erts_system_profile_flags.scheduler && psmq) {
-	    ErtsSchedulerData *esdp = erts_get_scheduler_data();
-	    if (esdp) {
-	    	profile_sched_msg *msg = NULL;
-	        
-		ASSERT(psmq->n < 2);
-		msg = &((psmq->msg)[psmq->n]);
-		msg->scheduler_id = esdp->no;
-		get_now(&(msg->Ms), &(msg->s), &(msg->us));
-		msg->no_schedulers = 0;
-		msg->state = am_inactive;
-	    	psmq->n++;
-	    }
-	}
-
-#ifdef ERTS_ENABLE_LOCK_CHECK
-	if (update_act_changing)
-	    system_block_state.activity_changing--;
-#endif
-
-	erts_smp_cnd_broadcast(&system_block_state.cnd);
-
-	do {
-	    erts_smp_cnd_wait(&system_block_state.cnd, &system_block_state.mtx);
-	} while (erts_smp_pending_system_block()
-		 && !(want_to_block && !system_block_state.have_blocker));
-
-#ifdef ERTS_ENABLE_LOCK_CHECK
-	if (update_act_changing)
-	    system_block_state.activity_changing++;
-#endif
-	if (erts_system_profile_flags.scheduler && psmq) {
-	    ErtsSchedulerData *esdp = erts_get_scheduler_data();
-	    if (esdp) {
-	    	profile_sched_msg *msg = NULL;
-	        
-		ASSERT(psmq->n < 2);
-		msg = &((psmq->msg)[psmq->n]);
-		msg->scheduler_id = esdp->no;
-		get_now(&(msg->Ms), &(msg->s), &(msg->us));
-		msg->no_schedulers = 0;
-		msg->state = am_active;
-	    	psmq->n++;
-	    }
-	}
-
-	if (is_blockable)
-	    system_block_state.threads_to_block++;
-    }
-
-    if (!mtx_locked)
-	erts_smp_mtx_unlock(&system_block_state.mtx);
-
-    if (resume)
-	(*resume)(arg);
-}
-
-void
-erts_block_me(void (*prepare)(void *),
-	      void (*resume)(void *),
-	      void *arg)
-{
-    profile_sched_msg_q psmq;
-    psmq.n = 0;
-    if (prepare)
-	(*prepare)(arg);
-
-#ifdef ERTS_ENABLE_LOCK_CHECK
-    erts_lc_check_exact(NULL, 0); /* No locks should be locked */
-#endif
-
-    block_me(NULL, NULL, NULL, 0, 0, 0, &psmq);
-
-    if (erts_system_profile_flags.scheduler && psmq.n > 0) 
-    	dispatch_profile_msg_q(&psmq);
-
-    if (resume)
-	(*resume)(arg);
-}
-
-void
-erts_register_blockable_thread(void)
-{
-    profile_sched_msg_q psmq;
-    psmq.n = 0;
-    if (!is_blockable_thread()) {
-	erts_smp_mtx_lock(&system_block_state.mtx);
-	system_block_state.threads_to_block++;
-	erts_smp_tsd_set(system_block_state.blockable_key,
-			 (void *) &erts_system_block_state);
-
-	/* Someone might be waiting for us to block... */
-	if (erts_smp_pending_system_block())
-	    block_me(NULL, NULL, NULL, 1, 0, 0, &psmq);
-	erts_smp_mtx_unlock(&system_block_state.mtx);
-
-	if (erts_system_profile_flags.scheduler && psmq.n > 0)
-	    dispatch_profile_msg_q(&psmq);
-    }
-}
-
-void
-erts_unregister_blockable_thread(void)
-{
-    if (is_blockable_thread()) {
-	erts_smp_mtx_lock(&system_block_state.mtx);
-	system_block_state.threads_to_block--;
-	ASSERT(system_block_state.threads_to_block >= 0);
-	erts_smp_tsd_set(system_block_state.blockable_key, NULL);
-
-	/* Someone might be waiting for us to block... */
-	if (erts_smp_pending_system_block())
-	    erts_smp_cnd_broadcast(&system_block_state.cnd);
-	erts_smp_mtx_unlock(&system_block_state.mtx);
-    }
-}
-
-void
-erts_note_activity_begin(erts_activity_t activity)
-{
-    erts_smp_mtx_lock(&system_block_state.mtx);
-    if (erts_smp_pending_system_block()) {
-	Uint32 broadcast = 0;
-	switch (activity) {
-	case ERTS_ACTIVITY_GC:
-	    broadcast = (system_block_state.allowed_activities
-			 & ERTS_BS_FLG_ALLOW_GC);
-	    break;
-	case ERTS_ACTIVITY_IO:
-	    broadcast = (system_block_state.allowed_activities
-			 & ERTS_BS_FLG_ALLOW_IO);
-	    break;
-	case ERTS_ACTIVITY_WAIT:
-	    broadcast = 1;
-	    break;
-	default:
-	    abort();
-	    break;
-	}
-	if (broadcast)
-	    erts_smp_cnd_broadcast(&system_block_state.cnd);
-    }
-    erts_smp_mtx_unlock(&system_block_state.mtx);
-}
-
-void
-erts_check_block(erts_activity_t old_activity,
-		 erts_activity_t new_activity,
-		 int locked,
-		 void (*prepare)(void *),
-		 void (*resume)(void *),
-		 void *arg)
-{
-    int do_block;
-    profile_sched_msg_q psmq;
-
-    psmq.n = 0;
-    if (!locked && prepare)
-	(*prepare)(arg);
-
-    erts_smp_mtx_lock(&system_block_state.mtx);
-
-    /* First check if it is ok to block... */
-    if (!locked)
-	do_block = 1;
-    else {
-	switch (old_activity) {
-	case ERTS_ACTIVITY_UNDEFINED:
-	    do_block = 0;
-	    break;
-	case ERTS_ACTIVITY_GC:
-	    do_block = (system_block_state.allowed_activities
-			& ERTS_BS_FLG_ALLOW_GC);
-	    break;
-	case ERTS_ACTIVITY_IO:
-	    do_block = (system_block_state.allowed_activities
-			& ERTS_BS_FLG_ALLOW_IO);
-	    break;
-	case ERTS_ACTIVITY_WAIT:
-	    /* You are not allowed to leave activity waiting
-	     * without supplying the possibility to block
-	     * unlocked.
-	     */
-	    erts_set_activity_error(ERTS_ACT_ERR_LEAVE_WAIT_UNLOCKED,
-				    __FILE__, __LINE__);
-	    do_block = 0;
-	    break;
-	default:
-	    erts_set_activity_error(ERTS_ACT_ERR_LEAVE_UNKNOWN_ACTIVITY,
-				    __FILE__, __LINE__);
-	    do_block = 0;
-	    break;
-	}
-    }
-
-    if (do_block) {
-	/* ... then check if it is necessary to block... */
-
-	switch (new_activity) {
-	case ERTS_ACTIVITY_UNDEFINED:
-	    do_block = 1;
-	    break;
-	case ERTS_ACTIVITY_GC:
-	    do_block = !(system_block_state.allowed_activities
-			 & ERTS_BS_FLG_ALLOW_GC);
-	break;
-	case ERTS_ACTIVITY_IO:
-	    do_block = !(system_block_state.allowed_activities
-			 & ERTS_BS_FLG_ALLOW_IO);
-	    break;
-	case ERTS_ACTIVITY_WAIT:
-	    /* No need to block if we are going to wait */
-	    do_block = 0;
-	    break;
-	default:
-	    erts_set_activity_error(ERTS_ACT_ERR_ENTER_UNKNOWN_ACTIVITY,
-				    __FILE__, __LINE__);
-	    break;
-	}
-    }
-
-    if (do_block) {
-
-#ifdef ERTS_ENABLE_LOCK_CHECK
-	if (!locked) {
-	    /* Only system_block_state.mtx should be held */
-	    erts_lc_check_exact(&system_block_state.mtx.lc, 1);
-	}
-#endif
-
-	block_me(NULL, NULL, NULL, 1, 0, 1, &psmq);
-
-    }
-
-    erts_smp_mtx_unlock(&system_block_state.mtx);
-
-    if (erts_system_profile_flags.scheduler && psmq.n > 0) 
-	dispatch_profile_msg_q(&psmq);	
-
-    if (!locked && resume)
-	(*resume)(arg);
-}
-
-
-
-void
-erts_set_activity_error(erts_activity_error_t error, char *file, int line)
-{
-    switch (error) {
-    case ERTS_ACT_ERR_LEAVE_WAIT_UNLOCKED:
-	erl_exit(1, "%s:%d: Fatal error: Leaving activity waiting without "
-		 "supplying the possibility to block unlocked.",
-		 file, line);
-	break;
-    case ERTS_ACT_ERR_LEAVE_UNKNOWN_ACTIVITY:
-	erl_exit(1, "%s:%d: Fatal error: Leaving unknown activity.",
-		 file, line);
-	break;
-    case ERTS_ACT_ERR_ENTER_UNKNOWN_ACTIVITY:
-	erl_exit(1, "%s:%d: Fatal error: Leaving unknown activity.",
-		 file, line);
-	break;
-    default:
-	erl_exit(1, "%s:%d: Internal error in erts_smp_set_activity()",
-		 file, line);
-	break;
-    }
-
-}
-
-
-static ERTS_INLINE erts_aint32_t
-threads_not_under_control(void)
-{
-    erts_aint32_t res = system_block_state.threads_to_block;
-
-    /* Waiting is always an allowed activity... */
-    res -= erts_smp_atomic32_read(&erts_system_block_state.in_activity.wait);
-
-    if (system_block_state.allowed_activities & ERTS_BS_FLG_ALLOW_GC)
-	res -= erts_smp_atomic32_read(&erts_system_block_state.in_activity.gc);
-
-    if (system_block_state.allowed_activities & ERTS_BS_FLG_ALLOW_IO)
-	res -= erts_smp_atomic32_read(&erts_system_block_state.in_activity.io);
-
-    if (res < 0) {
-	ASSERT(0);
-	return 0;
-    }
-    return res;
-}
-
-/*
- * erts_block_system() blocks all threads registered as blockable.
- * It doesn't return until either all threads have blocked (0 is returned)
- * or it has timed out (ETIMEDOUT) is returned.
- *
- * If allowed activities == 0, blocked threads will release all locks
- * before blocking.
- *
- * If allowed_activities is != 0, erts_block_system() will allow blockable
- * threads to continue executing as long as they are doing an allowed
- * activity. When they are done with the allowed activity they will block,
- * *but* they will block holding locks. Therefore, the thread calling
- * erts_block_system() must *not* try to aquire any locks that might be
- * held by blocked threads holding locks from allowed activities.
- *
- * Currently allowed_activities are:
- *	* ERTS_BS_FLG_ALLOW_GC		Thread continues with garbage
- *					collection and blocks with
- *					main process lock on current
- *					process locked.
- *	* ERTS_BS_FLG_ALLOW_IO		Thread continues with I/O
- */
-
-void
-erts_block_system(Uint32 allowed_activities)
-{
-    int do_block;
-    profile_sched_msg_q psmq;
-    
-    psmq.n = 0;
-#ifdef ERTS_ENABLE_LOCK_CHECK
-    erts_lc_check_exact(NULL, 0); /* No locks should be locked */
-#endif
-
-    erts_smp_mtx_lock(&system_block_state.mtx);
-
-    do_block = erts_smp_pending_system_block();
-    if (do_block
-	&& system_block_state.have_blocker
-	&& erts_smp_equal_tids(system_block_state.blocker_tid,
-			       erts_smp_thr_self())) {
-	ASSERT(system_block_state.recursive_block >= 0);
-	system_block_state.recursive_block++;
-
-	/* You are not allowed to restrict allowed activites
-	   in a recursive block! */
-	ERTS_SMP_LC_ASSERT((system_block_state.allowed_activities
-			    & ~allowed_activities) == 0);
-    }
-    else {
-
-	erts_smp_atomic32_inc(&erts_system_block_state.do_block);
-
-	/* Someone else might be waiting for us to block... */
-	if (do_block) {
-	do_block_me:
-	    block_me(NULL, NULL, NULL, 1, 1, 0, &psmq);
-	}
-
-	ASSERT(!system_block_state.have_blocker);
-	system_block_state.have_blocker = 1;
-	system_block_state.blocker_tid = erts_smp_thr_self();
-	system_block_state.allowed_activities = allowed_activities;
-
-	if (is_blockable_thread())
-	    system_block_state.threads_to_block--;
-
-	while (threads_not_under_control() && !system_block_state.emergency)
-	    erts_smp_cnd_wait(&system_block_state.cnd, &system_block_state.mtx);
-
-	if (system_block_state.emergency) {
-	    system_block_state.have_blocker = 0;
-	    goto do_block_me;
-	}
-    }
-
-    erts_smp_mtx_unlock(&system_block_state.mtx);
-
-    if (erts_system_profile_flags.scheduler && psmq.n > 0 )
-    	dispatch_profile_msg_q(&psmq);
-}
-
-/*
- * erts_emergency_block_system() should only be called when we are
- * about to write a crash dump...
- */
-
-int
-erts_emergency_block_system(long timeout, Uint32 allowed_activities)
-{
-    int res = 0;
-    long another_blocker;
-
-    erts_smp_mtx_lock(&system_block_state.mtx);
-
-    if (system_block_state.emergency) {
-	 /* Argh... */
-	res = EINVAL;
-	goto done;
-    }
-
-    another_blocker = erts_smp_pending_system_block();
-    system_block_state.emergency = 1;
-    erts_smp_atomic32_inc(&erts_system_block_state.do_block);
-
-    if (another_blocker) {
-	if (is_blocker()) {
-	    erts_smp_atomic32_dec(&erts_system_block_state.do_block);
-	    res = 0;
-	    goto done;
-	}
-	/* kick the other blocker */
-	erts_smp_cnd_broadcast(&system_block_state.cnd);
-	while (system_block_state.have_blocker)
-	    erts_smp_cnd_wait(&system_block_state.cnd, &system_block_state.mtx);
-    }
-
-    ASSERT(!system_block_state.have_blocker);
-    system_block_state.have_blocker = 1;
-    system_block_state.blocker_tid = erts_smp_thr_self();
-    system_block_state.allowed_activities = allowed_activities;
-
-    if (is_blockable_thread())
-	system_block_state.threads_to_block--;
-
-    if (timeout < 0) {
-	while (threads_not_under_control())
-	    erts_smp_cnd_wait(&system_block_state.cnd, &system_block_state.mtx);
-    }
-    else {	
-	system_block_state.emergency_timeout = timeout;
-	erts_smp_cnd_signal(&system_block_state.watchdog_cnd);
-
-	while (system_block_state.emergency_timeout >= 0
-	       && threads_not_under_control()) {
-	    erts_smp_cnd_wait(&system_block_state.cnd,
-			      &system_block_state.mtx);
-	}
-    }
- done:
-    erts_smp_mtx_unlock(&system_block_state.mtx);
-    return res;
-}
-
-void
-erts_release_system(void)
-{
-    long do_block;
-    profile_sched_msg_q psmq;
-    
-    psmq.n = 0;
-
-#ifdef ERTS_ENABLE_LOCK_CHECK
-    erts_lc_check_exact(NULL, 0); /* No locks should be locked */
-#endif
-
-    erts_smp_mtx_lock(&system_block_state.mtx);
-    ASSERT(is_blocker());
-
-    ASSERT(system_block_state.recursive_block >= 0);
-
-    if (system_block_state.recursive_block)
-	system_block_state.recursive_block--;
-    else {
-	do_block = erts_smp_atomic32_dectest(&erts_system_block_state.do_block);
-	system_block_state.have_blocker = 0;
-	if (is_blockable_thread())
-	    system_block_state.threads_to_block++;
-	else
-	    do_block = 0;
-
-	/* Someone else might be waiting for us to block... */
-	if (do_block)
-	    block_me(NULL, NULL, NULL, 1, 0, 0, &psmq);
-	else
-	    erts_smp_cnd_broadcast(&system_block_state.cnd);
-    }
-
-    erts_smp_mtx_unlock(&system_block_state.mtx);
-
-    if (erts_system_profile_flags.scheduler && psmq.n > 0) 
-    	dispatch_profile_msg_q(&psmq);
-}
-
-#ifdef ERTS_ENABLE_LOCK_CHECK
-
-void
-erts_lc_activity_change_begin(void)
-{
-    erts_smp_mtx_lock(&system_block_state.mtx);
-    system_block_state.activity_changing++;
-    erts_smp_mtx_unlock(&system_block_state.mtx);
-}
-
-void
-erts_lc_activity_change_end(void)
-{
-    erts_smp_mtx_lock(&system_block_state.mtx);
-    system_block_state.activity_changing--;
-    if (system_block_state.checking && !system_block_state.activity_changing)
-	erts_smp_cnd_broadcast(&system_block_state.cnd);
-    erts_smp_mtx_unlock(&system_block_state.mtx);
-}
-
-#endif
-
-int
-erts_is_system_blocked(erts_activity_t allowed_activities)
-{
-    int blkd;
-
-    erts_smp_mtx_lock(&system_block_state.mtx);
-    blkd = (erts_smp_pending_system_block()
-	    && system_block_state.have_blocker
-	    && erts_smp_equal_tids(system_block_state.blocker_tid,
-				   erts_smp_thr_self())
-	    && !(system_block_state.allowed_activities & ~allowed_activities));
-#ifdef ERTS_ENABLE_LOCK_CHECK
-    if (blkd) {
-	system_block_state.checking = 1;
-	while (system_block_state.activity_changing)
-	    erts_smp_cnd_wait(&system_block_state.cnd, &system_block_state.mtx);
-	system_block_state.checking = 0;
-	blkd = !threads_not_under_control();
-    }
-#endif
-    erts_smp_mtx_unlock(&system_block_state.mtx);
-    return blkd;
-}
-
-static void *
-emergency_watchdog(void *unused)
-{
-    erts_smp_mtx_lock(&system_block_state.mtx);
-    while (1) {
-	long timeout;
-	while (system_block_state.emergency_timeout < 0)
-	    erts_smp_cnd_wait(&system_block_state.watchdog_cnd, &system_block_state.mtx);
-	timeout = system_block_state.emergency_timeout;
-	erts_smp_mtx_unlock(&system_block_state.mtx);
-
-	if (erts_disable_tolerant_timeofday)
-	    erts_milli_sleep(timeout);
-	else {
-	    SysTimeval to;
-	    erts_get_timeval(&to);
-	    to.tv_sec += timeout / 1000;
-	    to.tv_usec += timeout % 1000;
-
-	    while (1) {
-		SysTimeval curr;
-		erts_milli_sleep(timeout);
-		erts_get_timeval(&curr);
-		if (curr.tv_sec > to.tv_sec
-		    || (curr.tv_sec == to.tv_sec && curr.tv_usec >= to.tv_usec)) {
-		    break;
-		}
-		timeout = (to.tv_sec - curr.tv_sec)*1000;
-		timeout += (to.tv_usec - curr.tv_usec)/1000;
-	    }
-	}
-
-	erts_smp_mtx_lock(&system_block_state.mtx);
-	system_block_state.emergency_timeout = -1;
-	erts_smp_cnd_broadcast(&system_block_state.cnd);
-    }
-    erts_smp_mtx_unlock(&system_block_state.mtx);
-    return NULL;
-}
-
-void
-erts_system_block_init(void)
-{
-    erts_smp_thr_opts_t thr_opts = ERTS_SMP_THR_OPTS_DEFAULT_INITER;
-    /* Local state... */
-    system_block_state.emergency = 0;
-    system_block_state.emergency_timeout = -1;
-    erts_smp_cnd_init(&system_block_state.watchdog_cnd);
-    system_block_state.threads_to_block = 0;
-    system_block_state.have_blocker = 0;
-    /* system_block_state.block_tid */
-    system_block_state.recursive_block = 0;
-    system_block_state.allowed_activities = 0;
-    erts_smp_tsd_key_create(&system_block_state.blockable_key);
-    erts_smp_mtx_init(&system_block_state.mtx, "system_block");
-    erts_smp_cnd_init(&system_block_state.cnd);
-#ifdef ERTS_ENABLE_LOCK_CHECK
-    system_block_state.activity_changing = 0;
-    system_block_state.checking = 0;
-#endif
-
-    thr_opts.suggested_stack_size = 8;
-    erts_smp_thr_create(&system_block_state.watchdog_tid,
-			emergency_watchdog,
-			NULL,
-			&thr_opts);
-
-    /* Global state... */
-
-    erts_smp_atomic32_init(&erts_system_block_state.do_block, 0);
-    erts_smp_atomic32_init(&erts_system_block_state.in_activity.wait, 0);
-    erts_smp_atomic32_init(&erts_system_block_state.in_activity.gc, 0);
-    erts_smp_atomic32_init(&erts_system_block_state.in_activity.io, 0);
-
-    /* Make sure blockable threads unregister when exiting... */
-    erts_smp_install_exit_handler(erts_unregister_blockable_thread);
-}
-
-
-#endif /* #ifdef ERTS_SMP */
-
 char *
 erts_read_env(char *key)
 {
@@ -4023,7 +3894,7 @@ erts_read_env(char *key)
     char *value = erts_alloc(ERTS_ALC_T_TMP, value_len);
     int res;
     while (1) {
-	res = erts_sys_getenv(key, value, &value_len);
+	res = erts_sys_getenv_raw(key, value, &value_len);
 	if (res <= 0)
 	    break;
 	value = erts_realloc(ERTS_ALC_T_TMP, value, value_len);
@@ -4042,26 +3913,292 @@ erts_free_read_env(void *value)
 	erts_free(ERTS_ALC_T_TMP, value);
 }
 
-int
-erts_write_env(char *key, char *value)
+
+typedef struct {
+    size_t sz;
+    char *ptr;
+} ErtsEmuArg;
+
+typedef struct {
+    int argc;
+    ErtsEmuArg *arg;
+    size_t no_bytes;
+} ErtsEmuArgs;
+
+ErtsEmuArgs saved_emu_args = {0};
+
+void
+erts_save_emu_args(int argc, char **argv)
 {
-    int ix, res;
-    size_t key_len = sys_strlen(key), value_len = sys_strlen(value);
-    char *key_value = erts_alloc_fnf(ERTS_ALC_T_TMP,
-				     key_len + 1 + value_len + 1);
-    if (!key_value) {
-	errno = ENOMEM;
-	return -1;
+#ifdef DEBUG
+    char *end_ptr;
+#endif
+    char *ptr;
+    int i;
+    size_t arg_sz[100];
+    size_t size;
+
+    ASSERT(!saved_emu_args.argc);
+
+    size = sizeof(ErtsEmuArg)*argc;
+    for (i = 0; i < argc; i++) {
+	size_t sz = sys_strlen(argv[i]);
+	if (i < sizeof(arg_sz)/sizeof(arg_sz[0]))
+	    arg_sz[i] = sz;
+	size += sz+1;
+    } 
+    ptr = (char *) malloc(size);
+    if (!ptr) {
+        ERTS_INTERNAL_ERROR("malloc failed to allocate memory!");
     }
-    sys_memcpy((void *) key_value, (void *) key, key_len);
-    ix = key_len;
-    key_value[ix++] = '=';
-    sys_memcpy((void *) key_value, (void *) value, value_len);
-    ix += value_len;
-    key_value[ix] = '\0';
-    res = erts_sys_putenv(key_value, key_len);
-    erts_free(ERTS_ALC_T_TMP, key_value);
+#ifdef DEBUG
+    end_ptr = ptr + size;
+#endif
+    saved_emu_args.arg = (ErtsEmuArg *) ptr;
+    ptr += sizeof(ErtsEmuArg)*argc;
+    saved_emu_args.argc = argc;
+    saved_emu_args.no_bytes = 0;
+    for (i = 0; i < argc; i++) {
+	size_t sz;
+	if (i < sizeof(arg_sz)/sizeof(arg_sz[0]))
+	    sz = arg_sz[i];
+	else
+	    sz = sys_strlen(argv[i]);
+	saved_emu_args.arg[i].ptr = ptr;
+	saved_emu_args.arg[i].sz = sz;
+	saved_emu_args.no_bytes += sz;
+	ptr += sz+1;
+	sys_strcpy(saved_emu_args.arg[i].ptr, argv[i]);
+    }
+    ASSERT(ptr == end_ptr);
+}
+
+Eterm
+erts_get_emu_args(Process *c_p)
+{
+#ifdef DEBUG
+    Eterm *end_hp;
+#endif
+    int i;
+    Uint hsz;
+    Eterm *hp, res;
+
+    hsz = saved_emu_args.no_bytes*2;
+    hsz += saved_emu_args.argc*2;
+
+    hp = HAlloc(c_p, hsz);
+#ifdef DEBUG
+    end_hp = hp + hsz;
+#endif
+    res = NIL;
+
+    for (i = saved_emu_args.argc-1; i >= 0; i--) {
+    Eterm arg = buf_to_intlist(&hp,
+				   saved_emu_args.arg[i].ptr,
+				   saved_emu_args.arg[i].sz,
+				   NIL);
+	res = CONS(hp, arg, res);
+	hp += 2;
+    }
+
+    ASSERT(hp == end_hp);
+
     return res;
+}
+
+
+Eterm
+erts_get_ethread_info(Process *c_p)
+{
+    Uint sz, *szp;
+    Eterm res, *hp, **hpp, *end_hp = NULL;
+
+    sz = 0;
+    szp = &sz;
+    hpp = NULL;
+
+    while (1) {
+	Eterm tup, list, name;
+#if defined(ETHR_NATIVE_ATOMIC32_IMPL)	  \
+    || defined(ETHR_NATIVE_ATOMIC64_IMPL)	\
+    || defined(ETHR_NATIVE_DW_ATOMIC_IMPL)
+	char buf[1024];
+	int i;
+	char **str;
+#endif
+
+	res = NIL;
+
+#ifdef ETHR_X86_MEMBAR_H__
+
+	tup = erts_bld_tuple(hpp, szp, 2,
+			     erts_bld_string(hpp, szp, "sse2"),
+#ifdef ETHR_X86_RUNTIME_CONF_HAVE_SSE2__
+			     erts_bld_string(hpp, szp,
+					     (ETHR_X86_RUNTIME_CONF_HAVE_SSE2__
+					      ? "yes" : "no"))
+#else
+			     erts_bld_string(hpp, szp, "yes")
+#endif
+	    );
+	res = erts_bld_cons(hpp, szp, tup, res);
+
+	tup = erts_bld_tuple(hpp, szp, 2,
+			     erts_bld_string(hpp, szp,
+					     "x86"
+#ifdef ARCH_64
+					     "_64"
+#endif
+					     " OOO"),
+			     erts_bld_string(hpp, szp,
+#ifdef ETHR_X86_OUT_OF_ORDER
+					     "yes"
+#else
+					     "no"
+#endif
+				 ));
+
+	res = erts_bld_cons(hpp, szp, tup, res);
+#endif
+
+#ifdef ETHR_SPARC_V9_MEMBAR_H__
+
+	tup = erts_bld_tuple(hpp, szp, 2,
+			     erts_bld_string(hpp, szp, "Sparc V9"),
+			     erts_bld_string(hpp, szp,
+#if defined(ETHR_SPARC_TSO)
+					     "TSO"
+#elif defined(ETHR_SPARC_PSO)
+					     "PSO"
+#elif defined(ETHR_SPARC_RMO)
+					     "RMO"
+#else
+					     "undefined"
+#endif
+				 ));
+
+	res = erts_bld_cons(hpp, szp, tup, res);
+
+#endif
+
+#ifdef ETHR_PPC_MEMBAR_H__
+
+	tup = erts_bld_tuple(hpp, szp, 2,
+			     erts_bld_string(hpp, szp, "lwsync"),
+			     erts_bld_string(hpp, szp,
+#if defined(ETHR_PPC_HAVE_LWSYNC)
+					     "yes"
+#elif defined(ETHR_PPC_HAVE_NO_LWSYNC)
+					     "no"
+#elif defined(ETHR_PPC_RUNTIME_CONF_HAVE_LWSYNC__)
+					     ETHR_PPC_RUNTIME_CONF_HAVE_LWSYNC__ ? "yes" : "no"
+#else
+					     "undefined"
+#endif
+				 ));
+
+	res = erts_bld_cons(hpp, szp, tup, res);
+
+#endif
+
+	tup = erts_bld_tuple(hpp, szp, 2,
+			     erts_bld_string(hpp, szp, "Native rw-spinlocks"),
+#ifdef ETHR_NATIVE_RWSPINLOCK_IMPL
+			     erts_bld_string(hpp, szp, ETHR_NATIVE_RWSPINLOCK_IMPL)
+#else
+			     erts_bld_string(hpp, szp, "no")
+#endif
+	    );
+	res = erts_bld_cons(hpp, szp, tup, res);
+
+	tup = erts_bld_tuple(hpp, szp, 2,
+			     erts_bld_string(hpp, szp, "Native spinlocks"),
+#ifdef ETHR_NATIVE_SPINLOCK_IMPL
+			     erts_bld_string(hpp, szp, ETHR_NATIVE_SPINLOCK_IMPL)
+#else
+			     erts_bld_string(hpp, szp, "no")
+#endif
+	    );
+	res = erts_bld_cons(hpp, szp, tup, res);
+
+
+	list = NIL;
+#ifdef ETHR_NATIVE_DW_ATOMIC_IMPL
+	if (ethr_have_native_dw_atomic()) {
+	    name = erts_bld_string(hpp, szp, ETHR_NATIVE_DW_ATOMIC_IMPL);
+	    str = ethr_native_dw_atomic_ops();
+	    for (i = 0; str[i]; i++) {
+		erts_snprintf(buf, sizeof(buf), "ethr_native_dw_atomic_%s()", str[i]);
+		list = erts_bld_cons(hpp, szp,
+				     erts_bld_string(hpp, szp, buf),
+				     list);
+	    }
+	    str = ethr_native_su_dw_atomic_ops();
+	    for (i = 0; str[i]; i++) {
+		erts_snprintf(buf, sizeof(buf), "ethr_native_su_dw_atomic_%s()", str[i]);
+		list = erts_bld_cons(hpp, szp,
+				     erts_bld_string(hpp, szp, buf),
+				     list);
+	    }
+	}
+	else 
+#endif
+	    name = erts_bld_string(hpp, szp, "no");
+
+	tup = erts_bld_tuple(hpp, szp, 3,
+			     erts_bld_string(hpp, szp, "Double word native atomics"),
+			     name,
+			     list);
+	res = erts_bld_cons(hpp, szp, tup, res);
+
+	list = NIL;
+#ifdef ETHR_NATIVE_ATOMIC64_IMPL
+	name = erts_bld_string(hpp, szp, ETHR_NATIVE_ATOMIC64_IMPL);
+	str = ethr_native_atomic64_ops();
+	for (i = 0; str[i]; i++) {
+	    erts_snprintf(buf, sizeof(buf), "ethr_native_atomic64_%s()", str[i]);
+	    list = erts_bld_cons(hpp, szp,
+				 erts_bld_string(hpp, szp, buf),
+				 list);
+	}
+#else
+	name = erts_bld_string(hpp, szp, "no");
+#endif
+	tup = erts_bld_tuple(hpp, szp, 3,
+			     erts_bld_string(hpp, szp, "64-bit native atomics"),
+			     name,
+			     list);
+	res = erts_bld_cons(hpp, szp, tup, res);
+
+	list = NIL;
+#ifdef ETHR_NATIVE_ATOMIC32_IMPL
+	name = erts_bld_string(hpp, szp, ETHR_NATIVE_ATOMIC32_IMPL);
+	str = ethr_native_atomic32_ops();
+	for (i = 0; str[i]; i++) {
+	    erts_snprintf(buf, sizeof(buf), "ethr_native_atomic32_%s()", str[i]);
+	    list = erts_bld_cons(hpp, szp,
+				erts_bld_string(hpp, szp, buf),
+				list);
+	}
+#else
+	name = erts_bld_string(hpp, szp, "no");
+#endif
+	tup = erts_bld_tuple(hpp, szp, 3,
+			     erts_bld_string(hpp, szp, "32-bit native atomics"),
+			     name,
+			     list);
+	res = erts_bld_cons(hpp, szp, tup, res);
+
+	if (hpp) {
+	    HRelease(c_p, end_hp, *hpp)
+	    return res;
+	}
+
+	hp = HAlloc(c_p, sz);
+	end_hp = hp + sz;
+	hpp = &hp;
+	szp = NULL;
+    }
 }
 
 /*
@@ -4072,16 +4209,279 @@ void erts_silence_warn_unused_result(long unused)
 
 }
 
+/*
+ * Interval counts
+ */
+void
+erts_interval_init(erts_interval_t *icp)
+{
+#ifdef ARCH_64
+    erts_atomic_init_nob(&icp->counter.atomic, 0);
+#else
+    erts_dw_aint_t dw;
+#ifdef ETHR_SU_DW_NAINT_T__
+    dw.dw_sint = 0;
+#else
+    dw.sint[ERTS_DW_AINT_HIGH_WORD] = 0;
+    dw.sint[ERTS_DW_AINT_LOW_WORD] = 0;
+#endif
+    erts_dw_atomic_init_nob(&icp->counter.atomic, &dw);
+
+#endif
+#ifdef DEBUG
+    icp->smp_api = 0;
+#endif
+}
+
+void
+erts_smp_interval_init(erts_interval_t *icp)
+{
+#ifdef ERTS_SMP
+    erts_interval_init(icp);
+#else
+    icp->counter.not_atomic = 0;
+#endif
+#ifdef DEBUG
+    icp->smp_api = 1;
+#endif
+}
+
+static ERTS_INLINE Uint64
+step_interval_nob(erts_interval_t *icp)
+{
+#ifdef ARCH_64
+    return (Uint64) erts_atomic_inc_read_nob(&icp->counter.atomic);
+#else
+    erts_dw_aint_t exp;
+
+    erts_dw_atomic_read_nob(&icp->counter.atomic, &exp);
+    while (1) {
+	erts_dw_aint_t new = exp;
+
+#ifdef ETHR_SU_DW_NAINT_T__
+	new.dw_sint++;
+#else
+	new.sint[ERTS_DW_AINT_LOW_WORD]++;
+	if (new.sint[ERTS_DW_AINT_LOW_WORD] == 0)
+	    new.sint[ERTS_DW_AINT_HIGH_WORD]++;
+#endif
+
+	if (erts_dw_atomic_cmpxchg_nob(&icp->counter.atomic, &new, &exp))
+	    return erts_interval_dw_aint_to_val__(&new);
+
+    }
+#endif
+}
+
+static ERTS_INLINE Uint64
+step_interval_relb(erts_interval_t *icp)
+{
+#ifdef ARCH_64
+    return (Uint64) erts_atomic_inc_read_relb(&icp->counter.atomic);
+#else
+    erts_dw_aint_t exp;
+
+    erts_dw_atomic_read_nob(&icp->counter.atomic, &exp);
+    while (1) {
+	erts_dw_aint_t new = exp;
+
+#ifdef ETHR_SU_DW_NAINT_T__
+	new.dw_sint++;
+#else
+	new.sint[ERTS_DW_AINT_LOW_WORD]++;
+	if (new.sint[ERTS_DW_AINT_LOW_WORD] == 0)
+	    new.sint[ERTS_DW_AINT_HIGH_WORD]++;
+#endif
+
+	if (erts_dw_atomic_cmpxchg_relb(&icp->counter.atomic, &new, &exp))
+	    return erts_interval_dw_aint_to_val__(&new);
+
+    }
+#endif
+}
+
+
+static ERTS_INLINE Uint64
+ensure_later_interval_nob(erts_interval_t *icp, Uint64 ic)
+{
+    Uint64 curr_ic;
+#ifdef ARCH_64
+    curr_ic = (Uint64) erts_atomic_read_nob(&icp->counter.atomic);
+    if (curr_ic > ic)
+	return curr_ic;
+    return (Uint64) erts_atomic_inc_read_nob(&icp->counter.atomic);
+#else
+    erts_dw_aint_t exp;
+
+    erts_dw_atomic_read_nob(&icp->counter.atomic, &exp);
+    curr_ic = erts_interval_dw_aint_to_val__(&exp);
+    if (curr_ic > ic)
+	return curr_ic;
+
+    while (1) {
+	erts_dw_aint_t new = exp;
+
+#ifdef ETHR_SU_DW_NAINT_T__
+	new.dw_sint++;
+#else
+	new.sint[ERTS_DW_AINT_LOW_WORD]++;
+	if (new.sint[ERTS_DW_AINT_LOW_WORD] == 0)
+	    new.sint[ERTS_DW_AINT_HIGH_WORD]++;
+#endif
+
+	if (erts_dw_atomic_cmpxchg_nob(&icp->counter.atomic, &new, &exp))
+	    return erts_interval_dw_aint_to_val__(&new);
+
+	curr_ic = erts_interval_dw_aint_to_val__(&exp);
+	if (curr_ic > ic)
+	    return curr_ic;
+    }
+#endif
+}
+
+
+static ERTS_INLINE Uint64
+ensure_later_interval_acqb(erts_interval_t *icp, Uint64 ic)
+{
+    Uint64 curr_ic;
+#ifdef ARCH_64
+    curr_ic = (Uint64) erts_atomic_read_acqb(&icp->counter.atomic);
+    if (curr_ic > ic)
+	return curr_ic;
+    return (Uint64) erts_atomic_inc_read_acqb(&icp->counter.atomic);
+#else
+    erts_dw_aint_t exp;
+
+    erts_dw_atomic_read_acqb(&icp->counter.atomic, &exp);
+    curr_ic = erts_interval_dw_aint_to_val__(&exp);
+    if (curr_ic > ic)
+	return curr_ic;
+
+    while (1) {
+	erts_dw_aint_t new = exp;
+
+#ifdef ETHR_SU_DW_NAINT_T__
+	new.dw_sint++;
+#else
+	new.sint[ERTS_DW_AINT_LOW_WORD]++;
+	if (new.sint[ERTS_DW_AINT_LOW_WORD] == 0)
+	    new.sint[ERTS_DW_AINT_HIGH_WORD]++;
+#endif
+
+	if (erts_dw_atomic_cmpxchg_acqb(&icp->counter.atomic, &new, &exp))
+	    return erts_interval_dw_aint_to_val__(&new);
+
+	curr_ic = erts_interval_dw_aint_to_val__(&exp);
+	if (curr_ic > ic)
+	    return curr_ic;
+    }
+#endif
+}
+
+Uint64
+erts_step_interval_nob(erts_interval_t *icp)
+{
+    ASSERT(!icp->smp_api);
+    return step_interval_nob(icp);
+}
+
+Uint64
+erts_step_interval_relb(erts_interval_t *icp)
+{
+    ASSERT(!icp->smp_api);
+    return step_interval_relb(icp);
+}
+
+Uint64
+erts_smp_step_interval_nob(erts_interval_t *icp)
+{
+    ASSERT(icp->smp_api);
+#ifdef ERTS_SMP
+    return step_interval_nob(icp);
+#else
+    return ++icp->counter.not_atomic;
+#endif
+}
+
+Uint64
+erts_smp_step_interval_relb(erts_interval_t *icp)
+{
+    ASSERT(icp->smp_api);
+#ifdef ERTS_SMP
+    return step_interval_relb(icp);
+#else
+    return ++icp->counter.not_atomic;
+#endif
+}
+
+Uint64
+erts_ensure_later_interval_nob(erts_interval_t *icp, Uint64 ic)
+{
+    ASSERT(!icp->smp_api);
+    return ensure_later_interval_nob(icp, ic);
+}
+
+Uint64
+erts_ensure_later_interval_acqb(erts_interval_t *icp, Uint64 ic)
+{
+    ASSERT(!icp->smp_api);
+    return ensure_later_interval_acqb(icp, ic);
+}
+
+Uint64
+erts_smp_ensure_later_interval_nob(erts_interval_t *icp, Uint64 ic)
+{
+    ASSERT(icp->smp_api);
+#ifdef ERTS_SMP
+    return ensure_later_interval_nob(icp, ic);
+#else
+    if (icp->counter.not_atomic > ic)
+	return icp->counter.not_atomic;
+    else
+	return ++icp->counter.not_atomic;
+#endif
+}
+
+Uint64
+erts_smp_ensure_later_interval_acqb(erts_interval_t *icp, Uint64 ic)
+{
+    ASSERT(icp->smp_api);
+#ifdef ERTS_SMP
+    return ensure_later_interval_acqb(icp, ic);
+#else
+    if (icp->counter.not_atomic > ic)
+	return icp->counter.not_atomic;
+    else
+	return ++icp->counter.not_atomic;
+#endif
+}
+
+/*
+ * A millisecond timestamp without time correction where there's no hrtime
+ * - for tracing on "long" things...
+ */
+Uint64 erts_timestamp_millis(void)
+{
+#ifdef HAVE_GETHRTIME
+    return (Uint64) (sys_gethrtime() / 1000000);
+#else
+    Uint64 res;
+    SysTimeval tv;
+    sys_gettimeofday(&tv);
+    res = (Uint64) tv.tv_sec*1000000;
+    res += (Uint64) tv.tv_usec;
+    return (res / 1000);
+#endif
+}
+
 #ifdef DEBUG
 /*
  * Handy functions when using a debugger - don't use in the code!
  */
 
-void upp(buf,sz)
-byte* buf;
-int sz;
+void upp(byte *buf, size_t sz)
 {
-    bin_write(ERTS_PRINT_STDERR,NULL,buf,sz);
+    bin_write(ERTS_PRINT_STDERR, NULL, buf, sz);
 }
 
 void pat(Eterm atom)
@@ -4106,7 +4506,7 @@ Process *p;
     
 void ppi(Eterm pid)
 {
-    pp(erts_pid2proc_unlocked(pid));
+    pp(erts_proc_lookup(pid));
 }
 
 void td(Eterm x)

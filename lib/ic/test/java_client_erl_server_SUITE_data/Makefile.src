@@ -1,7 +1,7 @@
 #
 # %CopyrightBegin%
 # 
-# Copyright Ericsson AB 2003-2011. All Rights Reserved.
+# Copyright Ericsson AB 2003-2013. All Rights Reserved.
 # 
 # The contents of this file are subject to the Erlang Public License,
 # Version 1.1, (the "License"); you may not use this file except in
@@ -66,23 +66,35 @@ CLASS_FILES = $(JAVA_FILES:.java=.class)
 ERL_FILES = $(GEN_ERL_FILES) m_i_impl.erl
 EBINS = $(ERL_FILES:.erl=.@EMULATOR@)
 
-
+@IFEQ@ (@jinterface@,not_found)
+all:
+@ELSE@
 all: $(CLASS_FILES) $(EBINS)
+@ENDIF@
+
+$(GEN_ERL_FILES) $(GEN_HRL_FILES):  java_erl_test.built_erl
+$(GEN_JAVA_FILES): java_erl_test.built_java
+$(CLASS_FILES): $(GEN_JAVA_FILES)
+$(EBINS): $(GEN_ERL_FILES) $(GEN_HRL_FILES)
 
 clean:	
 	-rm -f $(GEN_JAVA_FILES) $(CLASS_FILES) \
-		$(GEN_ERL_FILES) $(GEN_HRL_FILES) $(EBINS) 
+		$(GEN_ERL_FILES) $(GEN_HRL_FILES) $(EBINS) \
+		java_erl_test.built_erl java_erl_test.built_java
 	-del /F /Q $(GEN_JAVA_FILES) $(CLASS_FILES) \
-		$(GEN_ERL_FILES) $(GEN_HRL_FILES) $(EBINS) 
+		$(GEN_ERL_FILES) $(GEN_HRL_FILES) $(EBINS) \
+		java_erl_test.built_erl java_erl_test.built_java
 
-$(GEN_JAVA_FILES) : java_erl_test.idl
+java_erl_test.built_java: java_erl_test.idl
 	$(ERLC) -I $(IC_INCLUDE_PATH) "+{be,java}" java_erl_test.idl
+	echo done > java_erl_test.built_java
 
 $(CLASS_FILES) : $(JAVA_FILES)
 	$(JAVAC) -classpath $(CLASSPATH) $(JAVA_FILES)
 
-$(GEN_ERL_FILES) $(GEN_HRL_FILES): java_erl_test.idl
+java_erl_test.built_erl: java_erl_test.idl
 	$(ERLC) -I $(IC_INCLUDE_PATH) "+{be,erl_genserv}" java_erl_test.idl
+	echo done > java_erl_test.built_erl
 
 .erl.@EMULATOR@:
 	$(ERLC) -I $(IC_INCLUDE_PATH) $<

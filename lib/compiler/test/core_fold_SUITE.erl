@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %% 
-%% Copyright Ericsson AB 2007-2011. All Rights Reserved.
+%% Copyright Ericsson AB 2007-2013. All Rights Reserved.
 %% 
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -21,7 +21,9 @@
 -export([all/0, suite/0,groups/0,init_per_suite/1, end_per_suite/1, 
 	 init_per_group/2,end_per_group/2,
 	 t_element/1,setelement/1,t_length/1,append/1,t_apply/1,bifs/1,
-	 eq/1,nested_call_in_case/1,coverage/1]).
+	 eq/1,nested_call_in_case/1,guard_try_catch/1,coverage/1,
+	 unused_multiple_values_error/1,unused_multiple_values/1,
+	 multiple_aliases/1,redundant_boolean_clauses/1,mixed_matching_clauses/1]).
 
 -export([foo/0,foo/1,foo/2,foo/3]).
 
@@ -31,11 +33,15 @@ suite() -> [{ct_hooks,[ts_install_cth]}].
 
 all() -> 
     test_lib:recompile(?MODULE),
-    [t_element, setelement, t_length, append, t_apply, bifs,
-     eq, nested_call_in_case, coverage].
+    [{group,p}].
 
 groups() -> 
-    [].
+    [{p,test_lib:parallel(),
+      [t_element,setelement,t_length,append,t_apply,bifs,
+       eq,nested_call_in_case,guard_try_catch,coverage,
+       unused_multiple_values_error,unused_multiple_values,
+       multiple_aliases,redundant_boolean_clauses,mixed_matching_clauses]}].
+
 
 init_per_suite(Config) ->
     Config.
@@ -67,6 +73,9 @@ t_element(Config) when is_list(Config) ->
     ?line {'EXIT',{badarg,_}} = (catch element(5, {a,b,c,d})),
     ?line {'EXIT',{badarg,_}} = (catch element(5, {a,b,X,d})),
     ?line {'EXIT',{badarg,_}} = (catch element(5.0, {a,b,X,d})),
+    {'EXIT',{badarg,_}} = (catch element(2, not_a_tuple)),
+    {'EXIT',{badarg,_}} = (catch element(2, [])),
+    {'EXIT',{badarg,_}} = (catch element(2, Tuple == 3)),
     case id({a,b,c}) of
 	{_,_,_}=Tup ->
 	    ?line {'EXIT',{badarg,_}} = (catch element(4, Tup))
@@ -87,6 +96,9 @@ setelement(Config) when is_list(Config) ->
 
     ?line {'EXIT',{badarg,_}} = (catch setelement_crash({a,b,c,d,e,f})),
     ?line error = setelement_crash_2({a,b,c,d,e,f}, <<42>>),
+
+    {'EXIT',{badarg,_}} = (catch setelement(1, not_a_tuple, New)),
+
     ok.
 
 setelement_crash(Tuple) ->
@@ -207,6 +219,23 @@ nested_call_in_case(Config) when is_list(Config) ->
     ?line {'EXIT',_} = (catch Mod:a(not_a_list, 42)),
     ok.
 
+guard_try_catch(_Config) ->
+    false = do_guard_try_catch(key, value),
+    value = get(key),
+    ok.
+
+do_guard_try_catch(K, V) ->
+    %% This try...catch block looks like a guard.
+    %% Make sure that it is not optimized like a guard
+    %% (the put/2 call must not be optimized away).
+    try
+	put(K, V),
+	false
+    catch
+	_:_ ->
+	    false
+    end.
+
 coverage(Config) when is_list(Config) ->
     ?line {'EXIT',{{case_clause,{a,b,c}},_}} =
 	(catch cover_will_match_list_type({a,b,c})),
@@ -214,6 +243,7 @@ coverage(Config) when is_list(Config) ->
 	(catch cover_will_match_list_type({a,b,c,d})),
     ?line a = cover_remove_non_vars_alias({a,b,c}),
     ?line error = cover_will_match_lit_list(),
+    {ok,[a]} = cover_is_safe_bool_expr(a),
 
     %% Make sure that we don't attempt to make literals
     %% out of pids. (Putting a pid into a #c_literal{}
@@ -221,6 +251,12 @@ coverage(Config) when is_list(Config) ->
     case list_to_pid("<0.42.0>") of
 	Pid when is_pid(Pid) -> ok
     end,
+
+    %% Cover the non-variable case in bsm_do_an/4.
+    ok = bsm_an_inlined(<<1>>, Config),
+    error = bsm_an_inlined(<<1,2,3>>, Config),
+    error = bsm_an_inlined([], Config),
+
     ok.
 
 cover_will_match_list_type(A) ->
@@ -248,5 +284,104 @@ cover_will_match_lit_list() ->
 	_ ->
 	    error
     end.
+
+cover_is_safe_bool_expr(X) ->
+    %% Use a try...catch that looks like a try...catch in a guard.
+    try
+	%% let V = [X] in {ok,V}
+	%%    is_safe_simple([X]) ==> true
+	%%    is_safe_bool_expr([X]) ==> false
+	V = [X],
+	{ok,V}
+    catch
+	_:_ ->
+	    false
+    end.
+
+bsm_an_inlined(<<_:8>>, _) -> ok;
+bsm_an_inlined(_, _) -> error.
+
+unused_multiple_values_error(Config) when is_list(Config) ->
+    PrivDir = ?config(priv_dir, Config),
+    Dir = filename:dirname(code:which(?MODULE)),
+    Core = filename:join(Dir, "unused_multiple_values_error"),
+    Opts = [no_copt,clint,return,from_core,{outdir,PrivDir}
+	   |test_lib:opt_opts(?MODULE)],
+    {error,[{unused_multiple_values_error,
+	     [{none,core_lint,{return_mismatch,{hello,1}}}]}],
+     []} = c:c(Core, Opts),
+    ok.
+
+unused_multiple_values(Config) when is_list(Config) ->
+    put(unused_multiple_values, []),
+    [false] = test_unused_multiple_values(false),
+    [b,a,{a,b},false] = test_unused_multiple_values({a,b}),
+    ok.
+
+test_unused_multiple_values(X) ->
+    ok = do_unused_multiple_values(X),
+    get(unused_multiple_values).
+
+do_unused_multiple_values(X) ->
+    case do_something(X) of
+        false ->
+            A = false;
+        Res ->
+            {A,B} = Res,
+            do_something(A),
+            do_something(B)
+    end,
+    _ThisShouldNotFail = A,
+    ok.
+
+do_something(I) ->
+    put(unused_multiple_values,
+	[I|get(unused_multiple_values)]),
+    I.
+
+
+%% Make sure that multiple aliases does not cause
+%% the case expression to be evaluated twice.
+multiple_aliases(Config) when is_list(Config) ->
+    do_ma(fun() ->
+		  X = Y = run_once(),
+		  {X,Y}
+	  end, {ok,ok}),
+    do_ma(fun() ->
+		  case {true,run_once()} of
+		      {true=A=B,ok=X=Y} ->
+			  {A,B,X,Y}
+		  end
+	  end, {true,true,ok,ok}),
+    ok.
+
+do_ma(Fun, Expected) when is_function(Fun, 0) ->
+    Expected = Fun(),
+    ran_once = erase(run_once),
+    ok.
+
+run_once() ->
+    undefined = put(run_once, ran_once),
+    ok.
+
+
+redundant_boolean_clauses(Config) when is_list(Config) ->
+  X = id(0),
+  yes = case X == 0 of
+            false -> no;
+            false -> no;
+            true -> yes
+        end.
+
+mixed_matching_clauses(Config) when is_list(Config) ->
+  0 = case #{} of
+          #{} -> 0;
+          a -> 1
+      end,
+  0 = case <<>> of
+          <<>> -> 0;
+          a -> 1
+      end,
+  ok.
 
 id(I) -> I.

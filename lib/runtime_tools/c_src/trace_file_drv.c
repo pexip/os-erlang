@@ -21,6 +21,9 @@
  * Purpose: Send trace messages to a file.
  */
 
+#ifdef __WIN32__
+#include <windows.h>
+#endif
 #ifdef HAVE_CONFIG_H
 #  include "config.h"
 #endif
@@ -31,7 +34,6 @@
 #ifdef __WIN32__
 #  include <io.h>
 #  define write _write
-#  define open _open
 #  define close _close
 #  define unlink _unlink
 #else
@@ -40,11 +42,6 @@
 #include <errno.h>
 #include <sys/types.h>
 #include <fcntl.h>
-#ifdef VXWORKS
-#  include "reclaim.h"
-#endif
-
-
 
 /*
  * Deduce MAXPATHLEN, which is the one to use in this file, 
@@ -176,11 +173,13 @@ static TraceFileData *first_data;
 */
 static ErlDrvData trace_file_start(ErlDrvPort port, char *buff);
 static void trace_file_stop(ErlDrvData handle);
-static void trace_file_output(ErlDrvData handle, char *buff, int bufflen);
+static void trace_file_output(ErlDrvData handle, char *buff,
+			      ErlDrvSizeT bufflen);
 static void trace_file_finish(void);
-static int trace_file_control(ErlDrvData handle, unsigned int command, 
-			      char* buff, int count, 
-			      char** res, int res_size);
+static ErlDrvSSizeT trace_file_control(ErlDrvData handle,
+				      unsigned int command, 
+				      char* buff, ErlDrvSizeT count, 
+				      char** res, ErlDrvSizeT res_size);
 static void trace_file_timeout(ErlDrvData handle);
 
 /*
@@ -194,6 +193,12 @@ static int my_flush(TraceFileData *data);
 static void put_be(unsigned n, unsigned char *s);
 static void close_unlink_port(TraceFileData *data); 
 static int wrap_file(TraceFileData *data);
+#ifdef __WIN32__
+static int win_open(char *path, int flags, int mask);
+#define open win_open
+#else
+ErlDrvEntry *driver_init(void);
+#endif
 
 /*
 ** The driver struct
@@ -212,7 +217,18 @@ ErlDrvEntry trace_file_driver_entry = {
     NULL,                  /* void * that is not used (BC) */
     trace_file_control,    /* F_PTR control, port_control callback */
     trace_file_timeout,    /* F_PTR timeout, driver_set_timer callback */
-    NULL                   /* F_PTR outputv, reserved */
+    NULL,                  /* F_PTR outputv, reserved */
+    NULL, /* ready_async */
+    NULL, /* flush */
+    NULL, /* call */
+    NULL, /* event */
+    ERL_DRV_EXTENDED_MARKER,
+    ERL_DRV_EXTENDED_MAJOR_VERSION,
+    ERL_DRV_EXTENDED_MINOR_VERSION,
+    0,
+    NULL,
+    NULL,
+    NULL,
 };
 
 /*
@@ -240,6 +256,7 @@ static ErlDrvData trace_file_start(ErlDrvPort port, char *buff)
     FILETYPE fd;
     int n, w;
     static const char name[] = "trace_file_drv";
+
 
 #ifdef HARDDEBUG
     fprintf(stderr,"hello (%s)\r\n", buff);
@@ -347,17 +364,18 @@ static void trace_file_stop(ErlDrvData handle)
 /*
 ** Data sent from erlang to port.
 */
-static void trace_file_output(ErlDrvData handle, char *buff, int bufflen)
+static void trace_file_output(ErlDrvData handle, char *buff,
+			      ErlDrvSizeT bufflen)
 {
     int heavy = 0;
     TraceFileData *data = (TraceFileData *) handle;
     unsigned char b[5] = "";
     put_be((unsigned) bufflen, b + 1);
-    switch (my_write(data, b, sizeof(b))) {
+    switch (my_write(data, (unsigned char *) b, sizeof(b))) {
     case 1:
 	heavy = !0;
     case 0:
-	switch (my_write(data, buff, bufflen)) {
+	switch (my_write(data, (unsigned char *) buff, bufflen)) {
 	case 1:
 	    heavy = !0;
 	case 0:
@@ -391,9 +409,10 @@ static void trace_file_output(ErlDrvData handle, char *buff, int bufflen)
 /*
 ** Control message from erlang, we handle $f, which is flush.
 */
-static int trace_file_control(ErlDrvData handle, unsigned int command, 
-			      char* buff, int count, 
-			      char** res, int res_size)
+static ErlDrvSSizeT trace_file_control(ErlDrvData handle,
+				       unsigned int command, 
+				       char* buff, ErlDrvSizeT count, 
+				       char** res, ErlDrvSizeT res_size)
 {
     if (command == 'f') {
 	TraceFileData *data = (TraceFileData *) handle;
@@ -636,3 +655,40 @@ static int wrap_file(TraceFileData *data) {
     return 0;
 }
 
+#ifdef __WIN32__
+static int win_open(char *path, int flags, int mask)
+{
+  DWORD access = 0;
+  DWORD creation = 0;
+  HANDLE fd;
+  int ret;
+  if (flags & O_WRONLY) {
+    access =  GENERIC_WRITE;
+  } else if (flags & O_RDONLY) {
+    access = GENERIC_READ;
+  } else {
+    access = (GENERIC_READ | GENERIC_WRITE);
+  } 
+  
+  if (flags & O_CREAT) {
+    creation |= CREATE_ALWAYS;
+  }  else {
+     creation |= OPEN_ALWAYS;
+  }
+
+  fd = CreateFileA(path, access,  
+		   FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, 
+		   NULL, creation, FILE_ATTRIBUTE_NORMAL, NULL);
+  if (fd == INVALID_HANDLE_VALUE) {
+    
+    return -1;
+  }
+  
+  if ((ret = _open_osfhandle((intptr_t)fd, (flags & O_RDONLY) ? O_RDONLY : 0))
+      < 0) {
+    CloseHandle(fd);
+  }
+
+  return ret;
+}
+#endif

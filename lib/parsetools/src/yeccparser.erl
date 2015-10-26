@@ -17,7 +17,7 @@ line_of(Token) ->
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 1996-2010. All Rights Reserved.
+%% Copyright Ericsson AB 1996-2013. All Rights Reserved.
 %%
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -83,7 +83,7 @@ yeccpars0(Tokens, Tzr, State, States, Vstack) ->
             Error
     end.
 
-yecc_error_type(function_clause, [{?MODULE,F,ArityOrArgs} | _]) ->
+yecc_error_type(function_clause, [{?MODULE,F,ArityOrArgs,_} | _]) ->
     case atom_to_list(F) of
         "yeccgoto_" ++ SymbolL ->
             {ok,[{atom,_,Symbol}],_} = erl_scan:string(SymbolL),
@@ -178,7 +178,7 @@ yecctoken2string({integer,_,N}) -> io_lib:write(N);
 yecctoken2string({float,_,F}) -> io_lib:write(F);
 yecctoken2string({char,_,C}) -> io_lib:write_char(C);
 yecctoken2string({var,_,V}) -> io_lib:format("~s", [V]);
-yecctoken2string({string,_,S}) -> io_lib:write_unicode_string(S);
+yecctoken2string({string,_,S}) -> io_lib:write_string(S);
 yecctoken2string({reserved_symbol, _, A}) -> io_lib:write(A);
 yecctoken2string({_Cat, _, Val}) -> io_lib:write(Val);
 yecctoken2string({dot, _}) -> "'.'";

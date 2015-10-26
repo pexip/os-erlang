@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 1997-2011. All Rights Reserved.
+%% Copyright Ericsson AB 1997-2013. All Rights Reserved.
 %%
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -24,12 +24,13 @@
 
 -export([all/0, suite/0,groups/0,init_per_suite/1, end_per_suite/1, 
 	 init_per_group/2,end_per_group/2,
-	 app_test/1,
-	 file_1/1, module_mismatch/1, big_file/1, outdir/1, 
+	 app_test/1,appup_test/1,
+	 file_1/1, forms_2/1, module_mismatch/1, big_file/1, outdir/1,
 	 binary/1, makedep/1, cond_and_ifdef/1, listings/1, listings_big/1,
-	 other_output/1, package_forms/1, encrypted_abstr/1,
+	 other_output/1, encrypted_abstr/1,
 	 bad_record_use1/1, bad_record_use2/1, strict_record/1,
-	 missing_testheap/1, cover/1, env/1, core/1, asm/1]).
+	 missing_testheap/1, cover/1, env/1, core/1, asm/1,
+	 sys_pre_attributes/1]).
 
 -export([init/3]).
 
@@ -41,11 +42,12 @@ suite() -> [{ct_hooks,[ts_install_cth]}].
 
 all() -> 
     test_lib:recompile(?MODULE),
-    [app_test, file_1, module_mismatch, big_file, outdir,
+    [app_test, appup_test, file_1, forms_2, module_mismatch, big_file, outdir,
      binary, makedep, cond_and_ifdef, listings, listings_big,
-     other_output, package_forms, encrypted_abstr,
+     other_output, encrypted_abstr,
      {group, bad_record_use}, strict_record,
-     missing_testheap, cover, env, core, asm].
+     missing_testheap, cover, env, core, asm,
+     sys_pre_attributes].
 
 groups() -> 
     [{bad_record_use, [],
@@ -69,19 +71,37 @@ end_per_group(_GroupName, Config) ->
 app_test(Config) when is_list(Config) ->
     ?line ?t:app_test(compiler).
 
+%% Test that the Application upgrade file has no `basic' errors.";
+appup_test(Config) when is_list(Config) ->
+    ok = ?t:appup_test(compiler).
+
 %% Tests that we can compile and run a simple Erlang program,
 %% using compile:file/1.
 
 file_1(Config) when is_list(Config) ->
     ?line Dog = test_server:timetrap(test_server:minutes(5)),
+
+    process_flag(trap_exit, true),
+
     ?line {Simple, Target} = files(Config, "file_1"),
     ?line {ok, Cwd} = file:get_cwd(),
     ?line ok = file:set_cwd(filename:dirname(Target)),
-    ?line {ok,simple} = compile:file(Simple),	%Smoke test only.
+
+    %% Native from BEAM without compilation info.
     ?line {ok,simple} = compile:file(Simple, [slim]), %Smoke test only.
-    ?line {ok,simple} = compile:file(Simple, [native,report]), %Smoke test.
     ?line {ok,simple} = compile:file(Target, [native,from_beam]), %Smoke test.
-    ?line {ok,simple} = compile:file(Simple, [debug_info]),
+
+    %% Native from BEAM with compilation info.
+    ?line {ok,simple} = compile:file(Simple),	%Smoke test only.
+    ?line {ok,simple} = compile:file(Target, [native,from_beam]), %Smoke test.
+
+    ?line {ok,simple} = compile:file(Simple, [native,report]), %Smoke test.
+
+    ?line compile_and_verify(Simple, Target, []),
+    ?line compile_and_verify(Simple, Target, [native]),
+    ?line compile_and_verify(Simple, Target, [debug_info]),
+    ?line {ok,simple} = compile:file(Simple, [no_line_info]), %Coverage
+
     ?line ok = file:set_cwd(Cwd),
     ?line true = exists(Target),
     ?line passed = run(Target, test, []),
@@ -89,14 +109,42 @@ file_1(Config) when is_list(Config) ->
     %% Cleanup.
     ?line ok = file:delete(Target),
     ?line ok = file:del_dir(filename:dirname(Target)),
+
+    %% There should not be any messages in the messages.
+    receive
+	Any ->
+	    ?t:fail({unexpected,Any})
+    after 10 ->
+	    ok
+    end,
+
     ?line test_server:timetrap_cancel(Dog),
+    ok.
+
+forms_2(Config) when is_list(Config) ->
+    Src = "/foo/bar",
+    AbsSrc = filename:absname(Src),
+    {ok,simple,Binary} = compile:forms([{attribute,1,module,simple}],
+				       [binary,{source,Src}]),
+    code:load_binary(simple, Src, Binary),
+    Info = simple:module_info(compile),
+
+    %% Test that the proper source is returned.
+    AbsSrc = proplists:get_value(source, Info),
+
+    %% Ensure that the options are not polluted with 'source'.
+    [] = proplists:get_value(options, Info),
+
+    %% Cleanup.
+    true = code:delete(simple),
+    false = code:purge(simple),
     ok.
 
 module_mismatch(Config) when is_list(Config) ->
     ?line DataDir = ?config(data_dir, Config),
     ?line File = filename:join(DataDir, "wrong_module_name.erl"),
-    ?line {error,[{"wrong_module_name.beam",
-		   [{compile,{module_name,arne,"wrong_module_name"}}]}],
+    {error,[{"wrong_module_name.beam",
+	     [{none,compile,{module_name,arne,"wrong_module_name"}}]}],
 	   []} = compile:file(File, [return]),
     ?line error = compile:file(File, [report]),
 
@@ -112,10 +160,9 @@ big_file(Config) when is_list(Config) ->
     ?line Big = filename:join(DataDir, "big.erl"),
     ?line Target = filename:join(PrivDir, "big.beam"),
     ?line ok = file:set_cwd(PrivDir),
-    ?line {ok,big} = compile:file(Big, []),
-    ?line {ok,big} = compile:file(Big, [r9,debug_info]),
-    ?line {ok,big} = compile:file(Big, [no_postopt]),
-    ?line true = exists(Target),
+    ?line compile_and_verify(Big, Target, []),
+    ?line compile_and_verify(Big, Target, [debug_info]),
+    ?line compile_and_verify(Big, Target, [no_postopt]),
 
     %% Cleanup.
     ?line ok = file:delete(Target),
@@ -199,6 +246,12 @@ makedep(Config) when is_list(Config) ->
       [makedep,{makedep_output,Target}|IncludeOptions]),
     ?line {ok,Mf6} = file:read_file(Target),
     ?line BasicMf2 = makedep_canonicalize_result(Mf6, DataDir),
+    %% Rule with creating phony target.
+    ?line PhonyMfName = SimpleRootname ++ "-phony.mk",
+    ?line {ok,PhonyMf} = file:read_file(PhonyMfName),
+    ?line {ok,_,Mf7} = compile:file(Simple,
+      [binary,makedep,makedep_phony|IncludeOptions]),
+    ?line PhonyMf = makedep_canonicalize_result(Mf7, DataDir),
 
     ?line ok = file:delete(Target),
     ?line ok = file:del_dir(filename:dirname(Target)),
@@ -237,57 +290,67 @@ cond_and_ifdef(Config) when is_list(Config) ->
     ok.
 
 listings(Config) when is_list(Config) ->
-    ?line Dog = test_server:timetrap(test_server:minutes(8)),
-    ?line DataDir = ?config(data_dir, Config),
-    ?line PrivDir = ?config(priv_dir, Config),
-    ?line Simple = filename:join(DataDir, simple),
-    ?line TargetDir = filename:join(PrivDir, listings),
-    ?line ok = file:make_dir(TargetDir),
+    Dog = test_server:timetrap(test_server:minutes(8)),
+    DataDir = ?config(data_dir, Config),
+    PrivDir = ?config(priv_dir, Config),
+    ok = do_file_listings(DataDir, PrivDir, [
+	    "simple",
+	    "small",
+	    "small_maps"
+	]),
+    test_server:timetrap_cancel(Dog),
+    ok.
+
+do_file_listings(_, _, []) -> ok;
+do_file_listings(DataDir, PrivDir, [File|Files]) ->
+    Simple = filename:join(DataDir, File),
+    TargetDir = filename:join(PrivDir, listings),
+    ok = file:make_dir(TargetDir),
 
     %% Test all dedicated listing options.
-    ?line do_listing(Simple, TargetDir, 'S'),
-    ?line do_listing(Simple, TargetDir, 'E'),
-    ?line do_listing(Simple, TargetDir, 'P'),
-    ?line do_listing(Simple, TargetDir, dpp, ".pp"),
-    ?line do_listing(Simple, TargetDir, dabstr, ".abstr"),
-    ?line do_listing(Simple, TargetDir, dexp, ".expand"),
-    ?line do_listing(Simple, TargetDir, dcore, ".core"),
-    ?line do_listing(Simple, TargetDir, doldinline, ".oldinline"),
-    ?line do_listing(Simple, TargetDir, dinline, ".inline"),
-    ?line do_listing(Simple, TargetDir, dcore, ".core"),
-    ?line do_listing(Simple, TargetDir, dcopt, ".copt"),
-    ?line do_listing(Simple, TargetDir, dsetel, ".dsetel"),
-    ?line do_listing(Simple, TargetDir, dkern, ".kernel"),
-    ?line do_listing(Simple, TargetDir, dlife, ".life"),
-    ?line do_listing(Simple, TargetDir, dcg, ".codegen"),
-    ?line do_listing(Simple, TargetDir, dblk, ".block"),
-    ?line do_listing(Simple, TargetDir, dbool, ".bool"),
-    ?line do_listing(Simple, TargetDir, dtype, ".type"),
-    ?line do_listing(Simple, TargetDir, ddead, ".dead"),
-    ?line do_listing(Simple, TargetDir, djmp, ".jump"),
-    ?line do_listing(Simple, TargetDir, dclean, ".clean"),
-    ?line do_listing(Simple, TargetDir, dpeep, ".peep"),
-    ?line do_listing(Simple, TargetDir, dopt, ".optimize"),
+    do_listing(Simple, TargetDir, 'S'),
+    do_listing(Simple, TargetDir, 'E'),
+    do_listing(Simple, TargetDir, 'P'),
+    do_listing(Simple, TargetDir, dpp, ".pp"),
+    do_listing(Simple, TargetDir, dabstr, ".abstr"),
+    do_listing(Simple, TargetDir, dexp, ".expand"),
+    do_listing(Simple, TargetDir, dcore, ".core"),
+    do_listing(Simple, TargetDir, doldinline, ".oldinline"),
+    do_listing(Simple, TargetDir, dinline, ".inline"),
+    do_listing(Simple, TargetDir, dcore, ".core"),
+    do_listing(Simple, TargetDir, dcopt, ".copt"),
+    do_listing(Simple, TargetDir, dsetel, ".dsetel"),
+    do_listing(Simple, TargetDir, dkern, ".kernel"),
+    do_listing(Simple, TargetDir, dlife, ".life"),
+    do_listing(Simple, TargetDir, dcg, ".codegen"),
+    do_listing(Simple, TargetDir, dblk, ".block"),
+    do_listing(Simple, TargetDir, dbool, ".bool"),
+    do_listing(Simple, TargetDir, dtype, ".type"),
+    do_listing(Simple, TargetDir, ddead, ".dead"),
+    do_listing(Simple, TargetDir, djmp, ".jump"),
+    do_listing(Simple, TargetDir, dclean, ".clean"),
+    do_listing(Simple, TargetDir, dpeep, ".peep"),
+    do_listing(Simple, TargetDir, dopt, ".optimize"),
 
     %% First clean up.
-    ?line Listings = filename:join(PrivDir, listings),
-    ?line lists:foreach(fun(F) -> ok = file:delete(F) end,
-			filelib:wildcard(filename:join(Listings, "*"))),
+    Listings = filename:join(PrivDir, listings),
+    lists:foreach(fun(F) -> ok = file:delete(F) end,
+	filelib:wildcard(filename:join(Listings, "*"))),
 
     %% Test options that produce a listing file if 'binary' is not given.
-    ?line do_listing(Simple, TargetDir, to_pp, ".P"),
-    ?line do_listing(Simple, TargetDir, to_exp, ".E"),
-    ?line do_listing(Simple, TargetDir, to_core0, ".core"),
-    ?line ok = file:delete(filename:join(Listings, "simple.core")),
-    ?line do_listing(Simple, TargetDir, to_core, ".core"),
-    ?line do_listing(Simple, TargetDir, to_kernel, ".kernel"),
+    do_listing(Simple, TargetDir, to_pp, ".P"),
+    do_listing(Simple, TargetDir, to_exp, ".E"),
+    do_listing(Simple, TargetDir, to_core0, ".core"),
+    ok = file:delete(filename:join(Listings, File ++ ".core")),
+    do_listing(Simple, TargetDir, to_core, ".core"),
+    do_listing(Simple, TargetDir, to_kernel, ".kernel"),
 
     %% Final clean up.
-    ?line lists:foreach(fun(F) -> ok = file:delete(F) end,
-			filelib:wildcard(filename:join(Listings, "*"))),
-    ?line ok = file:del_dir(Listings),
-    ?line test_server:timetrap_cancel(Dog),
-    ok.
+    lists:foreach(fun(F) -> ok = file:delete(F) end,
+	filelib:wildcard(filename:join(Listings, "*"))),
+    ok = file:del_dir(Listings),
+
+    do_file_listings(DataDir,PrivDir,Files).
 
 listings_big(Config) when is_list(Config) ->
     ?line Dog = test_server:timetrap(test_server:minutes(10)),
@@ -361,42 +424,16 @@ other_output(Config) when is_list(Config) ->
     ?line test_server:timetrap_cancel(Dog),
     ok.
 
-package_forms(Config) when is_list(Config) ->
-    Fs = [{attribute,1,file,{"./p.erl",1}},
-	  {attribute,1,module,[p,p]},
-	  {attribute,3,compile,export_all},
-	  {attribute,1,file,
-	   {"/clearcase/otp/erts/lib/stdlib/include/qlc.hrl",1}},
-	  {attribute,6,file,{"./p.erl",6}},
-	  {function,7,q,0,
-	   [{clause,7,[],[],
-	     [{call,8,
-	       {remote,8,{atom,8,qlc},{atom,8,q}},
-	       [{tuple,-8,
-		 [{atom,-8,qlc_lc},
-		  {'fun',-8,
-		   {clauses,
-		    [{clause,-8,[],[],
-		      [{tuple,-8,
-			[{atom,-8,simple_v1},
-			 {atom,-8,'X'},
-			 {'fun',-8,{clauses,[{clause,-8,[],[],[{nil,8}]}]}},
-			 {integer,-8,8}]}]}]}},
-		  {atom,-8,undefined}]}]}]}]},
-	  {eof,9}],
-    {ok,'p.p',_} = compile:forms(Fs, ['S',report]),
-    ok.
-
 encrypted_abstr(Config) when is_list(Config) ->
     ?line Dog = test_server:timetrap(test_server:minutes(10)),
     ?line {Simple,Target} = files(Config, "encrypted_abstr"),
 
     Res = case has_crypto() of
-	      no ->
+	      false ->
 		  %% No crypto.
 		  ?line encrypted_abstr_no_crypto(Simple, Target),
 		  {comment,"The crypto application is missing or broken"};
-	      yes ->
+	      true ->
 		  %% Simulate not having crypto by removing
 		  %% the crypto application from the path.
 		  ?line OldPath = code:get_path(),
@@ -469,6 +506,16 @@ encrypted_abstr_1(Simple, Target) ->
     ?line {error,beam_lib,{key_missing_or_invalid,"simple.beam",abstract_code}} =
 	beam_lib:chunks("simple.beam", [abstract_code]),
     ?line ok = file:set_cwd(OldCwd),
+
+    %% Test key compatibility by reading a BEAM file produced before
+    %% the update to the new crypto functions.
+    install_crypto_key("an old key"),
+    KeyCompat = filename:join(filename:dirname(Simple),
+			      "key_compatibility"),
+    {ok,{key_compatibility,[Chunk]}} = beam_lib:chunks(KeyCompat,
+						       [abstract_code]),
+    {abstract_code,{raw_abstract_v1,_}} = Chunk,
+
     ok.
 
 
@@ -478,6 +525,7 @@ write_crypt_file(Contents0) ->
     ok = file:write_file(".erlang.crypt", Contents).
 
 encrypted_abstr_no_crypto(Simple, Target) ->
+    io:format("simpe: ~p~n", [Simple]),
     ?line TargetDir = filename:dirname(Target),
     ?line Key = "ablurf123BX#$;3",
     ?line error = compile:file(Simple,
@@ -492,11 +540,11 @@ verify_abstract(Target) ->
 has_crypto() ->
     try
 	crypto:start(),
-	crypto:info(),
+	<<_,_,_,_,_>> = crypto:rand_bytes(5),
 	crypto:stop(),
-	yes
+	true
     catch
-	error:_ -> no
+	error:_ -> false
     end.
 
 install_crypto_key(Key) ->
@@ -736,8 +784,8 @@ do_core({M,A}, Outdir) ->
 	    error
     end.
 
-%% Compile to Beam assembly language (.S) and the try to
-%% run .S throught the compiler again.
+%% Compile to Beam assembly language (.S) and then try to
+%% run .S through the compiler again.
 
 asm(Config) when is_list(Config) ->
     ?line Dog = test_server:timetrap(test_server:minutes(20)),
@@ -758,10 +806,10 @@ do_asm(Beam, Outdir) ->
     try
 	{ok,M,Asm} = compile:forms(A, ['S']),
 	AsmFile = filename:join(Outdir, atom_to_list(M)++".S"),
-	{ok,Fd} = file:open(AsmFile, [write]),
+	{ok,Fd} = file:open(AsmFile, [write,{encoding,utf8}]),
 	beam_listing:module(Fd, Asm),
 	ok = file:close(Fd),
-	case compile:file(AsmFile, [from_asm,no_postopt,binary,report]) of
+	case compile:file(AsmFile, [from_asm,binary,report]) of
 	    {ok,M,_} ->
 		ok = file:delete(AsmFile);
 	    Other ->
@@ -774,3 +822,46 @@ do_asm(Beam, Outdir) ->
 		      [M,Class,Error,erlang:get_stacktrace()]),
 	    error
     end.
+
+sys_pre_attributes(Config) ->
+    DataDir = ?config(data_dir, Config),
+    File = filename:join(DataDir, "attributes.erl"),
+    Mod = attributes,
+    CommonOpts = [binary,report,verbose,
+		  {parse_transform,sys_pre_attributes}],
+    PreOpts = [{attribute,delete,deleted}],
+    PostOpts = [{attribute,insert,inserted,"value"}],
+    PrePostOpts = [{attribute,replace,replaced,42},
+		   {attribute,replace,replace_nonexisting,new}],
+    {ok,Mod,Code} = compile:file(File, PrePostOpts ++ PreOpts ++
+				     PostOpts ++ CommonOpts),
+    code:load_binary(Mod, File, Code),
+    Attr = Mod:module_info(attributes),
+    io:format("~p", [Attr]),
+    {inserted,"value"} = lists:keyfind(inserted, 1, Attr),
+    {replaced,[42]} = lists:keyfind(replaced, 1, Attr),
+    {replace_nonexisting,[new]} = lists:keyfind(replace_nonexisting, 1, Attr),
+    false = lists:keymember(deleted, 1, Attr),
+
+    %% Cover more code.
+    {ok,Mod,_} = compile:file(File, PostOpts ++ CommonOpts),
+    {ok,Mod,_} = compile:file(File, CommonOpts -- [verbose]),
+    {ok,Mod,_} = compile:file(File, PreOpts ++ CommonOpts),
+    {ok,Mod,_} = compile:file(File,
+			      [{attribute,replace,replaced,42}|CommonOpts]),
+    {ok,Mod,_} = compile:file(File, PrePostOpts ++ PreOpts ++
+				  PostOpts ++ CommonOpts --
+				  [report,verbose]),
+    ok.
+
+%%%
+%%% Utilities.
+%%%
+
+compile_and_verify(Name, Target, Opts) ->
+    Mod = list_to_atom(filename:basename(Name, ".erl")),
+    {ok,Mod} = compile:file(Name, Opts),
+    {ok,{Mod,[{compile_info,CInfo}]}} = 
+	beam_lib:chunks(Target, [compile_info]),
+    {options,BeamOpts} = lists:keyfind(options, 1, CInfo),
+    Opts = BeamOpts.

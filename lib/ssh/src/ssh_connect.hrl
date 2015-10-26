@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2005-2010. All Rights Reserved.
+%% Copyright Ericsson AB 2005-2013. All Rights Reserved.
 %%
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -20,6 +20,8 @@
 %%
 
 %%% Description : SSH connection protocol 
+
+-type channel_id()           :: integer().
 
 -define(DEFAULT_PACKET_SIZE, 32768).
 -define(DEFAULT_WINDOW_SIZE, 2*?DEFAULT_PACKET_SIZE).
@@ -253,7 +255,6 @@
 -record(connection, {
 	  requests = [], %% [{ChannelId, Pid}...] awaiting reply on request,
 	  channel_cache,
-	  channel_pids = [],
 	  port_bindings,
 	  channel_id_seed,
 	  cli_spec,
@@ -261,5 +262,7 @@
 	  port,
 	  options,
 	  exec,
-	  sub_system_supervisor
+	  system_supervisor,
+	  sub_system_supervisor,
+	  connection_supervisor
 	 }).

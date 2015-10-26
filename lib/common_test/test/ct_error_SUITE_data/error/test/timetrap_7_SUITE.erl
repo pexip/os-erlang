@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2010-2011. All Rights Reserved.
+%% Copyright Ericsson AB 2010-2012. All Rights Reserved.
 %%
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -114,7 +114,7 @@ all() ->
 
 tc0(_) ->
     ct:comment(io_lib:format("TO after ~w+~w sec", [?HANG,?TO])),
-    ct:sleep({seconds,5}),
+    ct:sleep({seconds,10}),
     ok.
 
 tc1() ->
@@ -133,5 +133,5 @@ tc2(_) ->
 
 tc3(_) ->
     ct:comment(io_lib:format("TO after ~w+~w sec", [?HANG,?TO])),
-    ct:sleep({seconds,5}),
+    ct:sleep({seconds,10}),
     ok.

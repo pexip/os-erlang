@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %% 
-%% Copyright Ericsson AB 1997-2011. All Rights Reserved.
+%% Copyright Ericsson AB 1997-2013. All Rights Reserved.
 %% 
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -32,6 +32,7 @@
 -export([all/0, suite/0,groups/0,init_per_suite/1, end_per_suite/1, 
 	 init_per_group/2,end_per_group/2, univ_to_local/1, local_to_univ/1,
 	 bad_univ_to_local/1, bad_local_to_univ/1,
+	 univ_to_seconds/1, seconds_to_univ/1,
 	 consistency/1,
 	 now_unique/1, now_update/1, timestamp/1]).
 
@@ -59,7 +60,9 @@ suite() -> [{ct_hooks,[ts_install_cth]}].
 
 all() -> 
     [univ_to_local, local_to_univ, local_to_univ_utc,
-     bad_univ_to_local, bad_local_to_univ, consistency,
+     bad_univ_to_local, bad_local_to_univ, 
+     univ_to_seconds, seconds_to_univ,
+     consistency,
      {group, now}, timestamp].
 
 groups() -> 
@@ -162,6 +165,30 @@ bad_test_local_to_univ([Local|Rest]) ->
 bad_test_local_to_univ([]) ->
     ok.
 
+
+%% Test universaltime to seconds conversions
+univ_to_seconds(Config) when is_list(Config) ->
+    test_univ_to_seconds(ok_utc_seconds()).
+
+test_univ_to_seconds([{Datetime, Seconds}|DSs]) ->
+    io:format("universaltime = ~p -> seconds = ~p", [Datetime, Seconds]),
+    Seconds = erlang:universaltime_to_posixtime(Datetime),
+    test_univ_to_seconds(DSs);
+test_univ_to_seconds([]) -> 
+    ok.
+
+%% Test seconds to universaltime conversions
+seconds_to_univ(Config) when is_list(Config) ->
+    test_seconds_to_univ(ok_utc_seconds()).
+
+test_seconds_to_univ([{Datetime, Seconds}|DSs]) ->
+    io:format("universaltime = ~p <- seconds = ~p", [Datetime, Seconds]),
+    Datetime = erlang:posixtime_to_universaltime(Seconds),
+    test_seconds_to_univ(DSs);
+test_seconds_to_univ([]) -> 
+    ok.
+
+
 %% Test that the the different time functions return
 %% consistent results. (See the test case for assumptions
 %% and limitations.)
@@ -214,13 +241,25 @@ compare(Utc0, Local) ->
 %% Two linear times can be subtracted to give their difference
 %% in seconds.
 %%
-%% XXX Limitations: The length of months and leap years are not
-%% taken into account; thus a comparision of dates is only
-%% valid if they are in the SAME month.
+%% XXX Limitations: Simplified leap year calc will fail for 2100 :-)
 
 linear_time({{Year, Mon, Day}, {Hour, Min, Sec}}) ->
-    86400*(366*Year + 31*(Mon-1) + (Day-1)) +
+    86400*(year_to_days(Year) + month_to_days(Year,Mon) + (Day-1)) +
 	3600*Hour + 60*Min + Sec.
+
+year_to_days(Year) ->
+    Year * 365 + (Year-1) div 4.
+
+month_to_days(Year, Mon) ->
+    DoM = [31,days_in_february(Year),31,30,31,30,31,31,30,31,30,31],
+    {PastMonths,_} = lists:split(Mon-1, DoM),
+    lists:sum(PastMonths).
+
+days_in_february(Year) ->
+    case (Year rem 4) of
+	0 -> 29;
+	_ -> 28
+    end.
 
 %% This functions returns either the normal timezone or the
 %% the DST timezone, depending on the given UTC time.
@@ -452,6 +491,32 @@ dst_dates() ->
      {1997, 06, 2},
      {1998, 06, 3},
      {1999, 06, 4}].
+
+%% exakt utc {date(), time()} which corresponds to the same seconds since 1 jan 1970 
+%% negative seconds are ok
+%% generated with date --date='1979-05-28 12:30:35 UTC' +%s
+ok_utc_seconds() -> [
+	{ {{1970, 1, 1},{ 0, 0, 0}},            0 },
+	{ {{1970, 1, 1},{ 0, 0, 1}},            1 },
+	{ {{1969,12,31},{23,59,59}},           -1 },
+	{ {{1920,12,31},{23,59,59}},  -1546300801 },
+	{ {{1600,02,19},{15,14,08}}, -11671807552 },
+	{ {{1979,05,28},{12,30,35}},    296742635 },
+	{ {{1999,12,31},{23,59,59}},    946684799 },
+	{ {{2000, 1, 1},{ 0, 0, 0}},    946684800 },
+	{ {{2000, 1, 1},{ 0, 0, 1}},    946684801 },
+
+	{ {{2038, 1,19},{03,14,07}},   2147483647 }, % Sint32 full - 1
+	{ {{2038, 1,19},{03,14,08}},   2147483648 }, % Sint32 full
+	{ {{2038, 1,19},{03,14,09}},   2147483649 }, % Sint32 full + 1
+
+	{ {{2106, 2, 7},{ 6,28,14}},   4294967294 }, % Uint32 full  0xFFFFFFFF - 1
+	{ {{2106, 2, 7},{ 6,28,15}},   4294967295 }, % Uint32 full  0xFFFFFFFF
+	{ {{2106, 2, 7},{ 6,28,16}},   4294967296 }, % Uint32 full  0xFFFFFFFF + 1
+	{ {{2012,12, 6},{16,28,08}},   1354811288 },
+	{ {{2412,12, 6},{16,28,08}},  13977592088 }
+    ].
+
 
 %% The following dates should not be near the end or beginning of
 %% a month, because they will be used to test when the dates are

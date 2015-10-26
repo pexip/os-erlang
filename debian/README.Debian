@@ -62,7 +62,6 @@ Enjoy Erlang! :-)
 
 Brent A. Fulgham <bfulgham@debian.org>  Sat, 10 Aug 2002 23:16:47 -0700
 
-
 ----------------
 
 This project (Erlang for Debian) is hosted on Alioth:
@@ -78,4 +77,14 @@ Note, that if you want to get Erlang documentation, you'll have to
 install erlang-manpages (for manual pages) and/or erlang-doc
 (for docs in HTML and PDF).
 
- -- Sergei Golovan <sgolovan@debian.org>  Tue, 12 Oct 2010 11:02:27 +0400
+----------------
+
+Starting from version 1:17.1-dfsg-5 the erlang-base and erlang-base-hipe
+packages provide systemd unit files for the epmd daemon. They are
+disabled by default though. To enable and to start epmd execute
+systemctl enable epmd
+systemctl start epmd
+After that epmd will be executed separately owned by a separate user
+which is more secure in multi-user environment.
+
+ -- Sergei Golovan <sgolovan@debian.org>  Thu, 14 Aug 2014 13:44:42 +0400

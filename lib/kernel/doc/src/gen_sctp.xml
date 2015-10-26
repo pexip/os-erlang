@@ -1,10 +1,10 @@
-<?xml version="1.0" encoding="latin1" ?>
+<?xml version="1.0" encoding="utf-8" ?>
 <!DOCTYPE erlref SYSTEM "erlref.dtd">
 
 <erlref>
   <header>
     <copyright>
-      <year>2007</year><year>2011</year>
+      <year>2007</year><year>2013</year>
       <holder>Ericsson AB. All Rights Reserved.</holder>
     </copyright>
     <legalnotice>
@@ -45,7 +45,15 @@
       SUSE Linux Enterprise Server 10 (x86_64) kernel 2.6.16.27-0.6-smp,
       with lksctp-tools-1.0.6, briefly on Solaris 10, and later on
       SUSE Linux Enterprise Server 10 Service Pack 1 (x86_64)
-      kernel 2.6.16.54-0.2.3-smp with lksctp-tools-1.0.7.</p>
+      kernel 2.6.16.54-0.2.3-smp with lksctp-tools-1.0.7,
+      and later also on FreeBSD 8.2.
+    </p>
+    <p>
+      This module was written for one-to-many style sockets
+      (type <c>seqpacket</c>). With the addition of
+      <seealso marker="#peeloff/2">peeloff/2</seealso>, one-to-one style
+      sockets (type <c>stream</c>) were introduced.
+    </p>
     <p>Record definitions for the <c>gen_sctp</c> module can be found using:</p>
 <pre>  -include_lib("kernel/include/inet_sctp.hrl").    </pre>
     <p>These record definitions use the "new" spelling 'adaptation',
@@ -115,7 +123,7 @@
         <p>Completely closes the socket and all associations on it. The unsent
           data is flushed as in <c>eof/2</c>. The <c>close/1</c> call 
           is blocking or otherwise depending of the value of
-          the <seealso marker="#option-linger">linger</seealso> socket
+          the <seealso marker="inet#option-linger">linger</seealso> socket
           <seealso marker="#options">option</seealso>.
           If <c>close</c> does not linger or linger timeout expires,
           the call returns and the data is flushed in the background.</p>
@@ -254,15 +262,19 @@
       </desc>
     </func>
     <func>
-      <name name="listen" arity="2"/>
+      <name name="listen" arity="2" clause_i="1"/>
+      <name name="listen" arity="2" clause_i="2"/>
       <fsummary>Set up a socket to listen.</fsummary>
       <desc>
         <p>Sets up a socket to listen on the IP address and port number
-          it is bound to. <c><anno>IsServer</anno></c> must be <c>true</c>
-          or <c>false</c>.
-          In the contrast to TCP, in SCTP there is no listening queue length.
-          If <c><anno>IsServer</anno></c> is <c>true</c> the socket accepts new associations, i.e.
-          it will become an SCTP server socket.</p>
+	it is bound to.</p>
+	<p>For type <c>seqpacket</c> sockets (the default)
+	<c><anno>IsServer</anno></c> must be <c>true</c> or <c>false</c>.
+	In contrast to TCP, in SCTP there is no listening queue length.
+	If <c><anno>IsServer</anno></c> is <c>true</c> the socket accepts new associations, i.e.
+	it will become an SCTP server socket.</p>
+	<p>For type <c>stream</c> sockets <anno>Backlog</anno> defines
+	the backlog queue length just like in TCP.</p>
       </desc>
     </func>
     <func>
@@ -295,9 +307,37 @@
           is used. In particular, the socket is opened in 
           <seealso marker="#option-binary">binary</seealso> and
           <seealso marker="#option-active">passive</seealso> mode,
+	  with <anno>SockType</anno> <c>seqpacket</c>,
           and with reasonably large
-          <seealso marker="#option-sndbuf">kernel</seealso> and driver
-          <seealso marker="#option-buffer">buffers.</seealso></p>
+          <seealso marker="inet#option-sndbuf">kernel</seealso> and driver
+          <seealso marker="inet#option-buffer">buffers.</seealso></p>
+      </desc>
+    </func>
+    <func>
+      <name name="peeloff" arity="2"/>
+      <fsummary>
+	Peel off a type <c>stream</c> socket from a type <c>seqpacket</c> one
+      </fsummary>
+      <desc>
+	<p>
+	  Branch off an existing association <anno>Assoc</anno>
+	  in a socket <anno>Socket</anno> of type <c>seqpacket</c>
+	  (one-to-many style) into
+	  a new socket <anno>NewSocket</anno> of type <c>stream</c>
+	  (one-to-one style).
+	</p>
+	<p>
+	  The existing association argument <anno>Assoc</anno>
+	  can be either a
+	  <seealso marker="#record-sctp_assoc_change">
+	    #sctp_assoc_change{}
+	  </seealso>
+	  record as returned from e.g
+	  <seealso marker="#recv-2">recv/*</seealso>,
+	  <seealso marker="#connect-5">connect/*</seealso> or
+	  from a listening socket in active mode. Or it can be just
+	  the field <c>assoc_id</c> integer from such a record.
+	</p>
       </desc>
     </func>
     <func>
@@ -456,9 +496,11 @@
       orthogonal to the sets of TCP, UDP and generic INET options:
       only those options which are explicitly listed below are allowed
       for SCTP sockets. Options can be set on the socket using
-      <c>gen_sctp:open/1,2</c> or <c>inet:setopts/2</c>,
-      retrieved using <c>inet:getopts/2</c>, and when calling
-      <c>gen_sctp:connect/4,5</c> options can be changed.</p>
+      <seealso marker="#open/1"><c>gen_sctp:open/1,2</c></seealso>
+      or <seealso marker="inet#setopts/2"><c>inet:setopts/2</c></seealso>,
+      retrieved using <seealso marker="inet#getopts/2"><c>inet:getopts/2</c></seealso>,
+      and when calling <seealso marker="#connect/4"><c>gen_sctp:connect/4,5</c></seealso>
+      options can be changed.</p>
     <marker id="option-binary"></marker>
     <marker id="option-list"></marker>
     <taglist>
@@ -467,7 +509,7 @@
         <p>Determines the type of data returned from <c>gen_sctp:recv/1,2</c>.</p>
         <marker id="option-active"></marker>
       </item>
-      <tag><c>{active, true|false|once}</c></tag>
+      <tag><c>{active, true|false|once|N}</c></tag>
       <item>
         <list type="bulleted">
           <item>
@@ -484,25 +526,31 @@
           </item>
           <item>
             <p>If <c>once</c>, only one message is automatically placed
-              in the message queue, after that the mode is automatically
-              re-set to passive. This provides flow control as well as
+              in the message queue, and after that the mode is automatically
+              reset to passive. This provides flow control as well as
               the possibility for the receiver to listen for its incoming
               SCTP data interleaved with other inter-process messages.</p>
           </item>
+          <item>
+            <p>If <c>active</c> is specified as an integer <c>N</c> in the
+              range -32768 to 32767 (inclusive), then that number is added to
+              the socket's count of the number of data messages to be
+              delivered to the controlling process. If the result of the
+              addition would be negative, the count is set to 0. Once the
+              count reaches 0, either through the delivery of messages or by
+              being explicitly set with <seealso
+              marker="inet#setopts/2">inet:setopts/2</seealso>, the socket's
+              mode is automatically reset to passive (<c>{active,
+              false}</c>) mode. When a socket in this active mode transitions to
+              passive mode, the message <c>{sctp_passive, Socket}</c> is sent
+              to the controlling process to notify it that if it wants to
+              receive more data messages from the socket, it must call
+              <seealso marker="inet#setopts/2">inet:setopts/2</seealso> to set
+              the socket back into an active mode.</p>
+          </item>
         </list>
-        <marker id="option-buffer"></marker>
       </item>
-      <tag><c>{buffer, integer()}</c></tag>
-      <item>
-        <p>Determines the size of the user-level software buffer used by
-          the SCTP driver. Not to be confused with <c>sndbuf</c>
-          and <c>recbuf</c> options which correspond to
-          the kernel socket buffers. It is recommended
-          to have <c>val(buffer) &gt;= max(val(sndbuf),val(recbuf))</c>.
-          In fact, the <c>val(buffer)</c> is automatically set to
-          the above maximum when <c>sndbuf</c> or <c>recbuf</c> values are set.</p>
-      </item>
-      <tag><c>{tos, integer()}</c></tag>
+     <tag><c>{tos, integer()}</c></tag>
       <item>
         <p>Sets the Type-Of-Service field on the IP datagrams being sent,
           to the given value, which effectively determines a prioritization
@@ -527,19 +575,8 @@
           <c>{IP,Port}</c> of the socket can be re-used immediately:
           no waiting in the CLOSE_WAIT state is performed (may be
           required for high-throughput servers).</p>
-        <marker id="option-linger"></marker>
       </item>
-      <tag><c>{linger, {true|false, integer()}</c></tag>
-      <item>
-        <p>Determines the timeout in seconds for flushing unsent data in the
-          <c>gen_sctp:close/1</c> socket call. If the 1st component of the value
-          tuple is <c>false</c>, the 2nd one is ignored, which means that
-          <c>gen_sctp:close/1</c> returns immediately not waiting
-          for data to be flushed. Otherwise, the 2nd component is
-          the flushing time-out in seconds.</p>
-        <marker id="option-sndbuf"></marker>
-      </item>
-      <tag><c>{sndbuf, integer()}</c></tag>
+	  <tag><c>{sndbuf, integer()}</c></tag>
       <item>
         <p>The size, in bytes, of the *kernel* send buffer for this socket.
           Sending errors would occur for datagrams larger than
@@ -553,6 +590,15 @@
           <c>val(sndbuf)</c>. Setting this option also adjusts
           the size of the driver buffer (see <c>buffer</c> above).</p>
       </item>
+
+		  <tag><c>{sctp_module, module()}</c></tag>
+		  <item> <p>
+				  Override which callback module is used. Defaults to
+				  <c>inet_sctp</c> for IPv4 and <c>inet6_sctp</c> for IPv6.
+			  </p>
+		  </item>
+
+
       <tag><c>{sctp_rtoinfo, #sctp_rtoinfo{}}</c></tag>
       <item>
 <pre>  #sctp_rtoinfo{

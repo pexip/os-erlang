@@ -4,9 +4,9 @@ Description: A quick hack which removes rpath from crypto and ssl applications b
 Forwarded: no
 Last-modified:Sat, 27 Feb 2010 09:34:43 +0300
 
---- erlang-14.b.4-dfsg.orig/erts/configure.in
-+++ erlang-14.b.4-dfsg/erts/configure.in
-@@ -4026,9 +4026,9 @@
+--- a/erts/configure.in
++++ b/erts/configure.in
+@@ -4540,9 +4540,9 @@
  SSL_CC_RUNTIME_LIBRARY_PATH=
  SSL_LD_RUNTIME_LIBRARY_PATH=
  SSL_DED_LD_RUNTIME_LIBRARY_PATH=

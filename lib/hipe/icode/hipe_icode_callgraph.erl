@@ -2,7 +2,7 @@
 %%
 %% %CopyrightBegin%
 %% 
-%% Copyright Ericsson AB 2004-2011. All Rights Reserved.
+%% Copyright Ericsson AB 2004-2014. All Rights Reserved.
 %% 
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -46,7 +46,7 @@
 
 -type mfa_icode() :: {mfa(), #icode{}}.
 
--record(icode_callgraph, {codedict :: dict(), ordered_sccs :: [[mfa()]]}).
+-record(icode_callgraph, {codedict :: dict:dict(), ordered_sccs :: [[mfa()]]}).
 
 %%------------------------------------------------------------------------
 %% Exported functions
@@ -102,7 +102,7 @@ pp(#icode_callgraph{ordered_sccs = SCCs}) ->
 %%------------------------------------------------------------------------
 %% Get the modules called from this module
 
--spec get_called_modules([mfa_icode()]) -> ordset(atom()).
+-spec get_called_modules([mfa_icode()]) -> ordsets:ordset(atom()).
 
 get_called_modules(List) ->
   get_remote_calls(List, []).

@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2005-2011. All Rights Reserved.
+%% Copyright Ericsson AB 2005-2012. All Rights Reserved.
 %%
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -25,18 +25,22 @@
 	 init_per_group/2,end_per_group/2,
 	 init_per_testcase/2,end_per_testcase/2,
 	 display/1, display_huge/0,
-	 types/1,
+	 erl_bif_types/1,guard_bifs_in_erl_bif_types/1,
+	 shadow_comments/1,
+	 specs/1,improper_bif_stubs/1,auto_imports/1,
 	 t_list_to_existing_atom/1,os_env/1,otp_7526/1,
 	 binary_to_atom/1,binary_to_existing_atom/1,
-	 atom_to_binary/1,min_max/1]).
+	 atom_to_binary/1,min_max/1, erlang_halt/1]).
 
 suite() -> [{ct_hooks,[ts_install_cth]}].
 
 all() -> 
-    [types, t_list_to_existing_atom, os_env, otp_7526,
+    [erl_bif_types, guard_bifs_in_erl_bif_types, shadow_comments,
+     specs, improper_bif_stubs, auto_imports,
+     t_list_to_existing_atom, os_env, otp_7526,
      display,
      atom_to_binary, binary_to_atom, binary_to_existing_atom,
-     min_max].
+     min_max, erlang_halt].
 
 groups() -> 
     [].
@@ -70,7 +74,7 @@ display(doc) ->
 display(Config) when is_list(Config) ->
     Pa = filename:dirname(code:which(?MODULE)),
     {ok, Node} = test_server:start_node(display_huge_term,peer,
-					[{args, "-pa "++Pa}]),
+					[{args, "-pa \""++Pa++"\""}]),
     true = rpc:call(Node,?MODULE,display_huge,[]),
     test_server:stop_node(Node),
     ok.
@@ -86,33 +90,20 @@ deeep(N,Acc) ->
 deeep(N) ->
     deeep(N,[hello]).
 
+erl_bif_types(Config) when is_list(Config) ->
+    ensure_erl_bif_types_compiled(),
 
-types(Config) when is_list(Config) ->
-    c:l(erl_bif_types),
-    case erlang:function_exported(erl_bif_types, module_info, 0) of
-	false ->
-	    %% Fail cleanly.
-	    ?line ?t:fail("erl_bif_types not compiled");
-	true ->
-	    types_1()
-    end.
-
-types_1() ->
-    ?line List0 = erlang:system_info(snifs),
+    List0 = erlang:system_info(snifs),
 
     %% Ignore missing type information for hipe BIFs.
-    ?line List = [MFA || {M,_,_}=MFA <- List0, M =/= hipe_bifs],
+    List = [MFA || {M,_,_}=MFA <- List0, M =/= hipe_bifs],
 
-    case [MFA || MFA <- List, not known_types(MFA)] of
-	[] ->
-	    types_2(List);
-	BadTypes ->
-	    io:put_chars("No type information:\n"),
-	    io:format("~p\n", [lists:sort(BadTypes)]),
-	    ?line ?t:fail({length(BadTypes),bifs_without_types})
-    end.
+    KnownTypes = [MFA || MFA <- List, known_types(MFA)],
+    io:format("There are ~p BIFs with type information in erl_bif_types.",
+	      [length(KnownTypes)]),
+    erl_bif_types_2(KnownTypes).
 
-types_2(List) ->
+erl_bif_types_2(List) ->
     BadArity = [MFA || {M,F,A}=MFA <- List,
 		       begin
 			   Types = erl_bif_types:arg_types(M, F, A),
@@ -120,14 +111,14 @@ types_2(List) ->
 		       end],
     case BadArity of
 	[] ->
-	    types_3(List);
+	    erl_bif_types_3(List);
 	[_|_] ->
 	    io:put_chars("Bifs with bad arity\n"),
 	    io:format("~p\n", [BadArity]),
 	    ?line ?t:fail({length(BadArity),bad_arity})
     end.
 
-types_3(List) ->
+erl_bif_types_3(List) ->
     BadSmokeTest = [MFA || {M,F,A}=MFA <- List,
 			   begin
 			       try erl_bif_types:type(M, F, A) of
@@ -151,8 +142,219 @@ types_3(List) ->
 	    ?line ?t:fail({length(BadSmokeTest),bad_smoke_test})
     end.
 
+guard_bifs_in_erl_bif_types(_Config) ->
+    ensure_erl_bif_types_compiled(),
+
+    List0 = erlang:system_info(snifs),
+    List = [{F,A} || {erlang,F,A} <- List0,
+		     erl_internal:guard_bif(F, A)],
+    Not = [FA || {F,A}=FA <- List,
+		 not erl_bif_types:is_known(erlang, F, A)],
+    case Not of
+	[] ->
+	    ok;
+	[_|_] ->
+	    io:put_chars(
+	      ["Dialyzer requires that all guard BIFs "
+	       "have type information in erl_bif_types.\n\n"
+	       "The following guard BIFs have no type information "
+	       "in erl_bif_types:\n\n",
+	       [io_lib:format("  ~p/~p\n", [F,A]) || {F,A} <- Not]]),
+	    ?t:fail()
+    end.
+
+shadow_comments(_Config) ->
+    ensure_erl_bif_types_compiled(),
+
+    List0 = erlang:system_info(snifs),
+    List1 = [MFA || {M,_,_}=MFA <- List0, M =/= hipe_bifs],
+    List = [MFA || MFA <- List1, not is_operator(MFA)],
+    HasTypes = [MFA || {M,F,A}=MFA <- List,
+		       erl_bif_types:is_known(M, F, A)],
+    Path = get_code_path(),
+    BifRel = sofs:relation(HasTypes, [{m,f,a}]),
+    BifModules = sofs:to_external(sofs:projection(1, BifRel)),
+    AbstrByModule = [extract_abstract(Mod, Path) || Mod <- BifModules],
+    Specs0 = [extract_specs(Mod, Abstr) ||
+		 {Mod,Abstr} <- AbstrByModule],
+    Specs = lists:append(Specs0),
+    SpecFuns0 = [F || {F,_} <- Specs],
+    SpecFuns = sofs:relation(SpecFuns0, [{m,f,a}]),
+    HasTypesAndSpecs = sofs:intersection(BifRel, SpecFuns),
+    Commented0 = lists:append([extract_comments(Mod, Path) ||
+				  Mod <- BifModules]),
+    Commented = sofs:relation(Commented0, [{m,f,a}]),
+    {NoComments0,_,NoBifSpecs0} =
+	sofs:symmetric_partition(HasTypesAndSpecs, Commented),
+    NoComments = sofs:to_external(NoComments0),
+    NoBifSpecs = sofs:to_external(NoBifSpecs0),
+
+    case NoComments of
+	[] ->
+	    ok;
+	[_|_] ->
+	    io:put_chars(
+	      ["If a BIF stub has both a spec and has type information in "
+	       "erl_bif_types, there *must*\n"
+	       "be a comment in the source file to make that immediately "
+	       "obvious.\n\nThe following comments are missing:\n\n",
+	       [io_lib:format("%% Shadowed by erl_bif_types: ~p:~p/~p\n",
+			      [M,F,A]) || {M,F,A} <- NoComments]]),
+	    ?t:fail()
+    end,
+
+    case NoBifSpecs of
+	[] ->
+	    ok;
+	[_|_] ->
+	    io:put_chars(
+	      ["The following functions have \"shadowed\" comments "
+	       "claiming that there is type information in erl_bif_types,\n"
+	       "but actually there is no such type information.\n\n"
+	       "Therefore, the following comments should be removed:\n\n",
+	       [io_lib:format("%% Shadowed by erl_bif_types: ~p:~p/~p\n",
+			      [M,F,A]) || {M,F,A} <- NoBifSpecs]]),
+	    ?t:fail()
+    end.
+
+extract_comments(Mod, Path) ->
+    Beam = which(Mod, Path),
+    SrcDir = filename:join(filename:dirname(filename:dirname(Beam)), "src"),
+    Src = filename:join(SrcDir, atom_to_list(Mod) ++ ".erl"),
+    {ok,Bin} = file:read_file(Src),
+    Lines0 = binary:split(Bin, <<"\n">>, [global]),
+    Lines1 = [T || <<"%% Shadowed by erl_bif_types: ",T/binary>> <- Lines0],
+    {ok,ReMFA} = re:compile("([^:]*):([^/]*)/(\\d*)"),
+    Lines = [L || L <- Lines1, re:run(L, ReMFA, [{capture,[]}]) =:= match],
+    [begin
+	 {match,[M,F,A]} = re:run(L, ReMFA, [{capture,all_but_first,list}]),
+	 {list_to_atom(M),list_to_atom(F),list_to_integer(A)}
+     end || L <- Lines].
+
+ensure_erl_bif_types_compiled() ->
+    c:l(erl_bif_types),
+    case erlang:function_exported(erl_bif_types, module_info, 0) of
+	false ->
+	    %% Fail cleanly.
+	    ?t:fail("erl_bif_types not compiled");
+	true ->
+	    ok
+    end.
+
 known_types({M,F,A}) ->
     erl_bif_types:is_known(M, F, A).
+
+specs(_) ->
+    List0 = erlang:system_info(snifs),
+
+    %% Ignore missing type information for hipe BIFs.
+    List1 = [MFA || {M,_,_}=MFA <- List0, M =/= hipe_bifs],
+
+    %% Ignore all operators.
+    List = [MFA || MFA <- List1, not is_operator(MFA)],
+
+    %% Extract specs from the abstract code for all BIFs.
+    Path = get_code_path(),
+    BifRel = sofs:relation(List, [{m,f,a}]),
+    BifModules = sofs:to_external(sofs:projection(1, BifRel)),
+    AbstrByModule = [extract_abstract(Mod, Path) || Mod <- BifModules],
+    Specs0 = [extract_specs(Mod, Abstr) ||
+		 {Mod,Abstr} <- AbstrByModule],
+    Specs = lists:append(Specs0),
+    BifSet = sofs:set(List, [function]),
+    SpecRel0 = sofs:relation(Specs, [{function,spec}]),
+    SpecRel = sofs:restriction(SpecRel0, BifSet),
+
+    %% Find BIFs without specs.
+    NoSpecs0 = sofs:difference(BifSet, sofs:domain(SpecRel)),
+    NoSpecs = sofs:to_external(NoSpecs0),
+    case NoSpecs of
+	[] ->
+	    ok;
+	[_|_] ->
+	    io:put_chars("The following BIFs don't have specs:\n"),
+	    [print_mfa(MFA) || MFA <- NoSpecs],
+	    ?t:fail()
+    end.
+
+is_operator({erlang,F,A}) ->
+    erl_internal:arith_op(F, A) orelse
+	erl_internal:bool_op(F, A) orelse
+	erl_internal:comp_op(F, A) orelse
+	erl_internal:list_op(F, A) orelse
+	erl_internal:send_op(F, A);
+is_operator(_) -> false.
+    
+extract_specs(M, Abstr) ->
+    [{make_mfa(M, Name),Spec} || {attribute,_,spec,{Name,Spec}} <- Abstr].
+
+make_mfa(M, {F,A}) -> {M,F,A};
+make_mfa(M, {M,_,_}=MFA) -> MFA.
+
+improper_bif_stubs(_) ->
+    Bifs0 = erlang:system_info(snifs),
+    Bifs = [MFA || {M,_,_}=MFA <- Bifs0, M =/= hipe_bifs],
+    Path = get_code_path(),
+    BifRel = sofs:relation(Bifs, [{m,f,a}]),
+    BifModules = sofs:to_external(sofs:projection(1, BifRel)),
+    AbstrByModule = [extract_abstract(Mod, Path) || Mod <- BifModules],
+    Funcs0 = [extract_functions(Mod, Abstr) ||
+		 {Mod,Abstr} <- AbstrByModule],
+    Funcs = lists:append(Funcs0),
+    BifSet = sofs:set(Bifs, [function]),
+    FuncRel0 = sofs:relation(Funcs, [{function,code}]),
+    FuncRel = sofs:restriction(FuncRel0, BifSet),
+    [check_stub(MFA, Body) || {MFA,Body} <- sofs:to_external(FuncRel)],
+    ok.
+
+auto_imports(_Config) ->
+    Path = get_code_path(),
+    {erlang,Abstr} = extract_abstract(erlang, Path),
+    SpecFuns = [Name || {attribute,_,spec,{Name,_}} <- Abstr],
+    auto_imports(SpecFuns, 0).
+
+auto_imports([{F,A}|T], Errors) ->
+    case erl_internal:bif(F, A) of
+	false ->
+	    io:format("~p/~p: not auto-imported, but spec claims it "
+		      "is auto-imported", [F,A]),
+	    auto_imports(T, Errors+1);
+	true ->
+	    auto_imports(T, Errors)
+    end;
+auto_imports([{erlang,F,A}|T], Errors) ->
+    case erl_internal:bif(F, A) of
+	false ->
+	    auto_imports(T, Errors);
+	true ->
+	    io:format("~p/~p: auto-imported, but "
+		      "spec claims it is *not* auto-imported", [F,A]),
+	    auto_imports(T, Errors+1)
+    end;
+auto_imports([], 0) ->
+    ok;
+auto_imports([], Errors) ->
+    ?t:fail({Errors,inconsistencies}).
+
+extract_functions(M, Abstr) ->
+    [{{M,F,A},Body} || {function,_,F,A,Body} <- Abstr].
+
+check_stub({erlang,apply,3}, _) ->
+    ok;
+check_stub({_,F,A}, B) ->
+    try
+	[{clause,_,Args,[],Body}] = B,
+	A = length(Args),
+	[{call,_,{remote,_,{atom,_,erlang},{atom,_,nif_error}},[_]}] = Body
+    catch
+	_:_ ->
+	    io:put_chars("Invalid body for the following BIF stub:\n"),
+	    Func = {function,0,F,A,B},
+	    io:put_chars(erl_pp:function(Func)),
+	    io:nl(),
+	    io:put_chars("The body should be: erlang:nif_error(undef)"),
+	    ?t:fail()
+    end.
 
 t_list_to_existing_atom(Config) when is_list(Config) ->
     ?line all = list_to_existing_atom("all"),
@@ -186,8 +388,12 @@ os_env(Config) when is_list(Config) ->
 	      false -> ?line ok;
 	      BadVal -> ?line ?t:fail(BadVal)
 	  end,
-    %% os:putenv and os:getenv currently uses a temp buf of size 1024
-    %% for storing key+value
+    true = os:putenv(EnvVar1, "mors"),
+    true = os:unsetenv(EnvVar1),
+    false = os:getenv(EnvVar1),
+    true = os:unsetenv(EnvVar1), % unset unset variable
+    %% os:putenv, os:getenv and os:unsetenv currently use a temp
+    %% buffer of size 1024 for storing key+value
     ?line os_env_long(1010, 1030, "hej hopp").
     
 os_env_long(Min, Max, _Value) when Min > Max ->
@@ -196,7 +402,7 @@ os_env_long(Min, Max, Value) ->
     ?line EnvVar = lists:duplicate(Min, $X),
     ?line true = os:putenv(EnvVar, Value),
     ?line Value = os:getenv(EnvVar),
-    ?line true = os:putenv(EnvVar, ""),
+    true = os:unsetenv(EnvVar),
     ?line os_env_long(Min+1, Max, Value).
 
 otp_7526(doc) ->    
@@ -279,8 +485,6 @@ binary_to_atom(Config) when is_list(Config) ->
     %% Bad UTF8 sequences.
     ?line ?BADARG(binary_to_atom(id(<<255>>), utf8)),
     ?line ?BADARG(binary_to_atom(id(<<255,0>>), utf8)),
-    ?line ?BADARG(binary_to_atom(id(<<0:512/unit:8,255>>), utf8)),
-    ?line ?BADARG(binary_to_atom(id(<<0:512/unit:8,255,0>>), utf8)),
     ?line ?BADARG(binary_to_atom(id(<<16#C0,16#80>>), utf8)), %Overlong 0.
     ?line [?BADARG(binary_to_atom(<<C/utf8>>, utf8)) ||
 	      C <- lists:seq(256, 16#D7FF)],
@@ -292,6 +496,8 @@ binary_to_atom(Config) when is_list(Config) ->
 	      C <- lists:seq(16#90000, 16#10FFFF)],
 
     %% system_limit failures.
+    ?line ?SYS_LIMIT(binary_to_atom(id(<<0:512/unit:8,255>>), utf8)),
+    ?line ?SYS_LIMIT(binary_to_atom(id(<<0:512/unit:8,255,0>>), utf8)),
     ?line ?SYS_LIMIT(binary_to_atom(<<0:256/unit:8>>, latin1)),
     ?line ?SYS_LIMIT(binary_to_atom(<<0:257/unit:8>>, latin1)),
     ?line ?SYS_LIMIT(binary_to_atom(<<0:512/unit:8>>, latin1)),
@@ -438,7 +644,84 @@ min_max(Config) when is_list(Config) ->
 
     ok.
 
+
+
+erlang_halt(Config) when is_list(Config) ->
+    try erlang:halt(undefined) of
+	_-> ?t:fail({erlang,halt,{undefined}})
+    catch error:badarg -> ok end,
+    try halt(undefined) of
+	_-> ?t:fail({halt,{undefined}})
+    catch error:badarg -> ok end,
+    try erlang:halt(undefined, []) of
+	_-> ?t:fail({erlang,halt,{undefined,[]}})
+    catch error:badarg -> ok end,
+    try halt(undefined, []) of
+	_-> ?t:fail({halt,{undefined,[]}})
+    catch error:badarg -> ok end,
+    try halt(0, undefined) of
+	_-> ?t:fail({halt,{0,undefined}})
+    catch error:badarg -> ok end,
+    try halt(0, [undefined]) of
+	_-> ?t:fail({halt,{0,[undefined]}})
+    catch error:badarg -> ok end,
+    try halt(0, [{undefined,true}]) of
+	_-> ?t:fail({halt,{0,[{undefined,true}]}})
+    catch error:badarg -> ok end,
+    try halt(0, [{flush,undefined}]) of
+	_-> ?t:fail({halt,{0,[{flush,undefined}]}})
+    catch error:badarg -> ok end,
+    try halt(0, [{flush,true,undefined}]) of
+	_-> ?t:fail({halt,{0,[{flush,true,undefined}]}})
+    catch error:badarg -> ok end,
+    H = hostname(),
+    {ok,N1} = slave:start(H, halt_node1),
+    {badrpc,nodedown} = rpc:call(N1, erlang, halt, []),
+    {ok,N2} = slave:start(H, halt_node2),
+    {badrpc,nodedown} = rpc:call(N2, erlang, halt, [0]),
+    {ok,N3} = slave:start(H, halt_node3),
+    {badrpc,nodedown} = rpc:call(N3, erlang, halt, [0,[]]),
+    ok.
+
+
+
 %% Helpers
     
 id(I) -> I.
 
+%% Get code path, including the path for the erts application.
+get_code_path() ->
+    case code:lib_dir(erts) of
+	{error,bad_name} ->
+	    Erts = filename:join([code:root_dir(),"erts","preloaded","ebin"]),
+	    [Erts|code:get_path()];
+	_ ->
+	    code:get_path()
+    end.
+
+which(Mod, Path) ->
+    which_1(atom_to_list(Mod) ++ ".beam", Path).
+
+which_1(Base, [D|Ds]) ->
+    Path = filename:join(D, Base),
+    case filelib:is_regular(Path) of
+	true -> Path;
+	false -> which_1(Base, Ds)
+    end.
+print_mfa({M,F,A}) ->
+    io:format("~p:~p/~p", [M,F,A]).
+
+extract_abstract(Mod, Path) ->
+    Beam = which(Mod, Path),
+    {ok,{Mod,[{abstract_code,{raw_abstract_v1,Abstr}}]}} =
+	beam_lib:chunks(Beam, [abstract_code]),
+    {Mod,Abstr}.
+
+
+hostname() ->
+    hostname(atom_to_list(node())).
+
+hostname([$@ | Hostname]) ->
+    list_to_atom(Hostname);
+hostname([_C | Cs]) ->
+    hostname(Cs).

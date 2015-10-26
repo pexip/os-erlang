@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2003-2011. All Rights Reserved.
+%% Copyright Ericsson AB 2003-2013. All Rights Reserved.
 %%
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -30,6 +30,8 @@
 	 compress/1,uncompress/1,zip/1,unzip/1,
 	 gzip/1,gunzip/1]).
 
+-export_type([zstream/0]).
+
 %% flush argument encoding
 -define(Z_NO_FLUSH,      0).
 -define(Z_SYNC_FLUSH,    2).
@@ -45,6 +47,7 @@
 %% compresssion strategy
 -define(Z_FILTERED,            1).
 -define(Z_HUFFMAN_ONLY,        2).
+-define(Z_RLE,                 3).
 -define(Z_DEFAULT_STRATEGY,    0).
 
 %% deflate compression method
@@ -123,7 +126,7 @@
 -type zmethod()     :: 'deflated'.
 -type zwindowbits() :: -15..-9 | 9..47.
 -type zmemlevel()   :: 1..9.
--type zstrategy()   :: 'default' | 'filtered' | 'huffman_only'.
+-type zstrategy()   :: 'default' | 'filtered' | 'huffman_only' | 'rle'.
 
 %%------------------------------------------------------------------------
 
@@ -206,7 +209,7 @@ deflate(Z, Data) ->
 deflate(Z, Data, Flush) ->
     try port_command(Z, Data) of
 	true ->
-	    call(Z, ?DEFLATE, <<(arg_flush(Flush)):32>>),
+	    _ = call(Z, ?DEFLATE, <<(arg_flush(Flush)):32>>),
 	    collect(Z)
     catch 
 	error:_Err ->
@@ -252,7 +255,7 @@ inflateReset(Z) ->
 inflate(Z, Data) ->
     try port_command(Z, Data) of
 	true -> 
-	    call(Z, ?INFLATE, <<?Z_NO_FLUSH:32>>),
+	    _ = call(Z, ?INFLATE, <<?Z_NO_FLUSH:32>>),
 	    collect(Z)
     catch 
 	error:_Err ->
@@ -349,10 +352,14 @@ getQSize(Z) ->
       Compressed :: binary().
 compress(Data) ->
     Z = open(),
-    deflateInit(Z, default),
-    Bs = deflate(Z, Data, finish),
-    deflateEnd(Z),
-    close(Z),
+    Bs = try
+	     deflateInit(Z, default),
+	     B = deflate(Z, Data, finish),
+	     deflateEnd(Z),
+	     B
+	 after
+	     close(Z)
+	 end,
     iolist_to_binary(Bs).
 
 -spec uncompress(Data) -> Decompressed when
@@ -364,10 +371,14 @@ uncompress(Data) ->
             if
                 Size >= 8 ->
                     Z = open(),
-                    inflateInit(Z),
-                    Bs = inflate(Z, Data),
-                    inflateEnd(Z),
-                    close(Z),
+		    Bs = try
+			     inflateInit(Z),
+			     B = inflate(Z, Data),
+			     inflateEnd(Z),
+			     B
+			 after
+			     close(Z)
+			 end,
                     iolist_to_binary(Bs);
                 true ->
                     erlang:error(data_error)
@@ -383,10 +394,14 @@ uncompress(Data) ->
       Compressed :: binary().
 zip(Data) ->
     Z = open(),
-    deflateInit(Z, default, deflated, -?MAX_WBITS, 8, default),
-    Bs = deflate(Z, Data, finish),
-    deflateEnd(Z),
-    close(Z),
+    Bs = try
+	     deflateInit(Z, default, deflated, -?MAX_WBITS, 8, default),
+	     B = deflate(Z, Data, finish),
+	     deflateEnd(Z),
+	     B
+	 after
+	     close(Z)
+	 end,
     iolist_to_binary(Bs).
 
 -spec unzip(Data) -> Decompressed when
@@ -394,10 +409,14 @@ zip(Data) ->
       Decompressed :: binary().
 unzip(Data) ->
     Z = open(),
-    inflateInit(Z, -?MAX_WBITS),
-    Bs = inflate(Z, Data),
-    inflateEnd(Z),
-    close(Z),
+    Bs = try
+	     inflateInit(Z, -?MAX_WBITS),
+	     B = inflate(Z, Data),
+	     inflateEnd(Z),
+	     B
+	 after
+	     close(Z)
+	 end,
     iolist_to_binary(Bs).
     
 -spec gzip(Data) -> Compressed when
@@ -405,10 +424,14 @@ unzip(Data) ->
       Compressed :: binary().
 gzip(Data) ->
     Z = open(),
-    deflateInit(Z, default, deflated, 16+?MAX_WBITS, 8, default),
-    Bs = deflate(Z, Data, finish),
-    deflateEnd(Z),
-    close(Z),
+    Bs = try
+	     deflateInit(Z, default, deflated, 16+?MAX_WBITS, 8, default),
+	     B = deflate(Z, Data, finish),
+	     deflateEnd(Z),
+	     B
+	 after
+	     close(Z)
+	 end,
     iolist_to_binary(Bs).
 
 -spec gunzip(Data) -> Decompressed when
@@ -416,10 +439,14 @@ gzip(Data) ->
       Decompressed :: binary().
 gunzip(Data) ->
     Z = open(),
-    inflateInit(Z, 16+?MAX_WBITS),
-    Bs = inflate(Z, Data),
-    inflateEnd(Z),
-    close(Z),
+    Bs = try
+	     inflateInit(Z, 16+?MAX_WBITS),
+	     B = inflate(Z, Data),
+	     inflateEnd(Z),
+	     B
+	 after
+	     close(Z)
+	 end,
     iolist_to_binary(Bs).
 
 -spec collect(zstream()) -> iolist().
@@ -460,6 +487,7 @@ arg_level(_) -> erlang:error(badarg).
      
 arg_strategy(filtered) ->     ?Z_FILTERED;
 arg_strategy(huffman_only) -> ?Z_HUFFMAN_ONLY;
+arg_strategy(rle) -> ?Z_RLE;
 arg_strategy(default) ->      ?Z_DEFAULT_STRATEGY;
 arg_strategy(_) -> erlang:error(badarg).
 

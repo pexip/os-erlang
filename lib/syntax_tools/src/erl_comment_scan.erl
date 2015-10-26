@@ -16,7 +16,7 @@
 %%
 %% =====================================================================
 %% @copyright 1997-2006 Richard Carlsson
-%% @author Richard Carlsson <richardc@it.uu.se>
+%% @author Richard Carlsson <carlsson.richard@gmail.com>
 %% @end
 %% =====================================================================
 
@@ -72,7 +72,28 @@ file(Name) ->
 	{ok, V} ->
 	    case V of
 		{ok, B} ->
-		    string(binary_to_list(B));
+                    Encoding = epp:read_encoding_from_binary(B),
+                    Enc = case Encoding of
+                              none -> epp:default_encoding();
+                              Enc0 -> Enc0
+                          end,
+                    case catch unicode:characters_to_list(B, Enc) of
+                        String when is_list(String) ->
+                            string(String);
+                        R when Encoding =:= none ->
+                            case
+                              catch unicode:characters_to_list(B, latin1)
+                            of
+                                String when is_list(String) ->
+                                    string(String);
+                                _ ->
+                                    error_read_file(Name1),
+                                    exit(R)
+                            end;
+                        R ->
+                            error_read_file(Name1),
+                            exit(R)
+                    end;
 		{error, E} ->
 		    error_read_file(Name1),
 		    exit({read, E})
@@ -272,7 +293,7 @@ join_lines([], Txt, L, Col, Ind) ->
 %% =====================================================================
 %% Utility functions for internal use
 
-filename([C|T]) when is_integer(C), C > 0, C =< 255 ->
+filename([C|T]) when is_integer(C), C > 0 ->
     [C | filename(T)];
 filename([]) ->
     [];
@@ -281,7 +302,7 @@ filename(N) ->
     exit(error).
 
 error_read_file(Name) ->
-    report_error("error reading file `~s'.", [Name]).
+    report_error("error reading file `~ts'.", [Name]).
 
 report_error(S, Vs) ->
     error_logger:error_msg(lists:concat([?MODULE, ": ", S, "\n"]), Vs).

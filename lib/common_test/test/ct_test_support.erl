@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2008-2011. All Rights Reserved.
+%% Copyright Ericsson AB 2008-2013. All Rights Reserved.
 %%
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -29,11 +29,18 @@
 -export([init_per_suite/1, init_per_suite/2, end_per_suite/1,
 	 init_per_testcase/2, end_per_testcase/2,
 	 write_testspec/2, write_testspec/3,
-	 run/2, run/4, get_opts/1, wait_for_ct_stop/1]).
+	 run/2, run/3, run/4, run_ct_run_test/2, run_ct_script_start/2,
+	 get_opts/1, wait_for_ct_stop/1]).
 
 -export([handle_event/2, start_event_receiver/1, get_events/2,
-	 verify_events/3, reformat/2, log_events/4,
+	 verify_events/3, verify_events/4, reformat/2, log_events/4,
 	 join_abs_dirs/2]).
+
+-export([start_slave/3, slave_stop/1]).
+
+-export([ct_test_halt/1, ct_rpc/2]).
+
+-export([random_error/1]).
 
 -include_lib("kernel/include/file.hrl").
 
@@ -60,13 +67,16 @@ init_per_suite(Config, Level) ->
 	_ ->
 	    ok
     end,
-    
     start_slave(Config, Level).
 
-start_slave(Config,Level) ->
+start_slave(Config, Level) ->
+    start_slave(ct, Config, Level).
+
+start_slave(NodeName, Config, Level) ->
     [_,Host] = string:tokens(atom_to_list(node()), "@"),
-    test_server:format(0, "Trying to start ~s~n", ["ct@"++Host]),
-    case slave:start(Host, ct, []) of
+    test_server:format(0, "Trying to start ~s~n",
+		       [atom_to_list(NodeName)++"@"++Host]),
+    case slave:start(Host, NodeName, []) of
 	{error,Reason} ->
 	    test_server:fail(Reason);
 	{ok,CTNode} ->
@@ -74,7 +84,7 @@ start_slave(Config,Level) ->
 	    IsCover = test_server:is_cover(),
 	    if IsCover ->
 		    cover:start(CTNode);
-	       true->
+	       true ->
 		    ok
 	    end,
 
@@ -94,7 +104,14 @@ start_slave(Config,Level) ->
 	    test_server:format(Level, "Dirs added to code path (on ~w):~n",
 			       [CTNode]),
 	    [io:format("~s~n", [D]) || D <- PathDirs],
-
+	    
+	    case proplists:get_value(start_sasl, Config) of
+		true ->
+		    rpc:call(CTNode, application, start, [sasl]),
+		    test_server:format(Level, "SASL started on ~w~n", [CTNode]);
+		_ ->
+		    ok
+	    end,
 	    TraceFile = filename:join(DataDir, "ct.trace"),
 	    case file:read_file_info(TraceFile) of
 		{ok,_} -> 
@@ -115,8 +132,7 @@ end_per_suite(Config) ->
     CTNode = proplists:get_value(ct_node, Config),
     PrivDir = proplists:get_value(priv_dir, Config),
     true = rpc:call(CTNode, code, del_path, [filename:join(PrivDir,"")]),
-    cover:stop(CTNode),
-    slave:stop(CTNode),
+    slave_stop(CTNode),
     ok.
 
 %%%-----------------------------------------------------------------
@@ -147,8 +163,7 @@ end_per_testcase(_TestCase, Config) ->
     case wait_for_ct_stop(CTNode) of
 	%% Common test was not stopped to we restart node.
 	false ->
-	    cover:stop(CTNode),
-	    slave:stop(CTNode),
+	    slave_stop(CTNode),
 	    start_slave(Config,proplists:get_value(trace_level,Config)),
 	    {fail, "Could not stop common_test"};
 	true ->
@@ -223,14 +238,49 @@ get_opts(Config) ->
 
 %%%-----------------------------------------------------------------
 %%% 
-run(Opts, Config) ->
+run(Opts0, Config) when is_list(Opts0) ->
+    Opts =
+	%% read (and override) opts from env variable, the form expected:
+	%% "[{some_key1,SomeVal2}, {some_key2,SomeVal2}]"
+	case os:getenv("CT_TEST_OPTS") of
+	    false -> Opts0;
+	    ""    -> Opts0;
+	    Terms ->
+		case erl_scan:string(Terms++".", 0) of
+		    {ok,Tokens,_} ->
+			case erl_parse:parse_term(Tokens) of
+			    {ok,OROpts} ->
+				Override =
+				    fun(O={Key,_}, Os) ->
+					    io:format(user, "ADDING START "
+						      "OPTION: ~p~n", [O]),
+					    [O | lists:keydelete(Key, 1, Os)]
+				    end,
+				lists:foldl(Override, Opts0, OROpts);
+			    _ ->
+				Opts0
+			end;
+		    _ ->
+			Opts0
+		end
+	end,
+
+    %% use ct interface
+    CtRunTestResult=run_ct_run_test(Opts,Config),
+    %% use run_test interface (simulated)
+    ExitStatus=run_ct_script_start(Opts,Config),
+
+    check_result(CtRunTestResult,ExitStatus,Opts).
+
+run_ct_run_test(Opts,Config) ->
     CTNode = proplists:get_value(ct_node, Config),
     Level = proplists:get_value(trace_level, Config),
-    %% use ct interface
     test_server:format(Level, "~n[RUN #1] Calling ct:run_test(~p) on ~p~n",
 		       [Opts, CTNode]),
-    Result1 = rpc:call(CTNode, ct, run_test, [Opts]),
-
+    T0 = now(),
+    CtRunTestResult = rpc:call(CTNode, ct, run_test, [Opts]),
+    test_server:format(Level, "~n[RUN #1] Got return value ~p after ~p ms~n",
+		       [CtRunTestResult,trunc(timer:now_diff(now(), T0)/1000)]),
     case rpc:call(CTNode, erlang, whereis, [ct_util_server]) of
 	undefined ->
 	    ok;
@@ -241,27 +291,76 @@ run(Opts, Config) ->
 	    timer:sleep(5000),
 	    undefined = rpc:call(CTNode, erlang, whereis, [ct_util_server])
     end,
-    %% use run_test interface (simulated)
-    test_server:format(Level, "Saving start opts on ~p: ~p~n", [CTNode,Opts]),
-    rpc:call(CTNode, application, set_env, [common_test, run_test_start_opts, Opts]),
-    test_server:format(Level, "[RUN #2] Calling ct_run:script_start() on ~p~n", [CTNode]),
-    Result2 = rpc:call(CTNode, ct_run, script_start, []),
-    case {Result1,Result2} of
-	{ok,ok} ->
-	    ok;
-	{E,_} when E =/= ok ->
-	    E;
-	{_,E} when E =/= ok ->
-	    E
-    end.
+    CtRunTestResult.
 
-run(M, F, A, Config) ->
+run_ct_script_start(Opts, Config) ->
     CTNode = proplists:get_value(ct_node, Config),
     Level = proplists:get_value(trace_level, Config),
-    test_server:format(Level, "~nCalling ~w:~w(~p) on ~p~n",
+    Opts1 = [{halt_with,{?MODULE,ct_test_halt}} | Opts],
+    test_server:format(Level, "Saving start opts on ~p: ~p~n",
+		       [CTNode, Opts1]),
+    rpc:call(CTNode, application, set_env,
+	     [common_test, run_test_start_opts, Opts1]),
+    test_server:format(Level, "[RUN #2] Calling ct_run:script_start() on ~p~n",
+		       [CTNode]),
+    T0 = now(),
+    ExitStatus = rpc:call(CTNode, ct_run, script_start, []),
+    test_server:format(Level, "[RUN #2] Got exit status value ~p after ~p ms~n",
+		       [ExitStatus,trunc(timer:now_diff(now(), T0)/1000)]),
+    ExitStatus.
+
+check_result({_Ok,Failed,{_UserSkipped,_AutoSkipped}},1,_Opts)
+  when Failed > 0 ->
+    ok;
+check_result({_Ok,0,{_UserSkipped,AutoSkipped}},ExitStatus,Opts)
+  when AutoSkipped > 0 ->
+    case proplists:get_value(exit_status, Opts) of
+	ignore_config when ExitStatus == 1 ->
+	    {error,{wrong_exit_status,ExitStatus}};
+	_ ->
+	    ok
+    end;
+check_result({error,_}=Error,2,_Opts) ->
+    Error;
+check_result({error,_},ExitStatus,_Opts) ->
+    {error,{wrong_exit_status,ExitStatus}};
+check_result({_Ok,0,{_UserSkipped,_AutoSkipped}},0,_Opts) ->
+    ok;
+check_result(CtRunTestResult,ExitStatus,Opts)
+  when is_list(CtRunTestResult) -> % repeated testruns
+    try check_result(sum_testruns(CtRunTestResult,0,0,0,0),ExitStatus,Opts)
+    catch _:_ ->
+	    {error,{unexpected_return_value,{CtRunTestResult,ExitStatus}}}
+    end;
+check_result(CtRunTestResult,ExitStatus,_Opts) ->
+    {error,{unexpected_return_value,{CtRunTestResult,ExitStatus}}}.
+
+sum_testruns([{O,F,{US,AS}}|T],Ok,Failed,UserSkipped,AutoSkipped) ->
+    sum_testruns(T,Ok+O,Failed+F,UserSkipped+US,AutoSkipped+AS);
+sum_testruns([],Ok,Failed,UserSkipped,AutoSkipped) ->
+    {Ok,Failed,{UserSkipped,AutoSkipped}}.
+
+run(M, F, A, Config) ->
+    run({M,F,A}, [], Config).
+
+run({M,F,A}, InitCalls, Config) ->
+    CTNode = proplists:get_value(ct_node, Config),
+    Level = proplists:get_value(trace_level, Config),
+    lists:foreach(
+      fun({IM,IF,IA}) ->
+	      test_server:format(Level, "~nInit call ~w:~w(~p) on ~p...~n",
+				 [IM, IF, IA, CTNode]),
+	      Result = rpc:call(CTNode, IM, IF, IA),
+	      test_server:format(Level, "~n...with result: ~p~n", [Result])
+      end, InitCalls),
+    test_server:format(Level, "~nStarting test with ~w:~w(~p) on ~p~n",
 		       [M, F, A, CTNode]),
     rpc:call(CTNode, M, F, A).
 
+%% this is the last function that ct_run:script_start() calls, so the
+%% return value here is what rpc:call/4 above returns
+ct_test_halt(ExitStatus) ->
+    ExitStatus.	    
 
 %%%-----------------------------------------------------------------
 %%% wait_for_ct_stop/1
@@ -278,11 +377,72 @@ wait_for_ct_stop(Retries, CTNode) ->
 	undefined ->
 	    true;
 	Pid ->
+	    Info = (catch process_info(Pid)),
 	    test_server:format(0, "Waiting for CT (~p) to finish (~p)...", 
 			       [Pid,Retries]),
+	    test_server:format(0, "Process info for ~p:~n~p", [Info]), 
 	    timer:sleep(5000),
 	    wait_for_ct_stop(Retries-1, CTNode)
     end.
+
+%%%-----------------------------------------------------------------
+%%% ct_rpc/1
+ct_rpc({M,F,A}, Config) ->
+    CTNode = proplists:get_value(ct_node, Config),
+    Level = proplists:get_value(trace_level, Config),
+    test_server:format(Level, "~nCalling ~w:~w(~p) on ~p...",
+		       [M,F,A, CTNode]),
+    rpc:call(CTNode, M, F, A).
+
+
+%%%-----------------------------------------------------------------
+%%% random_error/1
+random_error(Config) when is_list(Config) ->
+    random:seed(now()),
+    Gen = fun(0,_) -> ok; (N,Fun) -> Fun(N-1, Fun) end,
+    Gen(random:uniform(100), Gen),
+
+    ErrorTypes = ['BADMATCH','BADARG','CASE_CLAUSE','FUNCTION_CLAUSE',
+		  'EXIT','THROW','UNDEF'],
+    Type = lists:nth(random:uniform(length(ErrorTypes)), ErrorTypes),
+    Where = case random:uniform(2) of
+		1 ->
+		    io:format("ct_test_support *returning* error of type ~w",
+			      [Type]),
+		    tc;
+		2 ->
+		    io:format("ct_test_support *generating* error of type ~w",
+			      [Type]),
+		    lib
+	    end,
+    ErrorFun =
+	fun() ->
+		case Type of
+		    'BADMATCH' ->
+			ok = proplists:get_value(undefined, Config);
+		    'BADARG' ->
+			size(proplists:get_value(priv_dir, Config));
+		    'FUNCTION_CLAUSE' ->
+			random_error(x);
+		    'EXIT' ->
+			spawn_link(fun() ->
+					   undef_proc ! hello,
+					   ok
+				   end);
+		    'THROW' ->
+			PrivDir = proplists:get_value(priv_dir, Config),
+			if is_list(PrivDir) -> throw(generated_throw) end;
+		    'UNDEF' ->
+			apply(?MODULE, random_error, [])
+		end
+	end,
+    %% either call the fun here or return it to the caller (to be
+    %% executed in a test case instead)
+    case Where of
+	tc -> ErrorFun;
+	lib -> ErrorFun()
+    end.
+    
 
 %%%-----------------------------------------------------------------
 %%% EVENT HANDLING
@@ -294,12 +454,17 @@ handle_event(EH, Event) ->
     
 start_event_receiver(Config) ->
     CTNode = proplists:get_value(ct_node, Config),
-    spawn_link(CTNode, fun() -> er() end).
+    Level = proplists:get_value(trace_level, Config),
+    ER = spawn_link(CTNode, fun() -> er() end),
+    test_server:format(Level, "~nEvent receiver ~w started!~n", [ER]),
+    ER.
 
 get_events(_, Config) ->
     CTNode = proplists:get_value(ct_node, Config),
+    Level = proplists:get_value(trace_level, Config),
     {event_receiver,CTNode} ! {self(),get_events},
     Events = receive {event_receiver,Evs} -> Evs end,
+    test_server:format(Level, "Stopping event receiver!~n", []),
     {event_receiver,CTNode} ! stop,
     Events.
 
@@ -321,6 +486,14 @@ er_loop(Evs) ->
 
 verify_events(TEvs, Evs, Config) ->
     Node = proplists:get_value(ct_node, Config),
+    case catch verify_events1(TEvs, Evs, Node, Config) of
+	{'EXIT',Reason} ->
+	    Reason;
+	_ ->
+	    ok
+    end.
+
+verify_events(TEvs, Evs, Node, Config) ->
     case catch verify_events1(TEvs, Evs, Node, Config) of
 	{'EXIT',Reason} ->
 	    Reason;
@@ -569,19 +742,32 @@ locate({parallel,TEvs}, Node, Evs, Config) ->
 				  test_server:format("Found ~p!", [TEv]),
 				  {Done,RemEvs2,length(RemEvs2)}
 			  end;
-		     %% end_per_group auto skipped
-		     (TEv={TEH,tc_auto_skip,{M,end_per_group,R}}, {Done,RemEvs,_RemSize}) ->
+		     %% end_per_group auto- or user skipped
+		     (TEv={TEH,AutoOrUserSkip,{M,end_per_group,R}}, {Done,RemEvs,_RemSize})
+			when AutoOrUserSkip == tc_auto_skip;
+			     AutoOrUserSkip == tc_user_skip ->
 			  RemEvs1 = 
 			      lists:dropwhile(
 				fun({EH,#event{name=tc_auto_skip,
 					       node=EvNode,
 					       data={Mod,end_per_group,Reason}}}) when
-				   EH == TEH, EvNode == Node, Mod == M, Reason == R ->
-					false;
+				   EH == TEH, EvNode == Node, Mod == M ->
+					case match_data(R, Reason) of
+					    match -> false;
+					    _ -> true
+					end;
+				   ({EH,#event{name=tc_user_skip,
+					       node=EvNode,
+					       data={Mod,end_per_group,Reason}}}) when
+				   EH == TEH, EvNode == Node, Mod == M ->
+					case match_data(R, Reason) of
+					    match -> false;
+					    _ -> true
+					end;
 				   ({EH,#event{name=stop_logging,
 					       node=EvNode,data=_}}) when
 					  EH == TEH, EvNode == Node ->
-					exit({tc_auto_skip_not_found,TEv});
+					exit({tc_auto_or_user_skip_not_found,TEv});
 				   (_) ->
 					true
 				end, RemEvs),
@@ -591,23 +777,12 @@ locate({parallel,TEvs}, Node, Evs, Config) ->
 			      [_AutoSkip | RemEvs2] ->
 				  {Done,RemEvs2,length(RemEvs2)}
 			  end;
-		     %% match other event than test case
-		     (TEv={TEH,N,D}, Acc) when D == '_' ->
-			  case [E || E={EH,#event{name=Name,
-						  node=EvNode,
-						  data=_}} <- Evs1, 
-				     EH == TEH, EvNode == Node, Name == N] of
-			      [] ->
-				  exit({unmatched,TEv});
-			      _ ->
-				  test_server:format("Found ~p!", [TEv]),
-				  Acc
-			  end;
 		     (TEv={TEH,N,D}, Acc) ->
 			  case [E || E={EH,#event{name=Name,
 						  node=EvNode,
 						  data=Data}} <- Evs1, 
-				     EH == TEH, EvNode == Node, Name == N, Data == D] of
+				     EH == TEH, EvNode == Node, Name == N,
+				     match == match_data(D,Data)] of
 			      [] ->
 				  exit({unmatched,TEv});
 			      _ ->
@@ -810,11 +985,18 @@ locate({shuffle,TEvs}, Node, Evs, Config) ->
 				  test_server:format("Found ~p!", [TEv]),
 				  {Done,RemEvs2,length(RemEvs2)}
 			  end;
-		     %% end_per_group auto skipped
-		     (TEv={TEH,tc_auto_skip,{M,end_per_group,R}}, {Done,RemEvs,_RemSize}) ->
+		     %% end_per_group auto-or user skipped
+		     (TEv={TEH,AutoOrUserSkip,{M,end_per_group,R}}, {Done,RemEvs,_RemSize})
+			when AutoOrUserSkip == tc_auto_skip;
+			     AutoOrUserSkip == tc_user_skip ->
 			  RemEvs1 = 
 			      lists:dropwhile(
 				fun({EH,#event{name=tc_auto_skip,
+					       node=EvNode,
+					       data={Mod,end_per_group,Reason}}}) when
+				   EH == TEH, EvNode == Node, Mod == M, Reason == R ->
+					false;
+				   ({EH,#event{name=tc_user_skip,
 					       node=EvNode,
 					       data={Mod,end_per_group,Reason}}}) when
 				   EH == TEH, EvNode == Node, Mod == M, Reason == R ->
@@ -966,33 +1148,39 @@ locate({TEH,Name,Data}, Node, [{TEH,#event{name=Name,
 					   data = EvData,
 					   node = Node}}|Evs],
        Config) ->
-    try match_data(Data, EvData) of
+    case match_data(Data, EvData) of
 	match ->
-	    {Config,Evs}
-    catch _:_ ->
+	    {Config,Evs};
+	_ ->
 	    nomatch
     end;
 
 locate({_TEH,_Name,_Data}, _Node, [_|_Evs], _Config) ->
     nomatch.
 
-match_data(D,D) ->
+match_data(Data, EvData) ->
+    try do_match_data(Data, EvData)
+    catch _:_ ->
+	    nomatch
+    end.
+
+do_match_data(D,D) ->
     match;
-match_data('_',_) ->
+do_match_data('_',_) ->
     match;
-match_data(Fun,Data) when is_function(Fun) ->
+do_match_data(Fun,Data) when is_function(Fun) ->
     Fun(Data);
-match_data('$proplist',Proplist) ->
-    match_data(
+do_match_data('$proplist',Proplist) ->
+    do_match_data(
       fun(List) ->
 	      lists:foreach(fun({_,_}) -> ok end,List)
       end,Proplist);
-match_data([H1|MatchT],[H2|ValT]) ->
-    match_data(H1,H2),
-    match_data(MatchT,ValT);
-match_data(Tuple1,Tuple2) when is_tuple(Tuple1),is_tuple(Tuple2) ->
-    match_data(tuple_to_list(Tuple1),tuple_to_list(Tuple2));
-match_data([],[]) ->
+do_match_data([H1|MatchT],[H2|ValT]) ->
+    do_match_data(H1,H2),
+    do_match_data(MatchT,ValT);
+do_match_data(Tuple1,Tuple2) when is_tuple(Tuple1),is_tuple(Tuple2) ->
+    do_match_data(tuple_to_list(Tuple1),tuple_to_list(Tuple2));
+do_match_data([],[]) ->
     match.
 
 result_match({SkipOrFail,{ErrorInd,{Why,'_'}}},
@@ -1000,6 +1188,15 @@ result_match({SkipOrFail,{ErrorInd,{Why,'_'}}},
     true;
 result_match({SkipOrFail,{ErrorInd,{EMod,EFunc,{Why,'_'}}}},
 	    {SkipOrFail,{ErrorInd,{EMod,EFunc,{Why,_Stack}}}}) ->
+    true;
+result_match({failed,{timetrap_timeout,{'$approx',Num}}},
+	     {failed,{timetrap_timeout,Value}}) ->
+    if Value >= trunc(Num-0.05*Num),
+       Value =< trunc(Num+0.05*Num) -> true;
+       true -> false
+    end;
+result_match({user_timetrap_error,{Why,'_'}},
+	     {user_timetrap_error,{Why,_Stack}}) ->
     true;
 result_match(Result, Result) ->
     true;
@@ -1048,6 +1245,9 @@ log_events1([E={_EH,tc_done,{_M,{end_per_group,_GrName,Props},_R}} | Evs], Dev, 
 log_events1([E={_EH,tc_auto_skip,{_M,end_per_group,_Reason}} | Evs], Dev, Ind) ->
     io:format(Dev, "~s~p],~n", [Ind,E]),
     log_events1(Evs, Dev, Ind--" ");
+log_events1([E={_EH,tc_user_skip,{_M,end_per_group,_Reason}} | Evs], Dev, Ind) ->
+    io:format(Dev, "~s~p],~n", [Ind,E]),
+    log_events1(Evs, Dev, Ind--" ");
 log_events1([E], Dev, Ind) ->
     io:format(Dev, "~s~p~n].~n", [Ind,E]),
     ok;
@@ -1083,6 +1283,8 @@ reformat([{_EH,#event{name=test_start,data=_}} | Events], EH) ->
     [{EH,test_start,{'DEF',{'START_TIME','LOGDIR'}}} | reformat(Events, EH)];
 reformat([{_EH,#event{name=test_done,data=_}} | Events], EH) ->
     [{EH,test_done,{'DEF','STOP_TIME'}} | reformat(Events, EH)];
+reformat([{_EH,#event{name=tc_logfile,data=_}} | Events], EH) ->
+    reformat(Events, EH);
 reformat([{_EH,#event{name=test_stats,data=Data}} | Events], EH) ->
     [{EH,test_stats,Data} | reformat(Events, EH)];
 %% use this to only print the last test_stats event:
@@ -1217,3 +1419,22 @@ rm_files([F | Fs]) ->
 rm_files([]) ->
     ok.
     
+%%%-----------------------------------------------------------------
+%%%
+slave_stop(Node) ->
+    Cover = test_server:is_cover(),
+    if Cover-> cover:flush(Node);
+       true -> ok
+    end,
+    erlang:monitor_node(Node, true),
+    slave:stop(Node),
+    receive
+	{nodedown, Node} ->
+	    if Cover -> cover:stop(Node);
+	       true -> ok
+	    end
+    after 5000 ->
+	    erlang:monitor_node(Node, false),
+	    receive {nodedown, Node} -> ok after 0 -> ok end %flush
+    end,
+    ok.

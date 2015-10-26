@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 1999-2011. All Rights Reserved.
+%% Copyright Ericsson AB 1999-2013. All Rights Reserved.
 %%
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -70,9 +70,9 @@
 -export([module/2,format_error/1]).
 
 -import(lists, [map/2,foldl/3,foldr/3,mapfoldl/3,all/2,any/2,
-		reverse/1,reverse/2,member/2,nth/2,flatten/1]).
+		reverse/1,reverse/2,member/2,nth/2,flatten/1,unzip/1]).
 
--import(cerl, [ann_c_cons/3,ann_c_tuple/2]).
+-import(cerl, [ann_c_cons/3,ann_c_map/3,ann_c_tuple/2]).
 
 -include("core_parse.hrl").
 
@@ -132,7 +132,12 @@ body(Body, Sub) ->
 
 body(#c_values{anno=A,es=Es0}, Ctxt, Sub) ->
     Es1 = expr_list(Es0, Ctxt, Sub),
-    #c_values{anno=A,es=Es1};
+    case Ctxt of
+	value ->
+	    #c_values{anno=A,es=Es1};
+	effect ->
+	    make_effect_seq(Es1, Sub)
+    end;
 body(E, Ctxt, Sub) ->
     ?ASSERT(verify_scope(E, Sub)),
     expr(E, Ctxt, Sub).
@@ -150,14 +155,26 @@ guard(Expr, Sub) ->
 opt_guard_try(#c_seq{arg=Arg,body=Body0}=Seq) ->
     Body = opt_guard_try(Body0),
     case {Arg,Body} of
-	{#c_call{},#c_literal{val=false}} ->
-	    %% We have sequence consisting of a call (evaluted
-	    %% for a possible exception only), followed by 'false'.
-	    %% Since the sequence is inside a try block that will
+	{#c_call{module=#c_literal{val=Mod},
+		 name=#c_literal{val=Name},
+		 args=Args},#c_literal{val=false}} ->
+	    %% We have sequence consisting of a call (evaluated
+	    %% for a possible exception and/or side effect only),
+	    %% followed by 'false'.
+	    %%   Since the sequence is inside a try block that will
 	    %% default to 'false' if any exception occurs, not
 	    %% evalutating the call will not change the behaviour
-	    %% of the guard.
-	    Body;
+	    %% provided that the call has no side effects.
+	    case erl_bifs:is_pure(Mod, Name, length(Args)) of
+		false ->
+		    %% Not a pure BIF (meaning that this is not
+		    %% a guard and that we must keep the call).
+		    Seq#c_seq{body=Body};
+		true ->
+		    %% The BIF has no side effects, so it can
+		    %% be safely removed.
+		    Body
+	    end;
 	{_,_} ->
 	    Seq#c_seq{body=Body}
     end;
@@ -229,6 +246,16 @@ expr(#c_tuple{anno=Anno,es=Es0}=Tuple, Ctxt, Sub) ->
 	value ->
 	    ann_c_tuple(Anno, Es)
     end;
+expr(#c_map{anno=Anno,arg=V0,es=Es0}=Map, Ctxt, Sub) ->
+    Es = pair_list(Es0, Ctxt, Sub),
+    case Ctxt of
+	effect ->
+	    add_warning(Map, useless_building),
+	    expr(make_effect_seq(Es, Sub), Ctxt, Sub);
+	value ->
+	    V = expr(V0, Ctxt, Sub),
+	    ann_c_map(Anno,V,Es)
+    end;
 expr(#c_binary{segments=Ss}=Bin0, Ctxt, Sub) ->
     %% Warn for useless building, but always build the binary
     %% anyway to preserve a possible exception.
@@ -278,6 +305,10 @@ expr(#c_let{}=Let, Ctxt, Sub) ->
 	    %% Now recursively re-process the new expression.
 	    expr(Expr, Ctxt, sub_new_preserve_types(Sub))
     end;
+expr(#c_letrec{body=#c_var{}}=Letrec, effect, _Sub) ->
+    %% This is named fun in an 'effect' context. Warn and ignore.
+    add_warning(Letrec, useless_building),
+    void();
 expr(#c_letrec{defs=Fs0,body=B0}=Letrec, Ctxt, Sub) ->
     Fs1 = map(fun ({Name,Fb}) ->
 		      {Name,expr(Fb, {letrec,Ctxt}, Sub)}
@@ -285,18 +316,54 @@ expr(#c_letrec{defs=Fs0,body=B0}=Letrec, Ctxt, Sub) ->
     B1 = body(B0, value, Sub),
     Letrec#c_letrec{defs=Fs1,body=B1};
 expr(#c_case{}=Case0, Ctxt, Sub) ->
+    %% Ideally, the compiler should only emit warnings when there is
+    %% a real mistake in the code being compiled. We use the follow
+    %% heuristics in an attempt to approach that ideal:
+    %%
+    %% * If the guard for a clause always fails, we will emit a
+    %%   warning.
+    %%
+    %% * If a case expression is a literal, we will emit no warnings
+    %%   for clauses that will not match or for clauses that are
+    %%   shadowed after a clause that will always match. That means
+    %%   that code such as:
+    %%
+    %%      case ?DEBUG of
+    %%         false -> ok;
+    %%         true -> ...
+    %%      end
+    %%
+    %%   (where ?DEBUG expands to either 'true' or 'false') will not
+    %%   produce any warnings.
+    %%
+    %% * If the case expression is not literal, warnings will be
+    %%   emitted for every clause that don't match and for all
+    %%   clauses following a clause that will always match.
+    %%
+    %% * If no clause will ever match, there will be a warning
+    %%   (in addition to any warnings that may have been emitted
+    %%   according to the rules above).
+    %%
     case opt_bool_case(Case0) of
 	#c_case{arg=Arg0,clauses=Cs0}=Case1 ->
 	    Arg1 = body(Arg0, value, Sub),
-	    {Arg2,Cs1} = case_opt(Arg1, Cs0),
-	    Cs2 = clauses(Arg2, Cs1, Case1, Ctxt, Sub),
-	    Case = eval_case(Case1#c_case{arg=Arg2,clauses=Cs2}, Sub),
-	    bsm_an(Case);
+	    LitExpr = cerl:is_literal(Arg1),
+	    {Arg2,Cs1} = case_opt(Arg1, Cs0, Sub),
+	    Cs2 = clauses(Arg2, Cs1, Ctxt, Sub, LitExpr),
+	    Case = Case1#c_case{arg=Arg2,clauses=Cs2},
+	    warn_no_clause_match(Case1, Case),
+	    Expr = eval_case(Case, Sub),
+            case move_case_into_arg(Case, Sub) of
+                impossible ->
+                    bsm_an(Expr);
+                Other ->
+                    expr(Other, Ctxt, sub_new_preserve_types(Sub))
+            end;
 	Other ->
 	    expr(Other, Ctxt, Sub)
     end;
 expr(#c_receive{clauses=Cs0,timeout=T0,action=A0}=Recv, Ctxt, Sub) ->
-    Cs1 = clauses(#c_var{name='_'}, Cs0, Recv, Ctxt, Sub), %This is all we know
+    Cs1 = clauses(#c_var{name='_'}, Cs0, Ctxt, Sub, false),
     T1 = expr(T0, value, Sub),
     A1 = body(A0, Ctxt, Sub),
     Recv#c_receive{clauses=Cs1,timeout=T1,action=A1};
@@ -359,6 +426,16 @@ expr(#c_try{anno=A,arg=E0,vars=Vs0,body=B0,evars=Evs0,handler=H0}=Try, _, Sub0) 
 
 expr_list(Es, Ctxt, Sub) ->
     [expr(E, Ctxt, Sub) || E <- Es].
+
+pair_list(Es, Ctxt, Sub) ->
+    [pair(E, Ctxt, Sub) || E <- Es].
+
+pair(#c_map_pair{key=K,val=V}, effect, Sub) ->
+    make_effect_seq([K,V], Sub);
+pair(#c_map_pair{key=K0,val=V0}=Pair, value=Ctxt, Sub) ->
+    K = expr(K0, Ctxt, Sub),
+    V = expr(V0, Ctxt, Sub),
+    Pair#c_map_pair{key=K,val=V}.
 
 bitstr_list(Es, Sub) ->
     [bitstr(E, Sub) || E <- Es].
@@ -530,6 +607,14 @@ eval_binary_1([#c_bitstr{val=#c_literal{val=Val},size=#c_literal{val=Sz},
 	error:_ ->
 	    throw(impossible)
     end;
+eval_binary_1([#c_bitstr{val=#c_literal{},size=#c_literal{},
+			 unit=#c_literal{},type=#c_literal{},
+			 flags=#c_cons{}=Flags}=Bitstr|Ss], Acc0) ->
+    case cerl:fold_literal(Flags) of
+	#c_literal{} = Flags1 ->
+	    eval_binary_1([Bitstr#c_bitstr{flags=Flags1}|Ss], Acc0);
+	_ -> throw(impossible)
+    end;
 eval_binary_1([], Acc) -> Acc;
 eval_binary_1(_, _) -> throw(impossible).
 
@@ -629,7 +714,7 @@ useless_call(effect, #c_call{anno=Anno,
 useless_call(_, _) -> no.
 
 %% make_effect_seq([Expr], Sub) -> #c_seq{}|void()
-%%  Convert a list of epressions evaluated in effect context to a chain of
+%%  Convert a list of expressions evaluated in effect context to a chain of
 %%  #c_seq{}. The body in the innermost #c_seq{} will be void().
 %%  Anything that will not have any effect will be thrown away.
 
@@ -674,11 +759,14 @@ call_1(#c_call{anno=Anno}, lists, all, [Arg1,Arg2], Sub) ->
     C1 = #c_clause{pats=[#c_cons{hd=X, tl=Xs}], guard=#c_literal{val=true},
 		   body=#c_case{arg=#c_apply{anno=Anno, op=F, args=[X]},
 				clauses = [CC1, CC2, CC3]}},
-    C2 = #c_clause{pats=[#c_literal{val=[]}], guard=#c_literal{val=true},
+    C2 = #c_clause{pats=[#c_literal{val=[]}],
+		   guard=#c_call{module=#c_literal{val=erlang},
+				 name=#c_literal{val=is_function},
+				 args=[F, #c_literal{val=1}]},
 		   body=#c_literal{val=true}},
-    Err2 = #c_tuple{es=[#c_literal{val='function_clause'}, Xs]},
+    Err2 = #c_tuple{es=[#c_literal{val='function_clause'}, F, Xs]},
     C3 = #c_clause{pats=[Xs], guard=#c_literal{val=true},
-		   body=match_fail(Anno, Err2)},
+		   body=match_fail([{function_name,{'lists^all',1}}|Anno], Err2)},
     Fun = #c_fun{vars=[Xs],
 		 body=#c_case{arg=Xs, clauses=[C1, C2, C3]}},
     L = #c_var{name='L'},
@@ -701,11 +789,14 @@ call_1(#c_call{anno=Anno}, lists, any, [Arg1,Arg2], Sub) ->
     C1 = #c_clause{pats=[#c_cons{hd=X, tl=Xs}], guard=#c_literal{val=true},
 		   body=#c_case{arg=#c_apply{anno=Anno, op=F, args=[X]},
 				clauses = [CC1, CC2, CC3]}},
-    C2 = #c_clause{pats=[#c_literal{val=[]}], guard=#c_literal{val=true},
+    C2 = #c_clause{pats=[#c_literal{val=[]}],
+		   guard=#c_call{module=#c_literal{val=erlang},
+				 name=#c_literal{val=is_function},
+				 args=[F, #c_literal{val=1}]},
 		   body=#c_literal{val=false}},
-    Err2 = #c_tuple{es=[#c_literal{val='function_clause'}, Xs]},
+    Err2 = #c_tuple{es=[#c_literal{val='function_clause'}, F, Xs]},
     C3 = #c_clause{pats=[Xs], guard=#c_literal{val=true},
-		   body=match_fail(Anno, Err2)},
+		   body=match_fail([{function_name,{'lists^any',1}}|Anno], Err2)},
     Fun = #c_fun{vars=[Xs],
 		 body=#c_case{arg=Xs, clauses=[C1, C2, C3]}},
     L = #c_var{name='L'},
@@ -721,11 +812,14 @@ call_1(#c_call{anno=Anno}, lists, foreach, [Arg1,Arg2], Sub) ->
     C1 = #c_clause{pats=[#c_cons{hd=X, tl=Xs}], guard=#c_literal{val=true},
 		   body=#c_seq{arg=#c_apply{anno=Anno, op=F, args=[X]},
 			       body=#c_apply{anno=Anno, op=Loop, args=[Xs]}}},
-    C2 = #c_clause{pats=[#c_literal{val=[]}], guard=#c_literal{val=true},
+    C2 = #c_clause{pats=[#c_literal{val=[]}],
+		   guard=#c_call{module=#c_literal{val=erlang},
+				 name=#c_literal{val=is_function},
+				 args=[F, #c_literal{val=1}]},
 		   body=#c_literal{val=ok}},
-    Err = #c_tuple{es=[#c_literal{val='function_clause'}, Xs]},
+    Err = #c_tuple{es=[#c_literal{val='function_clause'}, F, Xs]},
     C3 = #c_clause{pats=[Xs], guard=#c_literal{val=true},
-		   body=match_fail(Anno, Err)},
+		   body=match_fail([{function_name,{'lists^foreach',1}}|Anno], Err)},
     Fun = #c_fun{vars=[Xs],
 		 body=#c_case{arg=Xs, clauses=[C1, C2, C3]}},
     L = #c_var{name='L'},
@@ -744,14 +838,18 @@ call_1(#c_call{anno=Anno}, lists, map, [Arg1,Arg2], Sub) ->
 						      op=F,
 						      args=[X]},
 			       body=#c_cons{hd=H,
+					    anno=[compiler_generated],
 					    tl=#c_apply{anno=Anno,
 							op=Loop,
 							args=[Xs]}}}},
-    C2 = #c_clause{pats=[#c_literal{val=[]}], guard=#c_literal{val=true},
+    C2 = #c_clause{pats=[#c_literal{val=[]}],
+		   guard=#c_call{module=#c_literal{val=erlang},
+				 name=#c_literal{val=is_function},
+				 args=[F, #c_literal{val=1}]},
 		   body=#c_literal{val=[]}},
-    Err = #c_tuple{es=[#c_literal{val='function_clause'}, Xs]},
+    Err = #c_tuple{es=[#c_literal{val='function_clause'}, F, Xs]},
     C3 = #c_clause{pats=[Xs], guard=#c_literal{val=true},
-		   body=match_fail(Anno, Err)},
+		   body=match_fail([{function_name,{'lists^map',1}}|Anno], Err)},
     Fun = #c_fun{vars=[Xs],
 		 body=#c_case{arg=Xs, clauses=[C1, C2, C3]}},
     L = #c_var{name='L'},
@@ -768,18 +866,21 @@ call_1(#c_call{anno=Anno}, lists, flatmap, [Arg1,Arg2], Sub) ->
     C1 = #c_clause{pats=[#c_cons{hd=X, tl=Xs}], guard=#c_literal{val=true},
 		   body=#c_let{vars=[H],
 			       arg=#c_apply{anno=Anno, op=F, args=[X]},
-			       body=#c_call{anno=Anno,
+			       body=#c_call{anno=[compiler_generated|Anno],
 					    module=#c_literal{val=erlang},
 					    name=#c_literal{val='++'},
 					    args=[H,
 						  #c_apply{anno=Anno,
 							   op=Loop,
 							   args=[Xs]}]}}},
-    C2 = #c_clause{pats=[#c_literal{val=[]}], guard=#c_literal{val=true},
+    C2 = #c_clause{pats=[#c_literal{val=[]}],
+		   guard=#c_call{module=#c_literal{val=erlang},
+				 name=#c_literal{val=is_function},
+				 args=[F, #c_literal{val=1}]},
 		   body=#c_literal{val=[]}},
-    Err = #c_tuple{es=[#c_literal{val='function_clause'}, Xs]},
+    Err = #c_tuple{es=[#c_literal{val='function_clause'}, F, Xs]},
     C3 = #c_clause{pats=[Xs], guard=#c_literal{val=true},
-		   body=match_fail(Anno, Err)},
+		   body=match_fail([{function_name,{'lists^flatmap',1}}|Anno], Err)},
     Fun = #c_fun{vars=[Xs],
 		 body=#c_case{arg=Xs, clauses=[C1, C2, C3]}},
     L = #c_var{name='L'},
@@ -795,7 +896,7 @@ call_1(#c_call{anno=Anno}, lists, filter, [Arg1,Arg2], Sub) ->
     B = #c_var{name='B'},
     Err1 = #c_tuple{es=[#c_literal{val='case_clause'}, X]},
     CC1 = #c_clause{pats=[#c_literal{val=true}], guard=#c_literal{val=true},
-		    body=#c_cons{hd=X, tl=Xs}},
+		    body=#c_cons{anno=[compiler_generated], hd=X, tl=Xs}},
     CC2 = #c_clause{pats=[#c_literal{val=false}], guard=#c_literal{val=true},
 		    body=Xs},
     CC3 = #c_clause{pats=[X], guard=#c_literal{val=true},
@@ -809,11 +910,14 @@ call_1(#c_call{anno=Anno}, lists, filter, [Arg1,Arg2], Sub) ->
 							op=Loop,
 							args=[Xs]},
 					   body=Case}}},
-    C2 = #c_clause{pats=[#c_literal{val=[]}], guard=#c_literal{val=true},
+    C2 = #c_clause{pats=[#c_literal{val=[]}],
+		   guard=#c_call{module=#c_literal{val=erlang},
+				 name=#c_literal{val=is_function},
+				 args=[F, #c_literal{val=1}]},
 		   body=#c_literal{val=[]}},
-    Err2 = #c_tuple{es=[#c_literal{val='function_clause'}, Xs]},
+    Err2 = #c_tuple{es=[#c_literal{val='function_clause'}, F, Xs]},
     C3 = #c_clause{pats=[Xs], guard=#c_literal{val=true},
-		   body=match_fail(Anno, Err2)},
+		   body=match_fail([{function_name,{'lists^filter',1}}|Anno], Err2)},
     Fun = #c_fun{vars=[Xs],
 		 body=#c_case{arg=Xs, clauses=[C1, C2, C3]}},
     L = #c_var{name='L'},
@@ -833,10 +937,14 @@ call_1(#c_call{anno=Anno}, lists, foldl, [Arg1,Arg2,Arg3], Sub) ->
 				 args=[Xs, #c_apply{anno=Anno,
 						    op=F,
 						    args=[X, A]}]}},
-    C2 = #c_clause{pats=[#c_literal{val=[]}], guard=#c_literal{val=true}, body=A},
-    Err = #c_tuple{es=[#c_literal{val='function_clause'}, Xs]},
+    C2 = #c_clause{pats=[#c_literal{val=[]}],
+		   guard=#c_call{module=#c_literal{val=erlang},
+				 name=#c_literal{val=is_function},
+				 args=[F, #c_literal{val=2}]},
+		   body=A},
+    Err = #c_tuple{es=[#c_literal{val='function_clause'}, F, A, Xs]},
     C3 = #c_clause{pats=[Xs], guard=#c_literal{val=true},
-		   body=match_fail(Anno, Err)},
+		   body=match_fail([{function_name,{'lists^foldl',2}}|Anno], Err)},
     Fun = #c_fun{vars=[Xs, A],
 		 body=#c_case{arg=Xs, clauses=[C1, C2, C3]}},
     L = #c_var{name='L'},
@@ -856,10 +964,14 @@ call_1(#c_call{anno=Anno}, lists, foldr, [Arg1,Arg2,Arg3], Sub) ->
 				 args=[X, #c_apply{anno=Anno,
 						   op=Loop,
 						   args=[Xs, A]}]}},
-    C2 = #c_clause{pats=[#c_literal{val=[]}], guard=#c_literal{val=true}, body=A},
-    Err = #c_tuple{es=[#c_literal{val='function_clause'}, Xs]},
+    C2 = #c_clause{pats=[#c_literal{val=[]}],
+		   guard=#c_call{module=#c_literal{val=erlang},
+				 name=#c_literal{val=is_function},
+				 args=[F, #c_literal{val=2}]},
+		   body=A},
+    Err = #c_tuple{es=[#c_literal{val='function_clause'}, F, A, Xs]},
     C3 = #c_clause{pats=[Xs], guard=#c_literal{val=true},
-		   body=match_fail(Anno, Err)},
+		   body=match_fail([{function_name,{'lists^foldr',2}}|Anno], Err)},
     Fun = #c_fun{vars=[Xs, A],
 		 body=#c_case{arg=Xs, clauses=[C1, C2, C3]}},
     L = #c_var{name='L'},
@@ -889,7 +1001,10 @@ call_1(#c_call{anno=Anno}, lists, mapfoldl, [Arg1,Arg2,Arg3], Sub) ->
 					     op=Loop,
 					     args=[Xs, Avar]},
 				    #c_tuple{es=[Xs, Avar]},
-				    #c_tuple{es=[#c_cons{hd=X, tl=Xs}, Avar]})
+				    #c_tuple{anno=[compiler_generated],
+					     es=[#c_cons{anno=[compiler_generated],
+							 hd=X, tl=Xs},
+						 Avar]})
 %%% Multiple-value version
 %%% 			      #c_let{vars=[Xs,A],
 %%% 				     %% The tuple here will be optimised
@@ -898,14 +1013,18 @@ call_1(#c_call{anno=Anno}, lists, mapfoldl, [Arg1,Arg2,Arg3], Sub) ->
 %%% 				     body=#c_values{es=[#c_cons{hd=X, tl=Xs},
 %%% 							A]}}
 			     )},
-    C2 = #c_clause{pats=[#c_literal{val=[]}], guard=#c_literal{val=true},
+    C2 = #c_clause{pats=[#c_literal{val=[]}],
+		   guard=#c_call{module=#c_literal{val=erlang},
+				 name=#c_literal{val=is_function},
+				 args=[F, #c_literal{val=2}]},
 %%% Tuple passing version
-		   body=#c_tuple{es=[#c_literal{val=[]}, Avar]}},
+		   body=#c_tuple{anno=[compiler_generated],
+				 es=[#c_literal{val=[]}, Avar]}},
 %%% Multiple-value version
 %%% 		   body=#c_values{es=[#c_literal{val=[]}, A]}},
-    Err = #c_tuple{es=[#c_literal{val='function_clause'}, Xs]},
+    Err = #c_tuple{es=[#c_literal{val='function_clause'}, F, Avar, Xs]},
     C3 = #c_clause{pats=[Xs], guard=#c_literal{val=true},
-		   body=match_fail(Anno, Err)},
+		   body=match_fail([{function_name,{'lists^mapfoldl',2}}|Anno], Err)},
     Fun = #c_fun{vars=[Xs, Avar],
 		 body=#c_case{arg=Xs, clauses=[C1, C2, C3]}},
     L = #c_var{name='L'},
@@ -943,7 +1062,9 @@ call_1(#c_call{anno=Anno}, lists, mapfoldr, [Arg1,Arg2,Arg3], Sub) ->
 			      #c_tuple{es=[Xs, Avar]},
 			      Match(#c_apply{anno=Anno, op=F, args=[X, Avar]},
 				    #c_tuple{es=[X, Avar]},
-				    #c_tuple{es=[#c_cons{hd=X, tl=Xs}, Avar]}))
+				    #c_tuple{anno=[compiler_generated],
+					     es=[#c_cons{anno=[compiler_generated],
+							 hd=X, tl=Xs}, Avar]}))
 %%% Multiple-value version
 %%% 		   body=#c_let{vars=[Xs,A],
 %%% 			       %% The tuple will be optimised away
@@ -953,14 +1074,18 @@ call_1(#c_call{anno=Anno}, lists, mapfoldr, [Arg1,Arg2,Arg3], Sub) ->
 %%% 					  #c_values{es=[#c_cons{hd=X, tl=Xs},
 %%% 						        A]})}
 		  },
-    C2 = #c_clause{pats=[#c_literal{val=[]}], guard=#c_literal{val=true},
+    C2 = #c_clause{pats=[#c_literal{val=[]}],
+		   guard=#c_call{module=#c_literal{val=erlang},
+				 name=#c_literal{val=is_function},
+				 args=[F, #c_literal{val=2}]},
 %%% Tuple passing version
-		   body=#c_tuple{es=[#c_literal{val=[]}, Avar]}},
+		   body=#c_tuple{anno=[compiler_generated],
+				 es=[#c_literal{val=[]}, Avar]}},
 %%% Multiple-value version
 %%% 		   body=#c_values{es=[#c_literal{val=[]}, A]}},
-    Err = #c_tuple{es=[#c_literal{val='function_clause'}, Xs]},
+    Err = #c_tuple{es=[#c_literal{val='function_clause'}, F, Avar, Xs]},
     C3 = #c_clause{pats=[Xs], guard=#c_literal{val=true},
-		   body=match_fail(Anno, Err)},
+		   body=match_fail([{function_name,{'lists^mapfoldr',2}}|Anno], Err)},
     Fun = #c_fun{vars=[Xs, Avar],
 		 body=#c_case{arg=Xs, clauses=[C1, C2, C3]}},
     L = #c_var{name='L'},
@@ -1220,6 +1345,8 @@ eval_element(Call, #c_literal{val=Pos}, #c_var{name=V}, Types)
 		true ->
 		    eval_failure(Call, badarg)
 	    end;
+	{ok,_} ->
+	    eval_failure(Call, badarg);
 	error ->
 	    Call
     end;
@@ -1251,6 +1378,7 @@ eval_is_record(Call, _, _, _, _) -> Call.
 is_not_integer(#c_literal{val=Val}) when not is_integer(Val) -> true;
 is_not_integer(#c_tuple{}) -> true;
 is_not_integer(#c_cons{}) -> true;
+is_not_integer(#c_map{}) -> true;
 is_not_integer(_) -> false.
 
 %% is_not_tuple(Core) -> true | false.
@@ -1258,6 +1386,7 @@ is_not_integer(_) -> false.
 
 is_not_tuple(#c_literal{val=Val}) when not is_tuple(Val) -> true;
 is_not_tuple(#c_cons{}) -> true;
+is_not_tuple(#c_map{}) -> true;
 is_not_tuple(_) -> false.
 
 %% eval_setelement(Call, Pos, Tuple, NewVal) -> Core.
@@ -1393,14 +1522,14 @@ let_subst_list([], [], _) -> {[],[],[]}.
 
 %%pattern(Pat, Sub) -> pattern(Pat, Sub, Sub).
 
-pattern(#c_var{name=V0}=Pat, Isub, Osub) ->
+pattern(#c_var{}=Pat, Isub, Osub) ->
     case sub_is_val(Pat, Isub) of
 	true ->
 	    V1 = make_var_name(),
 	    Pat1 = #c_var{name=V1},
 	    {Pat1,sub_set_var(Pat, Pat1, scope_add([V1], Osub))};
 	false ->
-	    {Pat,sub_del_var(Pat, scope_add([V0], Osub))}
+	    {Pat,sub_del_var(Pat, Osub)}
     end;
 pattern(#c_literal{}=Pat, _, Osub) -> {Pat,Osub};
 pattern(#c_cons{anno=Anno,hd=H0,tl=T0}, Isub, Osub0) ->
@@ -1410,6 +1539,9 @@ pattern(#c_cons{anno=Anno,hd=H0,tl=T0}, Isub, Osub0) ->
 pattern(#c_tuple{anno=Anno,es=Es0}, Isub, Osub0) ->
     {Es1,Osub1} = pattern_list(Es0, Isub, Osub0),
     {ann_c_tuple(Anno, Es1),Osub1};
+pattern(#c_map{anno=Anno,es=Es0}=Map, Isub, Osub0) ->
+    {Es1,Osub1} = map_pair_pattern_list(Es0, Isub, Osub0),
+    {Map#c_map{anno=Anno,es=Es1},Osub1};
 pattern(#c_binary{segments=V0}=Pat, Isub, Osub0) ->
     {V1,Osub1} = bin_pattern_list(V0, Isub, Osub0),
     {Pat#c_binary{segments=V1},Osub1};
@@ -1418,6 +1550,15 @@ pattern(#c_alias{var=V0,pat=P0}=Pat, Isub, Osub0) ->
     {P1,Osub2} = pattern(P0, Isub, Osub1),
     Osub = update_types(V1, [P1], Osub2),
     {Pat#c_alias{var=V1,pat=P1},Osub}.
+
+map_pair_pattern_list(Ps0, Isub, Osub0) ->
+    {Ps,{_,Osub}} = mapfoldl(fun map_pair_pattern/2, {Isub,Osub0}, Ps0),
+    {Ps,Osub}.
+
+map_pair_pattern(#c_map_pair{op=#c_literal{val=exact},key=K0,val=V0}=Pair,{Isub,Osub0}) ->
+    K = expr(K0, Isub),
+    {V,Osub} = pattern(V0,Isub,Osub0),
+    {Pair#c_map_pair{key=K,val=V},{Isub,Osub}}.
 
 bin_pattern_list(Ps0, Isub, Osub0) ->
     {Ps,{_,Osub}} = mapfoldl(fun bin_pattern/2, {Isub,Osub0}, Ps0),
@@ -1463,6 +1604,9 @@ is_subst(_) -> false.
 %%  chains so we never have to search more than once.  Use orddict so
 %%  we know the format.
 %%
+%%  In addition to the list of substitutions, we also keep track of
+%%  all variable currently live (the scope).
+%%
 %%  sub_subst_scope/1 adds dummy substitutions for all variables
 %%  in the scope in order to force renaming if variables in the
 %%  scope occurs as pattern variables.
@@ -1489,8 +1633,17 @@ sub_set_name(V, Val, #sub{v=S,s=Scope,t=Tdb0}=Sub) ->
     Tdb = copy_type(V, Val, Tdb1),
     Sub#sub{v=orddict:store(V, Val, S),s=gb_sets:add(V, Scope),t=Tdb}.
 
-sub_del_var(#c_var{name=V}, #sub{v=S,t=Tdb}=Sub) ->
-    Sub#sub{v=orddict:erase(V, S),t=kill_types(V, Tdb)}.
+sub_del_var(#c_var{name=V}, #sub{v=S,s=Scope,t=Tdb}=Sub) ->
+    %% Profiling shows that for programs with many record operations,
+    %% sub_del_var/2 is a bottleneck. Since the scope contains all
+    %% variables that are live, we know that V cannot be present in S
+    %% if it is not in the scope.
+    case gb_sets:is_member(V, Scope) of
+	false ->
+	    Sub#sub{s=gb_sets:insert(V, Scope)};
+	true ->
+	    Sub#sub{v=orddict:erase(V, S),t=kill_types(V, Tdb)}
+    end.
 
 sub_subst_var(#c_var{name=V}, Val, #sub{v=S0}) ->
     %% Fold chained substitutions.
@@ -1500,47 +1653,50 @@ sub_subst_scope(#sub{v=S0,s=Scope}=Sub) ->
     S = [{-1,#c_var{name=Sv}} || Sv <- gb_sets:to_list(Scope)]++S0,
     Sub#sub{v=S}.
 
-sub_is_val(#c_var{name=V}, #sub{v=S}) ->
-    v_is_value(V, S).
+sub_is_val(#c_var{name=V}, #sub{v=S,s=Scope}) ->
+    %% When the bottleneck in sub_del_var/2 was eliminated, this
+    %% became the new bottleneck. Since the scope contains all
+    %% live variables, a variable V can only be the target for
+    %% a substitution if it is in the scope.
+    gb_sets:is_member(V, Scope) andalso v_is_value(V, S).
 
-v_is_value(Var, Sub) ->
-    any(fun ({_,#c_var{name=Val}}) when Val =:= Var -> true;
-	    (_) -> false
-	end, Sub).
+v_is_value(Var, [{_,#c_var{name=Var}}|_]) -> true;
+v_is_value(Var, [_|T]) -> v_is_value(Var, T);
+v_is_value(_, []) -> false.
 
-%% clauses(E, [Clause], TopLevel, Context, Sub) -> [Clause].
-%%  Trim the clauses by removing all clauses AFTER the first one which
-%%  is guaranteed to match.  Also remove all trivially false clauses.
+%% warn_no_clause_match(CaseOrig, CaseOpt) -> ok
+%%  Generate a warning if none of the user-specified clauses
+%%  will match.
 
-clauses(E, Cs0, TopLevel, Ctxt, Sub) ->
-    Cs = clauses_1(E, Cs0, Ctxt, Sub),
-
-    %% Here we want to warn if no clauses whatsoever will ever
-    %% match, because that is probably a mistake.
-    case all(fun is_compiler_generated/1, Cs) andalso
-	any(fun(C) -> not is_compiler_generated(C) end, Cs0) of
+warn_no_clause_match(CaseOrig, CaseOpt) ->
+    OrigCs = cerl:case_clauses(CaseOrig),
+    OptCs = cerl:case_clauses(CaseOpt),
+    case any(fun(C) -> not is_compiler_generated(C) end, OrigCs) andalso
+	all(fun is_compiler_generated/1, OptCs) of
 	true ->
 	    %% The original list of clauses did contain at least one
 	    %% user-specified clause, but none of them will match.
 	    %% That is probably a mistake.
-	    add_warning(TopLevel, no_clause_match);
+	    add_warning(CaseOrig, no_clause_match);
 	false ->
 	    %% Either there were user-specified clauses left in
 	    %% the transformed clauses, or else none of the original
 	    %% clauses were user-specified to begin with (as in 'andalso').
 	    ok
-    end,
+    end.
 
-    Cs.
+%% clauses(E, [Clause], TopLevel, Context, Sub) -> [Clause].
+%%  Trim the clauses by removing all clauses AFTER the first one which
+%%  is guaranteed to match.  Also remove all trivially false clauses.
 
-clauses_1(E, [C0|Cs], Ctxt, Sub) ->
+clauses(E, [C0|Cs], Ctxt, Sub, LitExpr) ->
     #c_clause{pats=Ps,guard=G} = C1 = clause(C0, E, Ctxt, Sub),
     %%ok = io:fwrite("~w: ~p~n", [?LINE,{E,Ps}]),
     case {will_match(E, Ps),will_succeed(G)} of
 	{yes,yes} ->
-	    Line = get_line(core_lib:get_anno(C1)),
-	    case core_lib:is_literal(E) of
+	    case LitExpr of
 		false ->
+		    Line = get_line(core_lib:get_anno(C1)),
 		    shadow_warning(Cs, Line);
 		true ->
 		    %% If the case expression is a literal,
@@ -1549,15 +1705,13 @@ clauses_1(E, [C0|Cs], Ctxt, Sub) ->
 		    ok
 	    end,
 	    [C1];				%Skip the rest
-	{no,_Suc} ->
-	    clauses_1(E, Cs, Ctxt, Sub);	%Skip this clause
-	{_Mat,no} ->
+	{_Mat,no} ->				%Guard fails.
 	    add_warning(C1, nomatch_guard),
-	    clauses_1(E, Cs, Ctxt, Sub);	%Skip this clause
+	    clauses(E, Cs, Ctxt, Sub, LitExpr);	%Skip this clause
 	{_Mat,_Suc} ->
-	    [C1|clauses_1(E, Cs, Ctxt, Sub)]
+	    [C1|clauses(E, Cs, Ctxt, Sub, LitExpr)]
     end;
-clauses_1(_, [], _, _) -> [].
+clauses(_, [], _, _, _) -> [].
 
 shadow_warning([C|Cs], none) ->
     add_warning(C, nomatch_shadow),
@@ -1575,69 +1729,18 @@ will_succeed(#c_literal{val=true}) -> yes;
 will_succeed(#c_literal{val=false}) -> no;
 will_succeed(_Guard) -> maybe.
 
-%% will_match(Expr, [Pattern]) -> yes | maybe | no.
-%%  Test if we know whether a match will succeed/fail or just don't
-%%  know.  Be conservative.
+%% will_match(Expr, [Pattern]) -> yes | maybe.
+%%  We KNOW that this function is only used after optimizations
+%%  in case_opt/4. Therefore clauses that can definitely not match
+%%  have already been pruned.
 
 will_match(#c_values{es=Es}, Ps) ->
-    will_match_list(Es, Ps, yes);
+    will_match_1(cerl_clauses:match_list(Ps, Es));
 will_match(E, [P]) ->
-    will_match_1(E, P).
+    will_match_1(cerl_clauses:match(P, E)).
 
-will_match_1(_E, #c_var{}) -> yes;		%Will always match
-will_match_1(E, #c_alias{pat=P}) ->		%Pattern decides
-    will_match_1(E, P);
-will_match_1(#c_var{}, _P) -> maybe;
-will_match_1(#c_tuple{es=Es}, #c_tuple{es=Ps}) ->
-    will_match_list(Es, Ps, yes);
-will_match_1(#c_literal{val=Lit}, P) ->
-    will_match_lit(Lit, P);
-will_match_1(_, _) -> maybe.
-
-will_match_list([E|Es], [P|Ps], M) ->
-    case will_match_1(E, P) of
-	yes -> will_match_list(Es, Ps, M);
-	maybe -> will_match_list(Es, Ps, maybe);
-	no -> no
-    end;
-will_match_list([], [], M) -> M.
-
-will_match_lit(Cons, #c_cons{hd=Hp,tl=Tp}) ->
-    case Cons of
-	[H|T] ->
-	    case will_match_lit(H, Hp) of
-		yes -> will_match_lit(T, Tp);
-		Other -> Other
-	    end;
-	_ ->
-	    no
-    end;
-will_match_lit(Tuple, #c_tuple{es=Es}) ->
-    case is_tuple(Tuple) andalso tuple_size(Tuple) =:= length(Es) of
-	true -> will_match_lit_list(tuple_to_list(Tuple), Es);
-	false -> no
-    end;
-will_match_lit(Bin, #c_binary{}) ->
-    case is_bitstring(Bin) of
-	true -> maybe;
-	false -> no
-    end;
-will_match_lit(_, #c_var{}) ->
-    yes;
-will_match_lit(Lit, #c_alias{pat=P}) ->
-    will_match_lit(Lit, P);
-will_match_lit(Lit1, #c_literal{val=Lit2}) ->
-    case Lit1 =:= Lit2 of
-	true -> yes;
-	false -> no
-    end.
-
-will_match_lit_list([H|T], [P|Ps]) ->
-    case will_match_lit(H, P) of
-	yes -> will_match_lit_list(T, Ps);
-	Other -> Other
-    end;
-will_match_lit_list([], []) -> yes.
+will_match_1({false,_}) -> maybe;
+will_match_1({true,_}) -> yes.
 
 %% opt_bool_case(CoreExpr) - CoreExpr'.
 %%  Do various optimizations to case statement that has a
@@ -1701,9 +1804,14 @@ opt_bool_clauses([#c_clause{pats=[#c_literal{val=Lit}],
 	true ->
 	    %% This clause will match.
 	    C = C0#c_clause{body=opt_bool_case(B)},
-	    case Lit of
-		false -> [C|opt_bool_clauses(Cs, SeenT, true)];
-		true -> [C|opt_bool_clauses(Cs, true, SeenF)]
+	    case {Lit,SeenT,SeenF} of
+                {false,_,false} ->
+                    [C|opt_bool_clauses(Cs, SeenT, true)];
+                {true,false,_} ->
+                    [C|opt_bool_clauses(Cs, true, SeenF)];
+                _ ->
+                    add_warning(C, nomatch_shadow),
+                    opt_bool_clauses(Cs, SeenT, SeenF)
 	    end
     end;
 opt_bool_clauses([#c_clause{pats=Ps,guard=#c_literal{val=true}}=C|Cs], SeenT, SeenF) ->
@@ -1747,35 +1855,25 @@ opt_bool_clauses([_|_], _, _) ->
 %%     end.			       NewVar ->
 %%                                        erlang:error(badarg)
 %%                                  end.
-%%
-%%  We add the extra match-all clause at the end only if Expr is
-%%  not guaranteed to evaluate to a boolean.
 
 opt_bool_not(#c_case{arg=Arg,clauses=Cs0}=Case0) ->
     case Arg of
 	#c_call{anno=Anno,module=#c_literal{val=erlang},
  		name=#c_literal{val='not'},
  		args=[Expr]} ->
-	    Cs = opt_bool_not(Anno, Expr, Cs0),
+	    Cs = [opt_bool_not_invert(C) || C <- Cs0] ++
+		 [#c_clause{anno=[compiler_generated],
+			    pats=[#c_var{name=cor_variable}],
+			    guard=#c_literal{val=true},
+			    body=#c_call{anno=Anno,
+					 module=#c_literal{val=erlang},
+					 name=#c_literal{val=error},
+					 args=[#c_literal{val=badarg}]}}],
 	    Case = Case0#c_case{arg=Expr,clauses=Cs},
 	    opt_bool_not(Case);
 	_ ->
 	    opt_bool_case_redundant(Case0)
     end.
-
-opt_bool_not(Anno, Expr, Cs) ->
-    Tail = case is_bool_expr(Expr) of
-	       false ->
-		   [#c_clause{anno=[compiler_generated],
-			      pats=[#c_var{name=cor_variable}],
-			      guard=#c_literal{val=true},
-			      body=#c_call{anno=Anno,
-					   module=#c_literal{val=erlang},
-					   name=#c_literal{val=error},
-					   args=[#c_literal{val=badarg}]}}];
-	       true -> []
-	   end,
-    [opt_bool_not_invert(C) || C <- Cs] ++ Tail.
 
 opt_bool_not_invert(#c_clause{pats=[#c_literal{val=Bool}]}=C) ->
     C#c_clause{pats=[#c_literal{val=not Bool}]}.
@@ -1846,165 +1944,282 @@ opt_bool_case_guard(Arg, [#c_clause{pats=[#c_literal{val=false}]}=Fc,Tc]) ->
 %%  last clause is guaranteed to match so if there is only one clause
 %%  with a pattern containing only variables then rewrite to a let.
 
-eval_case(#c_case{arg=#c_var{name=V},
-		  clauses=[#c_clause{pats=[P],guard=G,body=B}|_]}=Case,
-	  #sub{t=Tdb}=Sub) ->
-    case orddict:find(V, Tdb) of
-	{ok,Type} ->
-	    case {will_match_type(P, Type),will_succeed(G)} of
-		{yes,yes} ->
-		    {Ps,Es} = remove_non_vars(P, Type),
-		    expr(#c_let{vars=Ps,arg=#c_values{es=Es},body=B},
-			 sub_new(Sub));
-		{_,_} ->
-		    eval_case_1(Case, Sub)
-	    end;
-	error -> eval_case_1(Case, Sub)
+eval_case(#c_case{arg=E,clauses=[#c_clause{pats=Ps0,
+					   guard=#c_literal{val=true},
+					   body=B}]}=Case, Sub) ->
+    Es = case cerl:is_c_values(E) of
+	     true -> cerl:values_es(E);
+	     false -> [E]
+	 end,
+    %% Consider:
+    %%
+    %%   case SomeSideEffect() of
+    %%      X=Y -> ...
+    %%   end
+    %%
+    %% We must not rewrite it to:
+    %%
+    %%   let <X,Y> = <SomeSideEffect(),SomeSideEffect()> in ...
+    %%
+    %% because SomeSideEffect() would be evaluated twice.
+    %%
+    %% Instead we must evaluate the case expression in an outer let
+    %% like this:
+    %%
+    %%   let NewVar = SomeSideEffect() in
+    %%       let <X,Y> = <NewVar,NewVar> in ...
+    %%
+    Vs = make_vars([], length(Es)),
+    case cerl_clauses:match_list(Ps0, Vs) of
+	{false,_} ->
+	    %% This can only happen if the Core Erlang code is
+	    %% handwritten or generated by another code generator
+	    %% than v3_core. Assuming that the Core Erlang program
+	    %% is correct, the clause will always match at run-time.
+	    Case;
+	{true,Bs} ->
+	    {Ps,As} = unzip(Bs),
+	    InnerLet = cerl:c_let(Ps, core_lib:make_values(As), B),
+	    Let = cerl:c_let(Vs, E, InnerLet),
+	    expr(Let, sub_new(Sub))
     end;
-eval_case(Case, Sub) -> eval_case_1(Case, Sub).
-
-eval_case_1(#c_case{arg=E,clauses=[#c_clause{pats=Ps,body=B}]}=Case, Sub) ->
-    case is_var_pat(Ps) of
-	true -> expr(#c_let{vars=Ps,arg=E,body=B}, sub_new(Sub));
-	false -> eval_case_2(E, Ps, B, Case)
-    end;
-eval_case_1(Case, _) -> Case.
-
-eval_case_2(E, [P], B, Case) ->
-    %% Recall that there is only one clause and that it is guaranteed to match.
-    %%   If E and P are literals, they must be the same literal and the body
-    %% can be used directly as there are no variables that need to be bound.
-    %%   Otherwise, P could be an alias meaning that two or more variables
-    %% would be bound to E. We don't bother to optimize that case as it
-    %% is rather uncommon.
-    case core_lib:is_literal(E) andalso core_lib:is_literal(P) of
-	false -> Case;
-	true -> B
-    end;
-eval_case_2(_, _, _, Case) -> Case.
-
-is_var_pat(Ps) ->
-    all(fun (#c_var{}) -> true;
-	    (_Pat) -> false
-	end, Ps).
-
-will_match_type(#c_tuple{es=Es}, #c_tuple{es=Ps}) ->
-    will_match_list_type(Es, Ps);
-will_match_type(#c_literal{val=Atom}, #c_literal{val=Atom}) -> yes;
-will_match_type(#c_var{}, #c_var{}) -> yes;
-will_match_type(#c_var{}, #c_alias{}) -> yes;
-will_match_type(_, _) -> no.
-
-will_match_list_type([E|Es], [P|Ps]) ->
-    case will_match_type(E, P) of
-	yes -> will_match_list_type(Es, Ps);
-	no -> no
-    end;
-will_match_list_type([], []) -> yes;
-will_match_list_type(_, _) -> no.		%Different length
-
-remove_non_vars(Ps0, Es0) ->
-    {Ps,Es} = remove_non_vars(Ps0, Es0, [], []),
-    {reverse(Ps),reverse(Es)}.
-
-remove_non_vars(#c_tuple{es=Ps}, #c_tuple{es=Es}, Pacc, Eacc) ->
-    remove_non_vars_list(Ps, Es, Pacc, Eacc);
-remove_non_vars(#c_var{}=Var, #c_alias{var=Evar}, Pacc, Eacc) ->
-    {[Var|Pacc],[Evar|Eacc]};
-remove_non_vars(#c_var{}=Var, #c_var{}=Evar, Pacc, Eacc) ->
-    {[Var|Pacc],[Evar|Eacc]};
-remove_non_vars(P, E, Pacc, Eacc) ->
-    true = core_lib:is_literal(P) andalso core_lib:is_literal(E), %Assertion.
-    {Pacc,Eacc}.
-
-remove_non_vars_list([P|Ps], [E|Es], Pacc0, Eacc0) ->
-    {Pacc,Eacc} = remove_non_vars(P, E, Pacc0, Eacc0),
-    remove_non_vars_list(Ps, Es, Pacc, Eacc);
-remove_non_vars_list([], [], Pacc, Eacc) ->
-    {Pacc,Eacc}.
+eval_case(Case, _) -> Case.
 
 %% case_opt(CaseArg, [Clause]) -> {CaseArg,[Clause]}.
-%%  Try and optimise case by avoid building a tuple in
-%%  the case expression. Instead of building a tuple
-%%  in the case expression, combine the elements into
-%%  multiple "values". If a clause refers to the tuple
-%%  in the case expression (that was not built), introduce
-%%  a let into the guard and/or body to build the tuple.
+%%  Try and optimise a case by avoid building tuples or lists
+%%  in the case expression. Instead combine the variable parts
+%%  of the case expression to multiple "values". If a clause
+%%  refers to the constructed term in the case expression (which
+%%  was not built), introduce a let into the guard and/or body to
+%%  build the term.
 %%
-%%     case {Expr1,Expr2} of		 case <Expr1,Expr2> of
-%%         {P1,P2} -> ...		     <P1,P2> -> ...
+%%     case {ok,[Expr1,Expr2]} of	case <Expr1,Expr2> of
+%%         {ok,[P1,P2]} -> ...		    <P1,P2> -> ...
 %%          .  	       	       	  ==>        .
 %%          .				     .
 %%          .				     .
-%%         Var ->                            <Var1,Var2> ->
-%%             ... Var ...                      let <Var> = {Var1,Var2}
-%%                                                  in ... Var ...
+%%         Var ->                           <Var1,Var2> ->
+%%             ... Var ...                     let <Var> = {ok,[Var1,Var2]}
+%%                                                 in ... Var ...
 %%          .                                 .
 %%          .                                 .
 %%          .				      .
-%%     end.				 end.
+%%     end.				end.
 %%
-case_opt(#c_tuple{anno=A,es=Es}, Cs0) ->
-    Cs1 = case_opt_cs(Cs0, length(Es)),
-    {core_lib:set_anno(core_lib:make_values(Es), A),Cs1};
-case_opt(Arg, Cs) -> {Arg,Cs}.
+case_opt(Arg, Cs0, Sub) ->
+    Cs1 = [{cerl:clause_pats(C),C,[],[]} || C <- Cs0],
+    Args0 = case cerl:is_c_values(Arg) of
+		false -> [Arg];
+		true -> cerl:values_es(Arg)
+	    end,
+    LitExpr = cerl:is_literal(Arg),
+    {Args,Cs2} = case_opt_args(Args0, Cs1, Sub, LitExpr, []),
+    Cs = [cerl:update_c_clause(C,
+			       reverse(Ps),
+			       letify(Bs, cerl:clause_guard(C)),
+			       letify(Bs, cerl:clause_body(C))) ||
+	     {[],C,Ps,Bs} <- Cs2],
+    {core_lib:make_values(Args),Cs}.
 
-case_opt_cs([#c_clause{pats=Ps0,guard=G,body=B}=C|Cs], Arity) ->
-    case case_tuple_pat(Ps0, Arity) of
-	{ok,Ps1,Avs} ->
-	    Flet = fun ({V,Pat}, Body) -> letify(V, Pat, Body) end,
-	    [C#c_clause{pats=Ps1,
-			guard=foldl(Flet, G, Avs),
-			body=foldl(Flet, B, Avs)}|case_opt_cs(Cs, Arity)];
-	error ->				%Can't match
-	    add_warning(C, nomatch_clause_type),
-	    case_opt_cs(Cs, Arity)
+case_opt_args([A0|As0], Cs0, Sub, LitExpr, Acc) ->
+    case case_opt_arg(A0, Sub, Cs0, LitExpr) of
+        {error,Cs1} ->
+	    %% Nothing to be done. Move on to the next argument.
+            Cs = [{Ps,C,[P|PsAcc],Bs} || {[P|Ps],C,PsAcc,Bs} <- Cs1],
+	    case_opt_args(As0, Cs, Sub, LitExpr, [A0|Acc]);
+	{ok,As1,Cs} ->
+	    %% The argument was either expanded (from tuple/list) or
+	    %% removed (literal).
+	    case_opt_args(As1++As0, Cs, Sub, LitExpr, Acc)
     end;
-case_opt_cs([], _) -> [].
+case_opt_args([], Cs, _Sub, _LitExpr, Acc) ->
+    {reverse(Acc),Cs}.
 
-%% case_tuple_pat([Pattern], Arity) -> {ok,[Pattern],[{AliasVar,Pat}]} | error.
+%% case_opt_arg(Expr, Sub, Clauses0, LitExpr) ->
+%%         {ok,Args,Clauses} | error
+%%  Try to expand one argument to several arguments (if tuple/list)
+%%  or to remove a literal argument.
+%%
+case_opt_arg(E0, Sub, Cs, LitExpr) ->
+    E = maybe_replace_var(E0, Sub),
+    case cerl:is_data(E) of
+	false ->
+            {error,Cs};
+	true ->
+	    case cerl:data_type(E) of
+		{atomic,_} ->
+		    case_opt_lit(E, Cs, LitExpr);
+		_ ->
+		    case_opt_data(E, Cs, LitExpr)
+	    end
+    end.
 
-case_tuple_pat([#c_tuple{es=Ps}], Arity) when length(Ps) =:= Arity ->
-    {ok,Ps,[]};
-case_tuple_pat([#c_literal{val=T}], Arity) when tuple_size(T) =:= Arity ->
-    Ps = [#c_literal{val=E} || E <- tuple_to_list(T)],
-    {ok,Ps,[]};
-case_tuple_pat([#c_var{anno=Anno0}=V], Arity) ->
-    Vars = make_vars(Anno0, 1, Arity),
+%% maybe_replace_var(Expr0, Sub) -> Expr
+%%  If Expr0 is a variable that has been previously matched and
+%%  is known to be a tuple, return the tuple instead. Otherwise
+%%  return Expr0 unchanged.
+%%
+maybe_replace_var(E, Sub) ->
+    case cerl:is_c_var(E) of
+	false -> E;
+	true -> maybe_replace_var_1(E, Sub)
+    end.
 
+maybe_replace_var_1(E, #sub{t=Tdb}) ->
+    case orddict:find(cerl:var_name(E), Tdb) of
+	{ok,T0} ->
+	    case cerl:is_c_tuple(T0) of
+		false ->
+		    E;
+		true ->
+		    cerl_trees:map(fun(C) ->
+					   case cerl:is_c_alias(C) of
+					       false -> C;
+					       true -> cerl:alias_pat(C)
+					   end
+				   end, T0)
+	    end;
+	error ->
+	    E
+    end.
+
+%% case_opt_lit(Literal, Clauses0, LitExpr) ->
+%%           {ok,[],Clauses} | error
+%%  The current part of the case expression is a literal. That
+%%  means that we will know at compile-time whether a clause
+%%  will match, and we can remove the corresponding pattern from
+%%  each clause.
+%%
+%%  The only complication is if the literal is a binary. Binary
+%%  pattern matching is tricky, so we will give up in that case.
+
+case_opt_lit(Lit, Cs0, LitExpr) ->
+    Cs1 = case_opt_lit_1(Lit, Cs0, LitExpr),
+    try case_opt_lit_2(Lit, Cs1) of
+	Cs ->
+	    {ok,[],Cs}
+    catch
+	throw:impossible ->
+            {error,Cs1}
+    end.
+
+case_opt_lit_1(E, [{[P|_],C,_,_}=Current|Cs], LitExpr) ->
+    case cerl_clauses:match(P, E) of
+        none ->
+            %% The pattern will not match the literal. Remove the clause.
+            %% Unless the entire case expression is a literal, also
+            %% emit a warning.
+            case LitExpr of
+                false -> add_warning(C, nomatch_clause_type);
+                true -> ok
+            end,
+            case_opt_lit_1(E, Cs, LitExpr);
+        _ ->
+            [Current|case_opt_lit_1(E, Cs, LitExpr)]
+    end;
+case_opt_lit_1(_, [], _) -> [].
+
+case_opt_lit_2(E, [{[P|Ps],C,PsAcc,Bs0}|Cs]) ->
+    %% Non-matching clauses have already been removed in case_opt_lit_1/3.
+    case cerl_clauses:match(P, E) of
+	{true,Bs} ->
+	    %% The pattern matches the literal. Remove the pattern
+	    %% and update the bindings.
+            [{Ps,C,PsAcc,Bs++Bs0}|case_opt_lit_2(E, Cs)];
+	{false,_} ->
+	    %% Binary literal and pattern. We are not sure whether
+	    %% the pattern will match.
+	    throw(impossible)
+    end;
+case_opt_lit_2(_, []) -> [].
+
+%% case_opt_data(Expr, Clauses0, LitExpr) -> {ok,Exprs,Clauses}
+
+case_opt_data(E, Cs0, LitExpr) ->
+    Es = cerl:data_es(E),
+    Cs = case_opt_data_1(Cs0, Es,
+			 {cerl:data_type(E),cerl:data_arity(E)},
+			 LitExpr),
+    {ok,Es,Cs}.
+
+case_opt_data_1([{[P|Ps0],C,PsAcc,Bs0}|Cs], Es, TypeSig, LitExpr) ->
+    case case_data_pat(P, TypeSig) of
+	{ok,Ps1,Bs1} ->
+	    [{Ps1++Ps0,C,PsAcc,Bs1++Bs0}|
+	     case_opt_data_1(Cs, Es, TypeSig,LitExpr)];
+	error ->
+	    case LitExpr of
+		false -> add_warning(C, nomatch_clause_type);
+		true -> ok
+	    end,
+	    case_opt_data_1(Cs, Es, TypeSig, LitExpr)
+    end;
+case_opt_data_1([], _, _, _) -> [].
+
+%% case_data_pat(Pattern, Type, Arity) -> {ok,[Pattern],[{AliasVar,Pat}]} | error.
+
+case_data_pat(P, TypeSig) ->
+    case cerl:is_data(P) of
+	false ->
+	    case_data_pat_var(P, TypeSig);
+	true ->
+	    case {cerl:data_type(P),cerl:data_arity(P)} of
+		TypeSig ->
+		    {ok,cerl:data_es(P),[]};
+		{_,_} ->
+		    error
+	    end
+    end.
+
+%% case_data_pat_var(Pattern, {DataType,ArityType}) ->
+%%          {ok,[Pattern],[{AliasVar,Pat}]}
+
+case_data_pat_var(P, {Type,Arity}=TypeSig) ->
     %% If the entire case statement is evaluated in an effect
     %% context (e.g. "case {A,B} of ... end, ok"), there will
     %% be a warning that a term is constructed but never used.
-    %% To avoid that warning, we must annotate the tuple as
-    %% compiler generated.
-
-    Anno = [compiler_generated|Anno0],
-    {ok,Vars,[{V,#c_tuple{anno=Anno,es=Vars}}]};
-case_tuple_pat([#c_alias{var=V,pat=P}], Arity) ->
-    case case_tuple_pat([P], Arity) of
-	{ok,Ps,Avs} ->
-	    Anno0 = core_lib:get_anno(P),
-	    Anno = [compiler_generated|Anno0],
-	    {ok,Ps,[{V,#c_tuple{anno=Anno,es=unalias_pat_list(Ps)}}|Avs]};
-	error ->
+    %% To avoid that warning, we must annotate the data
+    %% constructor as compiler generated.
+    Ann = [compiler_generated|cerl:get_ann(P)],
+    case cerl:type(P) of
+	var ->
+	    Vars = make_vars(cerl:get_ann(P), Arity),
+	    {ok,Vars,[{P,cerl:ann_make_data(Ann, Type, Vars)}]};
+	alias ->
+	    V = cerl:alias_var(P),
+	    Apat = cerl:alias_pat(P),
+	    case case_data_pat(Apat, TypeSig) of
+		{ok,Ps,Bs} ->
+		    {ok,Ps,[{V,cerl:ann_make_data(Ann, Type, unalias_pat_list(Ps))}|Bs]};
+		error ->
+		    error
+	    end;
+	_ ->
 	    error
-    end;
-case_tuple_pat(_, _) -> error.
+    end.
 
 %% unalias_pat(Pattern) -> Pattern.
 %%  Remove all the aliases in a pattern but using the alias variables
 %%  instead of the values.  We KNOW they will be bound.
 
-unalias_pat(#c_alias{var=V}) -> V;
-unalias_pat(#c_cons{anno=Anno,hd=H0,tl=T0}) ->
-    H1 = unalias_pat(H0),
-    T1 = unalias_pat(T0),
-    ann_c_cons(Anno, H1, T1);
-unalias_pat(#c_tuple{anno=Anno,es=Ps}) ->
-    ann_c_tuple(Anno, unalias_pat_list(Ps));
-unalias_pat(Atomic) -> Atomic.
+unalias_pat(P) ->
+    case cerl:is_c_alias(P) of
+	true ->
+	    cerl:alias_var(P);
+	false ->
+	    case cerl:is_data(P) of
+		false ->
+		    P;
+		true ->
+		    Es = unalias_pat_list(cerl:data_es(P)),
+		    cerl:update_data(P, cerl:data_type(P), Es)
+	    end
+    end.
 
 unalias_pat_list(Ps) -> [unalias_pat(P) || P <- Ps].
+
+make_vars(A, Max) ->
+    make_vars(A, 1, Max).
 
 make_vars(A, I, Max) when I =< Max ->
     [make_var(A)|make_vars(A, I+1, Max)];
@@ -2018,6 +2233,11 @@ make_var_name() ->
     put(new_var_num, N+1),
     list_to_atom("fol"++integer_to_list(N)).
 
+letify(Bs, Body) ->
+    foldr(fun({V,Val}, B) ->
+		  letify(V, Val, B)
+	  end, Body, Bs).
+
 letify(#c_var{name=Vname}=Var, Val, Body) ->
     case core_lib:is_var_used(Vname, Body) of
 	true ->
@@ -2028,23 +2248,23 @@ letify(#c_var{name=Vname}=Var, Val, Body) ->
 
 %% opt_case_in_let(LetExpr) -> LetExpr'
 
-opt_case_in_let(#c_let{vars=Vs,arg=Arg,body=B}=Let) ->
-    opt_case_in_let_0(Vs, Arg, B, Let).
+opt_case_in_let(#c_let{vars=Vs,arg=Arg,body=B}=Let, Sub) ->
+    opt_case_in_let_0(Vs, Arg, B, Let, Sub).
 
 opt_case_in_let_0([#c_var{name=V}], Arg,
-		  #c_case{arg=#c_var{name=V},clauses=Cs}=Case, Let) ->
+		  #c_case{arg=#c_var{name=V},clauses=Cs}=Case, Let, Sub) ->
     case opt_case_in_let_1(V, Arg, Cs) of
 	impossible ->
 	    case is_simple_case_arg(Arg) andalso
 		not core_lib:is_var_used(V, Case#c_case{arg=#c_literal{val=nil}}) of
 		true ->
-		    opt_bool_case(Case#c_case{arg=Arg});
+		    expr(opt_bool_case(Case#c_case{arg=Arg,clauses=Cs}), sub_new(Sub));
 		false ->
 		    Let
 	    end;
 	Expr -> Expr
     end;
-opt_case_in_let_0(_, _, _, Let) -> Let.
+opt_case_in_let_0(_, _, _, Let, _) -> Let.
 
 opt_case_in_let_1(V, Arg, Cs) ->
     try
@@ -2065,32 +2285,7 @@ opt_case_in_let_2(V, Arg0,
 		   (_) -> false end, Es),	%Only variables in tuple
     false = core_lib:is_var_used(V, B),		%Built tuple must not be used.
     Arg1 = tuple_to_values(Arg0, length(Es)),	%Might fail.
-    #c_let{vars=Es,arg=Arg1,body=B};
-opt_case_in_let_2(_, Arg, Cs) ->
-    %% simplify_bool_case(Case0) -> Case
-    %%  Remove unecessary cases like
-    %%
-    %%     case BoolExpr of
-    %%       true -> true;
-    %%       false -> false;
-    %%       ....
-    %%     end
-    %%
-    %%  where BoolExpr is an expression that can only return true
-    %%  or false (or throw an exception).
-
-    true = is_bool_case(Cs) andalso is_bool_expr(Arg),
-    Arg.
-
-is_bool_case([A,B|_]) ->
-    (is_bool_clause(true, A) andalso is_bool_clause(false, B))
-	orelse (is_bool_clause(false, A) andalso is_bool_clause(true, B)).
-
-is_bool_clause(Bool, #c_clause{pats=[#c_literal{val=Bool}],
-			       guard=#c_literal{val=true},
-			       body=#c_literal{val=Bool}}) ->
-    true;
-is_bool_clause(_, _) -> false.
+    #c_let{vars=Es,arg=Arg1,body=B}.
 
 %% is_simple_case_arg(Expr) -> true|false
 %%  Determine whether the Expr is simple enough to be worth
@@ -2159,14 +2354,29 @@ is_safe_bool_expr(Core, Sub) ->
     is_safe_bool_expr_1(Core, Sub, gb_sets:empty()).
 
 is_safe_bool_expr_1(#c_call{module=#c_literal{val=erlang},
-			    name=#c_literal{val=is_record},
-			    args=[_,_]},
-		    _Sub, _BoolVars) ->
+                            name=#c_literal{val=is_record},
+                            args=[A,#c_literal{val=Tag},#c_literal{val=Size}]},
+                    Sub, _BoolVars) when is_atom(Tag), is_integer(Size) ->
+    is_safe_simple(A, Sub);
+is_safe_bool_expr_1(#c_call{module=#c_literal{val=erlang},
+                            name=#c_literal{val=is_record}},
+                    _Sub, _BoolVars) ->
     %% The is_record/2 BIF is NOT allowed in guards.
+    %% The is_record/3 BIF where its second argument is not an atom or its third
+    %% is not an integer is NOT allowed in guards.
     %%
     %% NOTE: Calls like is_record(Expr, LiteralTag), where LiteralTag
     %% is a literal atom referring to a defined record, have already
     %% been rewritten to is_record(Expr, LiteralTag, TupleSize).
+    false;
+is_safe_bool_expr_1(#c_call{module=#c_literal{val=erlang},
+                            name=#c_literal{val=is_function},
+                            args=[A,#c_literal{val=Arity}]},
+                    Sub, _BoolVars) when is_integer(Arity), Arity >= 0 ->
+    is_safe_simple(A, Sub);
+is_safe_bool_expr_1(#c_call{module=#c_literal{val=erlang},
+                            name=#c_literal{val=is_function}},
+                    _Sub, _BoolVars) ->
     false;
 is_safe_bool_expr_1(#c_call{module=#c_literal{val=erlang},
 			    name=#c_literal{val=Name},args=Args},
@@ -2318,6 +2528,25 @@ move_let_into_expr(#c_let{vars=Lvs0,body=Lbody0}=Let,
 	    Case#c_case{arg=Cexpr,clauses=[Ca,Cb]};
 	{_,_,_} -> impossible
     end;
+move_let_into_expr(#c_let{vars=Lvs0,body=Lbody0}=Let,
+		   #c_seq{arg=Sarg0,body=Sbody0}=Seq, Sub0) ->
+    %%
+    %% let <Lvars> = do <Seq-arg>
+    %%                  <Seq-body>
+    %% in <Let-body>
+    %%
+    %%       ==>
+    %%
+    %% do <Seq-arg>
+    %%    let <Lvars> = <Seq-body>
+    %%    in <Let-body>
+    %%
+    Sarg = body(Sarg0, Sub0),
+    Sbody1 = body(Sbody0, Sub0),
+    {Lvs,Sbody,Sub} = let_substs(Lvs0, Sbody1, Sub0),
+    Lbody = body(Lbody0, Sub),
+    Seq#c_seq{arg=Sarg,body=Let#c_let{vars=Lvs,arg=core_lib:make_values(Sbody),
+				      body=Lbody}};
 move_let_into_expr(_Let, _Expr, _Sub) -> impossible.
 
 is_failing_clause(#c_clause{body=B}) ->
@@ -2378,7 +2607,7 @@ opt_simple_let_2(Let0, Vs0, Arg0, Body0, effect, Sub) ->
 		    expr(#c_seq{arg=Arg,body=Body}, effect, sub_new_preserve_types(Sub));
 		true ->
 		    Let = Let0#c_let{vars=Vs,arg=Arg,body=Body},
-		    opt_case_in_let_arg(opt_case_in_let(Let), effect, Sub)
+		    opt_case_in_let_arg(opt_case_in_let(Let, Sub), effect, Sub)
 	    end
     end;
 opt_simple_let_2(Let, Vs0, Arg0, Body, value, Sub) ->
@@ -2401,9 +2630,80 @@ opt_simple_let_2(Let, Vs0, Arg0, Body, value, Sub) ->
 	    expr(#c_seq{arg=Arg,body=Body}, value, sub_new_preserve_types(Sub));
 	{Vs,Arg,Body} ->
 	    opt_case_in_let_arg(
-	      opt_case_in_let(Let#c_let{vars=Vs,arg=Arg,body=Body}),
+	      opt_case_in_let(Let#c_let{vars=Vs,arg=Arg,body=Body}, Sub),
 	      value, Sub)
     end.
+
+move_case_into_arg(#c_case{arg=#c_let{vars=OuterVars0,arg=OuterArg,
+                                      body=InnerArg0}=Outer,
+                           clauses=InnerClauses}=Inner, Sub) ->
+    %%
+    %% case let <OuterVars> = <OuterArg> in <InnerArg> of
+    %%     <InnerClauses>
+    %% end
+    %%
+    %%       ==>
+    %%
+    %% let <OuterVars> = <OuterArg>
+    %% in case <InnerArg> of <InnerClauses> end
+    %%
+    ScopeSub0 = sub_subst_scope(Sub#sub{t=[]}),
+    {OuterVars,ScopeSub} = pattern_list(OuterVars0, ScopeSub0),
+    InnerArg = body(InnerArg0, ScopeSub),
+    Outer#c_let{vars=OuterVars,arg=OuterArg,
+                body=Inner#c_case{arg=InnerArg,clauses=InnerClauses}};
+move_case_into_arg(#c_case{arg=#c_case{arg=OuterArg,
+                                       clauses=[OuterCa0,OuterCb]}=Outer,
+                           clauses=InnerClauses}=Inner0, Sub) ->
+    case is_failing_clause(OuterCb) of
+        true ->
+            #c_clause{pats=OuterPats0,guard=OuterGuard0,
+                      body=InnerArg0} = OuterCa0,
+            %%
+            %% case case <OuterArg> of
+            %%          <OuterPats> when <OuterGuard> -> <InnerArg>
+            %%          <OuterCb>
+            %%          ...
+            %%      end of
+            %%     <InnerClauses>
+            %% end
+            %%
+            %%       ==>
+            %%
+            %% case <OuterArg> of
+            %%     <OuterPats> when <OuterGuard> ->
+            %%         case <InnerArg> of <InnerClauses> end
+            %%     <OuterCb>
+            %% end
+            %%
+            ScopeSub0 = sub_subst_scope(Sub#sub{t=[]}),
+            {OuterPats,ScopeSub} = pattern_list(OuterPats0, ScopeSub0),
+            OuterGuard = guard(OuterGuard0, ScopeSub),
+            InnerArg = body(InnerArg0, ScopeSub),
+            Inner = Inner0#c_case{arg=InnerArg,clauses=InnerClauses},
+            OuterCa = OuterCa0#c_clause{pats=OuterPats,guard=OuterGuard,
+                                        body=Inner},
+            Outer#c_case{arg=OuterArg,
+                         clauses=[OuterCa,OuterCb]};
+        false ->
+            impossible
+    end;
+move_case_into_arg(#c_case{arg=#c_seq{arg=OuterArg,body=InnerArg}=Outer,
+                           clauses=InnerClauses}=Inner, _Sub) ->
+    %%
+    %% case do <OuterArg> <InnerArg> of
+    %%     <InnerClauses>
+    %% end
+    %%
+    %%       ==>
+    %%
+    %% do <OuterArg>
+    %%    case <InnerArg> of <InerClauses> end
+    %%
+    Outer#c_seq{arg=OuterArg,
+                body=Inner#c_case{arg=InnerArg,clauses=InnerClauses}};
+move_case_into_arg(_, _) ->
+    impossible.
 
 %% In guards only, rewrite a case in a let argument like
 %%
@@ -2612,14 +2912,14 @@ bsm_maybe_ctx_to_binary(V, B) ->
 		   body=B}
     end.
 
-previous_ctx_to_binary(V, #c_seq{arg=#c_primop{name=Name,args=As}}) ->
-    case {Name,As} of
-	{#c_literal{val=bs_context_to_binary},[#c_var{name=V}]} ->
+previous_ctx_to_binary(V, Core) ->
+    case Core of
+	#c_seq{arg=#c_primop{name=#c_literal{val=bs_context_to_binary},
+			     args=[#c_var{name=V}]}} ->
 	    true;
-	{_,_} ->
+	_ ->
 	    false
-    end;
-previous_ctx_to_binary(_, _) -> false.
+    end.
 
 %% bsm_leftmost(Cs) -> none | ArgumentNumber
 %%  Find the leftmost argument that does binary matching. Return
@@ -2641,9 +2941,9 @@ bsm_leftmost_2([_|Ps], Cs, N, Pos) ->
 bsm_leftmost_2([], Cs, _, Pos) ->
     bsm_leftmost_1(Cs, Pos).
 
-%% bsm_notempty(Cs, Pos) -> true|false
+%% bsm_nonempty(Cs, Pos) -> true|false
 %%  Check if at least one of the clauses matches a non-empty
-%%  binary in the given argumet position.
+%%  binary in the given argument position.
 %%
 bsm_nonempty([#c_clause{pats=Ps}|Cs], Pos) ->
     case nth(Pos, Ps) of
@@ -2655,16 +2955,19 @@ bsm_nonempty([#c_clause{pats=Ps}|Cs], Pos) ->
 bsm_nonempty([], _ ) -> false.
 
 %% bsm_ensure_no_partition(Cs, Pos) -> ok     (exception if problem)
-%%  We must make sure that binary matching is not partitioned between
+%%  We must make sure that matching is not partitioned between
 %%  variables like this:
 %%             foo(<<...>>) -> ...
-%%             foo(Var) when ... -> ...
-%%             foo(<<...>>) ->
+%%             foo(<Variable>) when ... -> ...
+%%             foo(<Any non-variable pattern>) ->
 %%  If there is such partition, we are not allowed to reuse the binary variable
-%%  for the match context. Also, arguments to the left of the argument that
-%%  is matched against a binary, are only allowed to be simple variables, not
-%%  used in guards. The reason is that we must know that the binary is only
-%%  matched in one place.
+%%  for the match context.
+%%
+%%  Also, arguments to the left of the argument that is matched
+%%  against a binary, are only allowed to be simple variables, not
+%%  used in guards. The reason is that we must know that the binary is
+%%  only matched in one place (i.e. there must be only one bs_start_match2
+%%  instruction emitted).
 
 bsm_ensure_no_partition(Cs, Pos) ->
     bsm_ensure_no_partition_1(Cs, Pos, before).
@@ -2672,6 +2975,12 @@ bsm_ensure_no_partition(Cs, Pos) ->
 %% Loop through each clause.
 bsm_ensure_no_partition_1([#c_clause{pats=Ps,guard=G}|Cs], Pos, State0) ->
     State = bsm_ensure_no_partition_2(Ps, Pos, G, simple_vars, State0),
+    case State of
+	'after' ->
+	    bsm_ensure_no_partition_after(Cs, Pos);
+	_ ->
+	    ok
+    end,
     bsm_ensure_no_partition_1(Cs, Pos, State);
 bsm_ensure_no_partition_1([], _, _) -> ok.
 
@@ -2681,8 +2990,7 @@ bsm_ensure_no_partition_2([#c_binary{}=Where|_], 1, _, Vstate, State) ->
 	before when Vstate =:= simple_vars -> within;
 	before -> bsm_problem(Where, Vstate);
 	within when Vstate =:= simple_vars -> within;
-	within -> bsm_problem(Where, Vstate);
-	'after' -> bsm_problem(Where, bin_partition)
+	within -> bsm_problem(Where, Vstate)
     end;
 bsm_ensure_no_partition_2([#c_alias{}=Alias|_], 1, N, Vstate, State) ->
     %% Retrieve the real pattern that the alias refers to and check that.
@@ -2704,7 +3012,7 @@ bsm_ensure_no_partition_2([P|_], 1, _, Vstate, State) ->
 	    %%
 	    %% But if the clauses can't be freely rearranged, as in
 	    %%
-	    %% b(Var, <<>>) -> ...
+	    %% b(Var, <<X>>) -> ...
 	    %% b(1, 2) -> ...
 	    %%
 	    %% we do have a problem.
@@ -2731,6 +3039,15 @@ bsm_ensure_no_partition_2([#c_var{name=V}|Ps], N, G, Vstate, S) ->
 bsm_ensure_no_partition_2([_|Ps], N, G, _, S) ->
     bsm_ensure_no_partition_2(Ps, N-1, G, bin_argument_order, S).
 
+bsm_ensure_no_partition_after([#c_clause{pats=Ps}|Cs], Pos) ->
+    case nth(Pos, Ps) of
+	#c_var{} ->
+	    bsm_ensure_no_partition_after(Cs, Pos);
+	P ->
+	    bsm_problem(P, bin_partition)
+    end;
+bsm_ensure_no_partition_after([], _) -> ok.
+    
 bsm_could_match_binary(#c_alias{pat=P}) -> bsm_could_match_binary(P);
 bsm_could_match_binary(#c_cons{}) -> false;
 bsm_could_match_binary(#c_tuple{}) -> false;
@@ -2764,22 +3081,20 @@ add_bin_opt_info(Core, Term) ->
     end.
 
 add_warning(Core, Term) ->
-    Anno = core_lib:get_anno(Core),
-    case lists:member(compiler_generated, Anno) of
-	true -> ok;
+    case is_compiler_generated(Core) of
+	true ->
+	    ok;
 	false ->
-	    case get_line(Anno) of
-		Line when Line >= 0 ->		%Must be positive.
-                    File = get_file(Anno),
-		    Key = {?MODULE,warnings},
-		    case get(Key) of
-			[{File,[{Line,?MODULE,Term}]}|_] ->
-			    ok;			%We already have 
+	    Anno = core_lib:get_anno(Core),
+	    Line = get_line(Anno),
+	    File = get_file(Anno),
+	    Key = {?MODULE,warnings},
+	    case get(Key) of
+		[{File,[{Line,?MODULE,Term}]}|_] ->
+		    ok;				%We already have
 						%an identical warning.
-			Ws ->
-			    put(Key, [{File,[{Line,?MODULE,Term}]}|Ws])
-		    end;
-		_ -> ok				%Compiler-generated code.
+		Ws ->
+		    put(Key, [{File,[{Line,?MODULE,Term}]}|Ws])
 	    end
     end.
 
@@ -2793,14 +3108,7 @@ get_file([]) -> "no_file". % should not happen
 
 is_compiler_generated(Core) ->
     Anno = core_lib:get_anno(Core),
-    case lists:member(compiler_generated, Anno) of
-	true -> true;
-	false ->
-	    case get_line(Anno) of
-		Line when Line >= 0 -> false;
-		_ -> true
-	    end
-    end.
+    member(compiler_generated, Anno).
 
 get_warnings() ->
     ordsets:from_list((erase({?MODULE,warnings}))).
@@ -2864,7 +3172,7 @@ format_error(useless_building) ->
 format_error(bin_opt_alias) ->
     "INFO: the '=' operator will prevent delayed sub binary optimization";
 format_error(bin_partition) ->
-    "INFO: non-consecutive clauses that match binaries "
+    "INFO: matching non-variables after a previous clause matching a variable "
 	"will prevent delayed sub binary optimization";
 format_error(bin_left_var_used_in_guard) ->
     "INFO: a variable to the left of the binary pattern is used in a guard; "

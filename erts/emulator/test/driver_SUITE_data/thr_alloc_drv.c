@@ -21,14 +21,8 @@
 #include "erl_driver.h"
 
 ErlDrvData start(ErlDrvPort port, char *command);
-int control(ErlDrvData drv_data, unsigned int command, char *buf,
-	    int len, char **rbuf, int rlen);
-
-static int call(ErlDrvData drv_data,
-		unsigned int command,
-		char *buf, int len,
-		char **rbuf, int rlen,
-		unsigned int *flags);
+ErlDrvSSizeT control(ErlDrvData drv_data, unsigned int command, char *buf,
+		     ErlDrvSizeT len, char **rbuf, ErlDrvSizeT rlen);
 
 static ErlDrvEntry thr_alloc_drv_entry = { 
     NULL /* init */,
@@ -64,7 +58,7 @@ void *
 test_thread(void *vsize)
 {
     int i;
-    int size = (int) (long) vsize;
+    int size = (int) (ErlDrvSInt) vsize;
     void *mem;
     mem = driver_alloc(size);
     if (mem)
@@ -76,12 +70,12 @@ ErlDrvData start(ErlDrvPort port, char *command)
     return (ErlDrvData) port;
 }
 
-int control(ErlDrvData drv_data, unsigned int command, char *buf,
-	    int len, char **rbuf, int rlen)
+ErlDrvSSizeT control(ErlDrvData drv_data, unsigned int command, char *buf,
+		     ErlDrvSizeT len, char **rbuf, ErlDrvSizeT rlen)
 {
     ErlDrvPort port = (ErlDrvPort) drv_data;
     char *result = "failure";
-    int result_len;
+    ErlDrvSSizeT result_len;
     if (len <= 20) {
 	int res;
 	ErlDrvTid tid;
@@ -94,7 +88,7 @@ int control(ErlDrvData drv_data, unsigned int command, char *buf,
 	    res = erl_drv_thread_create("test_thread",
 					&tid,
 					test_thread,
-					(void *) (long) size,
+					(void *) (ErlDrvSInt) size,
 					NULL);
 	    if (res == 0) {
 		res = erl_drv_thread_join(tid, NULL);

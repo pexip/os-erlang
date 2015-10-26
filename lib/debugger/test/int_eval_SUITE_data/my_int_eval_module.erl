@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 1999-2010. All Rights Reserved.
+%% Copyright Ericsson AB 1999-2013. All Rights Reserved.
 %%
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -29,6 +29,7 @@
 -export([more_catch/1,more_nocatch/1,exit_me/0]).
 -export([f/1, f_try/1, f_catch/1]).
 -export([otp_5837/1, otp_8310/0]).
+-export([empty_map_update/1, update_in_fun/0]).
 
 %% Internal exports.
 -export([echo/2,my_subtract/2,catch_a_ball/0,throw_a_ball/0]).
@@ -76,12 +77,6 @@ apply_test(Fun) ->
     [a,b,d] = ?MODULE:Func(same([a,b,c,d]), same([c])),
     [d,e] = apply(Mod, Func, [same([d,e,f]), same([f])]),
     [3] = apply(?MODULE, Func, [same([3,4]),same([4])]),
-
-    %% This is obsolete, but it should work anyway.
-    HomeMadeFun = {?MODULE,my_subtract},
-    [a] = HomeMadeFun(same([a,x,c]), same([x,c])),
-    [x] = apply(HomeMadeFun, [[x,y],[y,z]]),
-
     ok.
 
 number(X) -> {number,X}.
@@ -117,7 +112,7 @@ more_nocatch(Fun) ->
 %% External calls.
 
 external_call_test(Data) ->
-    {'EXIT',{undef,[{?MODULE,not_exported,[42,Data]}|_]}} =
+    {'EXIT',{undef,[{?MODULE,not_exported,[42,Data],_}|_]}} =
 	(catch ?MODULE:not_exported(42, Data)),
     {yes,Data} = i_am_exported(Data),
     {yes,Data} = ?MODULE:i_am_exported(Data),
@@ -127,7 +122,7 @@ external_call_test(Data) ->
     {ok,Data,[a,b]} = not_exported(Data, [a,b]),
     {yes,Data} = i_am_exported(Data),
     {ok,Data,[a,b]} = not_exported(Data, [a,b]),
-    {'EXIT',{undef,[{?MODULE,not_exported,[7,Data]}|_]}} =
+    {'EXIT',{undef,[{?MODULE,not_exported,[7,Data],_}|_]}} =
 	(catch ?MODULE:not_exported(7, Data)),
     {yes,Data} = ?MODULE:i_am_exported(Data),
     ok.
@@ -242,4 +237,13 @@ otp_8310() ->
         (catch {a, [X || X <- a]}),
     {'EXIT',{{bad_generator,b},_}} =
         (catch {a, << <<X>>  || << X >> <= b >>}),
+    true = begin (X1 = true) andalso X1, X1 end,
+    false = begin (X2 = false) andalso X2, X2 end,
+    true = begin (X3 = true) orelse X3, X3 end,
+    false = begin (X4 = false) orelse X4, X4 end,
     ok.
+
+empty_map_update(Map) -> Map#{}.
+
+update_in_fun() ->
+    lists:map(fun (X) -> X#{price := 0} end, [#{hello => 0, price => nil}]).

@@ -1,7 +1,7 @@
 /*
  * %CopyrightBegin%
  * 
- * Copyright Ericsson AB 2004-2011. All Rights Reserved.
+ * Copyright Ericsson AB 2004-2013. All Rights Reserved.
  * 
  * The contents of this file are subject to the Erlang Public License,
  * Version 1.1, (the "License"); you may not use this file except in
@@ -125,7 +125,7 @@ static ErtsMonitor *create_monitor(Uint type, Eterm ref, Eterm pid, Eterm name)
      } else {
 	 n = (ErtsMonitor *) erts_alloc(ERTS_ALC_T_MONITOR_LH,
 					mon_size*sizeof(Uint));
-	 erts_smp_atomic_add(&tot_link_lh_size, mon_size*sizeof(Uint));
+	 erts_smp_atomic_add_nob(&tot_link_lh_size, mon_size*sizeof(Uint));
      } 
      hp = n->heap;
 
@@ -156,7 +156,7 @@ static ErtsLink *create_link(Uint type, Eterm pid)
      } else {
 	 n = (ErtsLink *) erts_alloc(ERTS_ALC_T_NLINK_LH,
 				     lnk_size*sizeof(Uint));
-	 erts_smp_atomic_add(&tot_link_lh_size, lnk_size*sizeof(Uint));
+	 erts_smp_atomic_add_nob(&tot_link_lh_size, lnk_size*sizeof(Uint));
      } 
      hp = n->heap;
 
@@ -191,13 +191,13 @@ static ErtsSuspendMonitor *create_suspend_monitor(Eterm pid)
 void
 erts_init_monitors(void)
 {
-    erts_smp_atomic_init(&tot_link_lh_size, 0);
+    erts_smp_atomic_init_nob(&tot_link_lh_size, 0);
 }
 
 Uint
 erts_tot_link_lh_size(void)
 {
-    return (Uint) erts_smp_atomic_read(&tot_link_lh_size);
+    return (Uint) erts_smp_atomic_read_nob(&tot_link_lh_size);
 }
 
 void erts_destroy_monitor(ErtsMonitor *mon)
@@ -222,7 +222,7 @@ void erts_destroy_monitor(ErtsMonitor *mon)
 	erts_free(ERTS_ALC_T_MONITOR_SH, (void *) mon);
     } else {
 	erts_free(ERTS_ALC_T_MONITOR_LH, (void *) mon);
-	erts_smp_atomic_add(&tot_link_lh_size, -1*mon_size*sizeof(Uint));
+	erts_smp_atomic_add_nob(&tot_link_lh_size, -1*mon_size*sizeof(Uint));
     }
 }
     
@@ -244,7 +244,7 @@ void erts_destroy_link(ErtsLink *lnk)
 	erts_free(ERTS_ALC_T_NLINK_SH, (void *) lnk);
     } else {
 	erts_free(ERTS_ALC_T_NLINK_LH, (void *) lnk);
-	erts_smp_atomic_add(&tot_link_lh_size, -1*lnk_size*sizeof(Uint));
+	erts_smp_atomic_add_nob(&tot_link_lh_size, -1*lnk_size*sizeof(Uint));
     }
 }
 
@@ -948,8 +948,10 @@ static void erts_dump_links(ErtsLink *root, int indent)
     erts_destroy_tmp_dsbuf(dsbufp);
 }
 
-Eterm erts_debug_dump_monitors_1(Process *p, Eterm pid)
+Eterm erts_debug_dump_monitors_1(BIF_ALIST_1)
 {
+    Process *p = BIF_P;
+    Eterm pid = BIF_ARG_1;
     Process *rp;
     DistEntry *dep;
     rp = erts_pid2proc(p, ERTS_PROC_LOCK_MAIN, pid, ERTS_PROC_LOCK_LINK);
@@ -969,24 +971,29 @@ Eterm erts_debug_dump_monitors_1(Process *p, Eterm pid)
 	}
     } else {
 	erts_printf("Dumping pid monitors--------------------\n");
-	erts_dump_monitors(rp->monitors,0);
+	erts_dump_monitors(ERTS_P_MONITORS(rp),0);
 	erts_printf("Monitors dumped-------------------------\n");
 	erts_smp_proc_unlock(rp, ERTS_PROC_LOCK_LINK);
 	BIF_RET(am_true);
     }
 }
 
-Eterm erts_debug_dump_links_1(Process *p, Eterm pid)
+Eterm erts_debug_dump_links_1(BIF_ALIST_1)
 {
+    Process *p = BIF_P;
+    Eterm pid = BIF_ARG_1;
     Process *rp;
     DistEntry *dep;
     if (is_internal_port(pid)) {
-	Port *rport = erts_id2port(pid, p, ERTS_PROC_LOCK_MAIN);
+	Port *rport = erts_id2port_sflgs(pid,
+					 p,
+					 ERTS_PROC_LOCK_MAIN,
+					 ERTS_PORT_SFLGS_INVALID_LOOKUP);
 	if (rport) {
 	    erts_printf("Dumping port links----------------------\n");
-	    erts_dump_links(rport->nlinks,0);
+	    erts_dump_links(ERTS_P_LINKS(rport), 0);
 	    erts_printf("Links dumped----------------------------\n");
-	    erts_smp_port_unlock(rport);
+	    erts_port_release(rport);
 	    BIF_RET(am_true);
 	} else {
 	    BIF_ERROR(p,BADARG);
@@ -1010,10 +1017,30 @@ Eterm erts_debug_dump_links_1(Process *p, Eterm pid)
 
 	} else {
 	    erts_printf("Dumping pid links-----------------------\n");
-	    erts_dump_links(rp->nlinks,0);
+	    erts_dump_links(ERTS_P_LINKS(rp), 0);
 	    erts_printf("Links dumped----------------------------\n");
 	    erts_smp_proc_unlock(rp, ERTS_PROC_LOCK_LINK);
 	    BIF_RET(am_true);
 	}
     }
+}
+
+void erts_one_link_size(ErtsLink *lnk, void *vpu)
+{
+    Uint *pu = vpu;
+    *pu += ERTS_LINK_SIZE*sizeof(Uint);
+    if(!IS_CONST(lnk->pid))
+	*pu += NC_HEAP_SIZE(lnk->pid)*sizeof(Uint);
+    if (lnk->type != LINK_NODE && ERTS_LINK_ROOT(lnk) != NULL) {
+	erts_doforall_links(ERTS_LINK_ROOT(lnk),&erts_one_link_size,vpu);
+    }
+}
+void erts_one_mon_size(ErtsMonitor *mon, void *vpu)
+{
+    Uint *pu = vpu;
+    *pu += ERTS_MONITOR_SIZE*sizeof(Uint);
+    if(!IS_CONST(mon->pid))
+	*pu += NC_HEAP_SIZE(mon->pid)*sizeof(Uint);
+    if(!IS_CONST(mon->ref))
+	*pu += NC_HEAP_SIZE(mon->ref)*sizeof(Uint);
 }

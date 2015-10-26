@@ -2,7 +2,7 @@
  * %CopyrightBegin%
 
  *
- * Copyright Ericsson AB 2001-2011. All Rights Reserved.
+ * Copyright Ericsson AB 2001-2013. All Rights Reserved.
  *
  * The contents of this file are subject to the Erlang Public License,
  * Version 1.1, (the "License"); you may not use this file except in
@@ -34,6 +34,18 @@
 #include "error.h"
 #include "hipe_stack.h"
 #include "hipe_bif0.h"	/* hipe_mfa_info_table_init() */
+
+#if defined(ERTS_ENABLE_LOCK_CHECK) && defined(ERTS_SMP)
+#    define ERTS_SMP_REQ_PROC_MAIN_LOCK(P) \
+        if ((P)) erts_proc_lc_require_lock((P), ERTS_PROC_LOCK_MAIN,	\
+					   __FILE__, __LINE__)
+#    define ERTS_SMP_UNREQ_PROC_MAIN_LOCK(P) \
+        if ((P)) erts_proc_lc_unrequire_lock((P), ERTS_PROC_LOCK_MAIN)
+#else
+#    define ERTS_SMP_REQ_PROC_MAIN_LOCK(P)
+#    define ERTS_SMP_UNREQ_PROC_MAIN_LOCK(P)
+#endif
+
 
 /*
  * Internal debug support.
@@ -173,19 +185,44 @@ void hipe_set_call_trap(Uint *bfun, void *nfun, int is_closure)
     bfun[-4] = (Uint)nfun;
 }
 
-static __inline__ void
-hipe_push_beam_trap_frame(Process *p, Eterm reg[], unsigned arity)
+void hipe_reserve_beam_trap_frame(Process *p, Eterm reg[], unsigned arity)
 {
     /* ensure that at least 2 words are available on the BEAM stack */
     if ((p->stop - 2) < p->htop) {
-	DPRINTF("calling gc to increase BEAM stack size");
+	DPRINTF("calling gc to reserve BEAM stack size");
 	p->fcalls -= erts_garbage_collect(p, 2, reg, arity);
+	ASSERT(!((p->stop - 2) < p->htop));
     }
     p->stop -= 2;
+    p->stop[0] = NIL;
+    p->stop[1] = NIL;
+}
+
+static __inline__ void
+hipe_push_beam_trap_frame(Process *p, Eterm reg[], unsigned arity)
+{
+    if (p->flags & F_DISABLE_GC) {
+	/* Trap frame already reserved */
+	ASSERT(p->stop[0] == NIL && p->stop[1] == NIL);
+    }
+    else {
+	if ((p->stop - 2) < p->htop) {
+	    DPRINTF("calling gc to increase BEAM stack size");
+	    p->fcalls -= erts_garbage_collect(p, 2, reg, arity);
+	    ASSERT(!((p->stop - 2) < p->htop));
+	}
+	p->stop -= 2;
+    }
     p->stop[1] = hipe_beam_catch_throw;
     p->stop[0] = make_cp(p->cp);
     ++p->catches;
     p->cp = hipe_beam_pc_return;
+}
+
+void hipe_unreserve_beam_trap_frame(Process *p)
+{
+    ASSERT(p->stop[0] == NIL && p->stop[1] == NIL);
+    p->stop += 2;
 }
 
 static __inline__ void hipe_pop_beam_trap_frame(Process *p)
@@ -318,33 +355,30 @@ Process *hipe_mode_switch(Process *p, unsigned cmd, Eterm reg[])
 	   * Native code called a BIF, which "failed" with a TRAP to BEAM.
 	   * Prior to returning, the BIF stored (see BIF_TRAP<N>):
 
-	   * the callee's address in p->def_arg_reg[3]
-	   * the callee's parameters in p->def_arg_reg[0..2]
+	   * the callee's address in p->i
+	   * the callee's parameters in reg[0..2]
 	   * the callee's arity in p->arity (for BEAM gc purposes)
 	   *
 	   * We need to remove the BIF's parameters from the native
 	   * stack: to this end hipe_${ARCH}_glue.S stores the BIF's
 	   * arity in p->hipe.narity.
 	   *
-	   * If the BIF emptied the stack (typically hibernate), p->hipe.nsp is
-	   * NULL and there is no need to get rid of stacked parameters.
+	   * If the BIF emptied the stack (typically hibernate), p->hipe.nstack
+	   * is NULL and there is no need to get rid of stacked parameters.
 	   */
 	  unsigned int i, is_recursive = 0;
 
-	  /* Save p->arity, then update it with the original BIF's arity.
-	     Get rid of any stacked parameters in that call. */
-	  /* XXX: hipe_call_from_native_is_recursive() copies data to
-	     reg[], which is useless in the TRAP case. Maybe write a
-	     specialised hipe_trap_from_native_is_recursive() later. */
-          if (p->hipe.nsp != NULL) {
-	      unsigned int callee_arity;
-	      callee_arity = p->arity;
-	      p->arity = p->hipe.narity; /* caller's arity */
-	      is_recursive = hipe_call_from_native_is_recursive(p, reg);
-
-	      p->i = (Eterm *)(p->def_arg_reg[3]);
-	      p->arity = callee_arity;
+          if (p->hipe.nstack != NULL) {
+	      ASSERT(p->hipe.nsp != NULL);
+	      is_recursive = hipe_trap_from_native_is_recursive(p);
           }
+	  else {
+	      /* Some architectures (risc) need this re-reset of nsp as the
+	       * BIF wrapper do not detect stack change and causes an obsolete
+	       * stack pointer to be saved in p->hipe.nsp before return to us.
+	       */
+	      p->hipe.nsp = NULL;
+	  }
 
 	  /* Schedule next process if current process was hibernated or is waiting
 	     for messages */
@@ -352,16 +386,16 @@ Process *hipe_mode_switch(Process *p, unsigned cmd, Eterm reg[])
 	      p->flags &= ~F_HIBERNATE_SCHED;
 	      goto do_schedule;
 	  }
-	  if (p->status == P_WAITING) {
+
+	  if (!(erts_smp_atomic32_read_acqb(&p->state) & ERTS_PSFLG_ACTIVE)) {
+	      for (i = 0; i < p->arity; ++i)
+		  p->arg_reg[i] = reg[i]; 	      
 	      goto do_schedule;
 	  }
 
-	  for (i = 0; i < p->arity; ++i)
-	      reg[i] = p->def_arg_reg[i];
-
 	  if (is_recursive)
 	      hipe_push_beam_trap_frame(p, reg, p->arity);
-
+	  
 	  result = HIPE_MODE_SWITCH_RES_CALL;
 	  break;
       }
@@ -444,10 +478,6 @@ Process *hipe_mode_switch(Process *p, unsigned cmd, Eterm reg[])
       case HIPE_MODE_SWITCH_RES_SUSPEND: {
 	  p->i = hipe_beam_pc_resume;
 	  p->arity = 0;
-	  erts_smp_proc_lock(p, ERTS_PROC_LOCK_STATUS);
-	  if (p->status != P_SUSPENDED)
-	      erts_add_to_runq(p);
-	  erts_smp_proc_unlock(p, ERTS_PROC_LOCK_STATUS);
 	  goto do_schedule;
       }
       case HIPE_MODE_SWITCH_RES_WAIT:
@@ -463,17 +493,20 @@ Process *hipe_mode_switch(Process *p, unsigned cmd, Eterm reg[])
 #endif
 	  p->i = hipe_beam_pc_resume;
 	  p->arity = 0;
-	  p->status = P_WAITING;
+	  erts_smp_atomic32_read_band_relb(&p->state,
+					   ~ERTS_PSFLG_ACTIVE);
 	  erts_smp_proc_unlock(p, ERTS_PROC_LOCKS_MSG_RECEIVE);
       do_schedule:
 	  {
 #if !(NR_ARG_REGS > 5)
 	      int reds_in = p->def_arg_reg[5];
 #endif
+	      ERTS_SMP_UNREQ_PROC_MAIN_LOCK(p);
 	      p = schedule(p, reds_in - p->fcalls);
+	      ERTS_SMP_REQ_PROC_MAIN_LOCK(p);
 #ifdef ERTS_SMP
 	      p->hipe_smp.have_receive_locks = 0;
-	      reg = p->scheduler_data->save_reg;
+	      reg = p->scheduler_data->x_reg_array;
 #endif
 	  }
 	  {
@@ -648,7 +681,7 @@ Eterm hipe_build_stacktrace(Process *p, struct StackTrace *s)
     if (depth < 1)
 	return NIL;
 
-    heap_size = 6 * depth;	/* each [{M,F,A}|_] is 2+4 == 6 words */
+    heap_size = 7 * depth;	/* each [{M,F,A,[]}|_] is 2+5 == 7 words */
     hp = HAlloc(p, heap_size);
     hp_end = hp + heap_size;
 
@@ -659,8 +692,8 @@ Eterm hipe_build_stacktrace(Process *p, struct StackTrace *s)
 	ra = (const void*)s->trace[i];
 	if (!hipe_find_mfa_from_ra(ra, &m, &f, &a))
 	    continue;
-	mfa = TUPLE3(hp, m, f, make_small(a));
-	hp += 4;
+	mfa = TUPLE4(hp, m, f, make_small(a), NIL);
+	hp += 5;
 	next = CONS(hp, mfa, NIL);
 	*next_p = next;
 	next_p = &CDR(list_val(next));

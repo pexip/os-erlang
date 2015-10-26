@@ -1,11 +1,3 @@
-#ifdef VXWORKS
-#include <vxWorks.h>
-#include <taskVarLib.h>
-#include <taskLib.h>
-#include <sysLib.h>
-#include <string.h>
-#include <ioLib.h>
-#endif
 #include <stdio.h>
 #include "erl_driver.h"
 
@@ -22,7 +14,9 @@
 
 static ErlDrvPort erlang_port;
 static ErlDrvData timer_start(ErlDrvPort, char*);
-static void timer_stop(ErlDrvData), timer_read(ErlDrvData, char*, int), timer(ErlDrvData);
+static void timer_stop(ErlDrvData);
+static void timer_read(ErlDrvData, char*, ErlDrvSizeT);
+static void timer(ErlDrvData);
 
 static ErlDrvEntry timer_driver_entry =
 {
@@ -37,6 +31,16 @@ static ErlDrvEntry timer_driver_entry =
     NULL,
     NULL,
     timer,
+    NULL,
+    NULL,
+    NULL,
+    NULL,
+    NULL,
+    ERL_DRV_EXTENDED_MARKER,
+    ERL_DRV_EXTENDED_MAJOR_VERSION,
+    ERL_DRV_EXTENDED_MINOR_VERSION,
+    0,
+    NULL,
     NULL,
     NULL
 };
@@ -57,8 +61,9 @@ static ErlDrvData timer_start(ErlDrvPort port, char *buf)
 }
 
 /* set the timer, this is monitored from erlang measuring the time */
-static void timer_read(ErlDrvData port, char *buf, int len)
+static void timer_read(ErlDrvData p, char *buf, ErlDrvSizeT len)
 {
+    ErlDrvPort port = (ErlDrvPort) p;
     char reply[1];
 
     if (buf[0] == START_TIMER) { 
@@ -71,11 +76,7 @@ static void timer_read(ErlDrvData port, char *buf, int len)
 	driver_output(port, reply, 1);
     } else if (buf[0] == DELAY_START_TIMER) {
 #ifndef __WIN32__
-#ifdef VXWORKS
-	taskDelay(sysClkRateGet());
-#else
 	sleep(1);
-#endif
 #endif
 	driver_set_timer(port, get_int32(buf + 1));
     }

@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %% 
-%% Copyright Ericsson AB 1996-2011. All Rights Reserved.
+%% Copyright Ericsson AB 1996-2013. All Rights Reserved.
 %% 
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -19,7 +19,7 @@
 -module(sys_SUITE).
 -export([all/0, suite/0,groups/0,init_per_suite/1, end_per_suite/1, 
 	 init_per_group/2,end_per_group/2,log/1,log_to_file/1,
-	 stats/1,trace/1,suspend/1,install/1]).
+	 stats/1,trace/1,suspend/1,install/1,special_process/1]).
 -export([handle_call/3,terminate/2,init/1]).
 -include_lib("test_server/include/test_server.hrl").
 
@@ -27,14 +27,12 @@
 
 
 %% Doesn't look into change_code at all
-%% Doesn't address writing your own process that understands
-%% system messages at all.
 
 
 suite() -> [{ct_hooks,[ts_install_cth]}].
 
 all() -> 
-    [log, log_to_file, stats, trace, suspend, install].
+    [log, log_to_file, stats, trace, suspend, install, special_process].
 
 groups() -> 
     [].
@@ -56,70 +54,60 @@ end_per_group(_GroupName, Config) ->
 
 log(suite) -> [];
 log(Config) when is_list(Config) ->
-    ?line {ok,_Server} = start(),
-    ?line ok = sys:log(?server,true),
-    ?line {ok,-44} = public_call(44),
-    ?line ok = sys:log(?server,false),
-    ?line ok = sys:log(?server,print),
-    ?line stop(),
+    {ok,_Server} = start(),
+    ok = sys:log(?server,true),
+    {ok,-44} = public_call(44),
+    ok = sys:log(?server,false),
+    ok = sys:log(?server,print),
+    stop(),
     ok.
 
 log_to_file(suite) -> [];
 log_to_file(Config) when is_list(Config) ->
     TempName = test_server:temp_name(?config(priv_dir,Config) ++ "sys."),
-    ?line {ok,_Server} = start(),
-    ?line ok = sys:log_to_file(?server,TempName),
-    ?line {ok,-44} = public_call(44),
-    ?line ok = sys:log_to_file(?server,false),
-    ?line {ok,Fd} = file:open(TempName,[read]),
-    ?line Msg1 = io:get_line(Fd,''),
-    ?line Msg2 = io:get_line(Fd,''),
-    ?line file:close(Fd),
-    ?line lists:prefix("*DBG* sys_SUITE_server got call {req,44} from ",Msg1),
-    ?line lists:prefix("*DBG* sys_SUITE_server sent {ok,-44} to ",Msg2),
-    ?line stop(),
+    {ok,_Server} = start(),
+    ok = sys:log_to_file(?server,TempName),
+    {ok,-44} = public_call(44),
+    ok = sys:log_to_file(?server,false),
+    {ok,Fd} = file:open(TempName,[read]),
+    Msg1 = io:get_line(Fd,''),
+    Msg2 = io:get_line(Fd,''),
+    file:close(Fd),
+    lists:prefix("*DBG* sys_SUITE_server got call {req,44} from ",Msg1),
+    lists:prefix("*DBG* sys_SUITE_server sent {ok,-44} to ",Msg2),
+    stop(),
     ok.
 
 stats(suite) -> [];
 stats(Config) when is_list(Config) ->
-    ?line Self = self(),
-    ?line {ok,_Server} = start(),
-    ?line ok = sys:statistics(?server,true),
-    ?line {ok,-44} = public_call(44),
-    ?line {ok,Stats} = sys:statistics(?server,get),
-    ?line lists:member({messages_in,1},Stats),
-    ?line lists:member({messages_out,1},Stats),
-    ?line ok = sys:statistics(?server,false),
-    ?line {status,_Pid,{module,_Mod},[_PDict,running,Self,_,_]} =
+    Self = self(),
+    {ok,_Server} = start(),
+    ok = sys:statistics(?server,true),
+    {ok,-44} = public_call(44),
+    {ok,Stats} = sys:statistics(?server,get),
+    lists:member({messages_in,1},Stats),
+    lists:member({messages_out,1},Stats),
+    ok = sys:statistics(?server,false),
+    {status,_Pid,{module,_Mod},[_PDict,running,Self,_,_]} =
 	sys:get_status(?server),
-    ?line {ok,no_statistics} = sys:statistics(?server,get),
-    ?line stop(),
+    {ok,no_statistics} = sys:statistics(?server,get),
+    stop(),
     ok.
 
 trace(suite) -> [];
 trace(Config) when is_list(Config) ->
-    ?line {ok,_Server} = start(),
-    case os:type() of
-	vxworks ->
-	    ?line test_server:sleep(20000);
-	_ ->
-	    ?line test_server:sleep(2000)
-    end,
-    ?line test_server:capture_start(),
-    ?line sys:trace(?server,true),
-    ?line {ok,-44} = public_call(44),
+    {ok,_Server} = start(),
+    test_server:sleep(2000),
+    test_server:capture_start(),
+    sys:trace(?server,true),
+    {ok,-44} = public_call(44),
     %% ho, hum, allow for the io to reach us..
-    case os:type() of
-	vxworks ->
-	    ?line test_server:sleep(10000);
-	_ ->
-	    ?line test_server:sleep(1000)
-    end,
-    ?line test_server:capture_stop(),
-    ?line [Msg1,Msg2] = test_server:capture_get(),
-    ?line lists:prefix("*DBG* sys_SUITE_server got call {req,44} from ",Msg1),
-    ?line lists:prefix("*DBG* sys_SUITE_server sent {ok,-44} to ",Msg2),
-    ?line stop(),
+    test_server:sleep(1000),
+    test_server:capture_stop(),
+    [Msg1,Msg2] = test_server:capture_get(),
+    lists:prefix("*DBG* sys_SUITE_server got call {req,44} from ",Msg1),
+    lists:prefix("*DBG* sys_SUITE_server sent {ok,-44} to ",Msg2),
+    stop(),
     ok.
 
 suspend(suite) -> [];
@@ -166,6 +154,84 @@ install(Config) when is_list(Config) ->
 	   {spy_got,{request,3},sys_SUITE_server}] = Msgs,
     ?line stop(),
     ok.
+
+special_process(suite) -> [];
+special_process(Config) when is_list(Config) ->
+    ok = spec_proc(sys_sp1),
+    ok = spec_proc(sys_sp2).
+
+spec_proc(Mod) ->
+    {ok,_} = Mod:start_link(100),
+    ok = sys:statistics(Mod,true),
+    ok = sys:trace(Mod,true),
+    1 = Ch = Mod:alloc(),
+    Free = lists:seq(2,100),
+    Replace = case sys:get_state(Mod) of
+		  {[Ch],Free} ->
+		      fun({A,F}) ->
+			      Free = F,
+			      {A,[2,3,4]}
+		      end;
+		  {state,[Ch],Free} ->
+		      fun({state,A,F}) ->
+			      Free = F,
+			      {state,A,[2,3,4]}
+		      end
+	      end,
+    case sys:replace_state(Mod, Replace) of
+	{[Ch],[2,3,4]} -> ok;
+	{state,[Ch],[2,3,4]} -> ok
+    end,
+    ok = Mod:free(Ch),
+    case sys:get_state(Mod) of
+	{[],[1,2,3,4]} -> ok;
+	{state,[],[1,2,3,4]} -> ok
+    end,
+    {ok,[{start_time,_},
+	 {current_time,_},
+	 {reductions,_},
+	 {messages_in,2},
+	 {messages_out,1}]} = sys:statistics(Mod,get),
+    ok = sys:statistics(Mod,false),
+    [] = sys:replace_state(Mod, fun(_) -> [] end),
+    process_flag(trap_exit,true),
+    ok = case catch sys:get_state(Mod) of
+	     [] ->
+		 ok;
+	     {'EXIT',{{callback_failed,
+		       {Mod,system_get_state},{throw,fail}},_}} ->
+		 ok
+	 end,
+    Mod:stop(),
+    WaitForUnregister = fun W() ->
+		       case whereis(Mod) of
+			   undefined -> ok;
+			   _ -> timer:sleep(10), W()
+		       end
+	       end,
+    WaitForUnregister(),
+    {ok,_} = Mod:start_link(4),
+    ok = case catch sys:replace_state(Mod, fun(_) -> {} end) of
+	     {} ->
+		 ok;
+	     {'EXIT',{{callback_failed,
+		       {Mod,system_replace_state},{throw,fail}},_}} ->
+		 ok
+	 end,
+    Mod:stop(),
+    WaitForUnregister(),
+    {ok,_} = Mod:start_link(4),
+    StateFun = fun(_) -> error(fail) end,
+    ok = case catch sys:replace_state(Mod, StateFun) of
+	     {} ->
+		 ok;
+	     {'EXIT',{{callback_failed,
+		       {Mod,system_replace_state},{error,fail}},_}} ->
+		 ok;
+	     {'EXIT',{{callback_failed,StateFun,{error,fail}},_}} ->
+		 ok
+	 end,
+    Mod:stop().
 
 %%%%%%%%%%%%%%%%%%%%
 %% Dummy server

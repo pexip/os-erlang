@@ -2,7 +2,7 @@
 /*
  * %CopyrightBegin%
  *
- * Copyright Ericsson AB 1998-2011. All Rights Reserved.
+ * Copyright Ericsson AB 1998-2013. All Rights Reserved.
  *
  * The contents of this file are subject to the Erlang Public License,
  * Version 1.1, (the "License"); you may not use this file except in
@@ -25,17 +25,22 @@
    definitions ourselves */
 
 #ifdef __WIN32__
-#define NO_SYSLOG
 #define NO_SYSCONF
 #define NO_DAEMON
 #endif
 
 #ifdef VXWORKS
-#define NO_SYSLOG
 #define NO_SYSCONF
 #define NO_DAEMON
 #define NO_FCNTL
 #define DONT_USE_MAIN
+#endif
+
+#ifdef __OSE__
+#  define NO_DAEMON
+#  define NO_SYSLOG
+#  define NO_SYSCONF
+#  define NO_FCNTL
 #endif
 
 /* ************************************************************************ */
@@ -94,11 +99,15 @@
 #endif /* ! WIN32 */
 
 #include <ctype.h>
-#include <signal.h>
+
+#if !defined(__OSE__)
+#  include <signal.h>
+#endif
+
 
 #include <errno.h>
 
-#ifndef NO_SYSLOG
+#ifdef HAVE_SYSLOG_H
 #  include <syslog.h>
 #endif
 
@@ -111,6 +120,14 @@
 #endif
 
 #include <stdarg.h>
+
+#ifdef __OSE__
+#  include "sys/select.h"
+#endif
+
+#ifdef HAVE_SYSTEMD_SD_DAEMON_H
+#  include <systemd/sd-daemon.h>
+#endif
 
 /* ************************************************************************ */
 /* Replace some functions by others by making the function name a macro */
@@ -226,13 +243,25 @@
 #define MAX_UNREG_COUNT 1000
 #define DEBUG_MAX_UNREG_COUNT 5
 
-/* Maximum length of a node name == atom name */
-#define MAXSYMLEN 255
+/*
+ * Maximum length of a node name == atom name
+ *   255 characters; UTF-8 encoded -> max 255*4
+ */
+#define MAXSYMLEN (255*4)
 
 #define MAX_LISTEN_SOCKETS 16
 
-#define INBUF_SIZE 1024
-#define OUTBUF_SIZE 1024
+/*
+ * Largest request: ALIVE2_REQ
+ *  2 + 13 + 2*MAXSYMLEN
+ * Largest response: PORT2_RESP
+ *  2 + 14 + 2*MAXSYMLEN
+ *
+ * That is, 3*MAXSYMLEN should be large enough
+ */
+
+#define INBUF_SIZE (3*MAXSYMLEN)
+#define OUTBUF_SIZE (3*MAXSYMLEN)
 
 #define get_int16(s) ((((unsigned char*)  (s))[0] << 8) | \
                       (((unsigned char*)  (s))[1]))
@@ -311,6 +340,9 @@ typedef struct {
   int listenfd[MAX_LISTEN_SOCKETS];
   char *addresses;
   char **argv;
+#ifdef HAVE_SYSTEMD_SD_DAEMON_H
+  int is_systemd;
+#endif
 } EpmdVars;
 
 void dbg_printf(EpmdVars*,int,const char*,...);

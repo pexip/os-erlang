@@ -1,7 +1,7 @@
 %% 
 %% %CopyrightBegin%
 %% 
-%% Copyright Ericsson AB 2004-2011. All Rights Reserved.
+%% Copyright Ericsson AB 2004-2014. All Rights Reserved.
 %% 
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -75,8 +75,10 @@
 
 	 %% 
 	 %% Logging
-	 log_to_txt/2, log_to_txt/3, log_to_txt/4,
-	 log_to_txt/5, log_to_txt/6, log_to_txt/7, 
+	 log_to_txt/1, log_to_txt/2, log_to_txt/3, log_to_txt/4, 
+	 log_to_txt/5, log_to_txt/6, log_to_txt/7, log_to_txt/8, 
+	 log_to_io/1,  log_to_io/2,  log_to_io/3,  log_to_io/4, 
+	 log_to_io/5,  log_to_io/6,  log_to_io/7, 
 	 change_log_size/1,
 	 get_log_type/0,
 	 set_log_type/1,
@@ -104,63 +106,15 @@
 	 async_get_bulk/5, async_get_bulk/6, async_get_bulk/7, async_get_bulk/8 
 	]).
 
-%% Backward compatibility exports (API version "1")
--deprecated({agent_info,        3}).
--deprecated({update_agent_info, 5}).
--deprecated({g,                 3}).
--deprecated({g,                 4}).
--deprecated({g,                 5}).
--deprecated({g,                 6}).
--deprecated({g,                 7}).
--deprecated({ag,                3}).
--deprecated({ag,                4}).
--deprecated({ag,                5}).
--deprecated({ag,                6}).
--deprecated({ag,                7}).
--deprecated({gn,                3}).
--deprecated({gn,                4}).
--deprecated({gn,                5}).
--deprecated({gn,                6}).
--deprecated({gn,                7}).
--deprecated({agn,               3}).
--deprecated({agn,               4}).
--deprecated({agn,               5}).
--deprecated({agn,               6}).
--deprecated({agn,               7}).
--deprecated({gb,                5}).
--deprecated({gb,                6}).
--deprecated({gb,                7}).
--deprecated({gb,                8}).
--deprecated({gb,                9}).
--deprecated({agb,               5}).
--deprecated({agb,               6}).
--deprecated({agb,               7}).
--deprecated({agb,               8}).
--deprecated({agb,               9}).
--deprecated({s,                 3}).
--deprecated({s,                 4}).
--deprecated({s,                 5}).
--deprecated({s,                 6}).
--deprecated({s,                 7}).
--deprecated({as,                3}).
--deprecated({as,                4}).
--deprecated({as,                5}).
--deprecated({as,                6}).
--deprecated({as,                7}).
--export([
-	 agent_info/3, update_agent_info/5, 
-	 g/3, g/4, g/5, g/6, g/7, 
-	 ag/3, ag/4, ag/5, ag/6, ag/7, 
-	 gn/3, gn/4, gn/5, gn/6, gn/7, 
-	 agn/3, agn/4, agn/5, agn/6, agn/7, 
-	 gb/5, gb/6, gb/7, gb/8, gb/9, 
-	 agb/5, agb/6, agb/7, agb/8, agb/9, 
-	 s/3, s/4, s/5, s/6, s/7, 
-	 as/3, as/4, as/5, as/6, as/7
-	]).
-
 %% Application internal export
 -export([start_link/3, snmpm_start_verify/2, snmpm_start_verify/3]).
+-export([target_name/1, target_name/2]).
+
+-export_type([
+	      register_timeout/0, 
+	      agent_config/0, 
+	      target_name/0
+	     ]).
 
 
 -include_lib("snmp/src/misc/snmp_debug.hrl").
@@ -170,6 +124,26 @@
 -include("snmp_verbosity.hrl").
 
 -define(DEFAULT_AGENT_PORT, 161).
+-define(ATL_BLOCK_DEFAULT,  true).
+
+
+%%-----------------------------------------------------------------
+%% Types
+%%-----------------------------------------------------------------
+
+-type register_timeout() :: pos_integer() | snmp:snmp_timer().
+-type agent_config() :: {engine_id,        snmp:engine_id()}   | % Mandatory
+			{address,          inet:ip_address()}  | % Mandatory
+			{port,             inet:port_number()} | % Optional
+			{tdomain,          snmp:tdomain()}     | % Optional
+			{community,        snmp:community()}   | % Optional
+			{timeout,          register_timeout()} | % Optional
+			{max_message_size, snmp:mms()}         | % Optional
+			{version,          snmp:version()}     | % Optional
+			{sec_moduel,       snmp:sec_model()}   | % Optional
+			{sec_name,         snmp:sec_name()}    | % Optional
+			{sec_level,        snmp:sec_level()}.    % Optional
+-type target_name() :: string().
 
 
 %% This function is called when the snmp application
@@ -405,21 +379,33 @@ register_agent(UserId, Addr) ->
     register_agent(UserId, Addr, ?DEFAULT_AGENT_PORT, []).
 
 %% Backward compatibility 
-register_agent(UserId, Addr, Port, Config0) ->
+register_agent(UserId, Domain, Addr, Config0) when is_atom(Domain) ->
     case lists:keymember(target_name, 1, Config0) of
 	false ->
-	    TargetName = mk_target_name(Addr, Port, Config0), 
-	    Config     = [{reg_type, addr_port}, 
-			  {address, Addr}, {port, Port} | Config0], 
+	    TargetName = mk_target_name(Domain, Addr, Config0),
+	    Config =
+		[{reg_type, addr_port},
+		 {tdomain, Domain}, {taddress, Addr} | Config0],
 	    do_register_agent(UserId, TargetName, ensure_engine_id(Config));
 	true ->
 	    {value, {_, TargetName}} = 
 		lists:keysearch(target_name, 1, Config0),
 	    Config1 = lists:keydelete(target_name, 1, Config0),
-	    Config2 = [{reg_type, addr_port}, 
-		       {address, Addr}, {port, Port} | Config1], 
+	    Config2 =
+		[{reg_type, addr_port},
+		 {tdomain, Domain}, {taddress, Addr} | Config1],
 	    register_agent(UserId, TargetName, ensure_engine_id(Config2))
-    end.
+    end;
+register_agent(UserId, Ip, Port, Config) when is_integer(Port) ->
+    Domain = snmpm_config:default_transport_domain(),
+    Addr =
+	case snmp_conf:check_address(Domain, {Ip, Port}) of
+	    ok ->
+		{Ip, Port};
+	    {ok, FixedAddr} ->
+		FixedAddr
+	end,
+    register_agent(UserId, Domain, Addr, Config).
 
 unregister_agent(UserId, TargetName) when is_list(TargetName) ->
     snmpm_config:unregister_agent(UserId, TargetName);
@@ -428,25 +414,17 @@ unregister_agent(UserId, TargetName) when is_list(TargetName) ->
 unregister_agent(UserId, Addr) ->
     unregister_agent(UserId, Addr, ?DEFAULT_AGENT_PORT).
 
-unregister_agent(UserId, Addr, Port) ->
-    case target_name(Addr, Port) of
+unregister_agent(UserId, DomainIp, AddressPort) ->
+    case target_name(DomainIp, AddressPort) of
 	{ok, TargetName} ->
 	    unregister_agent(UserId, TargetName);
 	Error ->
 	    Error
     end.
 
+
 agent_info(TargetName, Item) ->
     snmpm_config:agent_info(TargetName, Item).
-
-%% Backward compatibility
-agent_info(Addr, Port, Item) ->
-    case target_name(Addr, Port) of
-	{ok, TargetName} ->
-	    agent_info(TargetName, Item);
-	Error ->
-	    Error
-    end.
 
 update_agent_info(UserId, TargetName, Info) when is_list(Info) ->
     snmpm_config:update_agent_info(UserId, TargetName, Info).
@@ -454,14 +432,6 @@ update_agent_info(UserId, TargetName, Info) when is_list(Info) ->
 update_agent_info(UserId, TargetName, Item, Val) ->
     update_agent_info(UserId, TargetName, [{Item, Val}]).
 
-%% Backward compatibility functions
-update_agent_info(UserId, Addr, Port, Item, Val) ->
-    case target_name(Addr, Port) of
-	{ok, TargetName} ->
-	    update_agent_info(UserId, TargetName, Item, Val);
-	Error ->
-	    Error
-    end.
 
 which_agents() ->
     snmpm_config:which_agents().
@@ -549,55 +519,6 @@ sync_get(UserId, TargetName, Context, Oids, Timeout, ExtraInfo) ->
 %% </BACKWARD-COMPAT>
 
 
-%% <DEPRECATED>
-g(UserId, Addr, Oids) ->
-    g(UserId, Addr, ?DEFAULT_AGENT_PORT, Oids).
-
-g(UserId, Addr, CtxName, Oids) when is_list(CtxName) andalso is_list(Oids) ->
-    g(UserId, Addr, ?DEFAULT_AGENT_PORT, CtxName, Oids);
-
-g(UserId, Addr, Port, Oids) when is_integer(Port) andalso is_list(Oids) ->
-    g(UserId, Addr, Port, ?DEFAULT_CONTEXT, Oids);
-
-g(UserId, Addr, Oids, Timeout) 
-  when is_list(Oids) andalso is_integer(Timeout) ->
-    g(UserId, Addr, ?DEFAULT_AGENT_PORT, Oids, Timeout).
-
-g(UserId, Addr, Port, CtxName, Oids) 
-  when is_integer(Port) andalso is_list(CtxName) andalso is_list(Oids) ->
-    case target_name(Addr, Port) of
-	{ok, TargetName} ->
-	    sync_get(UserId, TargetName, CtxName, Oids);
-	Error ->
-	    Error
-    end;    
-    
-g(UserId, Addr, Port, Oids, Timeout) 
-  when is_integer(Port) andalso is_list(Oids) andalso is_integer(Timeout) ->
-    g(UserId, Addr, Port, ?DEFAULT_CONTEXT, Oids, Timeout);
-
-g(UserId, Addr, CtxName, Oids, Timeout) 
-  when is_list(CtxName) andalso is_list(Oids) andalso is_integer(Timeout) ->
-    g(UserId, Addr, ?DEFAULT_AGENT_PORT, CtxName, Oids, Timeout).
-
-g(UserId, Addr, Port, CtxName, Oids, Timeout) ->
-    case target_name(Addr, Port) of
-	{ok, TargetName} ->
-	    sync_get(UserId, TargetName, CtxName, Oids, Timeout);
-	Error ->
-	    Error
-    end.
-
-g(UserId, Addr, Port, CtxName, Oids, Timeout, ExtraInfo) ->
-    case target_name(Addr, Port) of
-	{ok, TargetName} ->
-	    sync_get(UserId, TargetName, CtxName, Oids, Timeout, ExtraInfo);
-	Error ->
-	    Error
-    end.
-%% </DEPRECATED>
-
-
 
 %% --- asynchroneous get-request ---
 %% 
@@ -634,55 +555,6 @@ async_get(UserId, TargetName, Context, Oids, Expire, ExtraInfo) ->
 %% </BACKWARD-COMPAT>
 
 
-%% <DEPRECATED>
-ag(UserId, Addr, Oids) ->
-    ag(UserId, Addr, ?DEFAULT_AGENT_PORT, Oids).
-
-ag(UserId, Addr, Port, Oids) when is_integer(Port) andalso is_list(Oids) ->
-    ag(UserId, Addr, Port, ?DEFAULT_CONTEXT, Oids);
-
-ag(UserId, Addr, CtxName, Oids) when is_list(CtxName) andalso is_list(Oids) ->
-    ag(UserId, Addr, ?DEFAULT_AGENT_PORT, CtxName, Oids);
-
-ag(UserId, Addr, Oids, Expire) when is_list(Oids) andalso is_integer(Expire) ->
-    ag(UserId, Addr, ?DEFAULT_AGENT_PORT, ?DEFAULT_CONTEXT, Oids, Expire).
-
-ag(UserId, Addr, Port, CtxName, Oids) 
-  when is_integer(Port) andalso is_list(CtxName) andalso is_list(Oids) ->
-    case target_name(Addr, Port) of
-	{ok, TargetName} ->
-	    async_get(UserId, TargetName, CtxName, Oids);
-	Error ->
-	    Error
-    end;
-
-ag(UserId, Addr, Port, Oids, Expire) 
-  when is_integer(Port) andalso is_list(Oids) andalso is_integer(Expire) ->
-    ag(UserId, Addr, Port, ?DEFAULT_CONTEXT, Oids, Expire);
-
-ag(UserId, Addr, CtxName, Oids, Expire) 
-  when is_list(CtxName) andalso is_list(Oids) andalso is_integer(Expire) ->
-    ag(UserId, Addr, ?DEFAULT_AGENT_PORT, CtxName, Oids, Expire).
-
-ag(UserId, Addr, Port, CtxName, Oids, Expire) ->
-    case target_name(Addr, Port) of
-	{ok, TargetName} ->
-	    async_get(UserId, TargetName, CtxName, Oids, Expire);
-	Error ->
-	    Error
-    end.
-
-ag(UserId, Addr, Port, CtxName, Oids, Expire, ExtraInfo) ->
-    case target_name(Addr, Port) of
-	{ok, TargetName} ->
-	    async_get(UserId, TargetName, CtxName, Oids, Expire, ExtraInfo);
-	Error ->
-	    Error
-    end.
-%% </DEPRECATED>
-
-
-
 %% --- synchroneous get_next-request ---
 %% 
 
@@ -714,55 +586,6 @@ sync_get_next(UserId, TargetName, Context, Oids, Timeout, ExtraInfo) ->
     SendOpts = [{timeout, Timeout}, {context, Context}, {extra, ExtraInfo}], 
     sync_get_next2(UserId, TargetName, Oids, SendOpts).
 %% </BACKWARD-COMPAT>
-
-
-%% <DEPRECATED>
-gn(UserId, Addr, Oids) ->
-    gn(UserId, Addr, ?DEFAULT_AGENT_PORT, Oids).
-
-gn(UserId, Addr, CtxName, Oids) when is_list(CtxName) andalso is_list(Oids) ->
-    gn(UserId, Addr, ?DEFAULT_AGENT_PORT, CtxName, Oids);
-
-gn(UserId, Addr, Port, Oids) when is_integer(Port) andalso is_list(Oids) ->
-    gn(UserId, Addr, Port, ?DEFAULT_CONTEXT, Oids);
-
-gn(UserId, Addr, Oids, Timeout) 
-  when is_list(Oids) andalso is_integer(Timeout) ->
-    gn(UserId, Addr, ?DEFAULT_AGENT_PORT, Oids, Timeout).
-
-gn(UserId, Addr, Port, CtxName, Oids) 
-  when is_integer(Port) andalso is_list(CtxName) andalso is_list(Oids) ->
-    case target_name(Addr, Port) of
-	{ok, TargetName} ->
-	    sync_get_next(UserId, TargetName, CtxName, Oids);
-	Error ->
-	    Error
-    end;    
-	
-gn(UserId, Addr, Port, Oids, Timeout) 
-  when is_integer(Port) andalso is_list(Oids) andalso is_integer(Timeout) ->
-    gn(UserId, Addr, Port, ?DEFAULT_CONTEXT, Oids, Timeout);
-gn(UserId, Addr, CtxName, Oids, Timeout) 
-  when is_list(CtxName) andalso is_list(Oids) andalso is_integer(Timeout) ->
-    gn(UserId, Addr, ?DEFAULT_AGENT_PORT, CtxName, Oids, Timeout).
-
-gn(UserId, Addr, Port, CtxName, Oids, Timeout) ->
-    case target_name(Addr, Port) of
-	{ok, TargetName} ->
-	    sync_get_next(UserId, TargetName, CtxName, Oids, Timeout);
-	Error ->
-	    Error
-    end.
-
-gn(UserId, Addr, Port, CtxName, Oids, Timeout, ExtraInfo) ->
-    case target_name(Addr, Port) of
-	{ok, TargetName} ->
-	    sync_get_next(UserId, TargetName, CtxName, Oids, Timeout, ExtraInfo);
-	Error ->
-	    Error
-    end.
-%% </DEPRECATED>
-
 
 
 %% --- asynchroneous get_next-request ---
@@ -798,56 +621,6 @@ async_get_next(UserId, TargetName, Context, Oids, Expire, ExtraInfo) ->
 %% </BACKWARD-COMPAT>
 
 
-%% <DEPRECATED>
-agn(UserId, Addr, Oids) ->
-    agn(UserId, Addr, ?DEFAULT_AGENT_PORT, Oids).
-
-agn(UserId, Addr, CtxName, Oids) when is_list(CtxName) andalso is_list(Oids) ->
-    agn(UserId, Addr, ?DEFAULT_AGENT_PORT, CtxName, Oids);
-
-agn(UserId, Addr, Port, Oids) when is_integer(Port) andalso is_list(Oids) ->
-    agn(UserId, Addr, Port, ?DEFAULT_CONTEXT, Oids);
-
-agn(UserId, Addr, Oids, Expire) 
-  when is_list(Oids) andalso is_integer(Expire) ->
-    agn(UserId, Addr, ?DEFAULT_AGENT_PORT, Oids, Expire).
-
-agn(UserId, Addr, Port, CtxName, Oids) 
-  when is_integer(Port) andalso is_list(CtxName) andalso is_list(Oids) ->
-    case target_name(Addr, Port) of
-	{ok, TargetName} ->
-	    async_get_next(UserId, TargetName, CtxName, Oids);
-	Error ->
-	    Error
-    end;    
-	
-agn(UserId, Addr, Port, Oids, Expire) 
-  when is_integer(Port) andalso is_list(Oids) andalso is_integer(Expire) ->
-    agn(UserId, Addr, Port, ?DEFAULT_CONTEXT, Oids, Expire);
-agn(UserId, Addr, CtxName, Oids, Expire) 
-  when is_list(CtxName) andalso is_list(CtxName) andalso is_integer(Expire) ->
-    agn(UserId, Addr, ?DEFAULT_AGENT_PORT, CtxName, Oids, Expire).
-
-agn(UserId, Addr, Port, CtxName, Oids, Expire) ->
-    case target_name(Addr, Port) of
-	{ok, TargetName} ->
-	    async_get_next(UserId, TargetName, CtxName, Oids, Expire);
-	Error ->
-	    Error
-    end.
-
-agn(UserId, Addr, Port, CtxName, Oids, Expire, ExtraInfo) ->
-    case target_name(Addr, Port) of
-	{ok, TargetName} ->
-	    async_get_next(UserId, TargetName, CtxName, Oids, Expire, 
-			   ExtraInfo);
-	Error ->
-	    Error
-    end.
-%% </DEPRECATED>
-
-
-
 %% --- synchroneous set-request ---
 %% 
 
@@ -881,64 +654,6 @@ sync_set(UserId, TargetName, Context, VarsAndVals, Timeout, ExtraInfo) ->
 %% </BACKWARD-COMPAT>
 
 
-%% <DEPRECATED>
-s(UserId, Addr, VarsAndVals) ->
-    s(UserId, Addr, ?DEFAULT_AGENT_PORT, VarsAndVals).
-
-s(UserId, Addr, Port, VarsAndVals) 
-  when is_integer(Port) andalso is_list(VarsAndVals) ->
-    s(UserId, Addr, Port, ?DEFAULT_CONTEXT, VarsAndVals);
-
-s(UserId, Addr, CtxName, VarsAndVals) 
-  when is_list(CtxName) andalso is_list(VarsAndVals) ->
-    s(UserId, Addr, ?DEFAULT_AGENT_PORT, CtxName, VarsAndVals);
-
-s(UserId, Addr, VarsAndVals, Timeout) 
-  when is_list(VarsAndVals) andalso is_integer(Timeout) ->
-    s(UserId, Addr, ?DEFAULT_AGENT_PORT, VarsAndVals, Timeout).
-
-s(UserId, Addr, Port, CtxName, VarsAndVals) 
-  when is_integer(Port) andalso 
-       is_list(CtxName) andalso 
-       is_list(VarsAndVals) ->
-    case target_name(Addr, Port) of
-	{ok, TargetName} ->
-	    sync_set(UserId, TargetName, CtxName, VarsAndVals);
-	Error ->
-	    Error
-    end;
-
-s(UserId, Addr, Port, VarsAndVals, Timeout) 
-  when is_integer(Port) andalso 
-       is_list(VarsAndVals) andalso 
-       is_integer(Timeout) ->
-    s(UserId, Addr, Port, ?DEFAULT_CONTEXT, VarsAndVals, Timeout);
-
-s(UserId, Addr, CtxName, VarsAndVals, Timeout) 
-  when is_list(CtxName) andalso 
-       is_list(VarsAndVals) andalso 
-       is_integer(Timeout) ->
-    s(UserId, Addr, ?DEFAULT_AGENT_PORT, CtxName, VarsAndVals, Timeout).
-
-s(UserId, Addr, Port, CtxName, VarsAndVals, Timeout) ->
-    case target_name(Addr, Port) of
-	{ok, TargetName} ->
-	    sync_set(UserId, TargetName, CtxName, VarsAndVals, Timeout);
-	Error ->
-	    Error
-    end.
-
-s(UserId, Addr, Port, CtxName, VarsAndVals, Timeout, ExtraInfo) ->
-    case target_name(Addr, Port) of
-	{ok, TargetName} ->
-	    sync_set(UserId, TargetName, CtxName, VarsAndVals, Timeout, ExtraInfo);
-	Error ->
-	    Error
-    end.
-%% </DEPRECATED>
-
-
-
 %% --- asynchroneous set-request --- 
 %% 
 
@@ -970,63 +685,6 @@ async_set(UserId, TargetName, Context, VarsAndVals, Expire, ExtraInfo) ->
     SendOpts = [{timeout, Expire}, {context, Context}, {extra, ExtraInfo}], 
     async_set2(UserId, TargetName, VarsAndVals, SendOpts).
 %% </BACKWARD-COMPAT>
-
-
-%% <DEPRECATED>
-as(UserId, Addr, VarsAndVals) ->
-    as(UserId, Addr, ?DEFAULT_AGENT_PORT, VarsAndVals).
-
-as(UserId, Addr, Port, VarsAndVals) 
-  when is_integer(Port) andalso is_list(VarsAndVals) ->
-    as(UserId, Addr, Port, ?DEFAULT_CONTEXT, VarsAndVals);
-
-as(UserId, Addr, CtxName, VarsAndVals) 
-  when is_list(CtxName) andalso is_list(VarsAndVals) ->
-    as(UserId, Addr, ?DEFAULT_AGENT_PORT, CtxName, VarsAndVals);
-
-as(UserId, Addr, VarsAndVals, Expire) 
-  when is_list(VarsAndVals) andalso is_integer(Expire) ->
-    as(UserId, Addr, ?DEFAULT_AGENT_PORT, VarsAndVals, Expire).
-
-as(UserId, Addr, Port, CtxName, VarsAndVals) 
-  when is_integer(Port) andalso 
-       is_list(CtxName) andalso 
-       is_list(VarsAndVals) ->
-    case target_name(Addr, Port) of
-	{ok, TargetName} ->
-	    async_set(UserId, TargetName, CtxName, VarsAndVals);
-	Error ->
-	    Error
-    end;
-	
-as(UserId, Addr, Port, VarsAndVals, Expire) 
-  when is_integer(Port) andalso 
-       is_list(VarsAndVals) andalso 
-       is_integer(Expire) ->
-    as(UserId, Addr, Port, ?DEFAULT_CONTEXT, VarsAndVals, Expire);
-
-as(UserId, Addr, CtxName, VarsAndVals, Expire) 
-  when is_list(CtxName) andalso 
-       is_list(VarsAndVals) andalso 
-       is_integer(Expire) ->
-    as(UserId, Addr, ?DEFAULT_AGENT_PORT, CtxName, VarsAndVals, Expire).
-
-as(UserId, Addr, Port, CtxName, VarsAndVals, Expire) ->
-    case target_name(Addr, Port) of
-	{ok, TargetName} ->
-	    async_set(UserId, TargetName, CtxName, VarsAndVals, Expire);
-	Error ->
-	    Error
-    end.
-
-as(UserId, Addr, Port, CtxName, VarsAndVals, Expire, ExtraInfo) ->
-    case target_name(Addr, Port) of
-	{ok, TargetName} ->
-	    async_set(UserId, TargetName, CtxName, VarsAndVals, Expire, ExtraInfo);
-	Error ->
-	    Error
-    end.
-%% </DEPRECATED>
 
 
 %% --- synchroneous get-bulk ---
@@ -1088,162 +746,6 @@ sync_get_bulk(UserId, TargetName, NonRep, MaxRep, Context, Oids, Timeout,
 %% </BACKWARD-COMPAT>
 
 
-%% <DEPRECATED>
-gb(UserId, Addr, NonRep, MaxRep, Oids) ->
-    %% p("gb -> entry with"
-    %%   "~n   UserId: ~p"
-    %%   "~n   Addr:   ~p"
-    %%   "~n   NonRep: ~p"
-    %%   "~n   MaxRep: ~p"
-    %%   "~n   Oids:   ~p", 
-    %%   [UserId, Addr, NonRep, MaxRep, Oids]),
-    gb(UserId, Addr, ?DEFAULT_AGENT_PORT, NonRep, MaxRep, Oids).
-
-gb(UserId, Addr, Port, NonRep, MaxRep, Oids) 
-  when is_integer(Port) andalso 
-       is_integer(NonRep) andalso 
-       is_integer(MaxRep) andalso 
-       is_list(Oids) ->
-    %% p("gb -> entry with"
-    %%   "~n   UserId: ~p"
-    %%   "~n   Addr:   ~p"
-    %%   "~n   Port:   ~p"
-    %%   "~n   NonRep: ~p"
-    %%   "~n   MaxRep: ~p"
-    %%   "~n   Oids:   ~p", 
-    %%   [UserId, Addr, Port, NonRep, MaxRep, Oids]),
-    gb(UserId, Addr, Port, NonRep, MaxRep, ?DEFAULT_CONTEXT, Oids);
-
-gb(UserId, Addr, NonRep, MaxRep, CtxName, Oids) 
-  when is_integer(NonRep) andalso 
-       is_integer(MaxRep) andalso 
-       is_list(CtxName) andalso 
-       is_list(Oids) ->
-    %% p("gb -> entry with"
-    %%   "~n   UserId:  ~p"
-    %%   "~n   Addr:    ~p"
-    %%   "~n   NonRep:  ~p"
-    %%   "~n   MaxRep:  ~p"
-    %%   "~n   CtxName: ~p"
-    %%   "~n   Oids:    ~p", 
-    %%   [UserId, Addr, NonRep, MaxRep, CtxName, Oids]),
-    gb(UserId, Addr, ?DEFAULT_AGENT_PORT, NonRep, MaxRep, CtxName, Oids);
-
-gb(UserId, Addr, NonRep, MaxRep, Oids, Timeout) 
-  when is_integer(NonRep) andalso 
-       is_integer(MaxRep) andalso 
-       is_list(Oids) andalso 
-       is_integer(Timeout) ->
-    %% p("gb -> entry with"
-    %%   "~n   UserId:  ~p"
-    %%   "~n   Addr:    ~p"
-    %%   "~n   NonRep:  ~p"
-    %%   "~n   MaxRep:  ~p"
-    %%   "~n   Oids:    ~p"
-    %%   "~n   Timeout: ~p", 
-    %%   [UserId, Addr, NonRep, MaxRep, Oids, Timeout]),
-    gb(UserId, Addr, ?DEFAULT_AGENT_PORT, NonRep, MaxRep, Oids, Timeout).
-
-gb(UserId, Addr, Port, NonRep, MaxRep, CtxName, Oids) 
-  when is_integer(Port) andalso 
-       is_integer(NonRep) andalso 
-       is_integer(MaxRep) andalso 
-       is_list(CtxName) andalso 
-       is_list(Oids) ->
-    %% p("gb -> entry with"
-    %%   "~n   UserId:  ~p"
-    %%   "~n   Addr:    ~p"
-    %%   "~n   Port:    ~p"
-    %%   "~n   NonRep:  ~p"
-    %%   "~n   MaxRep:  ~p"
-    %%   "~n   CtxName: ~p"
-    %%   "~n   Oids:    ~p", 
-    %%   [UserId, Addr, Port, NonRep, MaxRep, CtxName, Oids]),
-    case target_name(Addr, Port) of
-	{ok, TargetName} ->
-	    %% p("gb -> TargetName: ~p", [TargetName]),
-	    sync_get_bulk(UserId, TargetName, NonRep, MaxRep, CtxName, Oids);
-	Error ->
-	    Error
-    end;
-
-gb(UserId, Addr, Port, NonRep, MaxRep, Oids, Timeout) 
-  when is_integer(Port) andalso 
-       is_integer(NonRep) andalso 
-       is_integer(MaxRep) andalso 
-       is_list(Oids) andalso 
-       is_integer(Timeout) ->
-    %% p("gb -> entry with"
-    %%   "~n   UserId:  ~p"
-    %%   "~n   Addr:    ~p"
-    %%   "~n   Port:    ~p"
-    %%   "~n   NonRep:  ~p"
-    %%   "~n   MaxRep:  ~p"
-    %%   "~n   Oids:    ~p"
-    %%   "~n   Timeout: ~p", 
-    %%   [UserId, Addr, Port, NonRep, MaxRep, Oids, Timeout]),
-    gb(UserId, Addr, Port, NonRep, MaxRep, ?DEFAULT_CONTEXT, Oids, Timeout);
-
-gb(UserId, Addr, NonRep, MaxRep, CtxName, Oids, Timeout) 
-  when is_integer(NonRep) andalso 
-       is_integer(MaxRep) andalso 
-       is_list(CtxName) andalso 
-       is_list(Oids) andalso 
-       is_integer(Timeout) ->
-    %% p("gb -> entry with"
-    %%   "~n   UserId:  ~p"
-    %%   "~n   Addr:    ~p"
-    %%   "~n   NonRep:  ~p"
-    %%   "~n   MaxRep:  ~p"
-    %%   "~n   CtxName: ~p"
-    %%   "~n   Oids:    ~p"
-    %%   "~n   Timeout: ~p", 
-    %%   [UserId, Addr, NonRep, MaxRep, CtxName, Oids, Timeout]),
-    gb(UserId, Addr, ?DEFAULT_AGENT_PORT, NonRep, MaxRep, CtxName, Oids, 
-       Timeout).
-
-gb(UserId, Addr, Port, NonRep, MaxRep, CtxName, Oids, Timeout) ->
-    %% p("gb -> entry with"
-    %%   "~n   UserId:  ~p"
-    %%   "~n   Addr:    ~p"
-    %%   "~n   Port:    ~p"
-    %%   "~n   NonRep:  ~p"
-    %%   "~n   MaxRep:  ~p"
-    %%   "~n   CtxName: ~p"
-    %%   "~n   Oids:    ~p"
-    %%   "~n   Timeout: ~p", 
-    %%   [UserId, Addr, Port, NonRep, MaxRep, CtxName, Oids, Timeout]),
-    case target_name(Addr, Port) of
-	{ok, TargetName} ->
-	    sync_get_bulk(UserId, TargetName, 
-			  NonRep, MaxRep, CtxName, Oids, Timeout);
-	Error ->
-	    Error
-    end.
-
-gb(UserId, Addr, Port, NonRep, MaxRep, CtxName, Oids, Timeout, ExtraInfo) ->
-    %% p("gb -> entry with"
-    %%   "~n   UserId:    ~p"
-    %%   "~n   Addr:      ~p"
-    %%   "~n   Port:      ~p"
-    %%   "~n   NonRep:    ~p"
-    %%   "~n   MaxRep:    ~p"
-    %%   "~n   CtxName:   ~p"
-    %%   "~n   Oids:      ~p"
-    %%   "~n   Timeout:   ~p"
-    %%   "~n   ExtraInfo: ~p", 
-    %%   [UserId, Addr, Port, NonRep, MaxRep, CtxName, Oids, Timeout, ExtraInfo]),
-    case target_name(Addr, Port) of
-	{ok, TargetName} ->
-	    sync_get_bulk(UserId, TargetName, 
-			  NonRep, MaxRep, CtxName, Oids, Timeout, ExtraInfo);
-	Error ->
-	    Error
-    end.
-%% </DEPRECATED>
-
-
-
 %% --- asynchroneous get-bulk ---
 %% 
 
@@ -1288,81 +790,6 @@ async_get_bulk(UserId, TargetName, NonRep, MaxRep, Context, Oids, Expire,
 %% </BACKWARD-COMPAT>
 
 
-%% <DEPRECATED>
-agb(UserId, Addr, NonRep, MaxRep, Oids) ->
-    agb(UserId, Addr, ?DEFAULT_AGENT_PORT, NonRep, MaxRep, Oids).
-
-agb(UserId, Addr, Port, NonRep, MaxRep, Oids) 
-  when is_integer(Port) andalso 
-       is_integer(NonRep) andalso 
-       is_integer(MaxRep) andalso 
-       is_list(Oids) ->
-    agb(UserId, Addr, Port, NonRep, MaxRep, ?DEFAULT_CONTEXT, Oids);
-
-agb(UserId, Addr, NonRep, MaxRep, CtxName, Oids) 
-  when is_integer(NonRep) andalso 
-       is_integer(MaxRep) andalso 
-       is_list(CtxName) andalso 
-       is_list(Oids) ->
-    agb(UserId, Addr, ?DEFAULT_AGENT_PORT, NonRep, MaxRep, CtxName, Oids);
-
-agb(UserId, Addr, NonRep, MaxRep, Oids, Expire) 
-  when is_integer(NonRep) andalso 
-       is_integer(MaxRep) andalso 
-       is_list(Oids) andalso 
-       is_integer(Expire) ->
-    agb(UserId, Addr, ?DEFAULT_AGENT_PORT, NonRep, MaxRep, Oids, Expire).
-
-agb(UserId, Addr, Port, NonRep, MaxRep, CtxName, Oids) 
-  when is_integer(Port) andalso 
-       is_integer(NonRep) andalso 
-       is_integer(MaxRep), 
-       is_list(CtxName) andalso 
-       is_list(Oids) ->
-    case target_name(Addr, Port) of
-	{ok, TargetName} ->
-	    async_get_bulk(UserId, TargetName, 
-			   NonRep, MaxRep, CtxName, Oids);
-	Error ->
-	    Error
-    end;
-
-agb(UserId, Addr, Port, NonRep, MaxRep, Oids, Expire) 
-  when is_integer(Port) andalso 
-       is_integer(NonRep) andalso 
-       is_integer(MaxRep) andalso 
-       is_list(Oids) andalso 
-       is_integer(Expire) ->
-    agb(UserId, Addr, Port, NonRep, MaxRep, ?DEFAULT_CONTEXT, Oids, Expire);
-
-agb(UserId, Addr, NonRep, MaxRep, CtxName, Oids, Expire) 
-  when is_integer(NonRep) andalso 
-       is_integer(MaxRep) andalso 
-       is_list(CtxName) andalso 
-       is_list(Oids) andalso 
-       is_integer(Expire) ->
-    agb(UserId, Addr, ?DEFAULT_AGENT_PORT, NonRep, MaxRep, CtxName, Oids).
-
-agb(UserId, Addr, Port, NonRep, MaxRep, CtxName, Oids, Expire) ->
-    case target_name(Addr, Port) of
-	{ok, TargetName} ->
-	    async_get_bulk(UserId, TargetName, 
-			   NonRep, MaxRep, CtxName, Oids, Expire);
-	Error ->
-	    Error
-    end.
-
-agb(UserId, Addr, Port, NonRep, MaxRep, CtxName, Oids, Expire, ExtraInfo) ->
-    case target_name(Addr, Port) of
-	{ok, TargetName} ->
-	    async_get_bulk(UserId, TargetName, 
-			   NonRep, MaxRep, CtxName, Oids, Expire,
-			   ExtraInfo);
-	Error ->
-	    Error
-    end.
-%% </DEPRECATED>
-
 
 cancel_async_request(UserId, ReqId) ->
     snmpm_server:cancel_async_request(UserId, ReqId).
@@ -1371,25 +798,206 @@ cancel_async_request(UserId, ReqId) ->
 %%%-----------------------------------------------------------------
 %%% Audit Trail Log functions (for backward compatibility)
 %%%-----------------------------------------------------------------
-log_to_txt(LogDir, Mibs) ->
+
+-spec log_to_txt(LogDir :: snmp:dir()) ->
+    snmp:void().
+
+log_to_txt(LogDir) ->
+    log_to_txt(LogDir, []). 
+
+-spec log_to_txt(LogDir :: snmp:dir(), 
+		 Block  :: boolean()) ->
+    snmp:void();
+                (LogDir :: snmp:dir(), 
+		 Mibs   :: [snmp:mib_name()]) ->
+    snmp:void().
+
+log_to_txt(LogDir, Block) 
+  when ((Block =:= true) orelse (Block =:= false)) ->
+    Mibs    = [], 
     OutFile = "snmpm_log.txt",       
     LogName = ?audit_trail_log_name, 
     LogFile = ?audit_trail_log_file, 
-    snmp:log_to_txt(LogDir, Mibs, OutFile, LogName, LogFile).
-log_to_txt(LogDir, Mibs, OutFile) ->
+    snmp:log_to_txt(LogDir, Mibs, OutFile, LogName, LogFile, Block);
+log_to_txt(LogDir, Mibs) ->
+    Block   = ?ATL_BLOCK_DEFAULT, 
+    OutFile = "snmpm_log.txt",       
     LogName = ?audit_trail_log_name, 
     LogFile = ?audit_trail_log_file, 
-    snmp:log_to_txt(LogDir, Mibs, OutFile, LogName, LogFile).
-log_to_txt(LogDir, Mibs, OutFile, LogName) ->
-    LogFile = ?audit_trail_log_file, 
-    snmp:log_to_txt(LogDir, Mibs, OutFile, LogName, LogFile).
-log_to_txt(LogDir, Mibs, OutFile, LogName, LogFile) -> 
-    snmp:log_to_txt(LogDir, Mibs, OutFile, LogName, LogFile).
-log_to_txt(LogDir, Mibs, OutFile, LogName, LogFile, Start) -> 
-    snmp:log_to_txt(LogDir, Mibs, OutFile, LogName, LogFile, Start).
-log_to_txt(LogDir, Mibs, OutFile, LogName, LogFile, Start, Stop) -> 
-    snmp:log_to_txt(LogDir, Mibs, OutFile, LogName, LogFile, Start, Stop).
+    snmp:log_to_txt(LogDir, Mibs, OutFile, LogName, LogFile, Block).
 
+-spec log_to_txt(LogDir :: snmp:dir(), 
+		 Mibs   :: [snmp:mib_name()], 
+		 Block  :: boolean()) ->
+    snmp:void();
+                (LogDir  :: snmp:dir(), 
+		 Mibs    :: [snmp:mib_name()], 
+		 OutFile :: file:filename()) ->
+    snmp:void().
+
+log_to_txt(LogDir, Mibs, Block)  
+  when ((Block =:= true) orelse (Block =:= false)) ->
+    OutFile = "snmpm_log.txt",       
+    LogName = ?audit_trail_log_name, 
+    LogFile = ?audit_trail_log_file, 
+    snmp:log_to_txt(LogDir, Mibs, OutFile, LogName, LogFile, Block);
+log_to_txt(LogDir, Mibs, OutFile) ->
+    Block   = ?ATL_BLOCK_DEFAULT, 
+    LogName = ?audit_trail_log_name, 
+    LogFile = ?audit_trail_log_file, 
+    snmp:log_to_txt(LogDir, Mibs, OutFile, LogName, LogFile, Block).
+
+-spec log_to_txt(LogDir  :: snmp:dir(), 
+		 Mibs    :: [snmp:mib_name()], 
+		 OutFile :: file:filename(), 
+		 Block   :: boolean()) ->
+    snmp:void();
+                (LogDir  :: snmp:dir(), 
+		 Mibs    :: [snmp:mib_name()], 
+		 OutFile :: file:filename(), 
+		 LogName :: string()) ->
+    snmp:void().
+
+log_to_txt(LogDir, Mibs, OutFile, Block)  
+  when ((Block =:= true) orelse (Block =:= false)) ->
+    LogName = ?audit_trail_log_name, 
+    LogFile = ?audit_trail_log_file, 
+    snmp:log_to_txt(LogDir, Mibs, OutFile, LogName, LogFile, Block); 
+log_to_txt(LogDir, Mibs, OutFile, LogName) ->
+    Block   = ?ATL_BLOCK_DEFAULT, 
+    LogFile = ?audit_trail_log_file, 
+    snmp:log_to_txt(LogDir, Mibs, OutFile, LogName, LogFile, Block).
+
+-spec log_to_txt(LogDir  :: snmp:dir(), 
+		 Mibs    :: [snmp:mib_name()], 
+		 OutFile :: file:filename(), 
+		 LogName :: string(), 
+		 Block   :: boolean()) ->
+    snmp:void();
+                (LogDir  :: snmp:dir(), 
+		 Mibs    :: [snmp:mib_name()], 
+		 OutFile :: file:filename(), 
+		 LogName :: string(), 
+		 LogFile :: string()) ->
+    snmp:void().
+
+log_to_txt(LogDir, Mibs, OutFile, LogName, Block)  
+  when ((Block =:= true) orelse (Block =:= false)) -> 
+    LogFile = ?audit_trail_log_file, 
+    snmp:log_to_txt(LogDir, Mibs, OutFile, LogName, LogFile, Block);
+log_to_txt(LogDir, Mibs, OutFile, LogName, LogFile) -> 
+    Block = ?ATL_BLOCK_DEFAULT, 
+    snmp:log_to_txt(LogDir, Mibs, OutFile, LogName, LogFile, Block).
+
+-spec log_to_txt(LogDir  :: snmp:dir(), 
+		 Mibs    :: [snmp:mib_name()], 
+		 OutFile :: file:filename(), 
+		 LogName :: string(), 
+		 LogFile :: string(), 
+		 Block   :: boolean()) ->
+    snmp:void();
+                (LogDir  :: snmp:dir(), 
+		 Mibs    :: [snmp:mib_name()], 
+		 OutFile :: file:filename(), 
+		 LogName :: string(), 
+		 LogFile :: string(), 
+		 Start   :: snmp_log:log_time()) ->
+    snmp:void().
+
+log_to_txt(LogDir, Mibs, OutFile, LogName, LogFile, Block)  
+  when ((Block =:= true) orelse (Block =:= false)) -> 
+    snmp:log_to_txt(LogDir, Mibs, OutFile, LogName, LogFile, Block);
+log_to_txt(LogDir, Mibs, OutFile, LogName, LogFile, Start) -> 
+    Block = ?ATL_BLOCK_DEFAULT, 
+    snmp:log_to_txt(LogDir, Mibs, OutFile, LogName, LogFile, Block, Start).
+
+-spec log_to_txt(LogDir  :: snmp:dir(), 
+		 Mibs    :: [snmp:mib_name()], 
+		 OutFile :: file:filename(), 
+		 LogName :: string(), 
+		 LogFile :: string(), 
+		 Block   :: boolean(), 
+		 Start   :: snmp_log:log_time()) ->
+    snmp:void();
+                (LogDir  :: snmp:dir(), 
+		 Mibs    :: [snmp:mib_name()], 
+		 OutFile :: file:filename(), 
+		 LogName :: string(), 
+		 LogFile :: string(), 
+		 Start   :: snmp_log:log_time(), 
+		 Stop    :: snmp_log:log_time()) ->
+    snmp:void().
+
+log_to_txt(LogDir, Mibs, OutFile, LogName, LogFile, Block, Start)  
+  when ((Block =:= true) orelse (Block =:= false)) -> 
+    snmp:log_to_txt(LogDir, Mibs, OutFile, LogName, LogFile, Block, Start);
+log_to_txt(LogDir, Mibs, OutFile, LogName, LogFile, Start, Stop) -> 
+    Block = ?ATL_BLOCK_DEFAULT, 
+    snmp:log_to_txt(LogDir, Mibs, OutFile, LogName, LogFile, Block, Start, Stop).
+
+-spec log_to_txt(LogDir  :: snmp:dir(), 
+		 Mibs    :: [snmp:mib_name()], 
+		 OutFile :: file:filename(), 
+		 LogName :: string(), 
+		 LogFile :: string(), 
+		 Block   :: boolean(), 
+		 Start   :: snmp_log:log_time(), 
+		 Stop    :: snmp_log:log_time()) ->
+    snmp:void().
+
+log_to_txt(LogDir, Mibs, OutFile, LogName, LogFile, Block, Start, Stop) -> 
+    snmp:log_to_txt(LogDir, Mibs, OutFile, LogName, LogFile, Block, Start, Stop).
+
+
+log_to_io(LogDir) ->
+    log_to_io(LogDir, []).
+
+log_to_io(LogDir, Block) 
+  when ((Block =:= true) orelse (Block =:= false)) ->
+    Mibs    = [], 
+    LogName = ?audit_trail_log_name, 
+    LogFile = ?audit_trail_log_file, 
+    snmp:log_to_io(LogDir, Mibs, LogName, LogFile, Block);
+log_to_io(LogDir, Mibs) ->
+    LogName = ?audit_trail_log_name, 
+    LogFile = ?audit_trail_log_file, 
+    snmp:log_to_io(LogDir, Mibs, LogName, LogFile).
+
+log_to_io(LogDir, Mibs, Block) 
+  when ((Block =:= true) orelse (Block =:= false)) ->
+    LogName = ?audit_trail_log_name, 
+    LogFile = ?audit_trail_log_file, 
+    snmp:log_to_io(LogDir, Mibs, LogName, LogFile, Block);
+log_to_io(LogDir, Mibs, LogName) ->
+    Block   = ?ATL_BLOCK_DEFAULT, 
+    LogFile = ?audit_trail_log_file, 
+    snmp:log_to_io(LogDir, Mibs, LogName, LogFile, Block).
+
+log_to_io(LogDir, Mibs, LogName, Block) 
+  when ((Block =:= true) orelse (Block =:= false)) -> 
+    LogFile = ?audit_trail_log_file, 
+    snmp:log_to_io(LogDir, Mibs, LogName, LogFile, Block);
+log_to_io(LogDir, Mibs, LogName, LogFile) -> 
+    Block = ?ATL_BLOCK_DEFAULT, 
+    snmp:log_to_io(LogDir, Mibs, LogName, LogFile, Block).
+
+log_to_io(LogDir, Mibs, LogName, LogFile, Block) 
+  when ((Block =:= true) orelse (Block =:= false)) -> 
+    snmp:log_to_io(LogDir, Mibs, LogName, LogFile, Block);
+log_to_io(LogDir, Mibs, LogName, LogFile, Start) -> 
+    Block = ?ATL_BLOCK_DEFAULT, 
+    snmp:log_to_io(LogDir, Mibs, LogName, LogFile, Block, Start).
+
+log_to_io(LogDir, Mibs, LogName, LogFile, Block, Start) 
+  when ((Block =:= true) orelse (Block =:= false)) -> 
+    snmp:log_to_io(LogDir, Mibs, LogName, LogFile, Block, Start); 
+log_to_io(LogDir, Mibs, LogName, LogFile, Start, Stop) -> 
+    Block = ?ATL_BLOCK_DEFAULT, 
+    snmp:log_to_io(LogDir, Mibs, LogName, LogFile, Block, Start, Stop).
+
+log_to_io(LogDir, Mibs, LogName, LogFile, Block, Start, Stop) -> 
+    snmp:log_to_io(LogDir, Mibs, LogName, LogFile, Block, Start, Stop).
+    
 
 change_log_size(NewSize) ->
     LogName = ?audit_trail_log_name, 
@@ -1434,7 +1042,7 @@ sys_up_time() ->
 format_reason(Reason) ->
     format_reason("", Reason).
 
-format_reason(Prefix, Reason) when is_integer(Prefix) and (Prefix >= 0) ->
+format_reason(Prefix, Reason) when is_integer(Prefix) andalso (Prefix >= 0) ->
     format_reason(lists:duplicate(Prefix, $ ), Reason);
 format_reason(Prefix, Reason) when is_list(Prefix) ->
     case (catch do_format_reason(Prefix, Reason)) of
@@ -1668,11 +1276,17 @@ format_vb_value(Prefix, _Type, Val) ->
 %% --- Internal utility functions ---
 %% 
 
-target_name(Addr, Port) ->
-    snmpm_config:agent_info(Addr, Port, target_name).
+target_name(Ip) ->
+    target_name(Ip, ?DEFAULT_AGENT_PORT).
+
+target_name(DomainIp, AddressPort) ->
+    snmpm_config:agent_info(DomainIp, AddressPort, target_name).
 
 mk_target_name(Addr, Port, Config) ->
-    snmpm_config:mk_target_name(Addr, Port, Config).
+    R = snmpm_config:mk_target_name(Addr, Port, Config),
+    p(?MODULE_STRING":mk_target_name(~p, ~p, ~p) -> ~p.~n",
+      [Addr, Port, Config, R]),
+    R.
 
 ensure_engine_id(Config) ->
     case lists:keymember(engine_id, 1, Config) of
@@ -1688,5 +1302,5 @@ ensure_engine_id(Config) ->
 %% p(F) ->
 %%     p(F, []).
 
-%% p(F, A) ->
-%%     io:format("~w:" ++ F ++ "~n", [?MODULE | A]).
+p(F, A) ->
+    io:format("~w:" ++ F ++ "~n", [?MODULE | A]).

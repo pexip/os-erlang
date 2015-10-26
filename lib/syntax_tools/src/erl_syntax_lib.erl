@@ -14,10 +14,8 @@
 %% Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307
 %% USA
 %%
-%% $Id$
-%%
 %% @copyright 1997-2006 Richard Carlsson
-%% @author Richard Carlsson <richardc@it.uu.se>
+%% @author Richard Carlsson <carlsson.richard@gmail.com>
 %% @end
 %% =====================================================================
 
@@ -290,7 +288,7 @@ mapfoldl(_, S, []) ->
 %%
 %% @see //stdlib/sets
 
--spec variables(erl_syntax:syntaxTree()) -> set().
+-spec variables(erl_syntax:syntaxTree()) -> sets:set(atom()).
 
 variables(Tree) ->
     variables(Tree, sets:new()).
@@ -345,7 +343,7 @@ default_variable_name(N) ->
 %%
 %% @see new_variable_name/2
 
--spec new_variable_name(set()) -> atom().
+-spec new_variable_name(sets:set(atom())) -> atom().
 
 new_variable_name(S) ->
     new_variable_name(fun default_variable_name/1, S).
@@ -371,7 +369,7 @@ new_variable_name(S) ->
 %% @see //stdlib/sets
 %% @see //stdlib/random
 
--spec new_variable_name(fun((integer()) -> atom()), set()) -> atom().
+-spec new_variable_name(fun((integer()) -> atom()), sets:set(atom())) -> atom().
 
 new_variable_name(F, S) ->
     R = start_range(S),
@@ -418,7 +416,7 @@ generate(_Key, Range) ->
 %% 
 %% @see new_variable_name/1
 
--spec new_variable_names(integer(), set()) -> [atom()].
+-spec new_variable_names(integer(), sets:set(atom())) -> [atom()].
 
 new_variable_names(N, S) ->
     new_variable_names(N, fun default_variable_name/1, S).
@@ -434,7 +432,7 @@ new_variable_names(N, S) ->
 %% 
 %% @see new_variable_name/2
 
--spec new_variable_names(integer(), fun((integer()) -> atom()), set()) ->
+-spec new_variable_names(integer(), fun((integer()) -> atom()), sets:set(atom())) ->
 	[atom()].
 
 new_variable_names(N, F, S) when is_integer(N) ->
@@ -1359,8 +1357,6 @@ analyze_attribute(file, Node) ->
     analyze_file_attribute(Node);
 analyze_attribute(record, Node) ->
     analyze_record_attribute(Node);
-analyze_attribute(define, _Node) ->
-    define;
 analyze_attribute(spec, _Node) ->
     spec;
 analyze_attribute(_, Node) ->
@@ -2225,11 +2221,6 @@ module_name_to_atom(M) ->
     case erl_syntax:type(M) of
 	atom ->
 	    erl_syntax:atom_value(M);
-	qualified_name ->
-	    list_to_atom(packages:concat(
-			   [erl_syntax:atom_value(A)
-			    || A <- erl_syntax:qualified_name_segments(M)])
-			);
 	_ ->
 	    throw(syntax_error)
     end.

@@ -1,7 +1,7 @@
 #
 # %CopyrightBegin%
 #
-# Copyright Ericsson AB 2004-2010. All Rights Reserved.
+# Copyright Ericsson AB 2004-2013. All Rights Reserved.
 #
 # The contents of this file are subject to the Erlang Public License,
 # Version 1.1, (the "License"); you may not use this file except in
@@ -36,16 +36,23 @@ RELSYSDIR = $(RELEASE_PATH)/lib/ssh-$(VSN)
 # Common Macros
 # ----------------------------------------------------
 
+# Behaviour (api) modules are first so they are compiled when
+# the compiler reaches a callback module using them.
+BEHAVIOUR_MODULES= \
+	ssh_sftpd_file_api \
+        ssh_channel \
+	ssh_daemon_channel \
+	ssh_client_key_api \
+	ssh_server_key_api
+
 MODULES= \
 	ssh \
 	ssh_sup \
 	sshc_sup \
 	sshd_sup \
-        ssh_channel \
+	ssh_connection_sup \
 	ssh_connection \
 	ssh_connection_handler \
-	ssh_connection_manager \
-	ssh_connection_controler \
 	ssh_shell \
 	ssh_system_sup \
 	ssh_subsystem_sup \
@@ -56,27 +63,27 @@ MODULES= \
 	ssh_auth\
 	ssh_bits \
 	ssh_cli \
-	ssh_dsa \
 	ssh_file \
 	ssh_io \
 	ssh_math \
+	ssh_message \
 	ssh_no_io \
-	ssh_rsa \
 	ssh_sftp \
 	ssh_sftpd \
 	ssh_sftpd_file\
-	ssh_sftpd_file_api \
 	ssh_transport \
-	ssh_userreg \
 	ssh_xfer
 
 PUBLIC_HRL_FILES= ssh.hrl ssh_userauth.hrl ssh_xfer.hrl
 
-ERL_FILES= $(MODULES:%=%.erl) $(ASN_ERLS)
+ERL_FILES= \
+	$(MODULES:%=%.erl) \
+	$(BEHAVIOUR_MODULES:%=%.erl)
 
-ALL_MODULES= $(MODULES) $(ASN_MODULES)
 
-TARGET_FILES= $(ALL_MODULES:%=$(EBIN)/%.$(EMULATOR)) $(APP_TARGET) $(APPUP_TARGET)
+TARGET_FILES= $(MODULES:%=$(EBIN)/%.$(EMULATOR))
+
+BEHAVIOUR_TARGET_FILES= $(BEHAVIOUR_MODULES:%=$(EBIN)/%.$(EMULATOR))
 
 APP_FILE= ssh.app
 APPUP_FILE= ssh.appup
@@ -87,53 +94,36 @@ APP_TARGET= $(EBIN)/$(APP_FILE)
 APPUP_SRC= $(APPUP_FILE).src
 APPUP_TARGET= $(EBIN)/$(APPUP_FILE)
 
-ASN_MODULES = PKCS-1 DSS
-ASN_ASNS = $(ASN_MODULES:%=%.asn1)
-ASN_ERLS = $(ASN_MODULES:%=%.erl)
-ASN_HRLS = $(ASN_MODULES:%=%.hrl)
-ASN_DBS = $(ASN_MODULES:%=%.asn1db)
-ASN_TABLES = $(ASN_MODULES:%=%.table)
-
-ASN_FLAGS = -bber_bin +der +compact_bit_string +optimize +noobj +inline
-
-INTERNAL_HRL_FILES = $(ASN_HRLS) ssh_auth.hrl ssh_connect.hrl ssh_transport.hrl
+INTERNAL_HRL_FILES = ssh_auth.hrl ssh_connect.hrl ssh_transport.hrl
 
 # ----------------------------------------------------
 # FLAGS
 # ----------------------------------------------------
-ERL_COMPILE_FLAGS += -pa$(EBIN) 
+EXTRA_ERLC_FLAGS = +warn_unused_vars
+ERL_COMPILE_FLAGS += -I$(ERL_TOP)/lib/kernel/src \
+	-pz $(EBIN) \
+	-pz $(ERL_TOP)/lib/public_key/ebin \
+	$(EXTRA_ERLC_FLAGS)
+
 
 # ----------------------------------------------------
 # Targets
 # ----------------------------------------------------
 
-debug opt: $(TARGET_FILES)
+$(TARGET_FILES): $(BEHAVIOUR_TARGET_FILES)
 
-debug: ERLC_FLAGS += -Ddebug
+debug opt: $(TARGET_FILES) $(APP_TARGET) $(APPUP_TARGET)
 
 clean:
-	rm -f $(TARGET_FILES)
+	rm -f $(TARGET_FILES) $(APP_TARGET) $(APPUP_TARGET)
 	rm -f errs core *~
-	rm -f $(ASN_ERLS) $(ASN_HRLS) $(ASN_DBS)
 
-$(TARGET_FILES): ssh.hrl
+$(APP_TARGET):	$(APP_SRC) ../vsn.mk
+	$(vsn_verbose)sed -e 's;%VSN%;$(VSN);' $< > $@
 
-# $(EBIN)/ssh_sftpd_file.$(EMULATOR): ERLC_FLAGS += -pa$(EBIN)
-# $(EBIN)/ssh_sftpd_file.$(EMULATOR): $(EBIN)/ssh_sftpd_file_api.$(EMULATOR)
+$(APPUP_TARGET):	$(APPUP_SRC) ../vsn.mk
+	$(vsn_verbose)sed -e 's;%VSN%;$(VSN);' $< > $@
 
-$(APP_TARGET): $(APP_SRC) ../vsn.mk
-	sed -e 's;%VSN%;$(VSN);' $< > $@
-
-$(APPUP_TARGET): $(APPUP_SRC) ../vsn.mk
-	sed -e 's;%VSN%;$(VSN);' $< > $@
-
-%.hrl: %.asn1
-	erlc $(ASN_FLAGS) $<
-
-DSS.hrl DSS.erl: DSS.asn1
-PKCS-1.hrl PKCS-1.erl: PKCS-1.asn1
-
-$(EBIN)/ssh_file.$(EMULATOR): $(ASN_HRLS)
 
 docs:
 
@@ -143,12 +133,13 @@ docs:
 include $(ERL_TOP)/make/otp_release_targets.mk
 
 release_spec: opt
-	$(INSTALL_DIR) $(RELSYSDIR)/src
-	$(INSTALL_DATA) $(INTERNAL_HRL_FILES) $(ERL_FILES) $(RELSYSDIR)/src
-	$(INSTALL_DIR) $(RELSYSDIR)/ebin
-	$(INSTALL_DATA) $(TARGET_FILES) $(RELSYSDIR)/ebin
-	$(INSTALL_DIR) $(RELSYSDIR)/include
-	$(INSTALL_DATA) $(PUBLIC_HRL_FILES) $(RELSYSDIR)/include
+	$(INSTALL_DIR) "$(RELSYSDIR)/src"
+	$(INSTALL_DATA) $(INTERNAL_HRL_FILES) $(ERL_FILES) "$(RELSYSDIR)/src"
+	$(INSTALL_DIR) "$(RELSYSDIR)/ebin"
+	$(INSTALL_DATA) $(BEHAVIOUR_TARGET_FILES) $(TARGET_FILES) $(APP_TARGET) \
+	$(APPUP_TARGET) "$(RELSYSDIR)/ebin"
+	$(INSTALL_DIR) "$(RELSYSDIR)/include"
+	$(INSTALL_DATA) $(PUBLIC_HRL_FILES) "$(RELSYSDIR)/include"
 
 release_docs_spec:
 
