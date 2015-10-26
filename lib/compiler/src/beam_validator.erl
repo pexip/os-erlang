@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2004-2010. All Rights Reserved.
+%% Copyright Ericsson AB 2004-2014. All Rights Reserved.
 %%
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -62,7 +62,7 @@ files([F|Fs]) ->
     case file(F) of
 	ok -> ok;
 	{error,Es} -> 
-	    io:format("~p:~n~s~n", [F,format_error(Es)])
+	    io:format("~tp:~n~ts~n", [F,format_error(Es)])
     end,
     files(Fs);
 files([]) -> ok.
@@ -166,12 +166,17 @@ validate(Module, Fs) ->
     Ft = index_bs_start_match(Fs, []),
     validate_0(Module, Fs, Ft).
 
-index_bs_start_match([{function,_,_,Entry,Code}|Fs], Acc0) ->
+index_bs_start_match([{function,_,_,Entry,Code0}|Fs], Acc0) ->
+    Code = dropwhile(fun({label,L}) when L =:= Entry -> false;
+			(_) -> true
+		     end, Code0),
     case Code of
-	[_,_,{label,Entry}|Is] ->
+	[{label,Entry}|Is] ->
 	    Acc = index_bs_start_match_1(Is, Entry, Acc0),
 	    index_bs_start_match(Fs, Acc);
 	_ ->
+	    %% Something serious is wrong. Ignore it for now.
+	    %% It will be detected and diagnosed later.
 	    index_bs_start_match(Fs, Acc0)
     end;
 index_bs_start_match([], Acc) ->
@@ -208,9 +213,12 @@ validate_error_1(Error, Module, Name, Ar) ->
     {{Module,Name,Ar},
      {internal_error,'_',{Error,erlang:get_stacktrace()}}}.
 
+-type index() :: non_neg_integer().
+-type reg_tab() :: gb_trees:tree(index(), 'none' | {'value', _}).
+
 -record(st,				%Emulation state
-	{x=init_regs(0, term)        :: gb_tree(),	%x register info.
-	 y=init_regs(0, initialized) :: gb_tree(),	%y register info.
+	{x=init_regs(0, term)        :: reg_tab(),%x register info.
+	 y=init_regs(0, initialized) :: reg_tab(),%y register info.
 	 f=init_fregs(),                %
 	 numy=none,			%Number of y registers.
 	 h=0,				%Available heap size.
@@ -222,11 +230,16 @@ validate_error_1(Error, Module, Name, Ar) ->
 	 setelem=false			%Previous instruction was setelement/3.
 	}).
 
+-type label()        :: integer().
+-type label_set()    :: gb_sets:set(label()).
+-type branched_tab() :: gb_trees:tree(label(), #st{}).
+-type ft_tab()       :: gb_trees:tree().
+
 -record(vst,				%Validator state
 	{current=none              :: #st{} | 'none',	%Current state
-	 branched=gb_trees:empty() :: gb_tree(),	%States at jumps
-	 labels=gb_sets:empty()    :: gb_set(),		%All defined labels
-	 ft=gb_trees:empty()       :: gb_tree()         %Some other functions
+	 branched=gb_trees:empty() :: branched_tab(),	%States at jumps
+	 labels=gb_sets:empty()    :: label_set(),	%All defined labels
+	 ft=gb_trees:empty()       :: ft_tab()          %Some other functions
 	 		% in the module (those that start with bs_start_match2).
 	}).
 
@@ -292,6 +305,8 @@ labels(Is) ->
 
 labels_1([{label,L}|Is], R) ->
     labels_1(Is, [L|R]);
+labels_1([{line,_}|Is], R) ->
+    labels_1(Is, R);
 labels_1(Is, R) ->
     {lists:reverse(R),Is}.
 
@@ -433,6 +448,8 @@ valfun_1(remove_message, Vst) ->
     Vst;
 valfun_1({'%',_}, Vst) ->
     Vst;
+valfun_1({line,_}, Vst) ->
+    Vst;
 %% Exception generating calls
 valfun_1({call_ext,Live,Func}=I, Vst) ->
     case return_type(Func, Vst) of
@@ -521,7 +538,7 @@ valfun_2(I, #vst{current=#st{ct=[[Fail]|_]}}=Vst) when is_integer(Fail) ->
     %% Update branched state
     valfun_3(I, branch_state(Fail, Vst));
 valfun_2(_, _) ->
-    error(ambigous_catch_try_state).
+    error(ambiguous_catch_try_state).
 
 %% Handle the remaining floating point instructions here.
 %% Floating point.
@@ -565,6 +582,7 @@ valfun_4({apply,Live}, Vst) ->
 valfun_4({apply_last,Live,_}, Vst) ->
     tail_call(apply, Live+2, Vst);
 valfun_4({call_fun,Live}, Vst) ->
+    validate_src([{x,Live}], Vst),
     call('fun', Live+1, Vst);
 valfun_4({call,Live,Func}, Vst) ->
     call(Func, Live, Vst);
@@ -619,6 +637,7 @@ valfun_4({gc_bif,Op,{f,Fail},Live,Src,Dst}, #vst{current=St0}=Vst0) ->
     Type = bif_type(Op, Src, Vst),
     set_type_reg(Type, Dst, Vst);
 valfun_4(return, #vst{current=#st{numy=none}}=Vst) ->
+    assert_term({x,0}, Vst),
     kill_state(Vst);
 valfun_4(return, #vst{current=#st{numy=NumY}}) ->
     error({stack_frame,NumY});
@@ -640,7 +659,8 @@ valfun_4(send, Vst) ->
     call(send, 2, Vst);
 valfun_4({set_tuple_element,Src,Tuple,I}, Vst) ->
     assert_term(Src, Vst),
-    assert_type({tuple_element,I+1}, Tuple, Vst);
+    assert_type({tuple_element,I+1}, Tuple, Vst),
+    Vst;
 %% Match instructions.
 valfun_4({select_val,Src,{f,Fail},{list,Choices}}, Vst) ->
     assert_term(Src, Vst),
@@ -661,10 +681,20 @@ valfun_4({get_tuple_element,Src,I,Dst}, Vst) ->
 valfun_4({test,bs_start_match2,{f,Fail},Live,[Ctx,NeedSlots],Ctx}, Vst0) ->
     %% If source and destination registers are the same, match state
     %% is OK as input.
-    _ = get_move_term_type(Ctx, Vst0),
+    CtxType = get_move_term_type(Ctx, Vst0),
     verify_live(Live, Vst0),
     Vst1 = prune_x_regs(Live, Vst0),
-    Vst = branch_state(Fail, Vst1),
+    BranchVst = case CtxType of
+		    {match_context,_,_} ->
+			%% The failure branch will never be taken when Ctx
+			%% is a match context. Therefore, the type for Ctx
+			%% at the failure label must not be match_context
+			%% (or we could reject legal code).
+			set_type_reg(term, Ctx, Vst1);
+		    _ ->
+			Vst1
+		end,
+    Vst = branch_state(Fail, BranchVst),
     set_type_reg(bsm_match_state(NeedSlots), Ctx, Vst);
 valfun_4({test,bs_start_match2,{f,Fail},Live,[Src,Slots],Dst}, Vst0) ->
     assert_term(Src, Vst0),
@@ -748,6 +778,10 @@ valfun_4({test,is_nonempty_list,{f,Lbl},[Cons]}, Vst) ->
 valfun_4({test,test_arity,{f,Lbl},[Tuple,Sz]}, Vst) when is_integer(Sz) ->
     assert_type(tuple, Tuple, Vst),
     set_type_reg({tuple,Sz}, Tuple, branch_state(Lbl, Vst));
+valfun_4({test,has_map_fields,{f,Lbl},Src,{list,List}}, Vst) ->
+    validate_src([Src], Vst),
+    assert_strict_literal_termorder(List),
+    branch_state(Lbl, Vst);
 valfun_4({test,_Op,{f,Lbl},Src}, Vst) ->
     validate_src(Src, Vst),
     branch_state(Lbl, Vst);
@@ -764,15 +798,27 @@ valfun_4({bs_utf16_size,{f,Fail},A,Dst}, Vst) ->
 valfun_4({bs_bits_to_bytes,{f,Fail},Src,Dst}, Vst) ->
     assert_term(Src, Vst),
     set_type_reg({integer,[]}, Dst, branch_state(Fail, Vst));
-valfun_4({bs_init2,{f,Fail},_,Heap,Live,_,Dst}, Vst0) ->
+valfun_4({bs_init2,{f,Fail},Sz,Heap,Live,_,Dst}, Vst0) ->
     verify_live(Live, Vst0),
+    if
+	is_integer(Sz) ->
+	    ok;
+	true ->
+	    assert_term(Sz, Vst0)
+    end,
     Vst1 = heap_alloc(Heap, Vst0),
     Vst2 = branch_state(Fail, Vst1),
     Vst3 = prune_x_regs(Live, Vst2),
     Vst = bs_zero_bits(Vst3),
     set_type_reg(binary, Dst, Vst);
-valfun_4({bs_init_bits,{f,Fail},_,Heap,Live,_,Dst}, Vst0) ->
+valfun_4({bs_init_bits,{f,Fail},Sz,Heap,Live,_,Dst}, Vst0) ->
     verify_live(Live, Vst0),
+    if
+	is_integer(Sz) ->
+	    ok;
+	true ->
+	    assert_term(Sz, Vst0)
+    end,
     Vst1 = heap_alloc(Heap, Vst0),
     Vst2 = branch_state(Fail, Vst1),
     Vst3 = prune_x_regs(Live, Vst2),
@@ -832,8 +878,37 @@ valfun_4({bs_final,{f,Fail},Dst}, Vst0) ->
 valfun_4({bs_final2,Src,Dst}, Vst0) ->
     assert_term(Src, Vst0),
     set_type_reg(binary, Dst, Vst0);
+%% Map instructions.
+valfun_4({put_map_assoc,{f,Fail},Src,Dst,Live,{list,List}}, Vst) ->
+    verify_put_map(Fail, Src, Dst, Live, List, Vst);
+valfun_4({put_map_exact,{f,Fail},Src,Dst,Live,{list,List}}, Vst) ->
+    verify_put_map(Fail, Src, Dst, Live, List, Vst);
+valfun_4({get_map_elements,{f,Fail},Src,{list,List}}, Vst) ->
+    verify_get_map(Fail, Src, List, Vst);
 valfun_4(_, _) ->
     error(unknown_instruction).
+
+verify_get_map(Fail, Src, List, Vst0) ->
+    assert_term(Src, Vst0),
+    Vst1 = branch_state(Fail, Vst0),
+    Lits = mmap(fun(L,_R) -> [L] end, List),
+    assert_strict_literal_termorder(Lits),
+    verify_get_map_pair(List,Vst0,Vst1).
+
+verify_get_map_pair([],_,Vst) -> Vst;
+verify_get_map_pair([Src,Dst|Vs],Vst0,Vsti) ->
+    assert_term(Src, Vst0),
+    verify_get_map_pair(Vs,Vst0,set_type_reg(term,Dst,Vsti)).
+
+verify_put_map(Fail, Src, Dst, Live, List, Vst0) ->
+    verify_live(Live, Vst0),
+    verify_y_init(Vst0),
+    foreach(fun (Term) -> assert_term(Term, Vst0) end, List),
+    assert_term(Src, Vst0),
+    Vst1 = heap_alloc(0, Vst0),
+    Vst2 = branch_state(Fail, Vst1),
+    Vst = prune_x_regs(Live, Vst2),
+    set_type_reg(term, Dst, Vst).
 
 %%
 %% Common code for validating bs_get* instructions.
@@ -855,7 +930,7 @@ validate_bs_skip_utf(Fail, Ctx, Live, Vst0) ->
     branch_state(Fail, Vst).
 
 %%
-%% Special state handling for setelement/3 and the set_tuple_element/3 instruction.
+%% Special state handling for setelement/3 and set_tuple_element/3 instructions.
 %% A possibility for garbage collection must not occur between setelement/3 and
 %% set_tuple_element/3.
 %%
@@ -869,6 +944,8 @@ val_dsetel({call_ext,3,{extfunc,erlang,setelement,3}}, #vst{current=St}=Vst) ->
 val_dsetel({set_tuple_element,_,_,_}, #vst{current=#st{setelem=false}}) ->
     error(illegal_context_for_set_tuple_element);
 val_dsetel({set_tuple_element,_,_,_}, #vst{current=#st{setelem=true}}=Vst) ->
+    Vst;
+val_dsetel({line,_}, Vst) ->
     Vst;
 val_dsetel(_, #vst{current=#st{setelem=true}=St}=Vst) ->
     Vst#vst{current=St#st{setelem=false}};
@@ -1011,7 +1088,7 @@ float_op(Src, Dst, Vst0) ->
 
 assert_fls(Fls, Vst) ->
     case get_fls(Vst) of
-	Fls -> Vst;
+	Fls -> ok;
 	OtherFls -> error({bad_floating_point_state,OtherFls})
     end.
 
@@ -1042,6 +1119,39 @@ assert_freg_set({fr,Fr}=Freg, #vst{current=#st{f=Fregs}})
 	true -> error({uninitialized_reg,Freg})
     end;
 assert_freg_set(Fr, _) -> error({bad_source,Fr}).
+
+%%% Maps
+
+%% ensure that a list of literals has a strict
+%% ascending term order (also meaning unique literals)
+assert_strict_literal_termorder(Ls) ->
+    Vs = lists:map(fun (L) -> get_literal(L) end, Ls),
+    case check_strict_value_termorder(Vs) of
+	true ->  ok;
+	false -> error({not_strict_order, Ls})
+    end.
+
+%% usage:
+%% mmap(fun(A,B) -> [{A,B}] end, [1,2,3,4]),
+%% [{1,2},{3,4}]
+
+mmap(F,List) ->
+    {arity,Ar} = erlang:fun_info(F,arity),
+    mmap(F,Ar,List).
+mmap(_F,_,[]) -> [];
+mmap(F,Ar,List) ->
+    {Hd,Tl} = lists:split(Ar,List),
+    apply(F,Hd) ++ mmap(F,Ar,Tl).
+
+check_strict_value_termorder([]) -> true;
+check_strict_value_termorder([_]) -> true;
+check_strict_value_termorder([V1,V2]) ->
+    erts_internal:cmp_term(V1,V2) < 0;
+check_strict_value_termorder([V1,V2|Vs]) ->
+    case erts_internal:cmp_term(V1,V2) < 0 of
+	true -> check_strict_value_termorder([V2|Vs]);
+	false -> false
+    end.
 
 %%%
 %%% Binary matching.
@@ -1087,7 +1197,7 @@ bsm_match_state(Slots) ->
     {match_context,0,Slots}.
 
 bsm_validate_context(Reg, Vst) ->
-    bsm_get_context(Reg, Vst),
+    _ = bsm_get_context(Reg, Vst),
     ok.
 
 bsm_get_context({x,X}=Reg, #vst{current=#st{x=Xs}}=_Vst) when is_integer(X) ->
@@ -1100,7 +1210,7 @@ bsm_get_context(Reg, _) -> error({bad_source,Reg}).
 bsm_save(Reg, {atom,start}, Vst) ->
     %% Save point refering to where the match started.
     %% It is always valid. But don't forget to validate the context register.
-    bsm_get_context(Reg, Vst),
+    bsm_validate_context(Reg, Vst),
     Vst;
 bsm_save(Reg, SavePoint, Vst) ->
     case bsm_get_context(Reg, Vst) of
@@ -1113,7 +1223,7 @@ bsm_save(Reg, SavePoint, Vst) ->
 bsm_restore(Reg, {atom,start}, Vst) ->
     %% (Mostly) automatic save point refering to where the match started.
     %% It is always valid. But don't forget to validate the context register.
-    bsm_get_context(Reg, Vst),
+    bsm_validate_context(Reg, Vst),
     Vst;
 bsm_restore(Reg, SavePoint, Vst) ->
     case bsm_get_context(Reg, Vst) of
@@ -1278,9 +1388,9 @@ assert_term(Src, Vst) ->
 %% number		Integer or Float of unknown value
 %%
 
+
 assert_type(WantedType, Term, Vst) ->
-    assert_type(WantedType, get_term_type(Term, Vst)),
-    Vst.
+    assert_type(WantedType, get_term_type(Term, Vst)).
 
 assert_type(Correct, Correct) -> ok;
 assert_type(float, {float,_}) -> ok;
@@ -1293,7 +1403,6 @@ assert_type({tuple_element,I}, {tuple,Sz})
     ok;
 assert_type(Needed, Actual) ->
     error({bad_type,{needed,Needed},{actual,Actual}}).
-
 
 %% upgrade_tuple_type(NewTupleType, OldType) -> TupleType.
 %%  upgrade_tuple_type/2 is used when linear code finds out more and
@@ -1373,6 +1482,15 @@ get_term_type_1({y,Y}=Reg, #vst{current=#st{y=Ys}}) when is_integer(Y) ->
 	{value,Type} -> Type
     end;
 get_term_type_1(Src, _) -> error({bad_source,Src}).
+
+
+%% get_literal(Src) -> literal_value().
+get_literal(nil) -> [];
+get_literal({atom,A}) when is_atom(A) -> A;
+get_literal({float,F}) when is_float(F) -> F;
+get_literal({integer,I}) when is_integer(I) -> I;
+get_literal({literal,L}) -> L;
+get_literal(T) -> error({not_literal,T}).
 
 
 branch_arities([], _, #vst{}=Vst) -> Vst;

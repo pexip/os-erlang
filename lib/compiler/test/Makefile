@@ -10,6 +10,7 @@ MODULES= \
 	apply_SUITE \
 	beam_validator_SUITE \
 	beam_disasm_SUITE \
+	beam_except_SUITE \
 	bs_bincomp_SUITE \
 	bs_bit_binaries_SUITE \
 	bs_construct_SUITE \
@@ -25,11 +26,10 @@ MODULES= \
 	guard_SUITE \
 	inline_SUITE \
 	lc_SUITE \
+	map_SUITE \
 	match_SUITE \
 	misc_SUITE \
 	num_bif_SUITE \
-	pmod_SUITE \
-	parteval_SUITE \
 	receive_SUITE \
 	record_SUITE \
 	trycatch_SUITE \
@@ -39,6 +39,7 @@ MODULES= \
 NO_OPT= \
 	andor \
 	apply \
+	beam_except \
 	bs_construct \
         bs_match \
 	bs_utf \
@@ -47,6 +48,7 @@ NO_OPT= \
 	fun \
 	guard \
 	lc \
+	map \
 	match \
 	misc \
 	num_bif \
@@ -67,6 +69,7 @@ INLINE= \
 	fun \
 	guard \
 	lc \
+	map \
 	match \
 	misc \
 	num_bif \
@@ -75,6 +78,7 @@ INLINE= \
 
 CORE_MODULES = \
 	bs_shadowed_size_var \
+	unused_multiple_values_error \
 	nested_call_in_case
 
 
@@ -153,12 +157,12 @@ include $(ERL_TOP)/make/otp_release_targets.mk
 release_spec: opt
 
 release_tests_spec: make_emakefile
-	$(INSTALL_DIR) $(RELSYSDIR)
+	$(INSTALL_DIR) "$(RELSYSDIR)"
 	$(INSTALL_DATA) compiler.spec compiler.cover \
-		$(EMAKEFILE) $(ERL_FILES) $(CORE_FILES) $(RELSYSDIR)
+		$(EMAKEFILE) $(ERL_FILES) $(CORE_FILES) "$(RELSYSDIR)"
 	$(INSTALL_DATA) $(NO_OPT_ERL_FILES) $(POST_OPT_ERL_FILES) \
-		$(INLINE_ERL_FILES) $(RELSYSDIR)
-	chmod -R u+w $(RELSYSDIR)
-	@tar cf - *_SUITE_data | (cd $(RELSYSDIR); tar xf -)
+		$(INLINE_ERL_FILES) "$(RELSYSDIR)"
+	chmod -R u+w "$(RELSYSDIR)"
+	@tar cf - *_SUITE_data | (cd "$(RELSYSDIR)"; tar xf -)
 
 release_docs_spec:

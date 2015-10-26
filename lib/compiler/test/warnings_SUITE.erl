@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2003-2011. All Rights Reserved.
+%% Copyright Ericsson AB 2003-2013. All Rights Reserved.
 %%
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -37,7 +37,9 @@
 
 -export([pattern/1,pattern2/1,pattern3/1,pattern4/1,
 	 guard/1,bad_arith/1,bool_cases/1,bad_apply/1,
-         files/1,effect/1,bin_opt_info/1,bin_construction/1]).
+         files/1,effect/1,bin_opt_info/1,bin_construction/1,
+	 comprehensions/1,maps/1,redundant_boolean_clauses/1,
+	 latin1_fallback/1]).
 
 % Default timetrap timeout (set in init_per_testcase).
 -define(default_timeout, ?t:minutes(2)).
@@ -55,12 +57,14 @@ suite() -> [{ct_hooks,[ts_install_cth]}].
 
 all() -> 
     test_lib:recompile(?MODULE),
-    [pattern, pattern2, pattern3, pattern4, guard,
-     bad_arith, bool_cases, bad_apply, files, effect,
-     bin_opt_info, bin_construction].
+    [{group,p}].
 
 groups() -> 
-    [].
+    [{p,test_lib:parallel(),
+      [pattern,pattern2,pattern3,pattern4,guard,
+       bad_arith,bool_cases,bad_apply,files,effect,
+       bin_opt_info,bin_construction,comprehensions,maps,
+       redundant_boolean_clauses,latin1_fallback]}].
 
 init_per_suite(Config) ->
     Config.
@@ -116,6 +120,7 @@ pattern2(Config) when is_list(Config) ->
 	   Source,
 	   [nowarn_unused_vars],
 	   {warnings,[{2,sys_core_fold,{nomatch_shadow,1}},
+		      {4,sys_core_fold,no_clause_match},
 		      {5,sys_core_fold,nomatch_clause_type},
 		      {6,sys_core_fold,nomatch_clause_type}]}}],
     ?line [] = run(Config, Ts),
@@ -198,6 +203,8 @@ pattern4(Config) when is_list(Config) ->
 	   [nowarn_unused_vars],
 	   {warnings,
 	    [{9,sys_core_fold,no_clause_match},
+             {11,sys_core_fold,nomatch_shadow},
+             {15,sys_core_fold,nomatch_shadow},
 	     {18,sys_core_fold,no_clause_match},
 	     {23,sys_core_fold,no_clause_match},
 	     {33,sys_core_fold,no_clause_match}
@@ -388,6 +395,10 @@ effect(Config) when is_list(Config) ->
               	    <<X:8>>;
               	unused_fun ->
               	    fun() -> {ok,X} end;
+		unused_named_fun ->
+		    fun F(0) -> 1;
+                        F(N) -> N*F(N-1)
+                    end;
               	unused_atom ->
               	    ignore;				%no warning
               	unused_nil ->
@@ -482,8 +493,9 @@ effect(Config) when is_list(Config) ->
 		      {22,sys_core_fold,{no_effect,{erlang,is_integer,1}}},
 		      {24,sys_core_fold,useless_building},
 		      {26,sys_core_fold,useless_building},
-		      {32,sys_core_fold,{no_effect,{erlang,'=:=',2}}},
-		      {34,sys_core_fold,{no_effect,{erlang,get_cookie,0}}}]}}],
+		      {28,sys_core_fold,useless_building},
+		      {36,sys_core_fold,{no_effect,{erlang,'=:=',2}}},
+		      {38,sys_core_fold,{no_effect,{erlang,get_cookie,0}}}]}}],
     ?line [] = run(Config, Ts),
     ok.
 
@@ -535,6 +547,137 @@ bin_construction(Config) when is_list(Config) ->
     
     ok.
 
+comprehensions(Config) when is_list(Config) ->
+    Ts = [{tautologic_guards,
+           <<"
+             f() -> [ true || true ].
+             g() -> << <<1>> || true >>.
+           ">>,
+           [], []}],
+    run(Config, Ts),
+    ok.
+
+maps(Config) when is_list(Config) ->
+    Ts = [{bad_map,
+           <<"
+             t() ->
+                 case maybe_map of
+                     #{} -> ok;
+                     not_map -> error
+                 end.
+             x() ->
+                 case true of
+                     #{}  -> error;
+                     true -> ok
+                 end.
+           ">>,
+           [],
+           {warnings,[{3,sys_core_fold,no_clause_match},
+                      {9,sys_core_fold,nomatch_clause_type}]}},
+	   {bad_map_src1,
+           <<"
+             t() ->
+		 M = {a,[]},
+		 {'EXIT',{badarg,_}} = (catch(M#{ a => 1})),
+		 ok.
+           ">>,
+           [],
+	   {warnings,[{4,v3_kernel,bad_map}]}},
+	   {bad_map_src2,
+           <<"
+             t() ->
+		 M = id({a,[]}),
+		 {'EXIT',{badarg,_}} = (catch(M#{ a => 1})),
+		 ok.
+	     id(I) -> I.
+           ">>,
+	   [inline],
+	   {warnings,[{4,v3_kernel,bad_map}]}},
+	   {bad_map_src3,
+           <<"
+             t() ->
+		 {'EXIT',{badarg,_}} = (catch <<>>#{ a := 1}),
+		 ok.
+           ">>,
+           [],
+	   {warnings,[{3,v3_core,bad_map}]}},
+	   {bad_map_literal_key,
+           <<"
+             t() ->
+		 V = id(1),
+		 M = id(#{ <<$h,$i>> => V }),
+		 V = case M of
+		    #{ <<0:257>> := Val } -> Val;
+		    #{ <<$h,$i>> := Val } -> Val
+		 end,
+		 ok.
+	     id(I) -> I.
+           ">>,
+           [],
+	   {warnings,[{6,v3_core,nomatch}]}}],
+    run(Config, Ts),
+    ok.
+
+redundant_boolean_clauses(Config) when is_list(Config) ->
+    Ts = [{redundant_boolean_clauses,
+           <<"
+             t(X) ->
+                 case X == 0 of
+                     false -> no;
+                     false -> no;
+                     true -> yes
+                 end.
+           ">>,
+           [],
+           {warnings,[{5,sys_core_fold,nomatch_shadow}]}}],
+    run(Config, Ts),
+    ok.
+
+latin1_fallback(Conf) when is_list(Conf) ->
+    DataDir = ?privdir,
+    IncFile = filename:join(DataDir, "include_me.hrl"),
+    file:write_file(IncFile, <<"%% ",246," in include file\n">>),
+    Ts1 = [{latin1_fallback1,
+	    %% Test that the compiler fall backs to latin-1 with
+	    %% a warning if a file has no encoding and does not
+	    %% contain correct UTF-8 sequences.
+	    <<"%% Bj",246,"rn
+              t(_) -> \"",246,"\";
+              t(x) -> ok.
+              ">>,
+	    [],
+	    {warnings,[{1,compile,reparsing_invalid_unicode},
+		       {3,sys_core_fold,{nomatch_shadow,2}}]}}],
+    [] = run(Conf, Ts1),
+
+    Ts2 = [{latin1_fallback2,
+	    %% Test that the compiler fall backs to latin-1 with
+	    %% a warning if a file has no encoding and does not
+	    %% contain correct UTF-8 sequences.
+	    <<"
+
+	      -include(\"include_me.hrl\").
+              ">>,
+	    [],
+	    {warnings,[{1,compile,reparsing_invalid_unicode}]}
+	   }],
+    [] = run(Conf, Ts2),
+
+    Ts3 = [{latin1_fallback3,
+	    %% Test that the compiler fall backs to latin-1 with
+	    %% a warning if a file has no encoding and does not
+	    %% contain correct UTF-8 sequences.
+	    <<"-ifdef(NOTDEFINED).
+              t(_) -> \"",246,"\";
+              t(x) -> ok.
+              -endif.
+              ">>,
+	    [],
+	    {warnings,[{2,compile,reparsing_invalid_unicode}]}}],
+    [] = run(Conf, Ts3),
+
+    ok.
+
 %%%
 %%% End of test cases.
 %%%
@@ -556,9 +699,10 @@ run(Config, Tests) ->
 %% Compiles a test module and returns the list of errors and warnings.
 
 run_test(Conf, Test0, Warnings) ->
-    Filename = 'warnings_test.erl',
+    Mod = "warnings_"++test_lib:uniq(),
+    Filename = Mod ++ ".erl",
     ?line DataDir = ?privdir,
-    ?line Test = ["-module(warnings_test). ", Test0],
+    Test = ["-module(", Mod, "). ", Test0],
     ?line File = filename:join(DataDir, Filename),
     ?line Opts = [binary,export_all,return|Warnings],
     ?line ok = file:write_file(File, Test),

@@ -1,7 +1,7 @@
 /*
  * %CopyrightBegin%
  *
- * Copyright Ericsson AB 2006-2011. All Rights Reserved.
+ * Copyright Ericsson AB 2006-2013. All Rights Reserved.
  *
  * The contents of this file are subject to the Erlang Public License,
  * Version 1.1, (the "License"); you may not use this file except in
@@ -25,6 +25,7 @@
 #  include <windows.h>
 #endif
 
+#include "ethread_inline.h"
 #include "erl_misc_utils.h"
 
 #if defined(__WIN32__)
@@ -124,6 +125,12 @@
 #include <sys/sysctl.h>
 #endif
 
+/* Simplify include for static functions */
+
+#if defined(__linux__) || defined(HAVE_KSTAT) || defined(__WIN32__) || defined(__FreeBSD__)
+#  define ERTS_CPU_TOPOLOGY_ENABLED (1)
+#endif
+
 static int read_topology(erts_cpu_info_t *cpuinfo);
 
 #if defined(ERTS_HAVE_MISC_UTIL_AFFINITY_MASK__)
@@ -152,6 +159,8 @@ erts_milli_sleep(long ms)
     if (ms > 0) {
 #ifdef __WIN32__
 	Sleep((DWORD) ms);
+#elif defined(__OSE__)
+	delay(ms);
 #else
 	struct timeval tv;
 	tv.tv_sec = ms / 1000;
@@ -183,10 +192,11 @@ struct erts_cpu_info_t_ {
 
 #if defined(__WIN32__)
 
-static __forceinline int
+static ETHR_FORCE_INLINE int
 get_proc_affinity(erts_cpu_info_t *cpuinfo, cpu_set_t *cpuset)
 {
-    DWORD pamask, samask;
+    DWORD_PTR pamask;
+    DWORD_PTR samask;
     if (GetProcessAffinityMask(GetCurrentProcess(), &pamask, &samask)) {
 	*cpuset = (cpu_set_t) pamask;
 	return 0;
@@ -197,7 +207,7 @@ get_proc_affinity(erts_cpu_info_t *cpuinfo, cpu_set_t *cpuset)
     }
 }
 
-static __forceinline int
+static ETHR_FORCE_INLINE int
 set_thr_affinity(cpu_set_t *set)
 {
     if (*set == (cpu_set_t) 0)
@@ -309,6 +319,10 @@ erts_cpu_info_update(erts_cpu_info_t *cpuinfo)
 	    online = 0;
 #endif
     }
+#elif defined(__OSE__)
+    online = ose_num_cpus();
+    configured = ose_num_cpus();
+    available = ose_num_cpus();
 #endif
 
     if (online > configured)
@@ -669,6 +683,7 @@ erts_unbind_from_cpu_str(char *str)
 }
 
 
+#if defined(ERTS_CPU_TOPOLOGY_ENABLED)
 static int
 pn_cmp(const void *vx, const void *vy)
 {
@@ -727,7 +742,7 @@ adjust_processor_nodes(erts_cpu_info_t *cpuinfo, int no_nodes)
 
 	prev = NULL;
 	this = &cpuinfo->topology[0];
-	last = &cpuinfo->topology[cpuinfo->configured-1];
+	last = &cpuinfo->topology[cpuinfo->topology_size-1];
 	while (1) {
 	    if (processor == this->processor) {
 		if (node != this->node)
@@ -759,6 +774,7 @@ adjust_processor_nodes(erts_cpu_info_t *cpuinfo, int no_nodes)
 	}
     }
 }
+#endif
 
 
 #ifdef __linux__
@@ -834,8 +850,8 @@ read_topology(erts_cpu_info_t *cpuinfo)
     ix = -1;
 
     if (realpath(ERTS_SYS_NODE_PATH, npath)) {
-	got_nodes = 1;
 	ndir = opendir(npath);
+	got_nodes = (ndir != NULL);
     }
 
     do {
@@ -939,7 +955,7 @@ read_topology(erts_cpu_info_t *cpuinfo)
 
 	if (res > 1) {
 	    prev = this++;
-	    last = &cpuinfo->topology[cpuinfo->configured-1];
+	    last = &cpuinfo->topology[cpuinfo->topology_size-1];
 
 	    while (1) {
 		this->thread = ((this->node == prev->node
@@ -1094,7 +1110,7 @@ read_topology(erts_cpu_info_t *cpuinfo)
 
 	if (res > 1) {
 	    prev = this++;
-	    last = &cpuinfo->topology[cpuinfo->configured-1];
+	    last = &cpuinfo->topology[cpuinfo->topology_size-1];
 
 	    while (1) {
 		this->thread = ((this->node == prev->node
@@ -1142,7 +1158,7 @@ read_topology(erts_cpu_info_t *cpuinfo)
 #define ERTS_MU_RELATION_CACHE                2 /* RelationCache */
 #define ERTS_MU_RELATION_PROCESSOR_PACKAGE    3 /* RelationProcessorPackage */
 
-static __forceinline int
+static ETHR_FORCE_INLINE int
 rel_cmp_val(int r)
 {
     switch (r) {

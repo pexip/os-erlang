@@ -1,7 +1,7 @@
 /*
  * %CopyrightBegin%
  *
- * Copyright Ericsson AB 2008-2010. All Rights Reserved.
+ * Copyright Ericsson AB 2008-2013. All Rights Reserved.
  *
  * The contents of this file are subject to the Erlang Public License,
  * Version 1.1, (the "License"); you may not use this file except in
@@ -42,16 +42,9 @@ static Export chksum_md5_2_exp;
 void erts_init_bif_chksum(void)
 {
     /* Non visual BIF to trap to. */
-    memset(&chksum_md5_2_exp, 0, sizeof(Export));
-    chksum_md5_2_exp.address = 
-	&chksum_md5_2_exp.code[3];
-    chksum_md5_2_exp.code[0] = am_erlang;
-    chksum_md5_2_exp.code[1] = am_atom_put("md5_trap",8);
-    chksum_md5_2_exp.code[2] = 2;
-    chksum_md5_2_exp.code[3] =
-	(BeamInstr) em_apply_bif;
-    chksum_md5_2_exp.code[4] = 
-	(BeamInstr) &md5_2;
+    erts_init_trap_export(&chksum_md5_2_exp,
+			  am_erlang, am_atom_put("md5_trap",8), 2,
+			  &md5_2);
 }
     
 

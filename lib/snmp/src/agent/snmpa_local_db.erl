@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %% 
-%% Copyright Ericsson AB 1996-2009. All Rights Reserved.
+%% Copyright Ericsson AB 1996-2014. All Rights Reserved.
 %% 
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -191,6 +191,12 @@ dets_open(DbDir, DbInitError, Opts) ->
 		    end
 	    end;
 	_ ->
+	    case DbInitError of
+		create_db_and_dir ->
+		    ok = filelib:ensure_dir(Filename);
+		_ ->
+		    ok
+	    end,
 	    case do_dets_open(Name, Filename, Opts) of
 		{ok, Dets} ->
 		    ?vdebug("dets open done",[]),
@@ -486,7 +492,11 @@ handle_call({match, Name, Db, Pattern}, _From, State) ->
     L1 = match(Db, Name, Pattern, State),
     {reply, lists:delete([undef], L1), State};
 
-handle_call({backup, BackupDir}, From, #state{dets = Dets} = State) ->
+%% This check (that there is no backup already in progress) is also 
+%% done in the master agent process, but just in case a user issues 
+%% a backup call to this process directly, we add a similar check here. 
+handle_call({backup, BackupDir}, From, 
+	    #state{backup = undefined, dets = Dets} = State) ->
     ?vlog("backup: ~p",[BackupDir]),
     Pid = self(),
     V   = get(verbosity),
@@ -510,6 +520,10 @@ handle_call({backup, BackupDir}, From, #state{dets = Dets} = State) ->
 	Error ->
 	    {reply, Error, State}
     end;
+
+handle_call({backup, _BackupDir}, _From, #state{backup = Backup} = S) ->
+    ?vinfo("backup already in progress: ~p", [Backup]),
+    {reply, {error, backup_in_progress}, S};
 
 handle_call(dump, _From, #state{dets = Dets} = State) ->
     ?vlog("dump",[]),
@@ -575,7 +589,7 @@ handle_cast({variable_inc, Name, Db, N}, State) ->
 	    {value, Val} -> Val;
 	    _ -> 0 
 	end,
-    insert(Db, Name, M+N rem 4294967296, State),
+    insert(Db, Name, (M+N) rem 4294967296, State),
     {noreply, State};
     
 handle_cast({verbosity,Verbosity}, State) ->
@@ -997,6 +1011,10 @@ table_construct_row(Name, RowIndex, Status, Cols) ->
 		defvals = Defs, status_col = StatusCol,
 		first_own_index = FirstOwnIndex, not_accessible = NoAccs} =
 	snmp_generic:table_info(Name),
+    ?vtrace(
+       "table_construct_row Indexes: ~p~n"
+       "    RowIndex: ~p",
+       [Indexes, RowIndex]),
     Keys = snmp_generic:split_index_to_keys(Indexes, RowIndex),
     OwnKeys = snmp_generic:get_own_indexes(FirstOwnIndex, Keys),
     Row = OwnKeys ++ snmp_generic:table_create_rest(length(OwnKeys) + 1,
@@ -1110,7 +1128,7 @@ table_func(is_set_ok, RowIndex, Cols, NameDb) ->
 table_func(set, RowIndex, Cols, NameDb) ->
     snmp_generic:table_set_row(NameDb,
 			       nofunc,
-			       {snmp_generic, table_try_make_consistent},
+			       fun snmp_generic:table_try_make_consistent/3,
 			       RowIndex,
 			       Cols);
 

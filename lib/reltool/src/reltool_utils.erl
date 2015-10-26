@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2009-2010. All Rights Reserved.
+%% Copyright Ericsson AB 2009-2013. All Rights Reserved.
 %%
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -22,15 +22,17 @@
 -export([root_dir/0, erl_libs/0, lib_dirs/1,
 	 split_app_name/1, prim_consult/1,
 	 default_rels/0, choose_default/3,
+	 normalize_dir/1,
 
-	 assign_image_list/1, get_latest_resize/1,
+	 assign_image_list/1, get_latest_resize/1, wait_for_stop_motion/2,
 	 mod_conds/0, list_to_mod_cond/1, mod_cond_to_index/1,
 	 incl_conds/0, list_to_incl_cond/1, incl_cond_to_index/1, elem_to_index/2,
 	 app_dir_test/2, split_app_dir/1,
 	 get_item/1, get_items/1, get_selected_items/3,
 	 select_items/3, select_item/2,
+	 get_column_width/1,
 
-	 safe_keysearch/5, print/4, return_first_error/2, add_warning/2,
+	 safe_keysearch/5, print/4, add_warning/3,
 
 	 create_dir/1, list_dir/1, read_file_info/1,
 	 write_file_info/2, read_file/1, write_file/2,
@@ -86,10 +88,25 @@ split_app_name(Name) ->
 	    {list_to_atom(Name), ""}
     end.
 
+
+normalize_dir(RelDir) ->
+    Tokens = filename:split(filename:absname(RelDir)),
+    filename:join(lists:reverse(normalize_dir(Tokens, []))).
+
+normalize_dir([".."|Dirs], [_Dir|Path]) ->
+    normalize_dir(Dirs, Path);
+normalize_dir(["."|Dirs], Path) ->
+    normalize_dir(Dirs, Path);
+normalize_dir([Dir|Dirs], Path) ->
+    normalize_dir(Dirs, [Dir|Path]);
+normalize_dir([], Path) ->
+    Path.
+
+
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
 prim_consult(Bin) when is_binary(Bin) ->
-    case erl_scan:string(binary_to_list(Bin)) of
+    case erl_scan:string(unicode:characters_to_list(Bin,encoding(Bin))) of
 	{ok, Tokens, _EndLine} ->
 	    prim_parse(Tokens, []);
 	{error, {_ErrorLine, Module, Reason}, _EndLine} ->
@@ -101,6 +118,14 @@ prim_consult(FullName) when is_list(FullName) ->
 	    prim_consult(Bin);
         error ->
             {error, file:format_error(enoent)}
+    end.
+
+encoding(Bin) when is_binary(Bin) ->
+    case epp:read_encoding_from_binary(Bin) of
+	none ->
+	    epp:default_encoding();
+	E ->
+	    E
     end.
 
 prim_parse(Tokens, Acc) ->
@@ -126,18 +151,14 @@ prim_parse(Tokens, Acc) ->
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
 default_rels() ->
-    %%Kernel = #rel_app{name = kernel, incl_apps = []},
-    %%Stdlib = #rel_app{name = stdlib, incl_apps = []},
-    Sasl = #rel_app{name = sasl,   incl_apps = []},
+    %% kernel and stdlib are added automatically in every release
     [
      #rel{name = ?DEFAULT_REL_NAME,
 	  vsn = "1.0",
 	  rel_apps = []},
-	  %%rel_apps = [Kernel, Stdlib]},
      #rel{name = "start_sasl",
 	  vsn = "1.0",
-	  rel_apps = [Sasl]}
-	  %%rel_apps = [Kernel, Sasl, Stdlib]}
+	  rel_apps = [#rel_app{name = sasl}]}
     ].
 
 choose_default(Tag, Profile, InclDefs)
@@ -187,6 +208,16 @@ get_latest_resize(#wx{obj = ObjRef, event = #wxSize{}} = Wx) ->
 	    get_latest_resize(Wx2)
     after 10 ->
 	    Wx
+    end.
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+wait_for_stop_motion(ObjRef, {_,_}=Pos) ->
+    receive
+	#wx{obj = ObjRef, event = #wxMouse{type = motion, x=X, y=Y}} ->
+	    wait_for_stop_motion(ObjRef, {X,Y})
+    after 100 ->
+	    Pos
     end.
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -249,7 +280,7 @@ app_dir_test(Dir1, Dir2) ->
 	Name1 > Name2 -> false;
 	Vsn1 < Vsn2 -> false;
 	Vsn1 > Vsn2 -> true;
-	Parent1 < Parent2 -> true;
+	Parent1 =< Parent2 -> true;
 	true -> false
     end.
 
@@ -377,10 +408,30 @@ select_item(ListCtrl, [{ItemNo, Text} | Items]) ->
 select_item(_ListCtrl, []) ->
     ok.
 
+get_column_width(ListCtrl) ->
+    wx:batch(fun() ->
+		     {Total, _} = wxWindow:getClientSize(ListCtrl),
+		     Total - scroll_size(ListCtrl)
+	     end).
+
+scroll_size(ObjRef) ->
+    case os:type() of
+	{win32, nt} -> 0;
+	{unix, darwin} ->
+	    %% I can't figure out is there is a visible scrollbar
+	    %% Always make room for it
+	    wxSystemSettings:getMetric(?wxSYS_VSCROLL_X);
+	_ ->
+	    case wxWindow:hasScrollbar(ObjRef, ?wxVERTICAL) of
+		true -> wxSystemSettings:getMetric(?wxSYS_VSCROLL_X);
+		false -> 0
+	    end
+    end.
+
 safe_keysearch(Key, Pos, List, Mod, Line) ->
     case lists:keysearch(Key, Pos, List) of
         false ->
-            io:format("~p(~p): lists:keysearch(~p, ~p, ~p) -> false\n",
+            io:format("~w(~w): lists:keysearch(~p, ~w, ~p) -> false\n",
                       [Mod, Line, Key, Pos, List]),
             erlang:error({Mod, Line, lists, keysearch, [Key, Pos, List]});
         {value, Val} ->
@@ -392,31 +443,13 @@ print(X, X, Format, Args) ->
 print(_, _, _, _) ->
     ok.
 
-%% -define(SAFE(M,F,A), safe(M, F, A, ?MODULE, ?LINE)).
-%%
-%% safe(M, F, A, Mod, Line) ->
-%%     case catch apply(M, F, A) of
-%%      {'EXIT', Reason} ->
-%%          io:format("~p(~p): ~p:~p~p -> ~p\n", [Mod, Line, M, F, A, Reason]),
-%%          timer:sleep(infinity);
-%%      Res ->
-%%          Res
-%%     end.
-
-return_first_error(Status, NewError) when is_list(NewError) ->
-    case Status of
-	{ok, _Warnings} ->
-	    {error, NewError};
-	{error, OldError} ->
-	    {error, OldError}
-    end.
-
-add_warning(Status, Warning) ->
-    case Status of
-	{ok, Warnings} ->
-	    {ok, [Warning | Warnings]};
-	{error, Error} ->
-	    {error, Error}
+add_warning(Format, Args, {ok,Warnings}) ->
+    Warning = lists:flatten(io_lib:format(Format,Args)),
+    case lists:member(Warning,Warnings) of
+	true ->
+	    {ok,Warnings};
+	false ->
+	    {ok,[Warning|Warnings]}
     end.
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -430,7 +463,7 @@ create_dir(Dir) ->
             ok;
         {error, Reason} ->
             Text = file:format_error(Reason),
-            throw_error("create dir ~s: ~s", [Dir, Text])
+            throw_error("create dir ~ts: ~ts", [Dir, Text])
     end.
 
 list_dir(Dir) ->
@@ -439,7 +472,7 @@ list_dir(Dir) ->
 	    Files;
         error ->
             Text = file:format_error(enoent),
-            throw_error("list dir ~s: ~s", [Dir, Text])
+            throw_error("list dir ~ts: ~ts", [Dir, Text])
     end.
 
 read_file_info(File) ->
@@ -448,7 +481,7 @@ read_file_info(File) ->
 	    Info;
         {error, Reason} ->
             Text = file:format_error(Reason),
-            throw_error("read file info ~s: ~s", [File, Text])
+            throw_error("read file info ~ts: ~ts", [File, Text])
     end.
 
 write_file_info(File, Info) ->
@@ -457,7 +490,7 @@ write_file_info(File, Info) ->
 	    ok;
         {error, Reason} ->
             Text = file:format_error(Reason),
-            throw_error("write file info ~s: ~s", [File, Text])
+            throw_error("write file info ~ts: ~ts", [File, Text])
     end.
 
 read_file(File) ->
@@ -466,7 +499,7 @@ read_file(File) ->
 	    Bin;
         {error, Reason} ->
             Text = file:format_error(Reason),
-            throw_error("read file ~s: ~s", [File, Text])
+            throw_error("read file ~ts: ~ts", [File, Text])
     end.
 
 write_file(File, IoList) ->
@@ -475,7 +508,7 @@ write_file(File, IoList) ->
 	    ok;
         {error, Reason} ->
             Text = file:format_error(Reason),
-            throw_error("write file ~s: ~s", [File, Text])
+            throw_error("write file ~ts: ~ts", [File, Text])
     end.
 
 recursive_delete(Dir) ->
@@ -491,7 +524,7 @@ recursive_delete(Dir) ->
 		    ok;
 		{error, Reason} ->
 		    Text = file:format_error(Reason),
-		    throw_error("delete file ~s: ~s\n", [Dir, Text])
+		    throw_error("delete file ~ts: ~ts\n", [Dir, Text])
 	    end;
 	false ->
             delete(Dir, regular)
@@ -505,7 +538,7 @@ delete(File, Type) ->
             ok;
         {error, Reason} ->
             Text = file:format_error(Reason),
-            throw_error("delete file ~s: ~s\n", [File, Text])
+            throw_error("delete file ~ts: ~ts\n", [File, Text])
     end.
 
 do_delete(File, regular) ->
@@ -539,16 +572,16 @@ copy_file(From, To) ->
 		    FromMode = FromInfo#file_info.mode,
 		    ToMode = ToInfo#file_info.mode,
 		    ToMode2 = FromMode bor ToMode,
-		    FileInfo = FromInfo#file_info{mode = ToMode2},
+		    FileInfo = ToInfo#file_info{mode = ToMode2},
 		    write_file_info(To, FileInfo),
 		    ok;
 		{error, Reason} ->
 		    Text = file:format_error(Reason),
-		    throw_error("copy file ~s -> ~s: ~s\n", [From, To, Text])
+		    throw_error("copy file ~ts -> ~ts: ~ts\n", [From, To, Text])
 	    end;
 	error ->
 	    Text = file:format_error(enoent),
-	    throw_error("copy file ~s -> ~s: ~s\n", [From, To, Text])
+	    throw_error("copy file ~ts -> ~ts: ~ts\n", [From, To, Text])
     end.
 
 throw_error(Format, Args) ->
@@ -556,18 +589,17 @@ throw_error(Format, Args) ->
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
+decode_regexps(Key, Regexps, undefined) ->
+    decode_regexps(Key, Regexps, []);
 decode_regexps(Key, {add, Regexps}, Old) when is_list(Regexps) ->
     do_decode_regexps(Key, Regexps, Old);
 decode_regexps(_Key, {del, Regexps}, Old)  when is_list(Regexps) ->
     [Re || Re <- Old, not lists:member(Re#regexp.source, Regexps)];
 decode_regexps(Key, Regexps, _Old) when is_list(Regexps) ->
-    do_decode_regexps(Key, Regexps, []);
-decode_regexps(Key, Regexps, _Old) when is_list(Regexps) ->
-    Text = lists:flatten(io_lib:format("~p", [{Key, Regexps}])),
-    throw({error, "Illegal option: " ++ Text}).
+    do_decode_regexps(Key, Regexps, []).
 
 do_decode_regexps(Key, [Regexp | Regexps], Acc) ->
-    case catch re:compile(Regexp, []) of
+    case catch re:compile(Regexp, [unicode]) of
         {ok, MP} ->
             do_decode_regexps(Key,
 			      Regexps,

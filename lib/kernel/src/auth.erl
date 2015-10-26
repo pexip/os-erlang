@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 1996-2011. All Rights Reserved.
+%% Copyright Ericsson AB 1996-2013. All Rights Reserved.
 %%
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -324,7 +324,7 @@ read_cookie(Name, Size) ->
 	{ok, File} ->
 	    case file:read(File, Size) of
 		{ok, List} ->
-		    file:close(File),
+		    ok = file:close(File),
 		    check_cookie(List, []);
 		{error, Reason} ->
 		    make_error(Name, Reason)
@@ -376,18 +376,22 @@ create_cookie(Name) ->
     case file:open(Name, [write, raw]) of
 	{ok, File} ->
 	    R1 = file:write(File, Cookie),
-	    file:close(File),
+	    ok = file:close(File),
 	    R2 = file:raw_write_file_info(Name, make_info(Name)),
 	    case {R1, R2} of
 		{ok, ok} ->
 		    ok;
-		{{error,_Reason}, _} ->
-		    {error, "Failed to create cookie file"};
+		{{error,Reason}, _} ->
+		    {error,
+		     lists:flatten(
+		       io_lib:format("Failed to write to cookie file '~ts': ~p", [Name, Reason]))};
 		{ok, {error, Reason}} ->
 		    {error, "Failed to change mode: " ++ atom_to_list(Reason)}
 	    end;
-	{error,_Reason} ->
-	    {error, "Failed to create cookie file"}
+	{error,Reason} ->
+	    {error,
+	     lists:flatten(
+	       io_lib:format("Failed to create cookie file '~ts': ~p", [Name, Reason]))}
     end.
 
 random_cookie(0, _, Result) ->

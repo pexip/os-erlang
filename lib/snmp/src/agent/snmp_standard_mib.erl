@@ -1,7 +1,7 @@
 %% 
 %% %CopyrightBegin%
 %% 
-%% Copyright Ericsson AB 1996-2010. All Rights Reserved.
+%% Copyright Ericsson AB 1996-2014. All Rights Reserved.
 %% 
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -143,19 +143,37 @@ do_reconfigure(Dir) ->
 %% Func: read_standard/1
 %% Args: Dir is the directory with trailing dir_separator where
 %%       the configuration files can be found.
-%% Purpose: Reads th standard configuration file.
+%% Purpose: Reads the standard configuration file.
 %% Returns: A list of standard variables
 %% Fails: If an error occurs, the process will die with Reason
 %%        configuration_error.
+%%        This file is mandatory, as it contains mandatory 
+%%        config options for which there are no default values. 
 %%-----------------------------------------------------------------
 read_standard(Dir) ->
     ?vdebug("check standard config file",[]),
-    Gen    = fun(_) -> ok end,
-    Filter = fun(Standard) -> sort_standard(Standard) end,
-    Check  = fun(Entry) -> check_standard(Entry) end,
+    FileName = "standard.conf",
+    Gen =
+	fun (D, Reason) ->
+		throw(
+		  {error,
+		   {failed_reading_config_file,
+		    D, FileName, list_dir(Dir), Reason}})
+	end,
+    Order  = fun snmp_conf:no_order/2,
+    Check  = fun (Entry, State) -> {check_standard(Entry), State} end,
+    Filter = fun sort_standard/1,
     [Standard] = 
-	snmp_conf:read_files(Dir, [{Gen, Filter, Check, "standard.conf"}]), 
+	snmp_conf:read_files(Dir, [{FileName, Gen, Order, Check, Filter}]),
     Standard.
+
+list_dir(Dir) ->
+    case file:list_dir(Dir) of
+	{ok, Files} ->
+	    Files;
+	Error ->
+	    Error
+    end.
 
 
 %%-----------------------------------------------------------------
@@ -548,6 +566,7 @@ snmp_set_serial_no(set, NewVal) ->
     snmp_generic:variable_func(set, (NewVal + 1) rem 2147483648,
 			       {snmpSetSerialNo, volatile}).
 
+
 %%-----------------------------------------------------------------
 %% This is the instrumentation function for sysOrTable
 %%-----------------------------------------------------------------
@@ -588,4 +607,4 @@ error(Reason) ->
     throw({error, Reason}).
 
 config_err(F, A) ->
-    snmpa_error:config_err("[STANDARD-MIB]: " ++ F, A).
+    snmpa_error:config_err("[STANDARD-MIB] " ++ F, A).

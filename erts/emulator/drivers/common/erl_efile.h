@@ -1,7 +1,7 @@
 /*
  * %CopyrightBegin%
  *
- * Copyright Ericsson AB 1997-2010. All Rights Reserved.
+ * Copyright Ericsson AB 1997-2013. All Rights Reserved.
  *
  * The contents of this file are subject to the Erlang Public License,
  * Version 1.1, (the "License"); you may not use this file except in
@@ -34,6 +34,7 @@
 #define EFILE_COMPRESSED 	8
 #define EFILE_MODE_EXCL        16
 #define EFILE_NO_TRUNCATE      32 /* Special for reopening on VxWorks */
+#define EFILE_MODE_SYNC        64
 
 /*
  * Seek modes for efile_seek().
@@ -67,6 +68,11 @@
 #define FILENAMES_16BIT 1
 #endif
 
+/* We use sendfilev if it exist on solaris */
+#if !defined(HAVE_SENDFILE) && defined(HAVE_SENDFILEV)
+#define HAVE_SENDFILE
+#endif
+
 /*
  * An handle to an open directory.  To be cast to the correct type
  * in the system-dependent directory functions.
@@ -81,19 +87,6 @@ typedef struct _Efile_error {
     int posix_errno;		/* Posix error number, as in <errno.h>. */
     int os_errno;		/* Os-dependent error number (not used). */
 } Efile_error;
-
-/*
- * This structure contains date and time.
- */
-typedef struct _Efile_time {
-    unsigned year;		/* (4 digits). */
-    unsigned month;		/* (1..12). */
-    unsigned day;		/* (1..31). */
-    unsigned hour;		/* (0..23). */
-    unsigned minute;		/* (0..59). */
-    unsigned second;		/* (0..59). */
-} Efile_time;
-
 
 /*
  * Describes what is returned by file:file_info/1.
@@ -111,17 +104,30 @@ typedef struct _Efile_info {
     Uint32 inode;		/* Inode number. */
     Uint32 uid;			/* User id of owner. */
     Uint32 gid;			/* Group id of owner. */
-    Efile_time accessTime;	/* Last time the file was accessed. */
-    Efile_time modifyTime;	/* Last time the file was modified. */
-    Efile_time cTime;		/* Creation time (Windows) or last
+    time_t accessTime;		/* Last time the file was accessed. */
+    time_t modifyTime;		/* Last time the file was modified. */
+    time_t cTime;		/* Creation time (Windows) or last
 				 * inode change (Unix).
 				 */
 } Efile_info;
 
+
+#ifdef HAVE_SENDFILE
+/*
+ * Describes the structure of headers/trailers for sendfile
+ */
+struct t_sendfile_hdtl {
+    SysIOVec *headers;
+    int hdr_cnt;
+    SysIOVec *trailers;
+    int trl_cnt;
+};
+#endif /* HAVE_SENDFILE */
+
 /*
  * Functions.
  */
-
+int efile_init(void);
 int efile_mkdir(Efile_error* errInfo, char* name);
 int efile_rmdir(Efile_error* errInfo, char* name);
 int efile_delete_file(Efile_error* errInfo, char* name);
@@ -143,7 +149,7 @@ int efile_write_info(Efile_error* errInfo, Efile_info* pInfo, char *name);
 int efile_write(Efile_error* errInfo, int flags, int fd, 
 		char* buf, size_t count);
 int efile_writev(Efile_error* errInfo, int flags, int fd, 
-		 SysIOVec* iov, int iovcnt, size_t size);
+		 SysIOVec* iov, int iovcnt);
 int efile_read(Efile_error* errInfo, int flags, int fd, 
 	       char* buf, size_t count, size_t* pBytesRead);
 int efile_seek(Efile_error* errInfo, int fd, 
@@ -162,3 +168,8 @@ int efile_symlink(Efile_error* errInfo, char* old, char* new);
 int efile_may_openfile(Efile_error* errInfo, char *name);
 int efile_fadvise(Efile_error* errInfo, int fd, Sint64 offset, Sint64 length,
 		  int advise);
+#ifdef HAVE_SENDFILE
+int efile_sendfile(Efile_error* errInfo, int in_fd, int out_fd,
+		      off_t *offset, Uint64 *nbytes, struct t_sendfile_hdtl *hdtl);
+#endif /* HAVE_SENDFILE */
+int efile_fallocate(Efile_error* errInfo, int fd, Sint64 offset, Sint64 length);

@@ -5,7 +5,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2010. All Rights Reserved.
+%% Copyright Ericsson AB 2010-2013. All Rights Reserved.
 %%
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -266,8 +266,11 @@ parse(#state{code = true, type = blank, line = CB, code_blank = CBs} = S)  ->
 parse(#state{code = true,
 	     code_blank = CB,
 	     list_lvl = Lvl,
-	     type = {text, TxtLvl},
-	     line = Line} = S) when TxtLvl > Lvl ->
+	     type = {Type, TxtLvl},
+	     line = Line} = S) when TxtLvl > Lvl,
+				    (Type == text orelse 
+				     Type == uolist orelse
+				     Type == olist)  ->
     Data = code(strip_lvls(Lvl+1, Line)),
     parse(get_line(put_chars(S#state{code_blank = []},
 			    [strip_code_blank(Lvl+1, CB), Data])));
@@ -331,6 +334,8 @@ text(Line) ->
 
 text("%ERTS-VSN%" ++ Cs, Acc) ->
     text(Cs, ["@ERTS_VSN@"|Acc]);
+text("%OTP-VSN%" ++ Cs, Acc) ->
+    text(Cs, ["@OTP_VSN@"|Acc]);
 text("%OTP-REL%" ++ Cs, Acc) ->
     text(Cs, ["@OTP_REL@"|Acc]);
 
@@ -354,6 +359,8 @@ put_text(#state{c = CTag, emphasis = EmTag} = S, Line) ->
 
 put_text(S, "%ERTS-VSN%"++Cs, CTag, EmTag, Acc) ->
     put_text(S, Cs, CTag, EmTag, ["@ERTS_VSN@"|Acc]);
+put_text(S, "%OTP-VSN%"++Cs, CTag, EmTag, Acc) ->
+    put_text(S, Cs, CTag, EmTag, ["@OTP_VSN@"|Acc]);
 put_text(S, "%OTP-REL%"++Cs, CTag, EmTag, Acc) ->
     put_text(S, Cs, CTag, EmTag, ["@OTP_REL@"|Acc]);
 
@@ -557,6 +564,8 @@ code(Line) ->
 
 code("%ERTS-VSN%" ++ Cs, Acc) ->
     code(Cs, ["@ERTS_VSN@"|Acc]);
+code("%OTP-VSN%" ++ Cs, Acc) ->
+    code(Cs, ["@OTP_VSN@"|Acc]);
 code("%OTP-REL%" ++ Cs, Acc) ->
     code(Cs, ["@OTP_REL@"|Acc]);
 
@@ -994,7 +1003,7 @@ resolve_link([_|Cs], start, "", "", "") ->
     resolve_link(Cs, start, "", "", "");
 resolve_link("]:" ++ Rest, key, Yek, "", "") ->
     resolve_link(Rest, url, Yek, "", "");
-resolve_link([C|Cs], url, Yek, Lru, "") when C == $"; C == $' ->
+resolve_link([C|Cs], url, Yek, Lru, "") when C == $"; C == $' -> %"
     resolve_link(Cs, {title, C}, Yek, Lru, "");
 resolve_link([$(|Cs], url, Yek, Lru, "") ->
     resolve_link(Cs, {title, $)}, Yek, Lru, "");
@@ -1010,8 +1019,20 @@ resolve_link([_|Cs], drop, Yek, Lru, Eltit) ->
     resolve_link(Cs, drop, Yek, Lru, Eltit);
 resolve_link([], _, Yek, Lru, Eltit) ->
     {ws_strip(lists:reverse(Yek)),
-     ws_strip(lists:reverse(Lru)),
+     ws_strip(md_strip_n_reverse(Lru)),
      ws_strip(lists:reverse(Eltit))}.
+
+%% Remove .md at end of references.
+md_strip_n_reverse(Lru) ->
+    md_strip_n_reverse(Lru,[]).
+md_strip_n_reverse("\ndm."++Lru,Acc) ->
+    md_strip_n_reverse(Lru,Acc);
+md_strip_n_reverse("#dm."++Lru,Acc) ->
+    md_strip_n_reverse(Lru,[$#|Acc]);
+md_strip_n_reverse([C|T],Acc) ->
+    md_strip_n_reverse(T,[C|Acc]);
+md_strip_n_reverse([], Acc) ->
+    Acc.
 
 %%
 %% Misc

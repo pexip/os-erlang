@@ -1,10 +1,10 @@
-<?xml version="1.0" encoding="latin1" ?>
+<?xml version="1.0" encoding="utf-8" ?>
 <!DOCTYPE chapter SYSTEM "chapter.dtd">
 
 <chapter>
   <header>
     <copyright>
-      <year>2004</year><year>2011</year>
+      <year>2004</year><year>2013</year>
       <holder>Ericsson AB. All Rights Reserved.</holder>
     </copyright>
     <legalnotice>
@@ -834,7 +834,7 @@
     <list type="bulleted">
       <item>
 	<p>[ftp, client] - A new option {progress, {CBmodule,
-	  CBFunction, InitProgressTerm} has been added to allow
+	  CBFunction, InitProgressTerm}} has been added to allow
 	  users to create things such as progress bars in there
 	  GUI's. The option affects ftp:send/[3,4] and
 	  ftp:recv/[3,4].</p>

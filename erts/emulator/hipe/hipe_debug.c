@@ -1,7 +1,7 @@
 /*
  * %CopyrightBegin%
  *
- * Copyright Ericsson AB 2001-2011. All Rights Reserved.
+ * Copyright Ericsson AB 2001-2013. All Rights Reserved.
  *
  * The contents of this file are subject to the Erlang Public License,
  * Version 1.1, (the "License"); you may not use this file except in
@@ -36,6 +36,7 @@
 #include "beam_load.h"
 #include "hipe_mode_switch.h"
 #include "hipe_debug.h"
+#include "erl_map.h"
 
 static const char dashes[2*sizeof(long)+5] = {
     [0 ... 2*sizeof(long)+3] = '-'
@@ -188,14 +189,11 @@ void hipe_print_pcb(Process *p)
     U("old_htop   ", old_htop);
     U("old_head   ", old_heap);
     U("min_heap_..", min_heap_size);
-    U("status     ", status);
-    U("rstatus    ", rstatus);
     U("rcount     ", rcount);
-    U("id         ", id);
-    U("prio       ", prio);
+    U("id         ", common.id);
     U("reds       ", reds);
-    U("tracer_pr..", tracer_proc);
-    U("trace_fla..", trace_flags);
+    U("tracer_pr..", common.tracer_proc);
+    U("trace_fla..", common.trace_flags);
     U("group_lea..", group_leader);
     U("flags      ", flags);
     U("fvalue     ", fvalue);
@@ -204,8 +202,8 @@ void hipe_print_pcb(Process *p)
     /*XXX: ErlTimer tm; */
     U("next       ", next);
     /*XXX: ErlOffHeap off_heap; */
-    U("reg        ", reg);
-    U("nlinks     ", nlinks);
+    U("reg        ", common.u.alive.reg);
+    U("nlinks     ", common.u.alive.links);
     /*XXX: ErlMessageQueue msg; */
     U("mbuf       ", mbuf);
     U("mbuf_sz    ", mbuf_sz);

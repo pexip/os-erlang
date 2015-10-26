@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %% 
-%% Copyright Ericsson AB 2008-2010. All Rights Reserved.
+%% Copyright Ericsson AB 2008-2012. All Rights Reserved.
 %% 
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -32,7 +32,7 @@
 	 get_const/1,colour_bin/1,datetime_bin/1,
 	 to_bool/1,from_bool/1]).
 
--export([wxgl_dl/0, priv_dir/1]).
+-export([wxgl_dl/0, priv_dir/2, opt_error_log/3]).
 
 -include("wxe.hrl").
 
@@ -74,7 +74,7 @@ call(Op, Args) ->
 	true ->
 	    debug_call(Dbg band 15, Op, Args, Port)
     end.
-	    
+
 rec(Op) ->
     receive 
 	{'_wxe_result_', Res} -> Res;
@@ -108,21 +108,26 @@ send_bin(Bin) when is_binary(Bin) ->
 get_cbId(Fun) ->
     gen_server:call((wx:get_env())#wx_env.sv,{register_cb, Fun}, infinity).   
 
-connect_cb(Object,EvData) ->
-    handle_listener(connect_cb, Object, EvData).
-
-disconnect_cb(Object,EvData) ->
-    handle_listener(disconnect_cb, Object, EvData).
-
-handle_listener(Op,Object,EvData) ->
-    Listener = gen_server:call((wx:get_env())#wx_env.sv, {Op,Object,EvData}, infinity),
-    case Listener of
-	{call_impl, connect_cb, EvtList} ->
-	    wxEvtHandler:connect_impl(EvtList,Object,EvData);
-	Res ->
-	    Res
+connect_cb(Object,EvData0 = #evh{cb=Callback}) ->
+    Server = (wx:get_env())#wx_env.sv,
+    case Callback of
+	0 -> %% Message api connect from this process
+	    case wxEvtHandler:connect_impl(Object,EvData0) of
+		{ok, Listener} ->
+		    EvData = EvData0#evh{handler=Listener, userdata=undefined},
+		    gen_server:call(Server, {connect_cb,Object,EvData}, infinity);
+		Error ->
+		    Error
+	    end;
+	_ -> %% callback, fun or pid (pid for wx_object:sync_events masked callbacks)
+	    %% let the server do the connect
+	    gen_server:call(Server, {connect_cb,Object,EvData0}, infinity)
     end.
 
+disconnect_cb(Object,EvData) ->
+    Server = (wx:get_env())#wx_env.sv,
+    gen_server:call(Server, {disconnect_cb,Object,EvData}, infinity).
+	
 debug_cast(1, Op, _Args, _Port) ->
     check_previous(),
     case ets:lookup(wx_debug_info,Op) of
@@ -205,7 +210,7 @@ check_previous() ->
 
 wxgl_dl() ->
     DynLib0 = "erl_gl",
-    PrivDir = priv_dir(DynLib0),
+    PrivDir = priv_dir(DynLib0, false),
     DynLib = case os:type() of
 		 {win32,_} ->
 		     DynLib0 ++ ".dll";
@@ -214,7 +219,7 @@ wxgl_dl() ->
 	     end,
     filename:join(PrivDir, DynLib).
 
-priv_dir(Driver0) ->
+priv_dir(Driver0, Silent) ->
     {file, Path} = code:is_loaded(?MODULE),
     Priv = case filelib:is_regular(Path) of
 	       true ->
@@ -229,14 +234,20 @@ priv_dir(Driver0) ->
 		 _ ->
 		     Driver0 ++ ".so"
 	     end,
-
     case file:read_file_info(filename:join(Priv, Driver)) of
 	{ok, _} ->
 	    Priv;
 	{error, _} ->
-	    error_logger:format("ERROR: Could not find \'~s\' in: ~s~n",
-				[Driver, Priv]),
-	    erlang:error({load_driver, "No driver found"})
+	    SrcPriv = filename:join(Priv, erlang:system_info(system_architecture)),
+	    case file:read_file_info(filename:join(SrcPriv, Driver)) of
+		{ok, _} ->
+		    SrcPriv;
+		{error, _} ->
+		    opt_error_log(Silent,
+				  "ERROR: Could not find \'~s\' in: ~s~n",
+				  [Driver, Priv]),
+		    erlang:error({load_driver, "No driver found"})
+	    end
     end.
 
 strip(Src, Src) ->
@@ -244,3 +255,7 @@ strip(Src, Src) ->
 strip([H|R], Src) ->
     [H| strip(R, Src)].
 
+opt_error_log(false, Format, Args) ->
+    error_logger:format(Format, Args);
+opt_error_log(true, _Format, _Args) ->
+    ok.

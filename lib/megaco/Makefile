@@ -1,7 +1,7 @@
 # 
 # %CopyrightBegin%
 # 
-# Copyright Ericsson AB 1999-2011. All Rights Reserved.
+# Copyright Ericsson AB 1999-2012. All Rights Reserved.
 # 
 # The contents of this file are subject to the Erlang Public License,
 # Version 1.1, (the "License"); you may not use this file except in
@@ -49,11 +49,14 @@ VSN=$(MEGACO_VSN)
 
 DIR_NAME = megaco_src-$(VSN)$(PRE_VSN)
 
+nullstring :=
+space := $(nullstring) # a space at the end
+
 ifndef APP_RELEASE_DIR
   ifndef TESTROOT
     APP_RELEASE_DIR = /tmp
   else
-    APP_RELEASE_DIR = $(TESTROOT)
+    APP_RELEASE_DIR = $(subst $(space),\ ,$(TESTROOT))
   endif
 endif
 
@@ -97,9 +100,8 @@ endif
 CONFIGURE_OPTS = $(FLEX_SCANNER_LINENO_ENABLER) $(FLEX_SCANNER_REENTRANT_ENABLER)
 
 
-MEGACO_DIA_PLT     = ./priv/megaco.plt
-MEGACO_DIA_PLT_LOG = $(basename $(MEGACO_DIA_PLT)).dialyzer_plt_log
-MEGACO_DIA_LOG     = $(basename $(MEGACO_DIA_PLT)).dialyzer_log
+DIA_PLT      = ./priv/plt/$(APPLICATION).plt
+DIA_ANALYSIS = $(basename $(DIA_PLT)).dialyzer_analysis
 
 
 # ----------------------------------------------------
@@ -140,8 +142,8 @@ info:
 	@echo "OTP_INSTALL_DIR: $(OTP_INSTALL_DIR)"
 	@echo "APP_INSTALL_DIR: $(APP_INSTALL_DIR)"
 	@echo ""
-	@echo "MEGACO_PLT     = $(MEGACO_PLT)"
-	@echo "MEGACO_DIA_LOG = $(MEGACO_DIA_LOG)"
+	@echo "DIA_PLT:      $(DIA_PLT)"
+	@echo "DIA_ANALYSIS: $(DIA_ANALYSIS)"
 	@echo ""
 
 version:
@@ -152,7 +154,7 @@ version:
 # Application install (of a app built from source) targets
 # ----------------------------------------------------
 app_install:
-	$(MAKE) TESTROOT=$(APP_INSTALL_DIR) release 
+	$(MAKE) TESTROOT="$(APP_INSTALL_DIR)" release 
 
 
 # ----------------------------------------------------
@@ -186,33 +188,33 @@ TAR.exclude2: Makefile TAR.exclude
 	(cd ..; find megaco -name '.cmake.state' >> megaco/TAR.exclude2)
 
 $(APP_DIR): tar_exclude
-	mkdir -p $(APP_DIR); \
+	mkdir -p "$(subst $(space),\ ,$@)"; \
         (cd ..; tar cfX - megaco/TAR.exclude2 megaco) | \
-        (cd $(APP_DIR); tar xf -); \
-        mv $(APP_DIR)/megaco/* $(APP_DIR)/; \
-	mkdir $(APP_DIR)/autoconf; \
-        cp autoconf/config.guess $(APP_DIR)/autoconf/; \
-        cp autoconf/config.sub $(APP_DIR)/autoconf/; \
-        cp autoconf/install-sh $(APP_DIR)/autoconf/; \
-        rmdir $(APP_DIR)/megaco
+        (cd "$(subst $(space),\ ,$@)"; tar xf -); \
+        mv "$(subst $(space),\ ,$@)"/megaco/* "$(subst $(space),\ ,$@)"/; \
+	mkdir $(subst $(space),\ ,$@)/autoconf; \
+        cp autoconf/config.guess "$(subst $(space),\ ,$@)"/autoconf/; \
+        cp autoconf/config.sub "$(subst $(space),\ ,$@)"/autoconf/; \
+        cp autoconf/install-sh "$(subst $(space),\ ,$@)"/autoconf/; \
+        rmdir "$(subst $(space),\ ,$@)"/megaco
 
 tar: $(APP_TAR_FILE)
 
 $(APP_TAR_FILE): $(APP_DIR)
-	(cd $(APP_RELEASE_DIR); gtar zcf $(APP_TAR_FILE) $(DIR_NAME))
+	(cd "$(APP_RELEASE_DIR)"; gtar zcf "$(subst $(space),\ ,$@)" $(DIR_NAME))
 
-dialyzer_plt: $(MEGACO_DIA_PLT)
+dialyzer_plt: $(DIA_PLT)
 
-$(MEGACO_DIA_PLT): 
-	@echo "Building megaco plt file"
+$(DIA_PLT): 
+	@echo "Building $(APPLICATION) plt file"
 	@dialyzer --build_plt \
                   --output_plt $@ \
-                  -r ../megaco/ebin \
-                  -o $(MEGACO_DIA_PLT_LOG) \
+                  -r ../$(APPLICATION)/ebin \
+                  --output $(DIA_ANALYSIS) \
                   --verbose
 
-dialyzer: $(MEGACO_DIA_PLT)
-	(dialyzer --plt $< \
-                  -o $(MEGACO_DIA_LOG) \
-                  ../megaco/ebin \
-                  && (shell cat $(MEGACO_DIA_LOG)))
+dialyzer: $(DIA_PLT)
+	@echo "Running dialyzer on $(APPLICATION)"
+	@dialyzer --plt $< \
+                  ../$(APPLICATION)/ebin \
+                  --verbose

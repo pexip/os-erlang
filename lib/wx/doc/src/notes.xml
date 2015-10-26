@@ -1,10 +1,10 @@
-<?xml version="1.0" encoding="latin1" ?>
+<?xml version="1.0" encoding="utf-8" ?>
 <!DOCTYPE chapter SYSTEM "chapter.dtd">
 
 <chapter>
   <header>
     <copyright>
-      <year>2009</year><year>2011</year>
+      <year>2009</year><year>2013</year>
       <holder>Ericsson AB. All Rights Reserved.</holder>
     </copyright>
     <legalnotice>
@@ -30,6 +30,252 @@
   </header>
   <p>This document describes the changes made to the wxErlang
     application.</p>
+
+<section><title>Wx 1.3.1</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+          <p>
+	    Implement --enable-sanitizers[=sanitizers]. Similar to
+	    debugging with Valgrind, it's very useful to enable
+	    -fsanitize= switches to catch bugs at runtime.</p>
+          <p>
+	    Own Id: OTP-12153</p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>Wx 1.3</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+	    <p>Fix delayed destroy for wxPaintDC objects which could
+	    cause an eternal loop for modal dialogs.</p> <p>Fix
+	    wxSL_LABELS compatibility between wxWidgets-2.8 and
+	    wxWidgets-3.0 versions</p>
+          <p>
+	    Own Id: OTP-11985</p>
+        </item>
+      </list>
+    </section>
+
+
+    <section><title>Improvements and New Features</title>
+      <list>
+        <item>
+          <p>
+	    Add missing classes wxPopup[Transient]Window,
+	    wxActivateEvent and wxTextCtrl:cahngeValue/2 function.</p>
+          <p>
+	    Own Id: OTP-11986</p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>Wx 1.2</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+          <p>
+	    Refactored C++ code, fixed crashes and a deadlock on
+	    linux.</p>
+          <p>
+	    Own Id: OTP-11586</p>
+        </item>
+        <item>
+          <p>
+	    Some local implementations of removing the last element
+	    from a list are replaced by <c>lists:droplast/1</c>. Note
+	    that this requires at least <c>stdlib-2.0</c>, which is
+	    the stdlib version delivered in OTP 17.0. (Thanks to Hans
+	    Svensson)</p>
+          <p>
+	    Own Id: OTP-11678</p>
+        </item>
+        <item>
+          <p>
+	    Reworked the internal event handling to avoid crashes in
+	    destroy objects. Thanks Tom for the bug report.</p>
+          <p>
+	    Own Id: OTP-11699</p>
+        </item>
+        <item>
+          <p>
+	    Application upgrade (appup) files are corrected for the
+	    following applications: </p>
+          <p>
+	    <c>asn1, common_test, compiler, crypto, debugger,
+	    dialyzer, edoc, eldap, erl_docgen, et, eunit, gs, hipe,
+	    inets, observer, odbc, os_mon, otp_mibs, parsetools,
+	    percept, public_key, reltool, runtime_tools, ssh,
+	    syntax_tools, test_server, tools, typer, webtool, wx,
+	    xmerl</c></p>
+          <p>
+	    A new test utility for testing appup files is added to
+	    test_server. This is now used by most applications in
+	    OTP.</p>
+          <p>
+	    (Thanks to Tobias Schlager)</p>
+          <p>
+	    Own Id: OTP-11744</p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>Wx 1.1.2</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+          <p>
+	    Fixed a problem which caused the debugger to crash when
+	    closing a window. Fixed static linking on mac.</p>
+          <p>
+	    Own Id: OTP-11444</p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>Wx 1.1.1</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+          <p>
+	    wx initialization hanged with wxWidgets-3.0 on mac. Fixed
+	    a crash with wxListBox on wxWidgets-3.0 (thanks Sergei
+	    Golovan) Fixed documentation links. Fixed event callbacks
+	    cleanup.</p>
+          <p>
+	    Own Id: OTP-11393</p>
+        </item>
+        <item>
+          <p>
+	    Improve documentation (Thanks to Boris Mühmer)</p>
+          <p>
+	    Own Id: OTP-11505</p>
+        </item>
+      </list>
+    </section>
+
+
+    <section><title>Improvements and New Features</title>
+      <list>
+        <item>
+          <p>
+	    Fix silent make rules (Thanks to Anthony Ramine)</p>
+          <p>
+	    Own Id: OTP-11515</p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>Wx 1.0</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+          <p>
+	    Add {silent_start, boolean()} option to wx:new/1 in order
+	    to be able to suppress error messages during startup of
+	    wx. (Thanks to Håkan Mattsson)</p>
+          <p>
+	    Own Id: OTP-10585</p>
+        </item>
+        <item>
+          <p>
+	    Fix wxTreeCtrl:getBoundingRect/2 and
+	    wxTreeCtrl:hitTest/1. wxTreeCtrl:hitTest now returns a
+	    tuple not bug compatible with previous releases but
+	    needed.</p>
+          <p>
+	    Own Id: OTP-10743</p>
+        </item>
+      </list>
+    </section>
+
+
+    <section><title>Improvements and New Features</title>
+      <list>
+        <item>
+          <p>
+	    The wx application now compiles and is usable with the
+	    unstable development branch of wxWidgets-2.9. Some
+	    functions are currently not available in wxWidgets-2.9
+	    and their erlang counterparts are marked as deprecated.
+	    They will generate an error if called when linked against
+	    wxWidgets-2.9 libraries. This means that wx can now be
+	    built on 64bit MacOsX, but keep in mind that
+	    wxWidgets-2.9 is still a development branch and needs (a
+	    lot) more work before it becomes stable.</p>
+          <p>
+	    Own Id: OTP-10407 Aux Id: kunagi-262 [173] </p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>Wx 0.99.2</title>
+
+    <section><title>Improvements and New Features</title>
+      <list>
+        <item>
+	    <p>Fix errors in wxDC and wxGraphicsContext api.</p>
+	    <p>Add wxTaskBarIcon.</p> <p>Add
+	    wxStyledTextControl:setEdgeMode/2.</p> <p>Add type and
+	    specs for all functions and records.</p>
+          <p>
+	    Own Id: OTP-9947</p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>Wx 0.99.1</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+          <p>
+	    Fixed a deadlock in the driver, which could happen if a
+	    callback caused another callback to be invoked.</p>
+          <p>
+	    Own Id: OTP-9725</p>
+        </item>
+      </list>
+    </section>
+
+
+    <section><title>Improvements and New Features</title>
+      <list>
+        <item>
+          <p>
+	    Implemented wxSystemOptions.</p>
+          <p>
+	    Load Opengl from libGL.so.1 instead libGL.so to work
+	    around linux problems.</p>
+          <p>
+	    Own Id: OTP-9702</p>
+        </item>
+      </list>
+    </section>
+
+</section>
 
 <section><title>Wx 0.99</title>
 

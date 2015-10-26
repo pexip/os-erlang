@@ -1,10 +1,10 @@
-<?xml version="1.0" encoding="latin1" ?>
+<?xml version="1.0" encoding="utf-8" ?>
 <!DOCTYPE chapter SYSTEM "chapter.dtd">
 
 <chapter>
   <header>
     <copyright>
-      <year>2004</year><year>2011</year>
+      <year>2004</year><year>2013</year>
       <holder>Ericsson AB. All Rights Reserved.</holder>
     </copyright>
     <legalnotice>
@@ -30,6 +30,754 @@
   </header>
   <p>This document describes the changes made to the Compiler
     application.</p>
+
+<section><title>Compiler 5.0.2</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+          <p>
+	    Corrected a bug with incorrect code generation when
+	    inlining was turned on.</p>
+          <p>
+	    Own Id: OTP-12132</p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>Compiler 5.0.1</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+          <p>
+	    A Dialyzer crash involving analysis of Map types has now
+	    been fixed.</p>
+          <p>
+	    Own Id: OTP-11947</p>
+        </item>
+        <item>
+	    <p>The compiler would fail to compile a file with a
+	    latin-1 character in the false branch of an <c>-ifdef</c>
+	    or <c>-indef</c>.</p>
+          <p>
+	    Own Id: OTP-11987</p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>Compiler 5.0</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+          <p>
+	    Line numbers would not be correct when a binary
+	    construction such as
+	    '<c>&lt;&lt;Bin/binary,...&gt;&gt;</c>' fails. (Thanks to
+	    Stanislav Seletskiy for reporting this bug.)</p>
+          <p>
+	    Own Id: OTP-11572</p>
+        </item>
+        <item>
+          <p>
+	    The compiler now properly annotates the code in value in
+	    the '<c>after</c>' clause for a '<c>try</c>' so that
+	    Dialyzer no longer generates a false warning for an
+	    unmatched return.</p>
+          <p>
+	    Own Id: OTP-11580</p>
+        </item>
+        <item>
+          <p>
+	    Some case statements where no clause would match could
+	    cause an internal error in the compiler. (Thanks to Erik
+	    Soe Sorensen for reporting this bug.)</p>
+          <p>
+	    Own Id: OTP-11610</p>
+        </item>
+        <item>
+          <p>
+	    With <c>--Wunmatched_returns</c>, dialyzer will no longer
+	    warn when the value of a list comprehension is ignored,
+	    provided that the each value in the list would be an
+	    atomic value (such as integer or atoms, as opposed to
+	    tuples and lists). Example: ignoring '<c>[io:format(...)
+	    || ...]</c>' will not cause a warning, while ignoring
+	    '<c>[file:close(Fd) || ...]</c>' will.</p>
+          <p>
+	    Own Id: OTP-11626</p>
+        </item>
+        <item>
+          <p>
+	    Matching out a binary and applying the binary as if it
+	    were a fun would crash the run-time system. (Thanks to
+	    Loïc Hoguin.)</p>
+          <p>
+	    Own Id: OTP-11672</p>
+        </item>
+        <item>
+          <p>
+	    Some local implementations of removing the last element
+	    from a list are replaced by <c>lists:droplast/1</c>. Note
+	    that this requires at least <c>stdlib-2.0</c>, which is
+	    the stdlib version delivered in OTP 17.0. (Thanks to Hans
+	    Svensson)</p>
+          <p>
+	    Own Id: OTP-11678</p>
+        </item>
+        <item>
+          <p>
+	    Allow all auto imports to be suppressed at once.
+	    Introducing the no_auto_import attribute:
+	    -compile(no_auto_import). Useful for code generation
+	    tools that always use the qualified function names and
+	    want to avoid the auto imported functions clashing with
+	    local ones. (Thanks to José Valim.)</p>
+          <p>
+	    Own Id: OTP-11682</p>
+        </item>
+        <item>
+          <p>
+	    Application upgrade (appup) files are corrected for the
+	    following applications: </p>
+          <p>
+	    <c>asn1, common_test, compiler, crypto, debugger,
+	    dialyzer, edoc, eldap, erl_docgen, et, eunit, gs, hipe,
+	    inets, observer, odbc, os_mon, otp_mibs, parsetools,
+	    percept, public_key, reltool, runtime_tools, ssh,
+	    syntax_tools, test_server, tools, typer, webtool, wx,
+	    xmerl</c></p>
+          <p>
+	    A new test utility for testing appup files is added to
+	    test_server. This is now used by most applications in
+	    OTP.</p>
+          <p>
+	    (Thanks to Tobias Schlager)</p>
+          <p>
+	    Own Id: OTP-11744</p>
+        </item>
+        <item>
+          <p>
+	    Adapt 'asm' deprecation message to new version scheme.
+	    (Thanks to Tuncer Ayaz)</p>
+          <p>
+	    Own Id: OTP-11751</p>
+        </item>
+        <item>
+          <p>
+	    A number of compiler errors where unusual or nonsensical
+	    code would crash the compiler have been reported by Ulf
+	    Norell and corrected by Anthony Ramine.</p>
+          <p>
+	    Own Id: OTP-11770</p>
+        </item>
+      </list>
+    </section>
+
+
+    <section><title>Improvements and New Features</title>
+      <list>
+        <item>
+          <p>
+	    Compilation times for modules with a huge number for
+	    record accesses using the dot operator has been improved.</p>
+          <p>
+	    Own Id: OTP-10652</p>
+        </item>
+        <item>
+          <p>
+	    The compiler can generate somewhat better code by moving
+	    let expressions into sequences. (Thanks to Anthony
+	    Ramine.)</p>
+          <p>
+	    Own Id: OTP-11056</p>
+        </item>
+        <item>
+          <p>
+	    Forbid unsized fields in patterns of binary generators
+	    and simplified v3_core's translation of bit string
+	    generators. (Thanks to Anthony Ramine.)</p>
+          <p>
+	    Own Id: OTP-11186</p>
+        </item>
+        <item>
+          <p>
+	    Funs can now be a given a name. Thanks to to Richard
+	    O'Keefe for the idea (EEP37) and to Anthony Ramine for
+	    the implementation.</p>
+          <p>
+	    Own Id: OTP-11537</p>
+        </item>
+        <item>
+          <p>
+	    Using the <c>from_asm</c> option to produce a BEAM file
+	    starting from BEAM assembly code would often fail because
+	    early optimization passes would not understand
+	    instructions that later optimization passes would
+	    introduce. (Thanks to Anthony Ramine.)</p>
+          <p>
+	    Own Id: OTP-11544</p>
+        </item>
+        <item>
+          <p>
+	    The <c>.core</c> and <c>.S</c> extensions are now
+	    documented in the <c>erlc</c> documentation, and the
+	    '<c>from_core</c>' and '<c>from_asm</c>' options are now
+	    documented in the compiler documentation. (Thanks to
+	    Tuncer Ayaz.)</p>
+          <p>
+	    Own Id: OTP-11547</p>
+        </item>
+        <item>
+	    <p>Optimization of case expressions that build tuples or
+	    lists have been improved.</p>
+          <p>
+	    Own Id: OTP-11584</p>
+        </item>
+        <item>
+          <p>
+	    EEP43: New data type - Maps</p>
+          <p>
+	    With Maps you may for instance: <taglist> <item><c>M0 =
+	    #{ a =&gt; 1, b =&gt; 2}, % create
+	    associations</c></item> <item><c>M1 = M0#{ a := 10 }, %
+	    update values</c></item> <item><c>M2 = M1#{ "hi" =&gt;
+	    "hello"}, % add new associations</c></item> <item><c>#{
+	    "hi" := V1, a := V2, b := V3} = M2. % match keys with
+	    values</c></item> </taglist></p>
+		<p>
+	    For information on how to use Maps please see Map Expressions in the
+		<seealso marker="doc/reference_manual:expressions#map_expressions">
+			Reference Manual</seealso>.</p>
+          <p>
+	    The current implementation is without the following
+	    features: <taglist> <item>No variable keys</item>
+	    <item>No single value access</item> <item>No map
+	    comprehensions</item> </taglist></p>
+          <p>
+	    Note that Maps is <em>experimental</em> during OTP 17.0.</p>
+          <p>
+	    Own Id: OTP-11616</p>
+        </item>
+        <item>
+          <p>
+	    Some function specs are corrected or moved and some edoc
+	    comments are corrected in order to allow use of edoc.
+	    (Thanks to Pierre Fenoll)</p>
+          <p>
+	    Own Id: OTP-11702</p>
+        </item>
+        <item>
+          <p>
+	    Thanks to Anthony Ramine for several improvements to the
+	    optimizations in the BEAM compiler and for cleaning up
+	    the code the code that transforms list and binary
+	    comprehensions to Core Erlang.</p>
+          <p>
+	    Own Id: OTP-11720</p>
+        </item>
+        <item>
+          <p>
+	    The default encoding for Erlang source files is now
+	    UTF-8. As a temporary measure to ease the transition from
+	    the old default of latin-1, if the compiler encounters
+	    byte sequences that are not valid UTF-8 sequences, the
+	    compiler will re-try the compilation in latin-1 mode.
+	    This workaround will be removed in a future release.</p>
+          <p>
+	    Own Id: OTP-11791</p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>Compiler 4.9.4</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+          <p>
+	    Typo fix ambigous -&gt; ambiguous. Thanks to Leo Correa.</p>
+          <p>
+	    Own Id: OTP-11455</p>
+        </item>
+      </list>
+    </section>
+
+
+    <section><title>Improvements and New Features</title>
+      <list>
+        <item>
+          <p>
+	    Lift 'after' blocks to zeroary functions. Thanks to
+	    Anthony Ramine.</p>
+          <p>
+	    Own Id: OTP-11267</p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>Compiler 4.9.3</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+          <p>
+	    Expressions such as <c>'B = is_integer(V), if B and B
+	    -&gt; ok end'</c> would crash the compiler.</p>
+          <p>
+	    Own Id: OTP-11240</p>
+        </item>
+        <item>
+          <p>
+	    <c>compile:file2/2</c> with the option
+	    <c>report_errors</c> could return ErrorInfo tuples with
+	    only two elements, while the documentation says that the
+	    ErrorInfo tuple always has three elements. Also updated
+	    the documentation to add that the first element may be
+	    '<c>none</c>' if no line number is applicable.</p>
+          <p>
+	    Own Id: OTP-11304 Aux Id: seq12412 </p>
+        </item>
+      </list>
+    </section>
+
+
+    <section><title>Improvements and New Features</title>
+      <list>
+        <item>
+          <p>
+	    Fix matching of floating point middle-endian machines.
+	    Thanks to Johannes Weissl.</p>
+          <p>
+	    Own Id: OTP-11201</p>
+        </item>
+        <item>
+          <p>
+	    Restrict inlining of local fun references. Thanks to
+	    Anthony Ramine.</p>
+          <p>
+	    Own Id: OTP-11211</p>
+        </item>
+        <item>
+          <p>
+	    Silence a misleading warning with some comprehensions.
+	    Thanks to Anthony Ramine.</p>
+          <p>
+	    Own Id: OTP-11212</p>
+        </item>
+        <item>
+          <p>
+	    Forbid returning a match context in beam_validator.
+	    Thanks to Anthony Ramine.</p>
+          <p>
+	    Own Id: OTP-11247</p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>Compiler 4.9.2</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+          <p>
+	    Compiling functions with complex boolean operations in
+	    guards could be very slow. (Thanks to Magnus Muller for
+	    reporting this issue.)</p>
+          <p>
+	    Own Id: OTP-10939</p>
+        </item>
+        <item>
+          <p>
+	    Certain guard expressions used in a receive statement
+	    could cause the compiler to crash.</p>
+          <p>
+	    Own Id: OTP-11119 Aux Id: seq12342 </p>
+        </item>
+      </list>
+    </section>
+
+
+    <section><title>Improvements and New Features</title>
+      <list>
+        <item>
+          <p>
+	    Fix optimization of some binary comprehensions. Thanks to
+	    Anthony Ramine.</p>
+          <p>
+	    Own Id: OTP-11005</p>
+        </item>
+        <item>
+          <p>
+	    Use a set to store ref registers in beam_receive. Thanks
+	    to Anthony Ramine.</p>
+          <p>
+	    Own Id: OTP-11069</p>
+        </item>
+        <item>
+          <p>
+	    Fix renaming of bs_put_string instructions. Thanks to
+	    Anthony Ramine.</p>
+          <p>
+	    Own Id: OTP-11129</p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>Compiler 4.9.1</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+          <p>
+	    The compiler would crash attempting to compile
+	    expressions such as "element(2, not_tuple)".</p>
+          <p>
+	    Own Id: OTP-10794</p>
+        </item>
+        <item>
+          <p>
+	    Forbid multiple values in Core Erlang sequence arguments.
+	    Thanks to José Valim and Anthony Ramine.</p>
+          <p>
+	    Own Id: OTP-10818</p>
+        </item>
+        <item>
+          <p>
+	    An unsafe optimization would cause the compiler to crash
+	    with an internal error for certain complex code
+	    sequences.</p>
+          <p>
+	    Own Id: OTP-10825 Aux Id: seq12247 </p>
+        </item>
+      </list>
+    </section>
+
+
+    <section><title>Improvements and New Features</title>
+      <list>
+        <item>
+	    <p>Integers in expression that will give a floating point
+	    result (such as "<c>X / 2</c>" will now be converted to
+	    floating point at compile-time. (Suggested by Richard
+	    O'Keefe.)</p>
+	    <p>Identical floating points constans in a module will
+	    now be coalesced to one entry in the constant pool.</p>
+          <p>
+	    Own Id: OTP-10788</p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>Compiler 4.9</title>
+
+    <section><title>Improvements and New Features</title>
+      <list>
+        <item>
+          <p>
+	    The compiler optimizations have been polished, so that
+	    the code quality will be slightly better in some cases.</p>
+          <p>
+	    Own Id: OTP-10193</p>
+        </item>
+        <item>
+	    <p> Support for Unicode has been implemented. </p>
+          <p>
+	    Own Id: OTP-10302</p>
+        </item>
+        <item>
+	    <p>Where necessary a comment stating encoding has been
+	    added to Erlang files. The comment is meant to be removed
+	    in Erlang/OTP R17B when UTF-8 becomes the default
+	    encoding. </p>
+          <p>
+	    Own Id: OTP-10630</p>
+        </item>
+        <item>
+          <p>
+	    Fix some wrong warnings triggered by the option
+	    inline_list_funcs. Thanks to Anthony Ramine.</p>
+          <p>
+	    Own Id: OTP-10690</p>
+        </item>
+        <item>
+          <p>
+	    Forbid local fun variables in Core Erlang guards. Thanks
+	    to Anthony Ramine.</p>
+          <p>
+	    Own Id: OTP-10706</p>
+        </item>
+        <item>
+          <p>
+	    Binary syntax matches could cause an internal consistency
+	    error in in the compiler. (Thanks to Viktor Sovietov for
+	    reporting this bug.)</p>
+          <p>
+	    Own Id: OTP-10724</p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>Compiler 4.8.2</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+          <p>
+	    Modules with very many functions would compile very
+	    slowly.</p>
+          <p>
+	    Own Id: OTP-10123</p>
+        </item>
+        <item>
+          <p>
+	    <c>compile:forms/2</c> will now use a
+	    {source,SourceFilePath} to set the source returned by
+	    <c>module_info(compile)</c> (Thanks to José Valim)</p>
+          <p>
+	    Own Id: OTP-10150</p>
+        </item>
+        <item>
+          <p>
+	    A process which had enabled trap_exit would receive EXIT
+	    messages after calling the compiler. (Thanks to Jeremy
+	    Heater.)</p>
+          <p>
+	    Own Id: OTP-10171</p>
+        </item>
+        <item>
+          <p>
+	    Fix messages ordering with column numbers</p>
+          <p>
+	    Own Id: OTP-10183</p>
+        </item>
+        <item>
+          <p>
+	    sys_pre_expand: Fix BASE never being set</p>
+          <p>
+	    Commit a612e99fb5aaa934fe5a8591db0f083d7fa0b20a turned
+	    module attributes from 2-tuples to 3-tuples but forgot to
+	    update get_base/1, breaking BASE for parametric modules.</p>
+          <p>
+	    Own Id: OTP-10184</p>
+        </item>
+        <item>
+          <p>
+	    The compiler will now issue a warning if literal tuple
+	    funs are used. For example, {erlang,is_tuple}(X) will now
+	    generate a warning.</p>
+          <p>
+	    Own Id: OTP-10185</p>
+        </item>
+        <item>
+          <p>
+	    The compiler will now warn for illegal sizes for segments
+	    in binary construction. For example,
+	    &lt;&lt;X:(2.5)&gt;&gt; will now cause the compiler to
+	    issue a warning.</p>
+          <p>
+	    Own Id: OTP-10197</p>
+        </item>
+        <item>
+          <p>
+	    Fix the erlc -MP flag</p>
+          <p>
+	    Because of a copy-and-paste error in erlc.c, the -MP flag
+	    had the same effect as -MG. As a workaround, you had to
+	    pass +makedep_phony to enable the MP option. This patch
+	    makes -MP work as intended.</p>
+          <p>
+	    Own Id: OTP-10211</p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>Compiler 4.8.1</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+          <p>
+	    In rare circumstance, the compiler could crash when
+	    compiling a case statement. (Thanks to Hakan Mattsson.)</p>
+          <p>
+	    Own Id: OTP-9842</p>
+        </item>
+        <item>
+	    <p>Calling a guard test (such as is_list/1) from the
+	    top-level in a guard, would cause a compiler crash if
+	    there was a local definition with the same name.
+	    Corrected to reject the program with an error
+	    message.</p>
+          <p>
+	    Own Id: OTP-9866</p>
+        </item>
+        <item>
+	    <p>Using <c>get/1</c> in a <c>try</c> block could in some
+	    cases cause an internal compiler error. (Thanks to Eric
+	    Merritt.)</p>
+          <p>
+	    Own Id: OTP-9867</p>
+        </item>
+        <item>
+          <p>
+	    An unexported on_load function would not get run if the
+	    module was compiled with the <c>inline</c> option.
+	    (Thanks to Yiannis Tsiouris.)</p>
+          <p>
+	    Own Id: OTP-9910</p>
+        </item>
+        <item>
+          <p>
+	    Fixed a discrepancy in compile_info</p>
+          <p>
+	    The BEAM disassembler used the atom 'none' to signify the
+	    absence of a compile_info chunk in a .beam file. This
+	    clashed with the type declaration of the compile_info
+	    field of a #beam_file{} record as containing a list. Now
+	    [] signifies the absence of this chunk. This simplifies
+	    the code and avoids a dialyzer warning.</p>
+          <p>
+	    Own Id: OTP-9917</p>
+        </item>
+        <item>
+          <p>
+	    Fix typo in `compile' doc: unmatched parenthesis (Thanks
+	    to Ricardo Catalinas Jiménez)</p>
+          <p>
+	    Own Id: OTP-9919</p>
+        </item>
+        <item>
+	    <p>In a <c>try</c>...<c>catch</c> statement that always
+	    returned <c>false</c>, the compiler would remove calls to
+	    BIFs that could not cause an exception (such as
+	    <c>put/2</c>). Example of such code: <c>try put(K, V),
+	    false catch _:_ -&gt; false end.</c></p>
+          <p>
+	    Own Id: OTP-9982</p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>Compiler 4.8</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+          <p>
+	    Add '-callback' attributes in stdlib's behaviours</p>
+          <p>
+	    Replace the behaviour_info(callbacks) export in stdlib's
+	    behaviours with -callback' attributes for all the
+	    callbacks. Update the documentation with information on
+	    the callback attribute Automatically generate
+	    'behaviour_info' function from '-callback' attributes</p>
+          <p>
+	    'behaviour_info(callbacks)' is a special function that is
+	    defined in a module which describes a behaviour and
+	    returns a list of its callbacks.</p>
+          <p>
+	    This function is now automatically generated using the
+	    '-callback' specs. An error is returned by lint if user
+	    defines both '-callback' attributes and the
+	    behaviour_info/1 function. If no type info is needed for
+	    a callback use a generic spec for it. Add '-callback'
+	    attribute to language syntax</p>
+          <p>
+	    Behaviours may define specs for their callbacks using the
+	    familiar spec syntax, replacing the '-spec' keyword with
+	    '-callback'. Simple lint checks are performed to ensure
+	    that no callbacks are defined twice and all types
+	    referred are declared.</p>
+          <p>
+	    These attributes can be then used by tools to provide
+	    documentation to the behaviour or find discrepancies in
+	    the callback definitions in the callback module.</p>
+          <p>
+	    Add callback specs into 'application' module in kernel
+	    Add callback specs to tftp module following internet
+	    documentation Add callback specs to inets_service module
+	    following possibly deprecated comments</p>
+          <p>
+	    Own Id: OTP-9621</p>
+        </item>
+        <item>
+          <p>
+	    The calculation of the 'uniq' value for a fun (see
+	    <c>erlang:fun_info/1</c>) was too weak and has been
+	    strengthened. It used to be based on the only the code
+	    for the fun body, but it is now based on the MD5 of the
+	    BEAM code for the module.</p>
+          <p>
+	    Own Id: OTP-9667</p>
+        </item>
+      </list>
+    </section>
+
+
+    <section><title>Improvements and New Features</title>
+      <list>
+        <item>
+	    <p>Variables are now now allowed in '<c>fun M:F/A</c>' as
+	    suggested by Richard O'Keefe in EEP-23.</p>
+	    <p>The representation of '<c>fun M:F/A</c>' in the
+	    abstract format has been changed in an incompatible way.
+	    Tools that directly read or manipulate the abstract
+	    format (such as parse transforms) may need to be updated.
+	    The compiler can handle both the new and the old format
+	    (i.e. extracting the abstract format from a pre-R15 BEAM
+	    file and compiling it using compile:forms/1,2 will work).
+	    The <c>syntax_tools</c> application can also handle both
+	    formats.</p>
+          <p>
+	    *** POTENTIAL INCOMPATIBILITY ***</p>
+          <p>
+	    Own Id: OTP-9643</p>
+        </item>
+        <item>
+          <p>
+	    <c>filename:find_src/1,2</c> will now work on stripped
+	    BEAM files (reported by Per Hedeland). The HiPE compiler
+	    will also work on stripped BEAM files. The BEAM compiler
+	    will no longer include compilation options given in the
+	    source code itself in <c>M:module_info(compile)</c>
+	    (because those options will be applied anyway if the
+	    module is re-compiled).</p>
+          <p>
+	    Own Id: OTP-9752</p>
+        </item>
+        <item>
+	    <p>Inlining binary matching could cause an internal
+	    compiler error. (Thanks to Rene Kijewski for reporting
+	    this bug.)</p>
+          <p>
+	    Own Id: OTP-9770</p>
+        </item>
+      </list>
+    </section>
+
+</section>
 
 <section><title>Compiler 4.7.5</title>
 
@@ -415,7 +1163,7 @@
 	    (Thanks to Paul Fisher.)</p>
 	    <p>Using filter expressions containing <c>andalso</c> or
 	    <c>orelse</c> in a list comprehension could cause a
-	    compiler crash. (Thanks to Martin Engstr�m.)</p>
+	    compiler crash. (Thanks to Martin Engström.)</p>
           <p>
 	    Own Id: OTP-8054</p>
         </item>

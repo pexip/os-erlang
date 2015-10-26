@@ -1,7 +1,7 @@
 /*
  * %CopyrightBegin%
  * 
- * Copyright Ericsson AB 1997-2011. All Rights Reserved.
+ * Copyright Ericsson AB 1997-2013. All Rights Reserved.
  * 
  * The contents of this file are subject to the Erlang Public License,
  * Version 1.1, (the "License"); you may not use this file except in
@@ -173,6 +173,8 @@ static int verify_dns_configuration(void)
 
 #endif    
 
+#if defined(VXWORKS) || _REENTRANT
+
 /* 
  * Copy the contents of one struct hostent to another, i.e. don't just
  * copy the pointers, copy all the data and create new pointers, etc.
@@ -186,11 +188,11 @@ static int verify_dns_configuration(void)
  * advance:  increment buf by n bytes, reduce len by same amount .
  */
 #if defined SIZEOF_VOID_P
-#define ALIGNBYTES (SIZEOF_VOID_P - 1)
+#define EI_ALIGNBYTES (SIZEOF_VOID_P - 1)
 #else
-#define ALIGNBYTES (sizeof(void*) - 1)
+#define EI_ALIGNBYTES (sizeof(void*) - 1)
 #endif
-#define align_buf(buf,len) for (;(((unsigned)buf) & ALIGNBYTES); (buf)++, len--)
+#define align_buf(buf,len) for (;(((unsigned)buf) & EI_ALIGNBYTES); (buf)++, len--)
 #define advance_buf(buf,len,n) ((buf)+=(n),(len)-=(n))
 
 /* "and now the tricky part..." */
@@ -226,7 +228,7 @@ static int copy_hostent(struct hostent *dest, const struct hostent *src, char *b
   
   while(*(src_aliases)) {
     if (buflen < sizeof(*pptr)) return -1;
-    *pptr = src_aliases;
+    *pptr = (char *)src_aliases;
     advance_buf(buffer,buflen,sizeof(*pptr));
     src_aliases++;
     pptr++;
@@ -281,6 +283,8 @@ static int copy_hostent(struct hostent *dest, const struct hostent *src, char *b
   if (buflen < 0) return -1;
   return 0;
 }
+
+#undef EI_ALIGNBYTES
 
 /* This function is a pseudo-reentrant version of gethostbyname(). It
  * uses locks to serialize the call to the regular (non-reentrant)
@@ -355,6 +359,10 @@ static struct hostent *my_gethostbyname_r(const char *name,
   return rval;
 }
 
+#endif /* defined(VXWORKS) || _REENTRANT */
+
+#if defined(VXWORKS) || EI_THREADS != false
+
 static struct hostent *my_gethostbyaddr_r(const char *addr,
 					  int length, 
 					  int type, 
@@ -416,6 +424,7 @@ static struct hostent *my_gethostbyaddr_r(const char *addr,
   return rval;
 }
 
+#endif /* defined(VXWORKS) || EI_THREADS != false */
 
 #endif /* !HAVE_GETHOSTBYNAME_R */
 
@@ -633,7 +642,7 @@ struct hostent *ei_gethostbyname_r(const char *name,
 #ifndef HAVE_GETHOSTBYNAME_R
   return my_gethostbyname_r(name,hostp,buffer,buflen,h_errnop);
 #else
-#if (defined(__GLIBC__) || (__FreeBSD_version >= 602000) || defined(__DragonFly__))
+#if (defined(__GLIBC__) || (__FreeBSD_version >= 602000) || defined(__DragonFly__) || defined(__ANDROID__))
   struct hostent *result;
 
   gethostbyname_r(name, hostp, buffer, buflen, &result, h_errnop);

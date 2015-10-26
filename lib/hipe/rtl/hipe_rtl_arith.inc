@@ -3,7 +3,7 @@
 %%
 %% %CopyrightBegin%
 %% 
-%% Copyright Ericsson AB 2004-2011. All Rights Reserved.
+%% Copyright Ericsson AB 2004-2013. All Rights Reserved.
 %% 
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -114,7 +114,7 @@ eval_alu(Op, Arg1, Arg2)
 eval_alu(Op, Arg1, Arg2) ->
   ?EXIT({argument_overflow,Op,Arg1,Arg2}).
 
-%% Björn & Bjarni:
+%% BjÃ¶rn & Bjarni:
 %% We need to be able to do evaluations based only on the bits, since
 %% there are cases where we can evaluate a subset of the bits, but can
 %% not do a full eval-alub call (eg. a + 0 gives no carry)

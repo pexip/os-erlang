@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %% 
-%% Copyright Ericsson AB 1997-2009. All Rights Reserved.
+%% Copyright Ericsson AB 1997-2013. All Rights Reserved.
 %% 
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -20,12 +20,13 @@
 -module(httpd_response).
 -export([generate_and_send_response/1, send_status/3, send_header/3, 
 	 send_body/3, send_chunk/3, send_final_chunk/2, split_header/2,
-	 is_disable_chunked_send/1, cache_headers/1]).
+	 is_disable_chunked_send/1, cache_headers/2]).
 -export([map_status_code/2]).
 
--include("httpd.hrl").
--include("http_internal.hrl").
--include("httpd_internal.hrl").
+-include_lib("inets/src/inets_app/inets_internal.hrl").
+-include_lib("inets/include/httpd.hrl").
+-include_lib("inets/src/http_lib/http_internal.hrl").
+-include_lib("inets/src/http_server/httpd_internal.hrl").
 
 -define(VMODULE,"RESPONSE").
 
@@ -35,8 +36,7 @@ generate_and_send_response(#mod{init_data =
 				#init_data{peername = {_,"unknown"}}}) ->
     ok;
 generate_and_send_response(#mod{config_db = ConfigDB} = ModData) ->
-    Modules = httpd_util:lookup(ConfigDB,modules,
-				[mod_get, mod_head, mod_log]),
+    Modules = httpd_util:lookup(ConfigDB, modules, ?DEFAULT_MODS),
     case traverse_modules(ModData, Modules) of
 	done ->
 	    ok;
@@ -69,16 +69,7 @@ traverse_modules(ModData,[]) ->
   {proceed,ModData#mod.data};
 traverse_modules(ModData,[Module|Rest]) ->
     ?hdrd("traverse modules", [{callback_module, Module}]), 
-    case (catch apply(Module, do, [ModData])) of
-	{'EXIT', Reason} ->
-	    ?hdrd("traverse modules - exit", [{reason, Reason}]), 
-	    String = 
-		lists:flatten(
-		  io_lib:format("traverse exit from apply: ~p:do => ~n~p",
-				[Module, Reason])),
-	    report_error(mod_log, ModData#mod.config_db, String),
-	    report_error(mod_disk_log, ModData#mod.config_db, String),
-	    done;
+    try apply(Module, do, [ModData]) of
 	done ->
 	    ?hdrt("traverse modules - done", []), 
 	    done;
@@ -88,6 +79,19 @@ traverse_modules(ModData,[Module|Rest]) ->
 	{proceed, NewData} ->
 	    ?hdrt("traverse modules - proceed", [{new_data, NewData}]), 
 	    traverse_modules(ModData#mod{data = NewData}, Rest)
+    catch 
+	T:E ->
+	    String = 
+		lists:flatten(
+		  io_lib:format("module traverse failed: ~p:do => "
+				"~n   Error Type:  ~p"
+				"~n   Error:       ~p"
+				"~n   Stack trace: ~p",
+				[Module, T, E, ?STACK()])),
+	    report_error(mod_log, ModData#mod.config_db, String),
+	    report_error(mod_disk_log, ModData#mod.config_db, String),
+	    send_status(ModData, 500, none),
+	    done
     end.
 
 %% send_status %%
@@ -100,12 +104,19 @@ send_status(#mod{socket_type = SocketType,
 		 socket      = Socket, 
 		 config_db   = ConfigDB} = ModData, StatusCode, PhraseArgs) ->
 
+    ?hdrd("send status", [{status_code, StatusCode}, 
+			  {phrase_args, PhraseArgs}]), 
+
     ReasonPhrase = httpd_util:reason_phrase(StatusCode),
     Message      = httpd_util:message(StatusCode, PhraseArgs, ConfigDB),
     Body         = get_body(ReasonPhrase, Message),
 
-    send_header(ModData, StatusCode, [{content_type, "text/html"},
-			    {content_length, integer_to_list(length(Body))}]),
+    ?hdrt("send status - header", [{reason_phrase, ReasonPhrase}, 
+     				   {message,       Message}]), 
+    send_header(ModData, StatusCode, 
+		[{content_type,   "text/html"},
+		 {content_length, integer_to_list(length(Body))}]),
+
     httpd_socket:deliver(SocketType, Socket, Body).
 
 
@@ -136,10 +147,14 @@ send_response(ModData, Header, Body) ->
 	    end
     end.
 
-send_header(#mod{socket_type = Type, socket = Sock, 
-		 http_version = Ver,  connection = Conn} = _ModData, 
+send_header(#mod{socket_type  = Type, 
+		 socket       = Sock, 
+		 http_version = Ver, 
+		 connection   = Conn,
+		 config_db    = ConfigDb} = _ModData, 
 	    StatusCode, KeyValueTupleHeaders) ->
-    Headers = create_header(lists:map(fun transform/1, KeyValueTupleHeaders)),
+    Headers = create_header(ConfigDb, 
+			    lists:map(fun transform/1, KeyValueTupleHeaders)),
     NewVer = case {Ver, StatusCode} of
 		 {[], _} ->
 		     %% May be implicit!
@@ -256,8 +271,8 @@ get_connection(false,"HTTP/1.1") ->
 get_connection(_,_) ->
     "".
 
-cache_headers(#mod{config_db = Db}) ->
-    case httpd_util:lookup(Db, script_nocache, false) of
+cache_headers(#mod{config_db = Db}, NoCacheType) ->
+    case httpd_util:lookup(Db, NoCacheType, false) of
 	true ->
 	    Date = httpd_util:rfc1123_date(),
 	    [{"cache-control", "no-cache"},
@@ -267,12 +282,19 @@ cache_headers(#mod{config_db = Db}) ->
 	    []
     end.
 
-create_header(KeyValueTupleHeaders) ->
-    NewHeaders = add_default_headers([{"date", httpd_util:rfc1123_date()},
-				      {"content-type", "text/html"},
-				      {"server", ?SERVER_SOFTWARE}], 
-				     KeyValueTupleHeaders),
+create_header(ConfigDb, KeyValueTupleHeaders) ->
+    Date        = httpd_util:rfc1123_date(), 
+    ContentType = "text/html", 
+    Server      = server(ConfigDb),
+    NewHeaders  = add_default_headers([{"date",         Date},
+				       {"content-type", ContentType},
+				       {"server",       Server}], 
+				       KeyValueTupleHeaders),
     lists:map(fun fix_header/1, NewHeaders).
+
+
+server(ConfigDb) ->
+    httpd_util:lookup(ConfigDb, server, ?SERVER_SOFTWARE).
 
 fix_header({Key0, Value}) ->
     %% make sure first letter is capital
@@ -345,8 +367,9 @@ transform({Field, Value}) when is_list(Field) ->
 %% Leave this method and go on to the newer form of response
 %% OTP-4408
 %%----------------------------------------------------------------------
-send_response_old(#mod{method      = "HEAD"} = ModData,
+send_response_old(#mod{method = "HEAD"} = ModData,
 		  StatusCode, Response) ->
+
     NewResponse = lists:flatten(Response),
     
     case httpd_util:split(NewResponse, [?CR, ?LF, ?CR, ?LF],2) of

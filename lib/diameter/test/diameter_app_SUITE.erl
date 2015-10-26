@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2010-2011. All Rights Reserved.
+%% Copyright Ericsson AB 2010-2014. All Rights Reserved.
 %%
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -41,10 +41,22 @@
 
 -define(A, list_to_atom).
 
+%% Modules not in the app and that should not have dependencies on it
+%% for build reasons.
+-define(COMPILER_MODULES, [diameter_codegen,
+                           diameter_dict_scanner,
+                           diameter_dict_parser,
+                           diameter_dict_util,
+                           diameter_exprecs,
+                           diameter_make]).
+
+-define(INFO_MODULES, [diameter_dbg,
+                       diameter_info]).
+
 %% ===========================================================================
 
 suite() ->
-    [{timetrap, {seconds, 10}}].
+    [{timetrap, {seconds, 60}}].
 
 all() ->
     [keys,
@@ -87,19 +99,14 @@ vsn(Config) ->
 %% # modules/1
 %%
 %% Ensure that the app file modules and installed modules differ by
-%% compiler/help modules.
+%% compiler/info modules.
 %% ===========================================================================
 
 modules(Config) ->
     Mods = fetch(modules, fetch(app, Config)),
     Installed = code_mods(),
-    Help = [diameter_callback,
-            diameter_codegen,
-            diameter_dbg,
-            diameter_exprecs,
-            diameter_info,
-            diameter_spec_scan,
-            diameter_spec_util],
+    Help = lists:sort(?INFO_MODULES ++ ?COMPILER_MODULES),
+
     {[], Help} = {Mods -- Installed, lists:sort(Installed -- Mods)}.
 
 code_mods() ->
@@ -133,12 +140,15 @@ release(Config) ->
     Rel = {release,
            {"diameter test release", fetch(vsn, App)},
            {erts, erlang:system_info(version)},
-           [{A, appvsn(A)} || A <- fetch(applications, App)]},
+           [{A, appvsn(A)} || A <- [sasl | fetch(applications, App)]]},
     Dir = fetch(priv_dir, Config),
     ok = write_file(filename:join([Dir, "diameter_test.rel"]), Rel),
     {ok, _, []} = systools:make_script("diameter_test", [{path, [Dir]},
                                                          {outdir, Dir},
                                                          silent]).
+
+%% sasl need to be included to avoid a missing_sasl warning, error
+%% in the case of relup/1.
 
 appvsn(Name) ->
     [{application, Name, App}] = diameter_util:consult(Name, app),
@@ -147,14 +157,16 @@ appvsn(Name) ->
 %% ===========================================================================
 %% # xref/1
 %%
-%% Ensure that no function in our application calls an undefined function.
+%% Ensure that no function in our application calls an undefined function
+%% or one in an application we haven't declared as a dependency. (Almost.)
 %% ===========================================================================
 
 xref(Config) ->
     App = fetch(app, Config),
-    Mods = fetch(modules, App) -- [diameter_codegen, diameter_dbg],
-    %% Skip modules that aren't required at runtime and that have
-    %% dependencies beyond those applications listed in the app file.
+    Mods = fetch(modules, App),  %% modules listed in the app file
+
+    %% List of application names extracted from runtime_dependencies.
+    Deps = lists:map(fun unversion/1, fetch(runtime_dependencies, App)),
 
     {ok, XRef} = xref:start(make_name(xref_test_name)),
     ok = xref:set_default(XRef, [{verbose, false}, {warnings, false}]),
@@ -164,16 +176,60 @@ xref(Config) ->
     %% stop xref from complaining about calls to module erlang, which
     %% was previously in kernel. Erts isn't an application however, in
     %% the sense that there's no .app file, and isn't listed in
-    %% applications. Seems less than ideal.
+    %% applications.
     ok = lists:foreach(fun(A) -> add_application(XRef, A) end,
                        [?APP, erts | fetch(applications, App)]),
 
     {ok, Undefs} = xref:analyze(XRef, undefined_function_calls),
+    {ok, RTmods} = xref:analyze(XRef, {module_use, Mods}),
+    {ok, CTmods} = xref:analyze(XRef, {module_use, ?COMPILER_MODULES}),
+    {ok, RTdeps} = xref:analyze(XRef, {module_call, Mods}),
 
     xref:stop(XRef),
 
     %% Only care about calls from our own application.
-    [] = lists:filter(fun({{M,_,_},_}) -> lists:member(M, Mods) end, Undefs).
+    [] = lists:filter(fun({{F,_,_},{T,_,_}}) ->
+                              lists:member(F, Mods)
+                                  andalso {F,T} /= {diameter_tcp, ssl}
+                      end,
+                      Undefs),
+    %% diameter_tcp does call ssl despite the latter not being listed
+    %% as a dependency in the app file since ssl is only required for
+    %% TLS security: it's up to a client who wants TLS to start ssl.
+
+    %% Ensure that only runtime or info modules call runtime modules.
+    %% It's not strictly necessary that diameter compiler modules not
+    %% depend on other diameter modules but it's a simple source of
+    %% build errors if not properly encoded in the makefile so guard
+    %% against it.
+    [] = (RTmods -- Mods) -- ?INFO_MODULES,
+
+    %% Ensure that runtime modules don't call compiler modules.
+    CTmods = CTmods -- Mods,
+
+    %% Ensure that runtime modules only call other runtime modules, or
+    %% applications declared as in runtime_dependencies in the app
+    %% file. Note that the declared application versions are ignored
+    %% since we only know what we can see now.
+    [] = lists:filter(fun(M) -> not lists:member(app(M), Deps) end,
+                      RTdeps -- Mods).
+
+unversion(App) ->
+    T = lists:dropwhile(fun is_vsn_ch/1, lists:reverse(App)),
+    lists:reverse(case T of [$-|TT] -> TT; _ -> T end).
+
+is_vsn_ch(C) ->
+    $0 =< C andalso C =< $9 orelse $. == C.
+
+app('$M_EXPR') -> %% could be anything but assume it's ok
+    "erts";
+app(Mod) ->
+    case code:which(Mod) of
+        preloaded ->
+            "erts";
+        Path ->
+            unversion(lists:nth(3, lists:reverse(filename:split(Path))))
+    end.
 
 add_application(XRef, App) ->
     add_application(XRef, App, code:lib_dir(App)).
@@ -201,7 +257,7 @@ relup(Config) ->
 
     App = fetch(app, Config),
     Rel = [{erts, erlang:system_info(version)}
-           | [{A, appvsn(A)} || A <- fetch(applications, App)]],
+           | [{A, appvsn(A)} || A <- [sasl | fetch(applications, App)]]],
 
     Dir = fetch(priv_dir, Config),
 
@@ -209,11 +265,14 @@ relup(Config) ->
     UpFrom = acc_rel(Dir, Rel, Up),
     DownTo = acc_rel(Dir, Rel, Down),
 
-    {[Name], [Name], UpFrom, DownTo}  %% no intersections
+    {[Name], [Name], [], []}  %% no current in up/down and go both ways
         = {[Name] -- UpFrom,
            [Name] -- DownTo,
            UpFrom -- DownTo,
            DownTo -- UpFrom},
+
+    [[], []] = [S -- sets:to_list(sets:from_list(S))
+                || S <- [UpFrom, DownTo]],
 
     {ok, _, _, []} = systools:make_relup(Name, UpFrom, DownTo, [{path, [Dir]},
                                                                 {outdir, Dir},

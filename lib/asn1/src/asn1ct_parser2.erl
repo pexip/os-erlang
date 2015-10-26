@@ -1,7 +1,8 @@
+%% vim: tabstop=8:shiftwidth=4
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2000-2010. All Rights Reserved.
+%% Copyright Ericsson AB 2000-2013. All Rights Reserved.
 %%
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -22,6 +23,11 @@
 -export([parse/1]).
 -include("asn1_records.hrl").
 
+%% Only used internally within this module.
+-record(typereference, {pos,val}).
+-record(constraint, {c,e}).
+-record(identifier, {pos,val}).
+
 %% parse all types in module
 parse(Tokens) ->
     case catch parse_ModuleDefinition(Tokens) of
@@ -33,6 +39,7 @@ parse(Tokens) ->
 	    {error,{Reason,hd(Tokens)}};
 	{ModuleDefinition,Rest1} ->
 	    {Types,Rest2} = parse_AssignmentList(Rest1),
+	    clean_process_dictionary(),
 	    case Rest2 of
 		[{'END',_}|_Rest3] ->
 		    {ok,ModuleDefinition#module{typeorval = Types}};
@@ -42,6 +49,13 @@ parse(Tokens) ->
 			    hd(Rest2)}}
 	    end
     end.
+
+clean_process_dictionary() ->
+    Mod = erase(asn1_module),
+    _ = erase({Mod,imports}),
+    _ = erase(tagdefault),
+    _ = erase(extensiondefault),
+    ok.
 
 parse_ModuleDefinition([{typereference,L1,ModuleIdentifier}|Rest0]) ->
     put(asn1_module,ModuleIdentifier),
@@ -81,14 +95,15 @@ parse_ModuleDefinition([{typereference,L1,ModuleIdentifier}|Rest0]) ->
     case Rest3 of
 	[{'::=',_L7}, {'BEGIN',_L8}|Rest4] ->
 	    {Exports, Rest5} = parse_Exports(Rest4),
-	    {Imports, Rest6} = parse_Imports(Rest5),
+	    {{imports, Imports}, Rest6} = parse_Imports(Rest5),
+            put({get(asn1_module), imports}, Imports),
 	    {#module{ pos = L1,
 		     name = ModuleIdentifier,
 		     defid = [], % fix this
 		     tagdefault = TagDefault,
 		     extensiondefault = ExtensionDefault,
 		     exports = Exports,
-		     imports = Imports},Rest6};
+		     imports = {imports, Imports}}, Rest6};
 	_ -> throw({asn1_error,{get_line(hd(Rest3)),get(asn1_module),
 				[got,get_token(hd(Rest3)),expected,"::= BEGIN"]}})
     end;
@@ -98,6 +113,9 @@ parse_ModuleDefinition(Tokens) ->
     
 parse_Exports([{'EXPORTS',_L1},{';',_L2}|Rest]) ->
     {{exports,[]},Rest};
+parse_Exports([{'EXPORTS',_},{'ALL',_},{';',_}|Rest]) ->
+    %% Same as no exports definition.
+    {{exports,all},Rest};
 parse_Exports([{'EXPORTS',_L1}|Rest]) ->
     {SymbolList,Rest2} = parse_SymbolList(Rest),
     case Rest2 of
@@ -456,7 +474,8 @@ parse_BuiltinType([{'INSTANCE',_},{'OF',_}|Rest]) ->
     {DefinedObjectClass,Rest2} = parse_DefinedObjectClass(Rest),
     case Rest2 of
 	[{'(',_}|_] ->
-	    {Constraint,Rest3} = parse_Constraint(Rest2),
+	    {Constraint0,Rest3} = parse_Constraint(Rest2),
+	    Constraint = merge_constraints([Constraint0]),
 	    {#type{def={'INSTANCE OF',DefinedObjectClass,Constraint}},Rest3};
 	_ ->
 	    {#type{def={'INSTANCE OF',DefinedObjectClass,[]}},Rest2}
@@ -717,12 +736,12 @@ parse_DefinedType(Tokens=[{typereference,L1,TypeName},
 	{'EXIT',_Reason} ->
 	    Rest2 = [T2,T3|Rest],
 	    {#type{def = #'Externaltypereference'{pos=L1,
-						  module=get(asn1_module),
+						  module=resolve_module(TypeName),
 						  type=TypeName}},Rest2};
 	{asn1_error,_} ->
 	    Rest2 = [T2,T3|Rest],
 	    {#type{def = #'Externaltypereference'{pos=L1,
-						  module=get(asn1_module),
+						  module=resolve_module(TypeName),
 						  type=TypeName}},Rest2};
 	Result ->
 	    Result
@@ -735,7 +754,7 @@ parse_DefinedType([{typereference,L1,Module},{'.',_},{typereference,_,TypeName}|
 parse_DefinedType([{typereference,L1,TypeName}|Rest]) ->
     case is_pre_defined_class(TypeName) of
 	false  ->
-	    {#type{def = #'Externaltypereference'{pos=L1,module=get(asn1_module),
+	    {#type{def = #'Externaltypereference'{pos=L1,module=resolve_module(TypeName),
 						  type=TypeName}},Rest};
 	_ ->
 	    throw({asn1_error,
@@ -757,6 +776,23 @@ parse_SelectionType(Tokens) ->
     throw({asn1_error,{get_line(hd(Tokens)),get(asn1_module),
 		       [got,get_token(hd(Tokens)),expected,'identifier <']}}).
     
+
+resolve_module(Type) ->
+    Current = get(asn1_module),
+    Imports = get({Current, imports}),
+    resolve_module(Type, Current, Imports).
+
+resolve_module(_Type, Current, undefined) ->
+    Current;
+resolve_module(Type, Current, Imports) ->
+    case [Mod || #'SymbolsFromModule'{symbols = S, module = Mod} <- Imports,
+                 #'Externaltypereference'{type = T} <- S, 
+                 Type == T] of
+        [#'Externaltypereference'{type = Mod}|_] -> Mod; 
+	%% This allows the same symbol to be imported several times
+	%% which ought to be checked elsewhere and flagged as an error
+        []  -> Current
+    end.
 
 %% --------------------------
 
@@ -905,19 +941,8 @@ parse_UnionsRec([{'|',_}|Rest]) ->
 	{V1,V2} ->
 	    {[V1,union,V2],Rest3}
 	end;
-parse_UnionsRec([{'UNION',_}|Rest]) ->
-    {InterSec,Rest2} = parse_Intersections(Rest),
-    {URec,Rest3} = parse_UnionsRec(Rest2),
-    case {InterSec,URec} of
-	{V1,[]} ->
-	    {V1,Rest3};
-	{{'SingleValue',V1},{'SingleValue',V2}} ->
-	    {{'SingleValue',ordsets:union(to_set(V1),to_set(V2))},Rest3};
-	{V1,V2} when is_list(V2) ->
-	    {[V1] ++ [union|V2],Rest3};
-	{V1,V2} ->
-	    {[V1,union,V2],Rest3}
-	end;
+parse_UnionsRec([{'UNION',Info}|Rest]) ->
+    parse_UnionsRec([{'|',Info}|Rest]);
 parse_UnionsRec(Tokens) ->
     {[],Tokens}.
 
@@ -952,20 +977,8 @@ parse_IElemsRec([{'^',_}|Rest]) ->
 	{V1,V2} ->
 	    {[V1,intersection,V2],Rest3}
     end;
-parse_IElemsRec([{'INTERSECTION',_}|Rest]) ->
-    {InterSec,Rest2} = parse_IntersectionElements(Rest),
-    {IRec,Rest3} = parse_IElemsRec(Rest2),
-    case {InterSec,IRec} of
-	{{'SingleValue',V1},{'SingleValue',V2}} ->
-	    {{'SingleValue',
-	      ordsets:intersection(to_set(V1),to_set(V2))},Rest3};
-	{V1,[]} ->
-	    {V1,Rest3};
-	{V1,V2} when is_list(V2) ->
-	    {[V1] ++ [intersection|V2],Rest3};
-	{V1,V2} ->
-	    {[V1,intersection,V2],Rest3}
-    end;
+parse_IElemsRec([{'INTERSECTION',Info}|Rest]) ->
+    parse_IElemsRec([{'^',Info}|Rest]);
 parse_IElemsRec(Tokens) ->
     {[],Tokens}.
 
@@ -1028,10 +1041,6 @@ parse_DefinedObjectClass([{typereference,_,_ModName},{'.',_},Tr={typereference,_
 parse_DefinedObjectClass([Tr={typereference,_,_ObjClName}|Rest]) ->
 %    {{objectclassname,tref2Exttref(Tr)},Rest};
     {tref2Exttref(Tr),Rest};
-parse_DefinedObjectClass([{'TYPE-IDENTIFIER',_}|Rest]) ->
-    {'TYPE-IDENTIFIER',Rest};
-parse_DefinedObjectClass([{'ABSTRACT-SYNTAX',_}|Rest]) ->
-    {'ABSTRACT-SYNTAX',Rest};
 parse_DefinedObjectClass(Tokens) ->
     throw({asn1_error,{get_line(hd(Tokens)),get(asn1_module),
 		       [got,get_token(hd(Tokens)),expected,
@@ -1042,7 +1051,8 @@ parse_DefinedObjectClass(Tokens) ->
 
 parse_ObjectClassAssignment([{typereference,L1,ObjClName},{'::=',_}|Rest]) ->
     {Type,Rest2} = parse_ObjectClass(Rest),
-    {#classdef{pos=L1,name=ObjClName,typespec=Type},Rest2};
+    {#classdef{pos=L1,name=ObjClName,module=resolve_module(Type),
+	       typespec=Type},Rest2};
 parse_ObjectClassAssignment(Tokens) ->
     throw({asn1_assignment_error,{get_line(hd(Tokens)),get(asn1_module),
 				  [got,get_token(hd(Tokens)),expected,
@@ -1539,7 +1549,7 @@ parse_DefinedObjectSet([{typereference,L1,ModuleName},{'.',_},
     {{objectset,L1,#'Externaltypereference'{pos=L2,module=ModuleName,
 					    type=ObjSetName}},Rest};
 parse_DefinedObjectSet([{typereference,L1,ObjSetName}|Rest]) ->
-    {{objectset,L1,#'Externaltypereference'{pos=L1,module=get(asn1_module),
+    {{objectset,L1,#'Externaltypereference'{pos=L1,module=resolve_module(ObjSetName),
 					    type=ObjSetName}},Rest};
 parse_DefinedObjectSet(Tokens) ->
     throw({asn1_error,{get_line(hd(Tokens)),get(asn1_module),
@@ -2125,8 +2135,7 @@ parse_ParameterizedObjectSetAssignment(Tokens) ->
 %% Parameter = {Governor,Reference} | Reference
 %% Governor = Type | DefinedObjectClass
 %% Type = #type{}
-%% DefinedObjectClass = #'Externaltypereference'{} | 
-%%                      'ABSTRACT-SYNTAX' | 'TYPE-IDENTIFIER'
+%% DefinedObjectClass = #'Externaltypereference'{}
 %% Reference = #'Externaltypereference'{} | #'Externalvaluereference'{}
 parse_ParameterList([{'{',_}|Rest]) ->
     parse_ParameterList(Rest,[]);
@@ -2854,13 +2863,14 @@ parse_SequenceValue(Tokens) ->
     throw({asn1_error,{get_line(hd(Tokens)),get(asn1_module),
 		       [got,get_token(hd(Tokens)),expected,'{']}}).
 
-parse_SequenceValue([{identifier,_,IdName}|Rest],Acc) ->
+parse_SequenceValue([{identifier,Pos,IdName}|Rest],Acc) ->
     {Value,Rest2} = parse_Value(Rest),
+    SeqTag = #seqtag{pos=Pos,module=get(asn1_module),val=IdName},
     case Rest2 of
 	[{',',_}|Rest3] ->
-	    parse_SequenceValue(Rest3,[{IdName,Value}|Acc]);
+	    parse_SequenceValue(Rest3, [{SeqTag,Value}|Acc]);
 	[{'}',_}|Rest3] ->
-	    {lists:reverse([{IdName,Value}|Acc]),Rest3};
+	    {lists:reverse(Acc, [{SeqTag,Value}]),Rest3};
 	_ ->
 	    throw({asn1_error,{get_line(hd(Rest2)),get(asn1_module),
 			       [got,get_token(hd(Rest2)),expected,'}']}})
@@ -3203,17 +3213,17 @@ prioritize_error(ErrList) ->
 
 tref2Exttref(#typereference{pos=Pos,val=Name}) ->
     #'Externaltypereference'{pos=Pos,
-			     module=get(asn1_module),
+			     module=resolve_module(Name),
 			     type=Name}.
 
 tref2Exttref(Pos,Name) ->
     #'Externaltypereference'{pos=Pos,
-			     module=get(asn1_module),
+			     module=resolve_module(Name),
 			     type=Name}.
 
 identifier2Extvalueref(#identifier{pos=Pos,val=Name}) ->
     #'Externalvaluereference'{pos=Pos,
-			      module=get(asn1_module),
+			      module=resolve_module(Name),
 			      value=Name}.
 
 %% lookahead_assignment/1 checks that the next sequence of tokens

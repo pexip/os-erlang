@@ -1,7 +1,7 @@
 %% =====================================================================
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2004-2010. All Rights Reserved.
+%% Copyright Ericsson AB 2004-2014. All Rights Reserved.
 %%
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -182,7 +182,7 @@
 -type label()   :: integer() | 'external' | 'top'.
 -type ordset(X) :: [X].  % XXX: TAKE ME OUT
 
--spec annotate(cerl:cerl()) -> {cerl:cerl(), ordset(label()), dict()}.
+-spec annotate(cerl:cerl()) -> {cerl:cerl(), ordset(label()), dict:dict()}.
 
 annotate(Tree) ->
     {Esc0, Vars} = analyze(Tree),
@@ -1083,7 +1083,6 @@ is_imm_op(erlang, is_alive, 0) -> true;
 is_imm_op(erlang, is_atom, 1) -> true;
 is_imm_op(erlang, is_binary, 1) -> true;
 is_imm_op(erlang, is_builtin, 3) -> true;
-is_imm_op(erlang, is_constant, 1) -> true;
 is_imm_op(erlang, is_float, 1) -> true;
 is_imm_op(erlang, is_function, 1) -> true;
 is_imm_op(erlang, is_integer, 1) -> true;

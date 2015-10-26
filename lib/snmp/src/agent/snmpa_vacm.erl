@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %% 
-%% Copyright Ericsson AB 1999-2010. All Rights Reserved.
+%% Copyright Ericsson AB 1999-2012. All Rights Reserved.
 %% 
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -62,6 +62,13 @@ get_mib_view(ViewType, SecModel, SecName, SecLevel, ContextName) ->
 
 %% Follows the procedure in rfc2275
 auth(ViewType, SecModel, SecName, SecLevel, ContextName) ->
+    ?vtrace("auth -> entry with"
+	    "~n   ViewType:    ~p"
+	    "~n   SecModel:    ~p"
+	    "~n   SecName:     ~p"
+	    "~n   SecLevel:    ~p"
+	    "~n   ContextName: ~p", 
+	    [ViewType, SecModel, SecName, SecLevel, ContextName]),
     % 3.2.1 - Check that the context is known to us
     ?vdebug("check that the context (~p) is known to us",[ContextName]),
     case snmp_view_based_acm_mib:vacmContextTable(get, ContextName,
@@ -74,7 +81,7 @@ auth(ViewType, SecModel, SecName, SecLevel, ContextName) ->
     end,
     % 3.2.2 - Check that the SecModel and SecName is valid
     ?vdebug("check that SecModel (~p) and SecName (~p) is valid",
-	    [SecModel,SecName]),
+	    [SecModel, SecName]),
     GroupName = 
 	case snmp_view_based_acm_mib:get(vacmSecurityToGroupTable, 
 					 [SecModel, length(SecName) | SecName],
@@ -111,6 +118,8 @@ check_auth(Res)                 -> {ok, Res}.
 %% key in the table >= ViewIndex.
 %%-----------------------------------------------------------------
 get_mib_view(ViewName) ->
+    ?vtrace("get_mib_view -> entry with"
+	    "~n   ViewName: ~p", [ViewName]),
     ViewKey = [length(ViewName) | ViewName],
     case snmp_view_based_acm_mib:table_next(vacmViewTreeFamilyTable,
 					    ViewKey) of
@@ -202,6 +211,13 @@ backup(BackupDir) ->
 
 %% Ret: {ok, ViewName} | {error, Reason}
 get_view_name(ViewType, GroupName, ContextName, SecModel, SecLevel) ->
+    ?vtrace("get_view_name -> entry with"
+	    "~n   ViewType:    ~p"
+	    "~n   GroupName:   ~p"
+	    "~n   ContextName: ~p"
+	    "~n   SecModel:    ~p"
+	    "~n   SecLevel:    ~p", 
+	    [ViewType, GroupName, ContextName, SecModel, SecLevel]),
     GroupKey = [length(GroupName) | GroupName],
     case get_access_row(GroupKey, ContextName, SecModel, SecLevel) of
 	undefined ->
@@ -266,9 +282,10 @@ dump_table(true) ->
 dump_table(_) ->
     ok.
 
+
 dump_table() ->
     [{_, FName}] = ets:lookup(snmp_agent_table, snmpa_vacm_file),
-    TmpName = FName ++ ".tmp",
+    TmpName = unique_table_name(FName), 
     case ets:tab2file(snmpa_vacm, TmpName) of
 	ok ->
 	    case file:rename(TmpName, FName) of
@@ -281,6 +298,35 @@ dump_table() ->
 	{error, Reason} ->
 	    user_err("Warning: could not save vacm db ~p (~p)",
 		     [FName, Reason])
+    end.
+
+%% This little thing is an attempt to create a "unique" filename
+%% in order to minimize the risk of two processes at the same 
+%% time dumping the table.
+unique_table_name(Pre) ->
+    %% We want something that is guaranteed to be unique, 
+    %% therefor we use erlang:now() instead of os:timestamp()
+    unique_table_name(Pre, erlang:now()).
+
+unique_table_name(Pre, {_A, _B, C} = Now) ->
+    {Date, Time}     = calendar:now_to_datetime(Now),
+    {YYYY, MM, DD}   = Date,
+    {Hour, Min, Sec} = Time,
+    FormatDate =
+        io_lib:format("~.4w~.2.0w~.2.0w_~.2.0w~.2.0w~.2.0w_~w",
+                      [YYYY, MM, DD, Hour, Min, Sec, round(C/1000)]), 
+    unique_table_name2(Pre, FormatDate).
+
+unique_table_name2(Pre, FormatedDate) ->
+    PidPart = unique_table_name_pid(), 
+    lists:flatten(io_lib:format("~s.~s~s.tmp", [Pre, PidPart, FormatedDate])).
+
+unique_table_name_pid() ->
+    case string:tokens(pid_to_list(self()), [$<,$.,$>]) of
+	[A, B, C] ->
+	    A ++ B ++ C ++ ".";
+	_ ->
+	    ""
     end.
 
 

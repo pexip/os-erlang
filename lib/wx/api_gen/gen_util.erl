@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2008-2011. All Rights Reserved.
+%% Copyright Ericsson AB 2008-2014. All Rights Reserved.
 %%
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -49,8 +49,10 @@ get_taylor_made(Str, Name) ->
 	   [dotall, {capture, all_but_first, list}]).
 
 open_write(File) ->
+    open_write(File, []).
+open_write(File, Opts) ->
     %% io:format("Generating ~s~n",[File]),
-    {ok, Fd} = file:open(File++".temp", [write]),
+    {ok, Fd} = file:open(File++".temp", [write|Opts]),
     put(current_file, {Fd,File}).
 
 
@@ -96,8 +98,8 @@ check_diff(Diff) ->
 	    [<<>>] -> ok;
 	    _ -> throw(diff)
 	end,
-	<<_, _, "%% Copyright", _/binary>> = D1,
-	<<_, _, "%% Copyright", _/binary>> = D2,
+	copyright(D1),
+	copyright(D2),
 	copyright
     catch
 	throw:_ ->  diff;
@@ -107,6 +109,10 @@ check_diff(Diff) ->
 	    io:format("~p:~p: ~p ~p~n", [?MODULE,?LINE, What, erlang:get_stacktrace()]),
 	    diff
     end.
+
+copyright(<<_, _, "%% Copyright", _/binary>>) -> ok;
+copyright(<<_, _, " * Copyright", _/binary>>) -> ok;
+copyright(_) -> throw(diff).
 
 w(Str) ->
     w(Str, []).
@@ -183,6 +189,8 @@ replace_and_remove([$| | R], Acc) ->
     replace_and_remove(R, ["|"|Acc]);
 replace_and_remove([$* | R], Acc) ->
     replace_and_remove(R, ["*"|Acc]);
+replace_and_remove([$+ | R], Acc) ->
+    replace_and_remove(R, ["+"|Acc]);
 replace_and_remove([$& | R], Acc) ->
     replace_and_remove(R, [$&|Acc]);
 replace_and_remove([$<,$< | R], Acc) ->
@@ -214,11 +222,12 @@ halt(Reason) ->
 
 erl_copyright() ->
     StartYear = start_year(get(current_class)),
+    {CurrentYear,_,_}   = erlang:date(),
     w("%%~n",[]),
     w("%% %CopyrightBegin%~n",[]),
     w("%%~n",[]),
-    w("%% Copyright Ericsson AB ~p-2011. All Rights Reserved.~n",
-      [StartYear]),
+    w("%% Copyright Ericsson AB ~p-~p. All Rights Reserved.~n",
+      [StartYear, CurrentYear]),
     w("%%~n",[]),
     w("%% The contents of this file are subject to the Erlang Public License,~n",[]),
     w("%% Version 1.1, (the \"License\"); you may not use this file except in~n",[]),
@@ -234,10 +243,11 @@ erl_copyright() ->
     w("%% %CopyrightEnd%~n",[]).
 
 c_copyright() ->
+    {CurrentYear,_,_}   = erlang:date(),
     w("/*~n",[]),
     w(" * %CopyrightBegin%~n",[]),
     w(" *~n",[]),
-    w(" * Copyright Ericsson AB 2008-2011. All Rights Reserved.~n",[]),
+    w(" * Copyright Ericsson AB 2008-~p. All Rights Reserved.~n",[CurrentYear]),
     w(" *~n",[]),
     w(" * The contents of this file are subject to the Erlang Public License,~n",[]),
     w(" * Version 1.1, (the \"License\"); you may not use this file except in~n",[]),

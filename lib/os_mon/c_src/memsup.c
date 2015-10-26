@@ -1,7 +1,7 @@
 /*
  * %CopyrightBegin%
  * 
- * Copyright Ericsson AB 1996-2009. All Rights Reserved.
+ * Copyright Ericsson AB 1996-2013. All Rights Reserved.
  * 
  * The contents of this file are subject to the Erlang Public License,
  * Version 1.1, (the "License"); you may not use this file except in
@@ -31,7 +31,7 @@
  *
  *  This program is started from Erlang as follows,
  *
- *      Port = open_port({spawn, 'memsup'}, [{packet,1}]) for UNIX and VxWorks
+ *      Port = open_port({spawn, 'memsup'}, [{packet,1}]) for UNIX
  *
  *  Erlang sends one of the request condes defined in memsup.h and this program
  *  answers in one of two ways:
@@ -75,10 +75,6 @@
  *  that there is no process at the other end of the connection
  *  having the connection open for writing (end-of-file).
  *
- *  COMPILING
- *
- *  When the target is VxWorks the identifier VXWORKS must be defined for
- *  the preprocessor (usually by a -D option).
  */
 
 #if defined(sgi) || defined(__sgi) || defined(__sgi__)
@@ -90,9 +86,7 @@
 #include <stddef.h>
 #include <stdlib.h>
 
-#ifndef VXWORKS
 #include <unistd.h>
-#endif
 
 #if (defined(__unix__) || defined(unix)) && !defined(USG)
 #include <sys/param.h>
@@ -104,19 +98,13 @@
 #include <time.h>
 #include <errno.h>
 
-#ifdef VXWORKS
-#include <vxWorks.h>
-#include <ioLib.h>
-#include <memLib.h>
-#endif
-
 #ifdef BSD4_4
 #include <sys/types.h>
 #include <sys/sysctl.h>
 #if !defined (__OpenBSD__) && !defined (__NetBSD__) 
 #include <vm/vm_param.h>
 #endif
-#if defined (__FreeBSD__) || defined(__DragonFly__)
+#if defined (__FreeBSD__) || defined(__DragonFly__) || defined (__NetBSD__)
 #include <sys/vmmeter.h>
 #endif
 #endif
@@ -143,20 +131,8 @@
 /*  prototypes */
 
 static void print_error(const char *,...);
-#ifdef VXWORKS
-extern int erl_mem_info_get(MEM_PART_STATS *);
-#endif
 
-#ifdef VXWORKS
-#define MAIN memsup
-
-static MEM_PART_STATS latest;
-static unsigned long latest_system_total; /* does not fit in the struct */
-
-#else
 #define MAIN main
-#endif
-
 
 /*
  * example, we want procfs information, now give them something equivalent: 
@@ -282,16 +258,6 @@ send_tag(int value){
     }
 }
 
-
-#ifdef VXWORKS
-static void load_statistics(void){
-    if(memPartInfoGet(memSysPartId,&latest) != OK)
-	memset(&latest,0,sizeof(latest));
-    latest_system_total = latest.numBytesFree + latest.numBytesAlloc;
-    erl_mem_info_get(&latest); /* if it fails, latest is untouched */
-}
-#endif
-
 #ifdef BSD4_4
 static int
 get_vmtotal(struct vmtotal *vt) {
@@ -327,27 +293,27 @@ get_mem_procfs(memory_ext *me){
     /* Total and free is NEEDED! */
     
     bp = strstr(buffer, "MemTotal:");    
-    if (sscanf(bp, "MemTotal: %lu kB\n", &(me->total)))  me->flag |= F_MEM_TOTAL;
+    if (bp != NULL && sscanf(bp, "MemTotal: %lu kB\n", &(me->total)))  me->flag |= F_MEM_TOTAL;
 
     bp = strstr(buffer, "MemFree:");    
-    if (sscanf(bp, "MemFree: %lu kB\n", &(me->free)))    me->flag |= F_MEM_FREE;
+    if (bp != NULL && sscanf(bp, "MemFree: %lu kB\n", &(me->free)))    me->flag |= F_MEM_FREE;
     
     /* Extensions */
     
     bp = strstr(buffer, "Buffers:");    
-    if (sscanf(bp, "Buffers: %lu kB\n", &(me->buffered))) me->flag |= F_MEM_BUFFERS;
+    if (bp != NULL && sscanf(bp, "Buffers: %lu kB\n", &(me->buffered))) me->flag |= F_MEM_BUFFERS;
     
     bp = strstr(buffer, "Cached:");    
-    if (sscanf(bp, "Cached: %lu kB\n", &(me->cached)))   me->flag |= F_MEM_CACHED;
+    if (bp != NULL && sscanf(bp, "Cached: %lu kB\n", &(me->cached)))   me->flag |= F_MEM_CACHED;
     
 
     /* Swap */
     
     bp = strstr(buffer, "SwapTotal:");    
-    if (sscanf(bp, "SwapTotal: %lu kB\n", &(me->total_swap))) me->flag |= F_SWAP_TOTAL;
+    if (bp != NULL && sscanf(bp, "SwapTotal: %lu kB\n", &(me->total_swap))) me->flag |= F_SWAP_TOTAL;
     
     bp = strstr(buffer, "SwapFree:");    
-    if (sscanf(bp, "SwapFree: %lu kB\n", &(me->free_swap))) me->flag |= F_SWAP_FREE;
+    if (bp != NULL && sscanf(bp, "SwapFree: %lu kB\n", &(me->free_swap))) me->flag |= F_SWAP_FREE;
     
     me->pagesize = 1024; /* procfs defines its size in kB */
     
@@ -358,20 +324,7 @@ get_mem_procfs(memory_ext *me){
 
 /* arch specific functions */
 
-#if defined(VXWORKS)
-static int
-get_extended_mem_vxwork(memory_ext *me) {
-    load_statistics();
-    me->total    = (latest.numBytesFree + latest.numBytesAlloc);
-    me->free     = latest.numBytesFree;
-    me->pagesize = 1;
-    me->flag     = F_MEM_TOTAL | F_MEM_FREE;
-    return 1;
-}
-#endif
-
-
-#if defined(__linux__) /* ifdef SYSINFO */
+#if defined(__linux__) && !defined(__ANDROID__)/* ifdef SYSINFO */
 /* sysinfo does not include cached memory which is a problem. */
 static int
 get_extended_mem_sysinfo(memory_ext *me) {
@@ -442,9 +395,9 @@ get_extended_mem_sgi(memory_ext *me) {
 
 static void
 get_extended_mem(memory_ext *me) {
-/* vxworks */
-#if defined(VXWORKS)
-    if (get_extended_mem_vxworks(me)) return;
+/* android */
+#if defined(__ANDROID__)
+    if (get_mem_procfs(me))  return;   
 
 /* linux */
 #elif defined(__linux__)
@@ -477,12 +430,7 @@ get_extended_mem(memory_ext *me) {
 
 static void 
 get_basic_mem(unsigned long *tot, unsigned long *used, unsigned long *pagesize){
-#if defined(VXWORKS)
-    load_statistics();
-    *tot = (latest.numBytesFree + latest.numBytesAlloc);
-    *used = latest.numBytesAlloc;
-    *pagesize = 1;
-#elif defined(_SC_AVPHYS_PAGES)	/* Does this exist on others than Solaris2? */
+#if defined(_SC_AVPHYS_PAGES)	/* Does this exist on others than Solaris2? */
     unsigned long avPhys, phys, pgSz;
     
     phys = sysconf(_SC_PHYS_PAGES);
@@ -493,7 +441,7 @@ get_basic_mem(unsigned long *tot, unsigned long *used, unsigned long *pagesize){
 #elif defined(__linux__) && !defined(_SC_AVPHYS_PAGES)
     memory_ext me;
     if (get_mem_procfs(&me) < 0) {
-        print_error("ProcFS read error.");
+        print_error("ProcFS read error");
         exit(1);
     }
     *tot      = me.total;
@@ -557,17 +505,8 @@ extended_show_mem(void){
     if (me.flag & F_SWAP_TOTAL) { send_tag(SWAP_TOTAL);       send(me.total_swap, ps); }
     if (me.flag & F_SWAP_FREE)  { send_tag(SWAP_FREE);        send(me.free_swap, ps);  }
     
-#ifdef VXWORKS
-    send_tag(SM_SYSTEM_TOTAL);
-    send(latest_system_total, 1);
-    send_tag(SM_LARGEST_FREE);
-    send(latest.maxBlockSizeFree, 1);
-    send_tag(SM_NUMBER_OF_FREE);
-    send(latest.numBlocksFree, 1);
-#else
     /* total is system total*/
     if (me.flag & F_MEM_TOTAL)  { send_tag(MEM_SYSTEM_TOTAL); send(me.total, ps);     }
-#endif
     send_tag(SHOW_SYSTEM_MEM_END);
 }    
 
@@ -582,7 +521,7 @@ message_loop(int erlin_fd)
 	 *  Wait for command from Erlang
 	 */
 	if ((res = read(erlin_fd, &cmdLen, 1)) < 0) {
-	    print_error("Error reading from Erlang.");
+	    print_error("Error reading from Erlang");
 	    return;
 	}
 
@@ -603,19 +542,19 @@ message_loop(int erlin_fd)
 		  break;
 		  
 		case 0:
-		  print_error("Erlang has closed.");
+		  print_error("Erlang has closed");
 		  return;
 
 		default:
-		  print_error("Error reading from Erlang.");
+		  print_error("Error reading from Erlang");
 		  return;
 		} /* switch() */
 	    } else { /* cmdLen != 1 */
-		print_error("Invalid command length (%d) received.", cmdLen);
+		print_error("Invalid command length (%d) received", cmdLen);
 		return;
 	    }
 	} else {		/* Erlang end closed */
-	    print_error("Erlang has closed.");
+	    print_error("Erlang has closed");
 	    return;
 	}
     }
@@ -641,15 +580,12 @@ static void
 print_error(const char *format,...)
 {
   va_list args;
+  char buffer[256];
 
   va_start(args, format);
-  fprintf(stderr, "%s: ", program_name);
-  vfprintf(stderr, format, args);
+  vsnprintf(buffer, 256, format, args);
   va_end(args);
-  fprintf(stderr, " \n");
+  /* try to use one write only */
+  fprintf(stderr, "[os_mon] memory supervisor port (memsup): %s\r\n", buffer);
+  fflush(stderr);
 }
-
-
-
-
-

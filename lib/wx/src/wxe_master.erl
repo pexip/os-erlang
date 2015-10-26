@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2008-2011. All Rights Reserved.
+%% Copyright Ericsson AB 2008-2012. All Rights Reserved.
 %%
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -28,7 +28,7 @@
 -behaviour(gen_server).
 
 %% API
--export([start/0, init_port/0, init_opengl/0]).
+-export([start/1, init_port/1, init_opengl/0, fetch_msgs/0]).
 
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
@@ -36,7 +36,9 @@
 
 -record(state, {cb_port,  %% Callback port and to erlang messages goes via it.
 		users,    %% List of wx servers, needed ??
-		driver}). %% Driver name so wx_server can create it's own port
+		driver,   %% Driver name so wx_server can create it's own port
+		msgs=[]   %% Early messages (such as openfiles on OSX)
+	       }).
 
 -include("wxe.hrl").
 -include("gen/wxe_debug.hrl").
@@ -47,20 +49,20 @@
 %% API
 %%====================================================================
 %%--------------------------------------------------------------------
-%% Function: start_link() -> {ok,Pid} | ignore | {error,Error}
+%% Function: start(SilentStart) -> {ok,Pid} | ignore | {error,Error}
 %% Description: Starts the server
 %%--------------------------------------------------------------------
-start() ->
-    gen_server:start({local, ?MODULE}, ?MODULE, [], []).
+start(SilentStart) ->
+    gen_server:start({local, ?MODULE}, ?MODULE, [SilentStart], []).
 
 %%--------------------------------------------------------------------
-%% Function: init_port() -> {UserPort,CallBackPort} | error(Error)
+%% Function: init_port(SilentStart) -> {UserPort,CallBackPort} | error(Error)
 %% Description: Creates the port
 %%--------------------------------------------------------------------
-init_port() ->
+init_port(SilentStart) ->
     case whereis(?MODULE) of
 	undefined ->
-	    case start() of
+	    case start(SilentStart) of
 		{ok,Pid} -> Pid;
 		{error,{already_started,Pid}} -> Pid;
 		{error, {Reason,Stack}} ->
@@ -76,11 +78,17 @@ init_port() ->
 
 
 %%--------------------------------------------------------------------
-%% Initlizes the opengl library
+%% Initalizes the opengl library
 %%--------------------------------------------------------------------
 init_opengl() ->
     GLLib = wxe_util:wxgl_dl(),
     wxe_util:call(?WXE_INIT_OPENGL, <<(list_to_binary(GLLib))/binary, 0:8>>).
+
+%%--------------------------------------------------------------------
+%% Fetch early messages, hack to get start up args on mac
+%%--------------------------------------------------------------------
+fetch_msgs() ->
+    gen_server:call(?MODULE, fetch_msgs, infinity).
 
 %%====================================================================
 %% gen_server callbacks
@@ -93,24 +101,20 @@ init_opengl() ->
 %%                         {stop, Reason}
 %% Description: Initiates the server
 %%--------------------------------------------------------------------
-init([]) ->
+init([SilentStart]) ->
     DriverName = ?DRIVER,
-    PrivDir = wxe_util:priv_dir(?DRIVER),
+    PrivDir = wxe_util:priv_dir(?DRIVER, SilentStart),
     erlang:group_leader(whereis(init), self()),
     case catch erlang:system_info(smp_support) of
 	true -> ok;
 	_ -> 
-	    error_logger:format("WX ERROR: SMP emulator required", []),
+	    wxe_util:opt_error_log(SilentStart,
+                                   "WX ERROR: SMP emulator required"
+                                   " (start with erl -smp)",
+                                   []),
 	    erlang:error(not_smp)
     end,
-    case catch (erlang:system_info(version) >= "5.6.2") of
-	true -> ok;
-	_ -> %% Needs to be able to disable FPU exceptions. 
-	    error_logger:format("WX ERROR: OTP R12B-2 or Emulator >= 5.6.2 required", []),
-	    erlang:error(wrong_version)
-    end,
 
-    %% io:format("Loading ~p @ ~p ~n", [DriverName,PrivDir]),
     case os:type() of
         {win32,_} ->  %% Needed for mingwm10.dll
             Path = os:getenv("PATH"),
@@ -121,7 +125,9 @@ init([]) ->
     case erl_ddll:load_driver(PrivDir,DriverName) of
 	ok -> ok;
 	{error, What} -> 
-	    error_logger:format("WX Failed loading ~p@~p ~n", [DriverName,PrivDir]),
+	    wxe_util:opt_error_log(SilentStart,
+                                   "WX Failed loading ~p@~p ~n",
+                                   [DriverName,PrivDir]),
 	    Str = erl_ddll:format_error(What),
 	    erlang:error({load_driver,Str})
     end,
@@ -154,6 +160,8 @@ init([]) ->
 %%--------------------------------------------------------------------
 handle_call(init_port, From, State=#state{driver=Driver,cb_port=CBPort, users=Users}) ->
     {reply, {Driver,CBPort}, State#state{users=gb_sets:add(From,Users)}};
+handle_call(fetch_msgs, _From, State=#state{msgs=Msgs}) ->
+    {reply, lists:reverse(Msgs), State#state{msgs=[]}};
 handle_call(_Request, _From, State) ->
     %%io:format("Unknown request ~p sent to ~p from ~p ~n",[_Request, ?MODULE, _From]),
     Reply = ok,
@@ -184,6 +192,8 @@ handle_info({wxe_driver, internal_error, Msg}, State) ->
 handle_info({wxe_driver, debug, Msg}, State) ->
     io:format("WX DBG: ~s~n", [Msg]),
     {noreply, State};
+handle_info({wxe_driver, open_file, File}, State=#state{msgs=Msgs}) ->
+    {noreply, State#state{msgs=[File|Msgs]}};
 handle_info(_Info, State) ->
     io:format("Unknown message ~p sent to ~p~n",[_Info, ?MODULE]),
     {noreply, State}.
@@ -217,4 +227,3 @@ debug_ping(Port) ->
     _R = (catch erlang:port_call(Port, 0, [])),
 %%    io:format("Erlang ping ~p ~n", [_R]),
     debug_ping(Port).
-

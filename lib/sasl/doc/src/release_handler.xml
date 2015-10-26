@@ -1,10 +1,10 @@
-<?xml version="1.0" encoding="latin1" ?>
+<?xml version="1.0" encoding="utf-8" ?>
 <!DOCTYPE erlref SYSTEM "erlref.dtd">
 
 <erlref>
   <header>
     <copyright>
-      <year>1996</year><year>2011</year>
+      <year>1996</year><year>2013</year>
       <holder>Ericsson AB. All Rights Reserved.</holder>
     </copyright>
     <legalnotice>
@@ -64,10 +64,10 @@
       downgraded to the specified version by evaluating the instructions
       in <c>relup</c>. An installed release can be made
       <em>permanent</em>. There can only be one permanent release in
-      the system, and this is the release that is used if the system is
-      restarted. An installed release, except the permanent one, can be
-      <em>removed</em>. When a release is removed, all files that
-      belong to that release only are deleted.</p>
+      the system, and this is the release that is used if the system
+      is restarted. An installed release, except the permanent one,
+      can be <em>removed</em>. When a release is removed, all files
+      that belong to that release only are deleted.</p>
     <p>Each version of the release has a status. The status can be
       <c>unpacked</c>, <c>current</c>, <c>permanent</c>, or <c>old</c>.
       There is always one latest release which either has status
@@ -107,16 +107,17 @@ old        reboot_old            permanent
       restarted. This is taken care of automatically if Erlang is
       started as an embedded system. Read about this in <em>Embedded System</em>. In this case, the system configuration file
       <c>sys.config</c> is mandatory.</p>
-    <p>A new release may restart the system. Which program to use is
-      specified by the SASL configuration parameter <c>start_prg</c>
-      which defaults to <c>$ROOT/bin/start</c>.</p>
+    <p>The installation of a new release may restart the system. Which
+      program to use is specified by the SASL configuration
+      parameter <c>start_prg</c> which defaults
+      to <c>$ROOT/bin/start</c>.</p>
     <p>The emulator restart on Windows NT expects that the system is
       started using the <c>erlsrv</c> program (as a service).
       Furthermore the release handler expects that the service is named 
       <em>NodeName</em>_<em>Release</em>, where <em>NodeName</em> is
       the first part of the Erlang nodename (up to, but not including
-      the "@") and <em>Release</em> is the current release of
-      the application. The release handler furthermore expects that a
+      the "@") and <em>Release</em> is the current version of
+      the release. The release handler furthermore expects that a
       program like <c>start_erl.exe</c> is specified as "machine" to
       <c>erlsrv</c>. During upgrading with restart, a new service will
       be registered and started. The new service will be set to
@@ -238,7 +239,7 @@ old        reboot_old            permanent
     </func>
     <func>
       <name>install_release(Vsn) -> {ok, OtherVsn, Descr} | {error, Reason}</name>
-      <name>install_release(Vsn, [Opt]) -> {ok, OtherVsn, Descr} | {error, Reason}</name>
+      <name>install_release(Vsn, [Opt]) -> {ok, OtherVsn, Descr} | {continue_after_restart, OtherVsn, Descr} | {error, Reason}</name>
       <fsummary>Install a release in the system.</fsummary>
       <type>
         <v>Vsn = OtherVsn = string()</v>
@@ -248,7 +249,8 @@ old        reboot_old            permanent
         <v>&nbsp;Timeout = default | infinity | int()>0</v>
         <v>&nbsp;Bool = boolean()</v>
         <v>Descr = term()</v>
-        <v>Reason = {illegal_option, Opt} | {already_installed, Vsn} | {change_appl_data, term()} | term()</v>
+        <v>Reason = {illegal_option, Opt} | {already_installed, Vsn} | {change_appl_data, term()} | {missing_base_app, OtherVsn, App} | {could_not_create_hybrid_boot, term()} | term()</v>
+	<v>App = atom()</v>
       </type>
       <desc>
         <p>Installs the specified version <c>Vsn</c> of the release.
@@ -268,6 +270,15 @@ old        reboot_old            permanent
           <c>OtherVsn</c> and <c>Descr</c> are the version
           (<c>UpFromVsn</c> or <c>Vsn</c>) and description
           (<c>Descr1</c> or <c>Descr2</c>) as specified in the script.</p>
+	  <p>If <c>{continue_after_restart,OtherVsn,Descr}</c> is
+	  returned, it means that the emulator will be restarted
+	  before the upgrade instructions are executed. This will
+	  happen if the emulator or any of the applications kernel,
+	  stdlib or sasl are updated. The new version of the emulator
+	  and these core applications will execute after the restart,
+	  but for all other applications the old versions will be
+	  started and the upgrade will be performed as normal by
+	  executing the upgrade instructions.</p>
         <p>If a recoverable error occurs, the function returns
           <c>{error,Reason}</c> and the original application
           specifications are restored. If a non-recoverable error
@@ -324,6 +335,18 @@ release_handler:set_unpacked(RelFile, [{myapp,"1.0","/home/user"},...]).
 	  <p>Obviously, this will not reduce the overall time for the
 	  upgrade, but it will allow checks and purge to be executed
 	  in the background before the real upgrade is started.</p>
+	</note>
+	<note>
+	  <p>When upgrading the emulator from a version older than OTP
+	  R15, there will be an attempt to load new application beam
+	  code into the old emulator. In some cases, the new beam
+	  format can not be read by the old emulator, and so the code
+	  loading will fail and terminate the complete upgrade. To
+	  overcome this problem, the new application code should be
+	  compiled with the old emulator. See <seealso
+	  marker="doc/design_principles:appup_cookbook">Design
+	  Principles</seealso> for more information about emulator
+	  upgrade from pre OTP R15 versions.</p>
 	</note>
       </desc>
     </func>
@@ -431,6 +454,18 @@ release_handler:set_unpacked(RelFile, [{myapp,"1.0","/home/user"},...]).
         <p>Returns all releases known to the release handler.</p>
       </desc>
     </func>
+    <func>
+      <name>which_releases(Status) -> [{Name, Vsn, Apps, Status}]</name>
+      <fsummary>Return all known releases of a specific status</fsummary>
+      <type>
+        <v>Name = Vsn = string()</v>
+        <v>Apps = ["App-Vsn"]</v>
+        <v>Status = unpacked | current | permanent | old</v>
+      </type>
+      <desc>
+        <p>Returns all releases known to the release handler of a specific status.</p>
+      </desc>
+    </func>
   </funcs>
 
   <section>
@@ -442,7 +477,7 @@ release_handler:set_unpacked(RelFile, [{myapp,"1.0","/home/user"},...]).
       and evaluated exactly in the same way as <c>release_handler</c>
       does.</p>
     <warning>
-      <p>These function is primarily intended for simplified testing of
+      <p>These functions are primarily intended for simplified testing
         of <c>.appup</c> files. They are not run within the context of
         the <c>release_handler</c> process. They must therefore
         <em>not</em> be used together with calls to
@@ -450,7 +485,7 @@ release_handler:set_unpacked(RelFile, [{myapp,"1.0","/home/user"},...]).
         <c>release_handler</c> to end up in an inconsistent state.</p>
       <p>No persistent information is updated, why these functions can
         be used on any Erlang node, embedded or not. Also, using these
-        functions does not effect which code will be loaded in case of
+        functions does not affect which code will be loaded in case of
         a reboot.</p>
       <p>If the upgrade or downgrade fails, the application may end up
         in an inconsistent state.</p>
@@ -458,7 +493,7 @@ release_handler:set_unpacked(RelFile, [{myapp,"1.0","/home/user"},...]).
   </section>
   <funcs>
     <func>
-      <name>upgrade_app(App, Dir) -> {ok, Unpurged} | restart_new_emulator | {error, Reason}</name>
+      <name>upgrade_app(App, Dir) -> {ok, Unpurged} | restart_emulator | {error, Reason}</name>
       <fsummary>Upgrade to a new application version</fsummary>
       <type>
         <v>App = atom()</v>
@@ -487,14 +522,21 @@ release_handler:set_unpacked(RelFile, [{myapp,"1.0","/home/user"},...]).
           does.</p>
         <p>Returns <c>{ok, Unpurged}</c> if evaluating the script is
           successful, where <c>Unpurged</c> is a list of unpurged
-          modules, or <c>restart_new_emulator</c> if this instruction is
+          modules, or <c>restart_emulator</c> if this instruction is
           encountered in the script, or <c>{error, Reason}</c> if
           an error occurred when finding or evaluating the script.</p>
+	<p>If the <c>restart_new_emulator</c> instruction is found in
+	  the script, <c>upgrade_app/2</c> will return
+	  <c>{error,restart_new_emulator}</c>. The reason for this is
+	  that this instruction requires that a new version of the
+	  emulator is started before the rest of the upgrade
+	  instructions can be executed, and this can only be done by
+          <c>install_release/1,2</c>.</p>
       </desc>
     </func>
     <func>
       <name>downgrade_app(App, Dir) -></name>
-      <name>downgrade_app(App, OldVsn, Dir) -> {ok, Unpurged} | restart_new_emulator | {error, Reason}</name>
+      <name>downgrade_app(App, OldVsn, Dir) -> {ok, Unpurged} | restart_emulator | {error, Reason}</name>
       <fsummary>Downgrade to a previous application version</fsummary>
       <type>
         <v>App = atom()</v>
@@ -528,7 +570,7 @@ release_handler:set_unpacked(RelFile, [{myapp,"1.0","/home/user"},...]).
           does.</p>
         <p>Returns <c>{ok, Unpurged}</c> if evaluating the script is
           successful, where <c>Unpurged</c> is a list of unpurged
-          modules, or <c>restart_new_emulator</c> if this instruction is
+          modules, or <c>restart_emulator</c> if this instruction is
           encountered in the script, or <c>{error, Reason}</c> if
           an error occurred when finding or evaluating the script.</p>
       </desc>
@@ -604,7 +646,7 @@ release_handler:set_unpacked(RelFile, [{myapp,"1.0","/home/user"},...]).
       </desc>
     </func>
     <func>
-      <name>eval_appup_script(App, ToVsn, ToDir, Script) -> {ok, Unpurged} | restart_new_emulator | {error, Reason}</name>
+      <name>eval_appup_script(App, ToVsn, ToDir, Script) -> {ok, Unpurged} | restart_emulator | {error, Reason}</name>
       <fsummary>Evaluate an application upgrade or downgrade script</fsummary>
       <type>
         <v>App = atom()</v>
@@ -617,8 +659,8 @@ release_handler:set_unpacked(RelFile, [{myapp,"1.0","/home/user"},...]).
       <desc>
         <p>Evaluates an application upgrade or downgrade script
           <c>Script</c>, the result from calling
-          <seealso marker="#upgrade_app/2">upgrade_app/2</seealso> or
-          <seealso marker="#downgrade_app/3">downgrade_app/2,3</seealso>,
+          <seealso marker="#upgrade_app/2">upgrade_script/2</seealso> or
+          <seealso marker="#downgrade_app/3">downgrade_script/3</seealso>,
           exactly in the same way as
           <seealso marker="#install_release/1">install_release/1,2</seealso>
           does.</p>
@@ -629,9 +671,16 @@ release_handler:set_unpacked(RelFile, [{myapp,"1.0","/home/user"},...]).
           <c>.appup</c> files should be located under <c>Dir/ebin</c>.</p>
         <p>Returns <c>{ok, Unpurged}</c> if evaluating the script is
           successful, where <c>Unpurged</c> is a list of unpurged
-          modules, or <c>restart_new_emulator</c> if this instruction is
+          modules, or <c>restart_emulator</c> if this instruction is
           encountered in the script, or <c>{error, Reason}</c> if
           an error occurred when evaluating the script.</p>
+	<p>If the <c>restart_new_emulator</c> instruction is found in
+	  the script, <c>eval_appup_script/4</c> will return
+	  <c>{error,restart_new_emulator}</c>. The reason for this is
+	  that this instruction requires that a new version of the
+	  emulator is started before the rest of the upgrade
+	  instructions can be executed, and this can only be done by
+          <c>install_release/1,2</c>.</p>
       </desc>
     </func>
   </funcs>

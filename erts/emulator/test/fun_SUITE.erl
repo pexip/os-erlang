@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 1999-2011. All Rights Reserved.
+%% Copyright Ericsson AB 1999-2012. All Rights Reserved.
 %%
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -30,7 +30,7 @@
 	 fun_to_port/1,t_hash/1,t_phash/1,t_phash2/1,md5/1,
 	 refc/1,refc_ets/1,refc_dist/1,
 	 const_propagation/1,t_arity/1,t_is_function2/1,
-	 t_fun_info/1]).
+	 t_fun_info/1,t_fun_info_mfa/1]).
 
 -export([nothing/0]).
 
@@ -42,7 +42,8 @@ all() ->
     [bad_apply, bad_fun_call, badarity, ext_badarity,
      equality, ordering, fun_to_port, t_hash, t_phash,
      t_phash2, md5, refc, refc_ets, refc_dist,
-     const_propagation, t_arity, t_is_function2, t_fun_info].
+     const_propagation, t_arity, t_is_function2, t_fun_info,
+     t_fun_info_mfa].
 
 groups() -> 
     [].
@@ -261,6 +262,16 @@ equality(Config) when is_list(Config) ->
     ?line false = eq(FF2, FF3),
     ?line false = eq(FF2, FF4),
     ?line false = eq(FF3, FF4),
+
+    %% EEP37
+    H1 = fun Fact(N) when N > 0 -> N * Fact(N - 1); Fact(0) -> 1 end,
+    H2 = fun Pow(N, M) when M > 0 -> N * Pow(N, M - 1); Pow(_, 0) -> 1 end,
+    H1_copy = copy_term(H1),
+
+    true = eq(H1, H1),
+    true = eq(H1, H1_copy),
+    true = eq(H2, H2),
+    false = eq(H1, H2),
 
     ok.
 
@@ -539,12 +550,6 @@ bad_md5(Bad) ->
     {'EXIT',{badarg,_}} = (catch erlang:md5(Bad)).
 
 refc(Config) when is_list(Config) ->
-    case erlang:system_info(heap_type) of
-	private -> refc_1();
-	hybrid -> {skip,"Hybrid heap"}
-    end.
-
-refc_1() ->
     ?line F1 = fun_factory(2),
     ?line {refc,2} = erlang:fun_info(F1, refc),
     ?line F2 = fun_factory(42),
@@ -570,12 +575,6 @@ fun_factory(Const) ->
     fun(X) -> X + Const end.
 
 refc_ets(Config) when is_list(Config) ->
-    case erlang:system_info(heap_type) of
-	private -> refc_ets_1();
-	hybrid -> {skip,"Hybrid heap"}
-    end.
-
-refc_ets_1() ->
     ?line F = fun(X) -> X + 33 end,
     ?line {refc,2} = erlang:fun_info(F, refc),
 
@@ -622,12 +621,6 @@ refc_ets_bag(F1, Options) ->
     ok.
 
 refc_dist(Config) when is_list(Config) ->
-    case erlang:system_info(heap_type) of
-	private -> refc_dist_1();
-	hybrid -> {skip,"Hybrid heap"}
-    end.
-
-refc_dist_1() ->
     ?line {ok,Node} = start_node(fun_SUITE_refc_dist),
     ?line process_flag(trap_exit, true),
     ?line Pid = spawn_link(Node,
@@ -744,8 +737,8 @@ t_arity(Config) when is_list(Config) ->
     ok.
 
 t_is_function2(Config) when is_list(Config) ->
-    ?line true = is_function({a,b}, 0),
-    ?line true = is_function({a,b}, 234343434333433433),
+    false = is_function(id({a,b}), 0),
+    false = is_function(id({a,b}), 234343434333433433),
     ?line true = is_function(fun() -> ok end, 0),
     ?line true = is_function(fun(_) -> ok end, 1),
     ?line false = is_function(fun(_) -> ok end, 0),
@@ -831,6 +824,24 @@ t_fun_info(Config) when is_list(Config) ->
     ?line bad_info(<<>>),
     ?line bad_info(<<1,2>>),
     ok.
+
+t_fun_info_mfa(Config) when is_list(Config) ->
+    Fun1 = fun spawn_call/2,
+    {module,M1}  = erlang:fun_info(Fun1, module),
+    {name,F1}    = erlang:fun_info(Fun1, name),
+    {arity,A1}   = erlang:fun_info(Fun1, arity),
+    {M1,F1,A1=2} = erlang:fun_info_mfa(Fun1),
+    %% Module fun.
+    Fun2 = fun ?MODULE:t_fun_info/1,
+    {module,M2}  = erlang:fun_info(Fun2, module),
+    {name,F2}    = erlang:fun_info(Fun2, name),
+    {arity,A2}   = erlang:fun_info(Fun2, arity),
+    {M2,F2,A2=1} = erlang:fun_info_mfa(Fun2),
+
+    %% Not fun.
+    {'EXIT',_} = (catch erlang:fun_info_mfa(id(d))),
+    ok.
+
 
 bad_info(Term) ->
     try	erlang:fun_info(Term, module) of

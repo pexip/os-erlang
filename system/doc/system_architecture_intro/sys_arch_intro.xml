@@ -1,10 +1,10 @@
-<?xml version="1.0" encoding="latin1" ?>
+<?xml version="1.0" encoding="utf-8" ?>
 <!DOCTYPE chapter SYSTEM "chapter.dtd">
 
 <chapter>
   <header>
     <copyright>
-      <year>2000</year><year>2009</year>
+      <year>2000</year><year>2013</year>
       <holder>Ericsson AB. All Rights Reserved.</holder>
     </copyright>
     <legalnotice>
@@ -150,7 +150,7 @@
         <item>Chapter 8: "Operation and Management Principles" describes the model for operation and maintenance of sub-systems.</item>
         <item>Chapter 9: "Tutorial" gives an orientation of the different 
          interoperability mechanism, which can be used when integrating an 
-         Erlang program with a program written in an other programming language.</item>
+         Erlang program with a program written in another programming language.</item>
       </list>
     </section>
 

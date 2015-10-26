@@ -2,7 +2,7 @@
 %%-----------------------------------------------------------------------
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2006-2011. All Rights Reserved.
+%% Copyright Ericsson AB 2006-2014. All Rights Reserved.
 %%
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -30,7 +30,7 @@
 -type dial_cl_parse_ret() :: {'check_init', #options{}}
                            | {'plt_info', #options{}}
                            | {'cl', #options{}}
-                           | {{'gui', 'gs' | 'wx'}, #options{}}
+                           | {'gui', #options{}}
                            | {'error', string()}.
 
 -type deep_string() :: string() | [deep_string()].
@@ -164,6 +164,13 @@ cl(["--src"|T]) ->
 cl(["--no_spec"|T]) ->
   put(dialyzer_options_use_contracts, false),
   cl(T);
+cl(["--statistics"|T]) ->
+  put(dialyzer_timing, true),
+  cl(T);
+cl(["--resources"|T]) ->
+  put(dialyzer_options_report_mode, quiet),
+  put(dialyzer_timing, debug),
+  cl(T);
 cl(["-v"|_]) ->
   io:format("Dialyzer version "++?VSN++"\n"),
   erlang:halt(?RET_NOTHING_SUSPICIOUS);
@@ -186,10 +193,10 @@ cl(["--dump_callgraph", File|T]) ->
   put(dialyzer_callgraph_file, File),
   cl(T);
 cl(["--gui"|T]) ->
-  put(dialyzer_options_mode, {gui, gs}),
+  put(dialyzer_options_mode, gui),
   cl(T);
-cl(["--wx"|T]) ->
-  put(dialyzer_options_mode, {gui, wx}),
+cl(["--solver", Solver|T]) -> % not documented
+  append_var(dialyzer_solvers, [list_to_atom(Solver)]),
   cl(T);
 cl([H|_] = L) ->
   case filelib:is_file(H) orelse filelib:is_dir(H) of
@@ -207,7 +214,7 @@ cl([]) ->
 	{plt_info, cl_options()};
       false ->
 	case get(dialyzer_options_mode) of
-	  {gui, _} = GUI -> {GUI, common_options()};
+	  gui -> {gui, common_options()};
 	  cl ->
 	    case get(dialyzer_options_analysis_type) =:= plt_check of
 	      true  -> {check_init, cl_options()};
@@ -250,6 +257,8 @@ init() ->
   put(dialyzer_output_format,     formatted),
   put(dialyzer_filename_opt,      basename),
   put(dialyzer_options_check_plt, DefaultOpts#options.check_plt),
+  put(dialyzer_timing,            DefaultOpts#options.timing),
+  put(dialyzer_solvers,           DefaultOpts#options.solvers),
   ok.
 
 append_defines([Def, Val]) ->
@@ -290,6 +299,7 @@ cl_options() ->
    {filename_opt, get(dialyzer_filename_opt)},
    {analysis_type, get(dialyzer_options_analysis_type)},
    {get_warnings, get(dialyzer_options_get_warnings)},
+   {timing, get(dialyzer_timing)},
    {callgraph_file, get(dialyzer_callgraph_file)}
    |common_options()].
 
@@ -302,7 +312,8 @@ common_options() ->
    {report_mode, get(dialyzer_options_report_mode)},
    {use_spec, get(dialyzer_options_use_contracts)},
    {warnings, get(dialyzer_warnings)},
-   {check_plt, get(dialyzer_options_check_plt)}].
+   {check_plt, get(dialyzer_options_check_plt)},
+   {solvers, get(dialyzer_solvers)}].
 
 %%-----------------------------------------------------------------------
 
@@ -346,12 +357,13 @@ help_warnings() ->
 help_message() ->
   S = "Usage: dialyzer [--help] [--version] [--shell] [--quiet] [--verbose]
 		[-pa dir]* [--plt plt] [--plts plt*] [-Ddefine]*
-                [-I include_dir]* [--output_plt file] [-Wwarn]*
-                [--src] [--gui | --wx] [files_or_dirs] [-r dirs]
+                [-I include_dir]* [--output_plt file] [-Wwarn]* [--raw]
+                [--src] [--gui] [files_or_dirs] [-r dirs]
                 [--apps applications] [-o outfile]
 		[--build_plt] [--add_to_plt] [--remove_from_plt]
 		[--check_plt] [--no_check_plt] [--plt_info] [--get_warnings]
-                [--no_native] [--fullpath]
+                [--dump_callgraph file] [--no_native] [--fullpath]
+                [--statistics]
 Options:
   files_or_dirs (for backwards compatibility also as: -c files_or_dirs)
       Use Dialyzer from the command line to detect defects in the
@@ -418,6 +430,9 @@ Options:
       Make Dialyzer a bit more quiet.
   --verbose
       Make Dialyzer a bit more verbose.
+  --statistics
+      Prints information about the progress of execution (analysis phases,
+      time spent in each and size of the relative input).
   --build_plt
       The analysis starts from an empty plt and creates a new one from the
       files specified with -c and -r. Only works for beam files.
@@ -456,9 +471,7 @@ Options:
   --fullpath
       Display the full path names of files for which warnings are emitted.
   --gui
-      Use the gs-based GUI.
-  --wx
-      Use the wx-based GUI.
+      Use the GUI.
 
 Note:
   * denotes that multiple occurrences of these options are possible.
@@ -483,14 +496,22 @@ warning_options_msg() ->
      Suppress warnings for unused functions.
   -Wno_improper_lists
      Suppress warnings for construction of improper lists.
-  -Wno_tuple_as_fun
-     Suppress warnings for using tuples instead of funs.
   -Wno_fun_app
      Suppress warnings for fun applications that will fail.
   -Wno_match
      Suppress warnings for patterns that are unused or cannot match.
   -Wno_opaque
      Suppress warnings for violations of opaqueness of data types.
+  -Wno_fail_call
+     Suppress warnings for failing calls.
+  -Wno_contracts
+     Suppress warnings about invalid contracts.
+  -Wno_behaviours
+     Suppress warnings about behaviour callbacks which drift from the published
+     recommended interfaces.
+  -Wno_undefined_callbacks
+     Suppress warnings about behaviours that have no -callback attributes for
+     their callbacks.
   -Wunmatched_returns ***
      Include warnings for function calls which ignore a structured return
      value or do not match against one of many possible return value(s).
@@ -498,9 +519,6 @@ warning_options_msg() ->
      Include warnings for functions that only return by means of an exception.
   -Wrace_conditions ***
      Include warnings for possible race conditions.
-  -Wbehaviours ***
-     Include warnings about behaviour callbacks which drift from the published
-     recommended interfaces.
   -Wunderspecs ***
      Warn about underspecified functions
      (those whose -spec is strictly more allowing than the success typing).

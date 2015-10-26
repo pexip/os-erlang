@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2008-2010. All Rights Reserved.
+%% Copyright Ericsson AB 2008-2011. All Rights Reserved.
 %%
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -108,7 +108,38 @@
 	 get_pid/1
 	]).
 
--export([behaviour_info/1]).
+%% -export([behaviour_info/1]).
+-callback init(Args :: term()) ->
+    {#wx_ref{}, State :: term()} | {#wx_ref{}, State :: term(), timeout() | hibernate} |
+    {stop, Reason :: term()} | ignore.
+-callback handle_event(Request :: #wx{}, State :: term()) ->
+    {noreply, NewState :: term()} |
+    {noreply, NewState :: term(), timeout() | hibernate} |
+    {stop, Reason :: term(), NewState :: term()}.
+-callback handle_call(Request :: term(), From :: {pid(), Tag :: term()},
+                      State :: term()) ->
+    {reply, Reply :: term(), NewState :: term()} |
+    {reply, Reply :: term(), NewState :: term(), timeout() | hibernate} |
+    {noreply, NewState :: term()} |
+    {noreply, NewState :: term(), timeout() | hibernate} |
+    {stop, Reason :: term(), Reply :: term(), NewState :: term()} |
+    {stop, Reason :: term(), NewState :: term()}.
+-callback handle_cast(Request :: term(), State :: term()) ->
+    {noreply, NewState :: term()} |
+    {noreply, NewState :: term(), timeout() | hibernate} |
+    {stop, Reason :: term(), NewState :: term()}.
+-callback handle_info(Info :: timeout() | term(), State :: term()) ->
+    {noreply, NewState :: term()} |
+    {noreply, NewState :: term(), timeout() | hibernate} |
+    {stop, Reason :: term(), NewState :: term()}.
+-callback terminate(Reason :: (normal | shutdown | {shutdown, term()} |
+                               term()),
+                    State :: term()) ->
+    term().
+-callback code_change(OldVsn :: (term() | {down, term()}), State :: term(),
+                      Extra :: term()) ->
+    {ok, NewState :: term()} | {error, Reason :: term()}.
+
 
 %% System exports
 -export([system_continue/3,
@@ -125,15 +156,15 @@
 %%%  API
 %%%=========================================================================
 %% @hidden
-behaviour_info(callbacks) ->
-    [{init,1},
-     {handle_call,3},
-     {handle_info,2},
-     {handle_event,2},
-     {terminate,2},
-     {code_change,3}];
-behaviour_info(_Other) ->
-    undefined.
+%% behaviour_info(callbacks) ->
+%%     [{init,1},
+%%      {handle_call,3},
+%%      {handle_info,2},
+%%      {handle_event,2},
+%%      {terminate,2},
+%%      {code_change,3}];
+%% behaviour_info(_Other) ->
+%%     undefined.
 
 
 %%  -----------------------------------------------------------------
@@ -226,9 +257,11 @@ call(Name, Request, Timeout) when is_atom(Name) orelse is_pid(Name) ->
 %% Invokes handle_cast(Request, State) in the server
 
 cast(#wx_ref{state=Pid}, Request) when is_pid(Pid) ->
-    Pid ! {'$gen_cast',Request};
+    Pid ! {'$gen_cast',Request},
+    ok;
 cast(Name, Request) when is_atom(Name) orelse is_pid(Name) ->
-    Name ! {'$gen_cast',Request}.
+    Name ! {'$gen_cast',Request},
+    ok.
 
 %% @spec (Ref::wxObject()) -> pid()
 %% @doc Get the pid of the object handle.
@@ -258,9 +291,10 @@ init_it(Starter, self, Name, Mod, Args, Options) ->
     init_it(Starter, self(), Name, Mod, Args, Options);
 init_it(Starter, Parent, Name, Mod, Args, [WxEnv|Options]) ->
     case WxEnv of
-	undefined -> ok;	
+	undefined -> ok;
 	_ -> wx:set_env(WxEnv)
     end,
+    put('_wx_object_', {Mod,'_wx_init_'}),
     Debug = debug_options(Name, Options),
     case catch Mod:init(Args) of
 	{#wx_ref{} = Ref, State} ->
@@ -350,57 +384,16 @@ handle_msg({'$gen_call', From, Msg}, Parent, Name, State, Mod) ->
 	{noreply, NState, Time1} ->
 	    loop(Parent, Name, NState, Mod, Time1, []);
 	{stop, Reason, Reply, NState} ->
-	    {'EXIT', R} = 
+	    {'EXIT', R} =
 		(catch terminate(Reason, Name, Msg, Mod, NState, [])),
 	    reply(From, Reply),
 	    exit(R);
 	Other -> handle_common_reply(Other, Name, Msg, Mod, State, [])
     end;
-
-handle_msg(Msg = {_,_,'_wx_invoke_cb_'}, Parent, Name, State, Mod) ->
-    Reply = dispatch_cb(Msg, Mod, State),
-    handle_no_reply(Reply, Parent, Name, Msg, Mod, State, []);
 handle_msg(Msg, Parent, Name, State, Mod) ->
     Reply = (catch dispatch(Msg, Mod, State)),
     handle_no_reply(Reply, Parent, Name, Msg, Mod, State, []).
-%% @hidden
-dispatch_cb({{Msg=#wx{}, Obj=#wx_ref{}}, _, '_wx_invoke_cb_'}, Mod, State) ->
-    Callback = fun() ->
-		       wxe_util:cast(?WXE_CB_START, <<>>),
-		       case Mod:handle_sync_event(Msg, Obj, State) of
-			   ok -> <<>>;
-			   noreply -> <<>>;
-			   Other ->
-			       Args = [Msg, Obj, State],
-			       MFA = {Mod, handle_sync_event, Args},
-			       exit({bad_return, Other, MFA})
-		       end
-	       end,
-    wxe_server:invoke_callback(Callback),
-    {noreply, State};
-dispatch_cb({Func, ArgList, '_wx_invoke_cb_'}, Mod, State) ->
-    try  %% This don't work yet....
-	[#wx_ref{type=ThisClass}] = ArgList,
-	case Mod:handle_overloaded(Func, ArgList, State) of
-	    {reply, CBReply, NState} -> 
-		ThisClass:send_return_value(Func, CBReply),
-		{noreply, NState};
-	    {reply, CBReply, NState, Time1} -> 
-		ThisClass:send_return_value(Func, CBReply),
-		{noreply, NState, Time1};
-	    {noreply, NState} ->
-		ThisClass:send_return_value(Func, <<>>),
-		{noreply, NState};
-	    {noreply, NState, Time1} ->
-		ThisClass:send_return_value(Func, <<>>),
-		{noreply, NState, Time1};
-	    Other -> Other
-	end
-    catch _Err:Reason ->
-	    %% Hopefully we can release the wx-thread with this
-	    wxe_util:cast(?WXE_CB_RETURN, <<>>),
-	    {'EXIT', {Reason, erlang:get_stacktrace()}}
-    end.
+
 %% @hidden
 handle_msg({'$gen_call', From, Msg}, Parent, Name, State, Mod, Debug) ->
     case catch Mod:handle_call(Msg, From, State) of
@@ -426,9 +419,6 @@ handle_msg({'$gen_call', From, Msg}, Parent, Name, State, Mod, Debug) ->
 	Other ->
 	    handle_common_reply(Other, Name, Msg, Mod, State, Debug)
     end;
-handle_msg(Msg = {_,_,'_wx_invoke_cb_'}, Parent, Name, State, Mod, Debug) ->
-    Reply = dispatch_cb(Msg, Mod, State),
-    handle_no_reply(Reply, Parent, Name, Msg, Mod, State, Debug);
 handle_msg(Msg, Parent, Name, State, Mod, Debug) ->
     Reply = (catch dispatch(Msg, Mod, State)),
     handle_no_reply(Reply, Parent, Name, Msg, Mod, State, Debug).
@@ -537,16 +527,16 @@ error_info(_Reason, application_controller, _Msg, _State, _Debug) ->
 error_info(Reason, Name, Msg, State, Debug) ->
     Reason1 = 
 	case Reason of
-	    {undef,[{M,F,A}|MFAs]} ->
+	    {undef,[{M,F,A,L}|MFAs]} ->
 		case code:is_loaded(M) of
 		    false ->
-			{'module could not be loaded',[{M,F,A}|MFAs]};
+			{'module could not be loaded',[{M,F,A,L}|MFAs]};
 		    _ ->
 			case erlang:function_exported(M, F, length(A)) of
 			    true ->
 				Reason;
 			    false ->
-				{'function not exported',[{M,F,A}|MFAs]}
+				{'function not exported',[{M,F,A,L}|MFAs]}
 			end
 		end;
 	    _ ->

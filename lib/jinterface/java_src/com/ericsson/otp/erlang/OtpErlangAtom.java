@@ -1,7 +1,7 @@
 /*
  * %CopyrightBegin%
  * 
- * Copyright Ericsson AB 2000-2009. All Rights Reserved.
+ * Copyright Ericsson AB 2000-2013. All Rights Reserved.
  * 
  * The contents of this file are subject to the Erlang Public License,
  * Version 1.1, (the "License"); you may not use this file except in
@@ -51,9 +51,9 @@ public class OtpErlangAtom extends OtpErlangObject implements Serializable,
 		    "null string value");
 	}
 
-	if (atom.length() > maxAtomLength) {
+	if (atom.codePointCount(0, atom.length()) > maxAtomLength) {
 	    throw new java.lang.IllegalArgumentException("Atom may not exceed "
-		    + maxAtomLength + " characters");
+		    + maxAtomLength + " characters: " + atom);
 	}
 	this.atom = atom;
     }

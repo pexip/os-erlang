@@ -1,10 +1,10 @@
-<?xml version="1.0" encoding="latin1" ?>
+<?xml version="1.0" encoding="utf-8" ?>
 <!DOCTYPE erlref SYSTEM "erlref.dtd">
 
 <erlref>
   <header>
     <copyright>
-      <year>1996</year><year>2011</year>
+      <year>1996</year><year>2014</year>
       <holder>Ericsson AB. All Rights Reserved.</holder>
     </copyright>
     <legalnotice>
@@ -167,6 +167,29 @@
         <p>Converts the Erlang data structure <c><anno>Data</anno></c> into an
           abstract form of type <c><anno>AbsTerm</anno></c>.
           This is the inverse of <c>normalise/1</c>.</p>
+        <p><c>erl_parse:abstract(T)</c> is equivalent to
+          <c>erl_parse:abstract(T, 0)</c>.</p>
+      </desc>
+    </func>
+    <func>
+      <name name="abstract" arity="2"/>
+      <type name="encoding_func"/>
+      <fsummary>Convert an Erlang term into an abstract form</fsummary>
+      <desc>
+        <p>Converts the Erlang data structure <c><anno>Data</anno></c> into an
+          abstract form of type <c><anno>AbsTerm</anno></c>.</p>
+        <p>The <c><anno>Line</anno></c> option is the line that will
+          be assigned to each node of the abstract form.</p>
+        <p>The <c><anno>Encoding</anno></c> option is used for
+          selecting which integer lists will be considered
+          as strings. The default is to use the encoding returned by
+          <seealso marker="epp#default_encoding/0">
+          <c>epp:default_encoding/0</c></seealso>.
+          The value <c>none</c> means that no integer lists will be
+          considered as strings. The <c>encoding_func()</c> will be
+          called with one integer of a list at a time, and if it
+          returns <c>true</c> for every integer the list will be
+          considered a string.</p>
       </desc>
     </func>
   </funcs>

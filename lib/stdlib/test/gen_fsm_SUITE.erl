@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 1996-2011. All Rights Reserved.
+%% Copyright Ericsson AB 1996-2014. All Rights Reserved.
 %%
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -21,17 +21,19 @@
 -include_lib("test_server/include/test_server.hrl").
 
 %% Test cases
--export([all/0, suite/0,groups/0,init_per_suite/1, end_per_suite/1, 
+-export([all/0, suite/0,groups/0,init_per_suite/1, end_per_suite/1,
 	 init_per_group/2,end_per_group/2]).
 
--export([ start1/1, start2/1, start3/1, start4/1 , start5/1, start6/1,
-	 start7/1, start8/1, start9/1, start10/1, start11/1]).
+-export([start1/1, start2/1, start3/1, start4/1, start5/1, start6/1,
+	 start7/1, start8/1, start9/1, start10/1, start11/1, start12/1]).
 
 -export([ abnormal1/1, abnormal2/1]).
 
 -export([shutdown/1]).
 
--export([ sys1/1, call_format_status/1, error_format_status/1]).
+-export([ sys1/1,
+	  call_format_status/1, error_format_status/1, terminate_crash_format/1,
+	  get_state/1, replace_state/1]).
 
 -export([hibernate/1,hiber_idle/3,hiber_wakeup/3,hiber_idle/2,hiber_wakeup/2]).
 
@@ -56,17 +58,18 @@
 
 suite() -> [{ct_hooks,[ts_install_cth]}].
 
-all() -> 
+all() ->
     [{group, start}, {group, abnormal}, shutdown,
      {group, sys}, hibernate, enter_loop].
 
-groups() -> 
+groups() ->
     [{start, [],
       [start1, start2, start3, start4, start5, start6, start7,
-       start8, start9, start10, start11]},
+       start8, start9, start10, start11, start12]},
      {abnormal, [], [abnormal1, abnormal2]},
      {sys, [],
-      [sys1, call_format_status, error_format_status]}].
+      [sys1, call_format_status, error_format_status, terminate_crash_format,
+       get_state, replace_state]}].
 
 init_per_suite(Config) ->
     Config.
@@ -258,25 +261,35 @@ start11(Config) when is_list(Config) ->
     test_server:messages_get(),
     ok.
 
+%% Via register linked
+start12(Config) when is_list(Config) ->
+    ?line dummy_via:reset(),
+    ?line {ok, Pid} =
+	gen_fsm:start_link({via, dummy_via, my_fsm}, gen_fsm_SUITE, [], []),
+    ?line {error, {already_started, Pid}} =
+	gen_fsm:start_link({via, dummy_via, my_fsm}, gen_fsm_SUITE, [], []),
+    ?line {error, {already_started, Pid}} =
+	gen_fsm:start({via, dummy_via, my_fsm}, gen_fsm_SUITE, [], []),
+
+    ?line ok = do_func_test(Pid),
+    ?line ok = do_sync_func_test(Pid),
+    ?line ok = do_func_test({via, dummy_via, my_fsm}),
+    ?line ok = do_sync_func_test({via, dummy_via, my_fsm}),
+    ?line stop_it({via, dummy_via, my_fsm}),
+
+    test_server:messages_get(),
+    ok.
+
 
 %% Check that time outs in calls work
 abnormal1(suite) -> [];
 abnormal1(Config) when is_list(Config) ->
-    ?line {ok, _Pid} = 
-	gen_fsm:start({local, my_fsm}, gen_fsm_SUITE, [], []),
+    {ok, _Pid} = gen_fsm:start({local, my_fsm}, gen_fsm_SUITE, [], []),
 
     %% timeout call.
-    case os:type() of
-	vxworks ->
-	    %% timeout call for VxWorks must be in 16ms increments.
-	    ?line delayed = gen_fsm:sync_send_event(my_fsm, {delayed_answer,1}, 17),
-	    ?line {'EXIT',{timeout,_}} =
-		(catch gen_fsm:sync_send_event(my_fsm, {delayed_answer,17}, 1));
-	_ ->
-	    ?line delayed = gen_fsm:sync_send_event(my_fsm, {delayed_answer,1}, 100),
-	    ?line {'EXIT',{timeout,_}} =
-		(catch gen_fsm:sync_send_event(my_fsm, {delayed_answer,10}, 1))
-    end,
+    delayed = gen_fsm:sync_send_event(my_fsm, {delayed_answer,1}, 100),
+    {'EXIT',{timeout,_}} =
+    (catch gen_fsm:sync_send_event(my_fsm, {delayed_answer,10}, 1)),
     test_server:messages_get(),
     ok.
 
@@ -362,7 +375,25 @@ call_format_status(Config) when is_list(Config) ->
     ?line Status4 = sys:get_status(GlobalName2),
     ?line {status, Pid4, _Mod, [_PDict4, running, _, _, Data4]} = Status4,
     ?line [format_status_called | _] = lists:reverse(Data4),
-    ?line stop_it(Pid4).
+    ?line stop_it(Pid4),
+
+    %% check that format_status can handle a name being a term other than a
+    %% pid or atom
+    ?line dummy_via:reset(),
+    ViaName1 = {via, dummy_via, "CallFormatStatus"},
+    ?line {ok, Pid5} = gen_fsm:start(ViaName1, gen_fsm_SUITE, [], []),
+    ?line Status5 = sys:get_status(ViaName1),
+    ?line {status, Pid5, _Mod, [_PDict5, running, _, _, Data5]} = Status5,
+    ?line [format_status_called | _] = lists:reverse(Data5),
+    ?line stop_it(Pid5),
+    ViaName2 = {via, dummy_via, {name, "term"}},
+    ?line {ok, Pid6} = gen_fsm:start(ViaName2, gen_fsm_SUITE, [], []),
+    ?line Status6 = sys:get_status(ViaName2),
+    ?line {status, Pid6, _Mod, [_PDict6, running, _, _, Data6]} = Status6,
+    ?line [format_status_called | _] = lists:reverse(Data6),
+    ?line stop_it(Pid6).
+
+
 
 error_format_status(Config) when is_list(Config) ->
     ?line error_logger_forwarder:register(),
@@ -375,7 +406,7 @@ error_format_status(Config) when is_list(Config) ->
     receive
 	{error,_GroupLeader,{Pid,
 			     "** State machine"++_,
-			     [Pid,{_,_,badreturn},idle,StateData,_]}} ->
+			     [Pid,{_,_,badreturn},idle,{formatted,StateData},_]}} ->
 	    ok;
 	Other ->
 	    ?line io:format("Unexpected: ~p", [Other]),
@@ -383,6 +414,81 @@ error_format_status(Config) when is_list(Config) ->
     end,
     ?t:messages_get(),
     process_flag(trap_exit, OldFl),
+    ok.
+
+terminate_crash_format(Config) when is_list(Config) ->
+    error_logger_forwarder:register(),
+    OldFl = process_flag(trap_exit, true),
+    StateData = crash_terminate,
+    {ok, Pid} = gen_fsm:start(gen_fsm_SUITE, {state_data, StateData}, []),
+    stop_it(Pid),
+    receive
+	{error,_GroupLeader,{Pid,
+			     "** State machine"++_,
+			     [Pid,{_,_,_},idle,{formatted, StateData},_]}} ->
+	    ok;
+	Other ->
+	    io:format("Unexpected: ~p", [Other]),
+	    ?t:fail()
+    after 5000 ->
+	    io:format("Timeout: expected error logger msg", []),
+	    ?t:fail()
+    end,
+    [] = ?t:messages_get(),
+    process_flag(trap_exit, OldFl),
+    ok.
+
+
+get_state(Config) when is_list(Config) ->
+    State = self(),
+    {ok, Pid} = gen_fsm:start(?MODULE, {state_data, State}, []),
+    {idle, State} = sys:get_state(Pid),
+    {idle, State} = sys:get_state(Pid, 5000),
+    stop_it(Pid),
+
+    %% check that get_state can handle a name being an atom (pid is
+    %% already checked by the previous test)
+    {ok, Pid2} = gen_fsm:start({local, gfsm}, gen_fsm_SUITE, {state_data, State}, []),
+    {idle, State} = sys:get_state(gfsm),
+    {idle, State} = sys:get_state(gfsm, 5000),
+    stop_it(Pid2),
+
+    %% check that get_state works when pid is sys suspended
+    {ok, Pid3} = gen_fsm:start(gen_fsm_SUITE, {state_data, State}, []),
+    {idle, State} = sys:get_state(Pid3),
+    ok = sys:suspend(Pid3),
+    {idle, State} = sys:get_state(Pid3, 5000),
+    ok = sys:resume(Pid3),
+    stop_it(Pid3),
+    ok.
+
+replace_state(Config) when is_list(Config) ->
+    State = self(),
+    {ok, Pid} = gen_fsm:start(?MODULE, {state_data, State}, []),
+    {idle, State} = sys:get_state(Pid),
+    NState1 = "replaced",
+    Replace1 = fun({StateName, _}) -> {StateName, NState1} end,
+    {idle, NState1} = sys:replace_state(Pid, Replace1),
+    {idle, NState1} = sys:get_state(Pid),
+    NState2 = "replaced again",
+    Replace2 = fun({idle, _}) -> {state0, NState2} end,
+    {state0, NState2} = sys:replace_state(Pid, Replace2, 5000),
+    {state0, NState2} = sys:get_state(Pid),
+    %% verify no change in state if replace function crashes
+    Replace3 = fun(_) -> error(fail) end,
+    {'EXIT',{{callback_failed,
+	      {gen_fsm,system_replace_state},{error,fail}},_}} =
+	(catch sys:replace_state(Pid, Replace3)),
+    {state0, NState2} = sys:get_state(Pid),
+    %% verify state replaced if process sys suspended
+    ok = sys:suspend(Pid),
+    Suffix2 = " and again",
+    NState3 = NState2 ++ Suffix2,
+    Replace4 = fun({StateName, _}) -> {StateName, NState3} end,
+    {state0, NState3} = sys:replace_state(Pid, Replace4),
+    ok = sys:resume(Pid),
+    {state0, NState3} = sys:get_state(Pid, 5000),
+    stop_it(Pid),
     ok.
 
 %% Hibernation
@@ -520,6 +626,8 @@ enter_loop(doc) ->
 enter_loop(Config) when is_list(Config) ->
     OldFlag = process_flag(trap_exit, true),
 
+    ?line dummy_via:reset(),
+
     %% Locally registered process + {local, Name}
     ?line {ok, Pid1a} =
 	proc_lib:start_link(?MODULE, enter_loop, [local, local]),
@@ -623,9 +731,21 @@ enter_loop(Config) when is_list(Config) ->
 	{'EXIT', Pid6b, process_not_registered_globally} ->
 	    ok
     after 1000 ->
-	    ?line test_server:fail(gen_server_started)
+	    ?line test_server:fail(gen_fsm_started)
     end,
     global:unregister_name(armitage),
+
+    dummy_via:register_name(armitage, self()),
+    ?line {ok, Pid6c} =
+	proc_lib:start_link(?MODULE, enter_loop, [anon, via]),
+    receive
+	{'EXIT', Pid6c, {process_not_registered_via, dummy_via}} ->
+	    ok
+    after 1000 ->
+	    ?line test_server:fail({gen_fsm_started, process_info(self(),
+								 messages)})
+    end,
+    dummy_via:unregister_name(armitage),
 
     process_flag(trap_exit, OldFlag),
     ok.
@@ -635,6 +755,7 @@ enter_loop(Reg1, Reg2) ->
     case Reg1 of
 	local -> register(armitage, self());
 	global -> global:register_name(armitage, self());
+	via -> dummy_via:register_name(armitage, self());
 	anon -> ignore
     end,
     proc_lib:init_ack({ok, self()}),
@@ -643,6 +764,9 @@ enter_loop(Reg1, Reg2) ->
 	    gen_fsm:enter_loop(?MODULE, [], state0, [], {local,armitage});
 	global ->
 	    gen_fsm:enter_loop(?MODULE, [], state0, [], {global,armitage});
+	via ->
+	    gen_fsm:enter_loop(?MODULE, [], state0, [],
+			       {via, dummy_via, armitage});
 	anon ->
 	    gen_fsm:enter_loop(?MODULE, [], state0, [])
     end.
@@ -769,7 +893,8 @@ init({state_data, StateData}) ->
 init(_) ->
     {ok, idle, state_data}.
 
-
+terminate(_, _State, crash_terminate) ->
+    exit({crash, terminate});
 terminate({From, stopped}, State, _Data) ->
     From ! {self(), {stopped, State}},
     ok;
@@ -907,6 +1032,6 @@ handle_sync_event({get, _Pid}, _From, State, Data) ->
     {reply, {state, State, Data}, State, Data}.
 
 format_status(terminate, [_Pdict, StateData]) ->
-    StateData;
+    {formatted, StateData};
 format_status(normal, [_Pdict, _StateData]) ->
     [format_status_called].

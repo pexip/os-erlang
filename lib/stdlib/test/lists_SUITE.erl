@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %% 
-%% Copyright Ericsson AB 1997-2011. All Rights Reserved.
+%% Copyright Ericsson AB 1997-2013. All Rights Reserved.
 %% 
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -61,7 +61,7 @@
 	 zip_unzip/1, zip_unzip3/1, zipwith/1, zipwith3/1,
 	 filter_partition/1, 
 	 otp_5939/1, otp_6023/1, otp_6606/1, otp_7230/1,
-	 suffix/1, subtract/1]).
+	 suffix/1, subtract/1, droplast/1]).
 
 %% Sort randomized lists until stopped.
 %%
@@ -2532,8 +2532,8 @@ otp_5939(Config) when is_list(Config) ->
     ?line [] = lists:filter(Pred, []),
     ?line {'EXIT', _} = (catch lists:partition(func, [])),
     ?line {[],[]} = lists:partition(Pred, []),
-    ?line {'EXIT', _} = (catch lists:zf(func, [])),
-    ?line [] = lists:zf(Fun1, []),
+    ?line {'EXIT', _} = (catch lists:filtermap(func, [])),
+    ?line [] = lists:filtermap(Fun1, []),
     ?line {'EXIT', _} = (catch lists:foreach(func, [])),
     ?line ok = lists:foreach(Fun1, []),
     ?line {'EXIT', _} = (catch lists:mapfoldl(func, [], [])),
@@ -2641,4 +2641,12 @@ sub_non_matching(A, B) ->
 sub(A, B) ->
     Res = A -- B,
     Res = lists:subtract(A, B).
-	
+
+%% Test lists:droplast/1
+droplast(Config) when is_list(Config) ->
+    ?line [] = lists:droplast([x]),
+    ?line [x] = lists:droplast([x, y]),
+    ?line {'EXIT', {function_clause, _}} = (catch lists:droplast([])),
+    ?line {'EXIT', {function_clause, _}} = (catch lists:droplast(x)),
+
+    ok.

@@ -1,7 +1,7 @@
 /*
  * %CopyrightBegin%
  *
- * Copyright Ericsson AB 2008-2010. All Rights Reserved.
+ * Copyright Ericsson AB 2008-2013. All Rights Reserved.
  *
  * The contents of this file are subject to the Erlang Public License,
  * Version 1.1, (the "License"); you may not use this file except in
@@ -26,9 +26,9 @@ WX_DEFINE_OBJARRAY(wxErlDrvTermDataArray);
 
 #define INLINE
 
-wxeReturn::wxeReturn (ErlDrvPort      _port, 
-                    ErlDrvTermData  _caller, 
-                    bool            _isResult) {
+wxeReturn::wxeReturn (ErlDrvTermData   _port,
+		      ErlDrvTermData   _caller,
+		      bool             _isResult) {
     port    = _port;
     caller  = _caller;
     
@@ -61,14 +61,12 @@ int wxeReturn::send() {
         rtData[i] = rt[i];
     }
  
-    int res = driver_send_term(port, caller, rtData, rtLength);
+    int res = erl_drv_send_term(port, caller, rtData, rtLength);
     driver_free(rtData);
 
 #ifdef DEBUG
     if(res == -1) {
-      wxString msg;
-      msg.Printf(wxT("Failed to send return or event msg"));
-      send_msg("internal_error", &msg);
+      fprintf(stderr, "Failed to send return or event msg\r\n");
     }
 #endif
 
@@ -218,6 +216,16 @@ void  wxeReturn::add(wxArrayInt val) {
         addInt(val[i]);       
     }
     endList(len);
+}
+
+INLINE
+void  wxeReturn::add(wxArrayDouble val) {
+  unsigned int len = val.GetCount();
+
+  for (unsigned int i = 0; i< len; i++) {
+    addFloat(val[i]);
+  }
+  endList(len);
 }
 
 INLINE 

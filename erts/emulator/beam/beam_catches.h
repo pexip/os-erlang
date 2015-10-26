@@ -1,7 +1,7 @@
 /*
  * %CopyrightBegin%
  *
- * Copyright Ericsson AB 2000-2010. All Rights Reserved.
+ * Copyright Ericsson AB 2000-2013. All Rights Reserved.
  *
  * The contents of this file are subject to the Erlang Public License,
  * Version 1.1, (the "License"); you may not use this file except in
@@ -20,12 +20,21 @@
 #ifndef __BEAM_CATCHES_H
 #define __BEAM_CATCHES_H
 
+#ifdef HAVE_CONFIG_H
+#  include "config.h"
+#endif
+#include "sys.h"
+#include "code_ix.h"
+
 #define BEAM_CATCHES_NIL	(-1)
 
 void beam_catches_init(void);
+void beam_catches_start_staging(void);
+void beam_catches_end_staging(int commit);
 unsigned beam_catches_cons(BeamInstr* cp, unsigned cdr);
 BeamInstr *beam_catches_car(unsigned i);
-void beam_catches_delmod(unsigned head, BeamInstr* code, unsigned code_bytes);
+void beam_catches_delmod(unsigned head, BeamInstr* code, unsigned code_bytes,
+			 ErtsCodeIndex);
 
 #define catch_pc(x)	beam_catches_car(catch_val((x)))
 

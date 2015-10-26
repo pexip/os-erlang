@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %% 
-%% Copyright Ericsson AB 1999-2011. All Rights Reserved.
+%% Copyright Ericsson AB 1999-2012. All Rights Reserved.
 %% 
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -20,30 +20,34 @@
 -module(code_SUITE).
 -export([all/0, suite/0,groups/0,init_per_suite/1, end_per_suite/1, 
 	 init_per_group/2,end_per_group/2,
-	 new_binary_types/1,
+	 versions/1,new_binary_types/1,
 	 t_check_process_code/1,t_check_old_code/1,
 	 t_check_process_code_ets/1,
 	 external_fun/1,get_chunk/1,module_md5/1,make_stub/1,
-	 make_stub_many_funs/1,constant_pools/1,
-	 false_dependency/1,coverage/1]).
+	 make_stub_many_funs/1,constant_pools/1,constant_refc_binaries/1,
+	 false_dependency/1,coverage/1,fun_confusion/1]).
 
+-define(line_trace, 1).
 -include_lib("test_server/include/test_server.hrl").
 
 suite() -> [{ct_hooks,[ts_install_cth]}].
 
 all() -> 
-    [new_binary_types, t_check_process_code,
+    [versions, new_binary_types, t_check_process_code,
      t_check_process_code_ets, t_check_old_code, external_fun, get_chunk,
      module_md5, make_stub, make_stub_many_funs,
-     constant_pools, false_dependency, coverage].
+     constant_pools, constant_refc_binaries, false_dependency,
+     coverage, fun_confusion].
 
 groups() -> 
     [].
 
 init_per_suite(Config) ->
+    erts_debug:set_internal_state(available_internal_state, true),
     Config.
 
 end_per_suite(_Config) ->
+    catch erts_debug:set_internal_state(available_internal_state, false),
     ok.
 
 init_per_group(_GroupName, Config) ->
@@ -52,6 +56,60 @@ init_per_group(_GroupName, Config) ->
 end_per_group(_GroupName, Config) ->
     Config.
 
+%% Make sure that only two versions of a module can be loaded.
+versions(Config) when is_list(Config) ->
+    V1 = compile_version(1, Config),
+    V2 = compile_version(2, Config),
+    V3 = compile_version(3, Config),
+
+    {ok,P1,1} = load_version(V1, 1),
+    {ok,P2,2} = load_version(V2, 2),
+    {error,not_purged} = load_version(V2, 2),
+    {error,not_purged} = load_version(V3, 3),
+
+    1 = check_version(P1),
+    2 = check_version(P2),
+    2 = versions:version(),
+
+    %% Kill processes, unload code.
+    P1 ! P2 ! done,
+    _ = monitor(process, P1),
+    _ = monitor(process, P2),
+    receive
+	{'DOWN',_,process,P1,normal} -> ok
+    end,
+    receive
+	{'DOWN',_,process,P2,normal} -> ok
+    end,
+    true = erlang:purge_module(versions),
+    true = erlang:delete_module(versions),
+    true = erlang:purge_module(versions),
+    ok.
+
+compile_version(Version, Config) ->
+    Data = ?config(data_dir, Config),
+    File = filename:join(Data, "versions"),
+    {ok,versions,Bin} = compile:file(File, [{d,'VERSION',Version},
+					    binary,report]),
+    Bin.
+
+load_version(Code, Ver) ->
+    case erlang:load_module(versions, Code) of
+	{module,versions} ->
+	    Pid = spawn_link(versions, loop, []),
+	    Ver = versions:version(),
+	    Ver = check_version(Pid),
+	    {ok,Pid,Ver};
+	Error ->
+	    Error
+    end.
+
+check_version(Pid) ->
+    Pid ! {self(),version},
+    receive
+	{Pid,version,Version} ->
+	    Version
+    end.
 
 new_binary_types(Config) when is_list(Config) ->
     ?line Data = ?config(data_dir, Config),
@@ -77,14 +135,7 @@ new_binary_types(Config) when is_list(Config) ->
 						      bit_sized_binary(Bin))),
     ok.
 
-t_check_process_code(doc) -> "Test check_process_code/2.";
 t_check_process_code(Config) when is_list(Config) ->
-    case erlang:system_info(heap_type) of
-	private -> t_check_process_code_1(Config);
-	hybrid -> {skip,"Hybrid heap"}
-    end.
-
-t_check_process_code_1(Config) ->
     ?line Priv = ?config(priv_dir, Config),
     ?line Data = ?config(data_dir, Config),
     ?line File = filename:join(Data, "my_code_test"),
@@ -189,12 +240,10 @@ gc1() -> ok.
 t_check_process_code_ets(doc) ->
     "Test check_process_code/2 in combination with a fun obtained from an ets table.";
 t_check_process_code_ets(Config) when is_list(Config) ->
-    case {test_server:is_native(?MODULE),erlang:system_info(heap_type)} of
-	{true,_} ->
-	    {skipped,"Native code"};
-	{_,hybrid} ->
-	    {skipped,"Hybrid heap"};
-	{false,private} ->
+    case test_server:is_native(?MODULE) of
+	true ->
+	    {skip,"Native code"};
+	false ->
 	    do_check_process_code_ets(Config)
     end.
 
@@ -278,7 +327,8 @@ t_check_old_code(Config) when is_list(Config) ->
 
 external_fun(Config) when is_list(Config) ->
     ?line false = erlang:function_exported(another_code_test, x, 1),
-    ?line ExtFun = erlang:make_fun(id(another_code_test), x, 1),
+    AnotherCodeTest = id(another_code_test),
+    ExtFun = fun AnotherCodeTest:x/1,
     ?line {'EXIT',{undef,_}} = (catch ExtFun(answer)),
     ?line false = erlang:function_exported(another_code_test, x, 1),
     ?line false = lists:member(another_code_test, erlang:loaded()),
@@ -338,9 +388,7 @@ module_md5_ok(Code) ->
 
 
 make_stub(Config) when is_list(Config) ->
-    %% No old code to purge if hybrid heap because of skipped test cases,
-    %% so we'll need a catch here.
-    ?line (catch erlang:purge_module(my_code_test)),
+    catch erlang:purge_module(my_code_test),
 
     ?line Data = ?config(data_dir, Config),
     ?line File = filename:join(Data, "my_code_test"),
@@ -374,9 +422,7 @@ make_stub(Config) when is_list(Config) ->
     ok.
 
 make_stub_many_funs(Config) when is_list(Config) ->
-    %% No old code to purge if hybrid heap because of skipped test cases,
-    %% so we'll need a catch here.
-    ?line (catch erlang:purge_module(many_funs)),
+    catch erlang:purge_module(many_funs),
 
     ?line Data = ?config(data_dir, Config),
     ?line File = filename:join(Data, "many_funs"),
@@ -403,7 +449,7 @@ make_stub_many_funs(Config) when is_list(Config) ->
 constant_pools(Config) when is_list(Config) ->
     ?line Data = ?config(data_dir, Config),
     ?line File = filename:join(Data, "literals"),
-    ?line {ok,literals,Code} = compile:file(File, [report,binary,constant_pool]),
+    ?line {ok,literals,Code} = compile:file(File, [report,binary]),
     ?line {module,literals} = erlang:load_module(literals,
 						 make_sub_binary(Code)),
 
@@ -472,6 +518,131 @@ create_old_heap() ->
 	    ok;
 	_ ->
 	    create_old_heap()
+    end.
+
+constant_refc_binaries(Config) when is_list(Config) ->
+    wait_for_memory_deallocations(),
+    Bef = memory_binary(),
+    io:format("Binary data (bytes) before test: ~p\n", [Bef]),
+
+    %% Compile the the literals module.
+    Data = ?config(data_dir, Config),
+    File = filename:join(Data, "literals"),
+    {ok,literals,Code} = compile:file(File, [report,binary]),
+
+    %% Load the code and make sure that the binary is a refc binary.
+    {module,literals} = erlang:load_module(literals, Code),
+    Bin = literals:binary(),
+    Sz = byte_size(Bin),
+    Check = erlang:md5(Bin),
+    io:format("Size of literal refc binary: ~p\n", [Sz]),
+    {refc_binary,Sz,_,_} = erts_debug:get_internal_state({binary_info,Bin}),
+    true = erlang:delete_module(literals),
+    false = erlang:check_process_code(self(), literals),
+    true = erlang:purge_module(literals),
+
+    %% Now try to provoke a memory leak.
+    provoke_mem_leak(10, Code, Check),
+
+    %% Calculate the change in allocated binary data.
+    erlang:garbage_collect(),
+    wait_for_memory_deallocations(),
+    Aft = memory_binary(),
+    io:format("Binary data (bytes) after test: ~p", [Aft]),
+    Diff = Aft - Bef,
+    if
+	Diff < 0 ->
+	    io:format("~p less bytes", [abs(Diff)]);
+	Diff > 0 ->
+	    io:format("~p more bytes", [Diff]);
+	true ->
+	    ok
+    end,
+
+    %% Test for leaks. We must accept some natural variations in
+    %% the size of allocated binaries.
+    if
+	Diff > 64*1024 ->
+	    ?t:fail(binary_leak);
+	true ->
+	    ok
+    end.
+
+memory_binary() ->
+    try
+	erlang:memory(binary)
+    catch
+	error:notsup ->
+	    0
+    end.
+
+provoke_mem_leak(0, _, _) -> ok;
+provoke_mem_leak(N, Code, Check) ->
+    {module,literals} = erlang:load_module(literals, Code),
+
+    %% Create several processes with references to the literal binary.
+    Self = self(),
+    Pids = [spawn_link(fun() ->
+			       create_binaries(Self, NumRefs, Check)
+		       end) || NumRefs <- lists:seq(1, 10)],
+    [receive {started,Pid} -> ok end || Pid <- Pids],
+
+    %% Make the code old and remove references to the constant pool
+    %% in all processes.
+    true = erlang:delete_module(literals),
+    Ms = [spawn_monitor(fun() ->
+				false = erlang:check_process_code(Pid, literals)
+			end) || Pid <- Pids],
+    [receive
+	 {'DOWN',R,process,P,normal} ->
+	     ok
+     end || {P,R} <- Ms],
+
+    %% Purge the code.
+    true = erlang:purge_module(literals),
+
+    %% Tell the processes that the code has been purged.
+    [begin
+	 monitor(process, Pid),
+	 Pid ! purged
+     end || Pid <- Pids],
+
+    %% Wait for all processes to terminate.
+    [receive
+	 {'DOWN',_,process,Pid,normal} ->
+	     ok
+     end || Pid <- Pids],
+
+    %% We now expect that the binary has been deallocated.
+    provoke_mem_leak(N-1, Code, Check).
+
+create_binaries(Parent, NumRefs, Check) ->
+    Bin = literals:binary(),
+    Bins = lists:duplicate(NumRefs, Bin),
+    {bits,Bits} = literals:bits(),
+    Parent ! {started,self()},
+    receive
+	purged ->
+	    %% The code has been purged. Now make sure that
+	    %% the binaries haven't been corrupted.
+	    Check = erlang:md5(Bin),
+	    [Bin = B || B <- Bins],
+	    <<42:13,Bin/binary>> = Bits,
+
+	    %% Remove all references to the binaries
+	    %% Doing it explicitly like this ensures that
+	    %% the binaries are gone when the parent process
+	    %% receives the 'DOWN' message.
+	    erlang:garbage_collect()
+    end.
+
+wait_for_memory_deallocations() ->
+    try
+	erts_debug:set_internal_state(wait, deallocations)
+    catch
+	error:undef ->
+	    erts_debug:set_internal_state(available_internal_state, true),
+	    wait_for_memory_deallocations()
     end.
 
 %% OTP-7559: c_p->cp could contain garbage and create a false dependency
@@ -553,6 +724,30 @@ coverage(Config) when is_list(Config) ->
     ?line {'EXIT',{badarg,_}} = (catch erlang:check_process_code(self(), [not_a_module])),
     ?line {'EXIT',{badarg,_}} = (catch erlang:delete_module([a,b,c])),
     ?line {'EXIT',{badarg,_}} = (catch erlang:module_loaded(42)),
+    ok.
+
+fun_confusion(Config) when is_list(Config) ->
+    Data = ?config(data_dir, Config),
+    Src = filename:join(Data, "fun_confusion"),
+    Mod = fun_confusion,
+
+    %% Load first version of module.
+    compile_load(Mod, Src, 1),
+    F1 = Mod:f(),
+    1 = F1(),
+
+    %% Load second version of module.
+    compile_load(Mod, Src, 2),
+    F2 = Mod:f(),
+
+    %% F1 should refer to the old code, not the newly loaded code.
+    1 = F1(),
+    2 = F2(),
+    ok.
+
+compile_load(Mod, Src, Ver) ->
+    {ok,Mod,Code1} = compile:file(Src, [binary,{d,version,Ver}]),
+    {module,Mod} = code:load_binary(Mod, "fun_confusion.beam", Code1),
     ok.
 
 %% Utilities.

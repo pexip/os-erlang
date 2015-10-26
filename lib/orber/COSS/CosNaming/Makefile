@@ -1,7 +1,7 @@
 #
 # %CopyrightBegin%
 # 
-# Copyright Ericsson AB 1997-2009. All Rights Reserved.
+# Copyright Ericsson AB 1997-2012. All Rights Reserved.
 # 
 # The contents of this file are subject to the Erlang Public License,
 # Version 1.1, (the "License"); you may not use this file except in
@@ -113,24 +113,26 @@ debug:
 	@${MAKE} TYPE=debug
 
 clean:
-	rm -f $(TARGET_FILES) $(GEN_FILES)  $(APP_TARGET)
+	rm -f $(TARGET_FILES) $(GEN_FILES)  $(APP_TARGET) IDL-GENERATED
 	rm -f errs core *~
 
 $(APP_TARGET): $(APP_SRC)
-	sed -e 's;%VSN%;$(VSN);' $(APP_SRC) > $(APP_TARGET)
+	$(vsn_verbose)sed -e 's;%VSN%;$(VSN);' $(APP_SRC) > $(APP_TARGET)
 
 docs:
 
 # ----------------------------------------------------
 # Special Build Targets
 # ----------------------------------------------------
-$(GEN_FILES): cos_naming_ext.idl cos_naming.idl
-	erlc $(ERL_IDL_FLAGS) +'{this,"CosNaming::NamingContext"}' \
+IDL-GENERATED: cos_naming_ext.idl cos_naming.idl
+	$(gen_verbose)erlc $(ERL_IDL_FLAGS) +'{this,"CosNaming::NamingContext"}' \
 	+'{this,"CosNaming::NamingContextExt"}' cos_naming_ext.idl
-	erlc $(ERL_IDL_FLAGS) +'{this,"CosNaming::NamingContext"}' cos_naming.idl
+	$(V_at)erlc $(ERL_IDL_FLAGS) +'{this,"CosNaming::NamingContext"}' cos_naming.idl
+	$(V_at)>IDL-GENERATED
 
-#	echo "ic:gen(cos_naming, [{this, \"CosNaming::NamingContext\"}]), halt()."| $(ERL) $(ERL_IDL_FLAGS)
+$(GEN_FILES): IDL-GENERATED
 
+$(TARGET_FILES): IDL-GENERATED
 
 # ----------------------------------------------------
 # Release Target
@@ -139,11 +141,11 @@ include $(ERL_TOP)/make/otp_release_targets.mk
 
 
 release_spec: opt
-	$(INSTALL_DIR) $(RELSYSDIR)/ebin
-	$(INSTALL_DATA) $(TARGET_FILES) $(APP_TARGET) $(RELSYSDIR)/ebin
-	$(INSTALL_DIR) $(RELSYSDIR)/COSS/CosNaming
-	$(INSTALL_DATA) $(ERL_FILES) $(HRL_FILES) $(IDL_FILE) $(RELSYSDIR)/COSS/CosNaming
-	$(INSTALL_DATA) $(GEN_FILES) $(RELSYSDIR)/COSS/CosNaming
+	$(INSTALL_DIR) "$(RELSYSDIR)/ebin"
+	$(INSTALL_DATA) $(TARGET_FILES) $(APP_TARGET) "$(RELSYSDIR)/ebin"
+	$(INSTALL_DIR) "$(RELSYSDIR)/COSS/CosNaming"
+	$(INSTALL_DATA) $(ERL_FILES) $(HRL_FILES) $(IDL_FILE) "$(RELSYSDIR)/COSS/CosNaming"
+	$(INSTALL_DATA) $(GEN_FILES) "$(RELSYSDIR)/COSS/CosNaming"
 
 
 release_docs_spec:

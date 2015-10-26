@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %% 
-%% Copyright Ericsson AB 1997-2009. All Rights Reserved.
+%% Copyright Ericsson AB 1997-2011. All Rights Reserved.
 %% 
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -61,7 +61,7 @@ print_op(Stream, Label) when element(1, Label) == label ->
 print_op(Stream, Op) ->
     io:format(Stream, "    ~p.\n", [Op]).
 
-function(File, {function,Name,Arity,Args,Body,Vdb}) ->
+function(File, {function,Name,Arity,Args,Body,Vdb,_Anno}) ->
     io:nl(File),
     io:format(File, "function ~p/~p.\n", [Name,Arity]),
     io:format(File, " ~p.\n", [Args]),

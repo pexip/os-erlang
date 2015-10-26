@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 1999-2010. All Rights Reserved.
+%% Copyright Ericsson AB 1999-2012. All Rights Reserved.
 %%
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -18,36 +18,16 @@
 %%
 %%
 -module(testSeq2738).
-
--export([compile/3]).
 -export([main/1]).
 
 -include_lib("test_server/include/test_server.hrl").
 
-%-record('SeqOpt',{int, opt = asn1_NOVALUE}).
 -record('SeqOptFake',{int, opt = asn1_NOVALUE}).
-%-record('OptSeq',{int=17}).
 -record('OptSeqFake',{bool = false}).
 
-
-
-
-compile(Config,Rules,Options) ->
-
-    ?line DataDir = ?config(data_dir,Config),
-    ?line OutDir = ?config(priv_dir,Config),
-    ?line true = code:add_patha(?config(priv_dir,Config)),
-    ?line ok = asn1ct:compile(DataDir ++ "Seq2738",[Rules,{outdir,OutDir}]++Options).
-
-
 main(_Rules) ->
-    
-    ?line {ok,Bytes} = 
-	asn1_wrapper:encode('Seq2738','SeqOptFake',
-		      #'SeqOptFake'{int = 10,
-				opt = #'OptSeqFake'{}}),
-    ?line {ok,#'SeqOptFake'{int=10,opt=#'OptSeqFake'{bool=false}}} = 
-	asn1_wrapper:decode('Seq2738','SeqOptFake',lists:flatten(Bytes)),
-    ?line {error,_} = 
-	asn1_wrapper:decode('Seq2738','SeqOpt',lists:flatten(Bytes)),
+    Enc = asn1_test_lib:roundtrip_enc('Seq2738',
+				      'SeqOptFake',
+				      #'SeqOptFake'{int=10,opt=#'OptSeqFake'{}}),
+    {error,_} = 'Seq2738':decode('SeqOpt', Enc),
     ok.

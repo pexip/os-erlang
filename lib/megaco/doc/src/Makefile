@@ -1,7 +1,7 @@
 # 
 # %CopyrightBegin%
 #
-# Copyright Ericsson AB 2000-2010. All Rights Reserved.
+# Copyright Ericsson AB 2000-2013. All Rights Reserved.
 #
 # The contents of this file are subject to the Erlang Public License,
 # Version 1.1, (the "License"); you may not use this file except in
@@ -25,14 +25,6 @@ include $(ERL_TOP)/make/$(TARGET)/otp.mk
 include ../../vsn.mk
 VSN=$(MEGACO_VSN)
 APPLICATION=megaco
-
-# ----------------------------------------------------
-# Include dependency
-# ----------------------------------------------------
-
-ifndef DOCSUPPORT
-include make.dep
-endif
 
 # ----------------------------------------------------
 # Release directory specification
@@ -73,34 +65,9 @@ EXTRA_FILES = \
 
 MAN3_FILES = $(XML_REF3_FILES:%.xml=$(MAN3DIR)/%.3)
 
-ifdef DOCSUPPORT
-
 HTML_REF_MAN_FILE = $(HTMLDIR)/index.html
 
 TOP_PDF_FILE = $(PDFDIR)/$(APPLICATION)-$(VSN).pdf
-
-else
-
-TEX_FILES_BOOK = \
-	$(BOOK_FILES:%.xml=%.tex)
-TEX_FILES_REF_MAN = $(XML_REF3_FILES:%.xml=%.tex) \
-	$(XML_APPLICATION_FILES:%.xml=%.tex)
-TEX_FILES_USERS_GUIDE = \
-	$(XML_CHAPTER_FILES:%.xml=%.tex)
-
-TOP_PDF_FILE = $(APPLICATION)-$(VSN).pdf
-TOP_PS_FILE  = $(APPLICATION)-$(VSN).ps
-
-$(TOP_PDF_FILE): book.dvi ../../vsn.mk
-	$(DVI2PS) $(DVIPS_FLAGS) -f $< | $(DISTILL) $(DISTILL_FLAGS) > $@
-
-$(TOP_PS_FILE): book.dvi $(APP_FILE)
-	$(DVI2PS) $(DVIPS_FLAGS) -f $< > $@
-
-
-TOP_HTML_FILES = $(INDEX_TARGET) 
-
-endif
 
 INDEX_FILE   = index.html
 INDEX_SRC    = $(INDEX_FILE).src
@@ -131,8 +98,6 @@ $(HTMLDIR)/%.jpg: %.jpg
 $(HTMLDIR)/%.png: %.png
 	$(INSTALL_DATA) $< $@
 
-ifdef DOCSUPPORT
-
 docs: pdf html man
 
 ldocs: local_docs $(INDEX_TARGET)
@@ -147,41 +112,6 @@ clean clean_docs: clean_html clean_man
 	rm -f $(TOP_PDF_FILE) $(TOP_PDF_FILE:%.pdf=%.fo)
 	rm -f errs core *~
 
-else
-
-ifeq ($(DOCTYPE),pdf)
-docs: pdf
-else
-ifeq ($(DOCTYPE),ps)
-docs: ps
-else
-docs: html imgs man
-endif
-endif
-
-pdf: $(TOP_PDF_FILE)
-
-ps: $(TOP_PS_FILE)
-
-html: imgs $(HTML_FILES) $(TOP_HTML_FILES)
-
-mhtml: html $(HTML_REF3_FILES) $(HTML_CHAPTER_FILES)
-
-clean: clean_html clean_man clean_pdf
-	rm -f core *~ 
-	rm -f *.aux *.cites *.citeshd *.dvi *.idx *.ilg *.ind
-	rm -f *.indhd *.lof *.lofhd *.lot *.lothd *.otpdef
-	rm -f *.otpuse *.terms *.termshd *.toc *.makeindexlog *.dvipslog
-	rm -f *.bib *.bbl *.blg *.bibhd
-
-clean_pdf:
-	rm -f $(TOP_PDF_FILE) $(TOP_PS_FILE)
-	rm -f $(TEX_FILES_USERS_GUIDE) 
-	rm -f $(TEX_FILES_REF_MAN) 
-	rm -f $(TEX_FILES_BOOK)
-
-endif 
-
 clean_man:
 	rm -f $(MAN3DIR)/*
 
@@ -193,17 +123,15 @@ imgs: $(IMG_FILES:%=$(HTMLDIR)/%)
 man: $(MAN3_FILES) 
 
 $(INDEX_TARGET): $(INDEX_SRC) $(APP_FILE)
-	sed -e 's/%VSN%/$(VSN)/; \
-                s/%ERLANG_SITE%/www\.erlang\.se\//; \
-                s/%UP_ONE_LEVEL%/..\/..\/..\/doc\/index.html/; \
-                s/%OFF_PRINT%/pdf\/megaco-$(VSN).pdf/' $< > $@
+	sed -e 's/%VSN%/$(VSN)/' \
+            -e 's/%ERLANG_SITE%/www\.erlang\.se\//' \
+            -e 's/%UP_ONE_LEVEL%/..\/..\/..\/doc\/index.html/' \
+            -e 's/%OFF_PRINT%/pdf\/megaco-$(VSN).pdf/' $< > $@
 
 debug opt: 
 
 info:
 	@echo "->Makefile<-"
-	@echo ""
-	@echo "DOCSUPPORT = $(DOCSUPPORT)"
 	@echo ""
 	@echo "INDEX_FILE   = $(INDEX_FILE)"
 	@echo "INDEX_SRC    = $(INDEX_SRC)"
@@ -215,10 +143,6 @@ info:
 	@echo "XML_CHAPTER_FILES     = $(XML_CHAPTER_FILES)"
 	@echo ""
 	@echo "IMG_FILES             = $(IMG_FILES)"
-	@echo ""
-	@echo "TEX_FILES_USERS_GUIDE = $(TEX_FILES_USERS_GUIDE)"
-	@echo "TEX_FILES_REF_MAN     = $(TEX_FILES_REF_MAN)"
-	@echo "TEX_FILES_BOOK        = $(TEX_FILES_BOOK)"
 	@echo ""
 	@echo "MAN3_FILES            = $(MAN3_FILES)"
 	@echo ""
@@ -236,46 +160,17 @@ info:
 # ---------------------------------------------------- 
 include $(ERL_TOP)/make/otp_release_targets.mk
 
-ifdef DOCSUPPORT
-
 release_docs_spec: docs
-	$(INSTALL_DIR) $(RELSYSDIR)/doc/pdf
-	$(INSTALL_DATA) $(TOP_PDF_FILE) $(RELSYSDIR)/doc/pdf
-	$(INSTALL_DIR) $(RELSYSDIR)/doc/html
+	$(INSTALL_DIR) "$(RELSYSDIR)/doc/pdf"
+	$(INSTALL_DATA) $(TOP_PDF_FILE) "$(RELSYSDIR)/doc/pdf"
+	$(INSTALL_DIR) "$(RELSYSDIR)/doc/html"
 	$(INSTALL_DATA) $(HTMLDIR)/* \
-		$(RELSYSDIR)/doc/html
-	$(INSTALL_DATA) $(INFO_FILE) $(RELSYSDIR)
-	$(INSTALL_DIR) $(RELEASE_PATH)/man/man3
-	$(INSTALL_DATA) $(MAN3DIR)/* $(RELEASE_PATH)/man/man3
-	$(INSTALL_DIR)  $(RELSYSDIR)/doc/standard
-	$(INSTALL_DATA) $(STANDARDS) $(RELSYSDIR)/doc/standard
-
-else
-
-ifeq ($(DOCTYPE),pdf)
-release_docs_spec: pdf
-	$(INSTALL_DIR)  $(RELEASE_PATH)/pdf
-	$(INSTALL_DATA) $(TOP_PDF_FILE) $(RELEASE_PATH)/pdf
-else
-ifeq ($(DOCTYPE),ps)
-release_docs_spec: ps
-	$(INSTALL_DIR)  $(RELEASE_PATH)/ps
-	$(INSTALL_DATA) $(TOP_PS_FILE) $(RELEASE_PATH)/ps
-else
-release_docs_spec: docs
-	$(INSTALL_DIR)  $(RELSYSDIR)/doc/html
-	$(INSTALL_DATA) $(IMG_FILES) $(EXTRA_FILES) $(HTML_FILES) \
-		$(RELSYSDIR)/doc/html
-	$(INSTALL_DATA) $(INFO_FILE) $(RELSYSDIR)
-	$(INSTALL_DIR)  $(RELEASE_PATH)/man/man3
-	$(INSTALL_DATA) $(MAN3_FILES) $(RELEASE_PATH)/man/man3
-	$(INSTALL_DATA) $(TOP_HTML_FILES) $(RELSYSDIR)/doc
-	$(INSTALL_DIR)  $(RELSYSDIR)/doc/standard
-	$(INSTALL_DATA) $(STANDARDS) $(RELSYSDIR)/doc/standard
-endif
-endif
-
-endif
+		"$(RELSYSDIR)/doc/html"
+	$(INSTALL_DATA) $(INFO_FILE) "$(RELSYSDIR)"
+	$(INSTALL_DIR) "$(RELEASE_PATH)/man/man3"
+	$(INSTALL_DATA) $(MAN3DIR)/* "$(RELEASE_PATH)/man/man3"
+	$(INSTALL_DIR)  "$(RELSYSDIR)/doc/standard"
+	$(INSTALL_DATA) $(STANDARDS) "$(RELSYSDIR)/doc/standard"
 
 release_spec:
 

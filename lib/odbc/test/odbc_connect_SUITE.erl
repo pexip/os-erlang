@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2002-2011. All Rights Reserved.
+%% Copyright Ericsson AB 2002-2014. All Rights Reserved.
 %%
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -47,11 +47,11 @@ all() ->
     case odbc_test_lib:odbc_check() of
 	ok ->
 	    [not_exist_db, commit, rollback, not_explicit_commit,
-	     no_c_node, port_dies, control_process_dies,
+	     no_c_executable, port_dies, control_process_dies,
 	     {group, client_dies}, connect_timeout, timeout,
 	     many_timeouts, timeout_reset, disconnect_on_timeout,
 	     connection_closed, disable_scrollable_cursors,
-	     return_rows_as_lists, api_missuse];
+	     return_rows_as_lists, api_missuse, extended_errors];
 	Other -> {skip, Other}
     end.
 
@@ -77,6 +77,8 @@ end_per_group(_GroupName, Config) ->
 %% variable, but should NOT alter/remove any existing entries.
 %%--------------------------------------------------------------------
 init_per_suite(Config) when is_list(Config) ->
+    file:write_file(filename:join([proplists:get_value(priv_dir,Config),
+				   "..","..","..","ignore_core_files"]),""),
     case odbc_test_lib:skip() of
 	true ->
 	    {skip, "ODBC not supported"};
@@ -246,28 +248,31 @@ not_exist_db(_Config)  ->
     test_server:sleep(100).
 
 %%-------------------------------------------------------------------------
-no_c_node(doc) ->
+no_c_executable(doc) ->
     "Test what happens if the port-program can not be found";
-no_c_node(suite) -> [];
-no_c_node(_Config) ->
+no_c_executable(suite) -> [];
+no_c_executable(_Config) ->
     process_flag(trap_exit, true),
     Dir = filename:nativename(filename:join(code:priv_dir(odbc), 
 					    "bin")),
     FileName1 = filename:nativename(os:find_executable("odbcserver", 
 						       Dir)),
     FileName2 = filename:nativename(filename:join(Dir, "odbcsrv")),
-    ok = file:rename(FileName1, FileName2),
-    Result = 
-	case catch odbc:connect(?RDBMS:connection_string(),
-				odbc_test_lib:platform_options()) of
-	    {error, port_program_executable_not_found} ->
-		ok;
-	    Else ->
-		Else
-	end,
-
-    ok = file:rename(FileName2, FileName1), 
-    ok = Result.
+    case file:rename(FileName1, FileName2) of
+	ok ->
+	    Result = 
+		case catch odbc:connect(?RDBMS:connection_string(),
+					odbc_test_lib:platform_options()) of
+		    {error, port_program_executable_not_found} ->
+			ok;
+		    Else ->
+			Else
+		end,
+	    ok = file:rename(FileName2, FileName1), 
+	    ok = Result;
+	_ ->
+	    {skip, "File permission issues"}
+    end.
 %%------------------------------------------------------------------------
 
 port_dies(doc) ->
@@ -277,13 +282,19 @@ port_dies(_Config) ->
     {ok, Ref} =  odbc:connect(?RDBMS:connection_string(), odbc_test_lib:platform_options()),
     {status, _} = process_info(Ref, status),   
     process_flag(trap_exit, true),
-    Port = lists:last(erlang:ports()),      
-    exit(Port, kill),
-    %% Wait for exit_status from port 5000 ms (will not get a exit
-    %% status in this case), then wait a little longer to make sure
-    %% the port and the controlprocess has had time to terminate.
-    test_server:sleep(10000),
-    undefined = process_info(Ref, status).
+    NamedPorts =  [{P,  erlang:port_info(P, name)} || P <- erlang:ports()],
+    case [P || {P, {name, Name}} <- NamedPorts,  is_odbcserver(Name)]  of
+	[Port] ->
+	    exit(Port, kill),
+	    %% Wait for exit_status from port 5000 ms (will not get a exit
+	    %% status in this case), then wait a little longer to make sure
+	    %% the port and the controlprocess has had time to terminate.
+	    test_server:sleep(10000),
+	    undefined = process_info(Ref, status);
+	[] ->
+	    ct:fail([erlang:port_info(P, name) || P <- erlang:ports()])  
+    end.
+
 
 %%-------------------------------------------------------------------------
 control_process_dies(doc) ->
@@ -292,13 +303,17 @@ control_process_dies(suite) -> [];
 control_process_dies(_Config) ->
     {ok, Ref} =  odbc:connect(?RDBMS:connection_string(), odbc_test_lib:platform_options()),
     process_flag(trap_exit, true),
-    Port = lists:last(erlang:ports()),      
-    {connected, Ref} = erlang:port_info(Port, connected),  
-    exit(Ref, kill),
-    test_server:sleep(500),
-    undefined = erlang:port_info(Port, connected).
-    %% Check for c-program still running, how?
-
+    NamedPorts =  [{P,  erlang:port_info(P, name)} || P <- erlang:ports()],
+    case [P || {P, {name, Name}} <- NamedPorts,  is_odbcserver(Name)] of
+	[Port] ->
+	    {connected, Ref} = erlang:port_info(Port, connected),  
+	    exit(Ref, kill),
+	    test_server:sleep(500),
+	    undefined = erlang:port_info(Port, connected);
+	%% Check for c-program still running, how?
+	[] ->
+	    ct:fail([erlang:port_info(P, name) || P <- erlang:ports()])    
+    end.
 
 %%-------------------------------------------------------------------------
 client_dies_normal(doc) ->
@@ -838,3 +853,43 @@ transaction_support_str(mysql) ->
     "ENGINE = InnoDB";
 transaction_support_str(_) ->
     "".
+
+
+%%-------------------------------------------------------------------------
+extended_errors(doc)->
+    ["Test the extended errors connection option: When off; the old behaviour of just an error "
+     "string is returned on error. When on, the error string is replaced by a 3 element tuple "
+     "that also exposes underlying ODBC provider error codes."];
+extended_errors(suite)  -> [];
+extended_errors(Config) when is_list(Config)->
+    Table = ?config(tableName, Config),
+    {ok, Ref} = odbc:connect(?RDBMS:connection_string(), odbc_test_lib:platform_options()),
+    {updated, _} = odbc:sql_query(Ref, "create table " ++ Table ++" ( id integer, data varchar(10))"),
+
+    % Error case WITHOUT extended errors on...
+    case odbc:sql_query(Ref, "create table " ++ Table ++" ( id integer, data varchar(10))") of
+        {error, ErrorString} when is_list(ErrorString) -> ok
+    end,
+
+    % Now the test case with extended errors on - This should return a tuple, not a list/string now.
+    % The first element is a string that is the ODBC error string; the 2nd element is a native integer error
+    % code passed from the underlying provider driver. The last is the familiar old error string.
+    % We can't check the actual error code; as each different underlying provider will return
+    % a different value - So we just check the return types at least.
+    {ok, RefExtended} = odbc:connect(?RDBMS:connection_string(), odbc_test_lib:platform_options() ++ [{extended_errors, on}]),
+    case odbc:sql_query(RefExtended, "create table " ++ Table ++" ( id integer, data varchar(10))") of
+        {error, {ODBCCodeString, NativeCodeNum, ShortErrorString}} when is_list(ODBCCodeString), is_number(NativeCodeNum), is_list(ShortErrorString) -> ok
+    end,
+
+    ok = odbc:disconnect(Ref),
+    ok = odbc:disconnect(RefExtended).
+
+
+is_odbcserver(Name) ->
+    case re:run(Name, "odbcserver") of
+	{match, _} ->
+	    true;
+	_ ->
+	    false
+    end.
+

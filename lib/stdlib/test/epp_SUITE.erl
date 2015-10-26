@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 1998-2011. All Rights Reserved.
+%% Copyright Ericsson AB 1998-2014. All Rights Reserved.
 %%
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -20,12 +20,13 @@
 -export([all/0, suite/0,groups/0,init_per_suite/1, end_per_suite/1, 
 	 init_per_group/2,end_per_group/2]).
 
--export([rec_1/1, predef_mac/1,
+-export([rec_1/1, include_local/1, predef_mac/1,
 	 upcase_mac_1/1, upcase_mac_2/1,
 	 variable_1/1, otp_4870/1, otp_4871/1, otp_5362/1,
          pmod/1, not_circular/1, skip_header/1, otp_6277/1, otp_7702/1,
          otp_8130/1, overload_mac/1, otp_8388/1, otp_8470/1, otp_8503/1,
-         otp_8562/1, otp_8665/1, otp_8911/1]).
+         otp_8562/1, otp_8665/1, otp_8911/1, otp_10302/1, otp_10820/1,
+         otp_11728/1, encoding/1]).
 
 -export([epp_parse_erl_form/2]).
 
@@ -63,11 +64,12 @@ end_per_testcase(_, Config) ->
 suite() -> [{ct_hooks,[ts_install_cth]}].
 
 all() -> 
-    [rec_1, {group, upcase_mac}, predef_mac,
+    [rec_1, {group, upcase_mac}, include_local, predef_mac,
      {group, variable}, otp_4870, otp_4871, otp_5362, pmod,
      not_circular, skip_header, otp_6277, otp_7702, otp_8130,
      overload_mac, otp_8388, otp_8470, otp_8503, otp_8562,
-     otp_8665, otp_8911].
+     otp_8665, otp_8911, otp_10302, otp_10820, otp_11728,
+     encoding].
 
 groups() -> 
     [{upcase_mac, [], [upcase_mac_1, upcase_mac_2]},
@@ -97,15 +99,47 @@ rec_1(Config) when is_list(Config) ->
     ?line check_errors(List),
     ok.
 
+include_local(doc) ->
+    [];
+include_local(suite) ->
+    [];
+include_local(Config) when is_list(Config) ->
+    ?line DataDir = ?config(data_dir, Config),
+    ?line File = filename:join(DataDir, "include_local.erl"),
+    FooHrl = filename:join([DataDir,"include","foo.hrl"]),
+    BarHrl = filename:join([DataDir,"include","bar.hrl"]),
+    %% include_local.erl includes include/foo.hrl which
+    %% includes bar.hrl (also in include/) without requiring
+    %% any additional include path, and overriding any file
+    %% of the same name that the path points to
+    ?line {ok, List} = epp:parse_file(File, [DataDir], []),
+    ?line {value, {attribute,_,a,{true,true}}} =
+	lists:keysearch(a,3,List),
+    [{File,1},{FooHrl,1},{BarHrl,1},{FooHrl,5},{File,5}] =
+        [ FileLine || {attribute,_,file,FileLine} <- List ],
+    ok.
+
 %%% Here is a little reimplementation of epp:parse_file, which times out
 %%% after 4 seconds if the epp server doesn't respond. If we use the
 %%% regular epp:parse_file, the test case will time out, and then epp
 %%% server will go on growing until we dump core.
 epp_parse_file(File, Inc, Predef) ->
-    {ok, Epp} = epp:open(File, Inc, Predef),
+    List = do_epp_parse_file(fun() ->
+				     epp:open(File, Inc, Predef)
+			     end),
+    List = do_epp_parse_file(fun() ->
+				     Opts = [{name, File},
+					     {includes, Inc},
+					     {macros, Predef}],
+				     epp:open(Opts)
+			     end),
+    {ok, List}.
+
+do_epp_parse_file(Open) ->
+    {ok, Epp} = Open(),
     List = collect_epp_forms(Epp),
     epp:close(Epp),
-    {ok, List}.
+    List.
 
 collect_epp_forms(Epp) ->
     Result = epp_parse_erl_form(Epp),
@@ -234,15 +268,22 @@ otp_4871(Config) when is_list(Config) ->
     %% so there are some sanity checks before killing.
     ?line {ok,Epp} = epp:open(File, []),
     timer:sleep(1),
-    ?line {current_function,{epp,_,_}} = process_info(Epp, current_function),
+    ?line true = current_module(Epp, epp),
     ?line {monitored_by,[Io]} = process_info(Epp, monitored_by),
-    ?line {current_function,{file_io_server,_,_}} =
-	process_info(Io, current_function),
+    ?line true = current_module(Io, file_io_server),
     ?line exit(Io, emulate_crash),
     timer:sleep(1),
     ?line {error,{_Line,epp,cannot_parse}} = otp_4871_parse_file(Epp),
     ?line epp:close(Epp),
     ok.
+
+current_module(Pid, Mod) ->
+    case process_info(Pid, current_function) of
+        {current_function, undefined} ->
+            true = test_server:is_native(Mod);
+        {current_function, {Mod, _, _}} ->
+            true
+    end.
 
 otp_4871_parse_file(Epp) ->
     case epp:parse_erl_form(Epp) of
@@ -559,12 +600,13 @@ otp_8130(suite) ->
 otp_8130(Config) when is_list(Config) ->
     true = os:putenv("epp_inc1", "stdlib"),
     Ts = [{otp_8130_1,
-           %% The scanner handles UNICODE in a special way. Hopefully
-           %% temporarily.
            <<"-define(M(A), ??A). "
              "t() ->  "
-             "   \"{ 34 , [ $1 , 2730 ] , \\\"34\\\" , X . a , 2730 }\" = "
-             "        ?M({34,\"1\\x{aaa}\",\"34\",X.a,$\\x{aaa}}), ok. ">>,
+             "   L = \"{ 34 , \\\"1\\\\x{AAA}\\\" , \\\"34\\\" , X . a , $\\\\x{AAA} }\", "
+             "   R = ?M({34,\"1\\x{aaa}\",\"34\",X.a,$\\x{aaa}}),"
+             "   Lt = erl_scan:string(L, 1, [unicode]),"
+             "   Rt = erl_scan:string(R, 1, [unicode]),"
+             "   Lt = Rt, ok. ">>,
           ok},
 
           {otp_8130_2,
@@ -1213,6 +1255,13 @@ otp_8911(doc) ->
 otp_8911(suite) ->
     [];
 otp_8911(Config) when is_list(Config) ->
+    case test_server:is_cover() of
+	true ->
+	    {skip, "Testing cover, so can not run when cover is already running"};
+	false ->
+	    do_otp_8911(Config)
+    end.
+do_otp_8911(Config) ->
     ?line {ok, CWD} = file:get_cwd(),
     ?line ok = file:set_cwd(?config(priv_dir, Config)),
 
@@ -1253,6 +1302,186 @@ otp_8665(Config) when is_list(Config) ->
          ],
     ?line [] = compile(Config, Cs),
     ok.
+
+otp_10302(doc) ->
+    "OTP-10302. Unicode characters scanner/parser.";
+otp_10302(suite) ->
+    [];
+otp_10302(Config) when is_list(Config) ->
+    %% Two messages (one too many). Keeps otp_4871 happy.
+    Cs = [{otp_8562,
+           <<"%% coding: utf-8\n \n \x{E4}">>,
+           {errors,[{3,epp,cannot_parse},
+                    {3,file_io_server,invalid_unicode}],[]}}
+         ],
+    [] = compile(Config, Cs),
+    Dir = ?config(priv_dir, Config),
+    File = filename:join(Dir, "otp_10302.erl"),
+    utf8 = encoding("coding: utf-8", File),
+    utf8 = encoding("coding: UTF-8", File),
+    latin1 = encoding("coding: Latin-1", File),
+    latin1 = encoding("coding: latin-1", File),
+    none = encoding_com("coding: utf-8", File),
+    none = encoding_com("\n\n%% coding: utf-8", File),
+    none = encoding_nocom("\n\n coding: utf-8", File),
+    utf8 = encoding_com("\n%% coding: utf-8", File),
+    utf8 = encoding_nocom("\n coding: utf-8", File),
+    none = encoding("coding: \nutf-8", File),
+    latin1 = encoding("Encoding :  latin-1", File),
+    utf8 = encoding("ccoding: UTF-8", File),
+    utf8 = encoding("coding= utf-8", File),
+    utf8 = encoding_com(" %% coding= utf-8", File),
+    utf8 = encoding("coding  =  utf-8", File),
+    none = encoding("coding: utf-16 coding: utf-8", File), %first is bad
+    none = encoding("Coding: utf-8", File),    %capital c
+    utf8 = encoding("-*- coding: utf-8 -*-", File),
+    utf8 = encoding("-*-coding= utf-8-*-", File),
+    utf8 = encoding("codingcoding= utf-8", File),
+    ok = prefix("coding: utf-8", File, utf8),
+
+    "coding: latin-1" = epp:encoding_to_string(latin1),
+    "coding: utf-8" = epp:encoding_to_string(utf8),
+    true = lists:member(epp:default_encoding(), [latin1, utf8]),
+
+    ok.
+
+prefix(S, File, Enc) ->
+    prefix(0, S, File, Enc).
+
+prefix(100, _S, _File, _) ->
+    ok;
+prefix(N, S, File, Enc) ->
+    Enc = encoding(lists:duplicate(N, $\s) ++ S, File),
+    prefix(N+1, S, File, Enc).
+
+encoding(Enc, File) ->
+    E = encoding_com("%% " ++ Enc, File),
+    none = encoding_com(Enc, File),
+    E = encoding_nocom(Enc, File).
+
+encoding_com(Enc, File) ->
+    B = list_to_binary(Enc),
+    E = epp:read_encoding_from_binary(B),
+    ok = file:write_file(File, Enc),
+    {ok, Fd} = file:open(File, [read]),
+    E = epp:set_encoding(Fd),
+    ok = file:close(Fd),
+    E = epp:read_encoding(File).
+
+encoding_nocom(Enc, File) ->
+    Options = [{in_comment_only, false}],
+    B = list_to_binary(Enc),
+    E = epp:read_encoding_from_binary(B, Options),
+    ok = file:write_file(File, Enc),
+    {ok, Fd} = file:open(File, [read]),
+    ok = file:close(Fd),
+    E = epp:read_encoding(File, Options).
+
+otp_10820(doc) ->
+    "OTP-10820. Unicode filenames.";
+otp_10820(suite) ->
+    [];
+otp_10820(Config) when is_list(Config) ->
+    L = [915,953,959,973,957,953,954,959,957,964],
+    Dir = ?config(priv_dir, Config),
+    File = filename:join(Dir, L++".erl"),
+    C1 = <<"%% coding: utf-8\n -module(any).">>,
+    ok = do_otp_10820(File, C1, "+pc latin1"),
+    ok = do_otp_10820(File, C1, "+pc unicode"),
+    C2 = <<"\n-module(any).">>,
+    ok = do_otp_10820(File, C2, "+pc latin1"),
+    ok = do_otp_10820(File, C2, "+pc unicode").
+
+do_otp_10820(File, C, PC) ->
+    {ok,Node} = start_node(erl_pp_helper, "+fnu " ++ PC),
+    ok = rpc:call(Node, file, write_file, [File, C]),
+    {ok,[{attribute,1,file,{File,1}},
+         {attribute,2,module,any},
+         {eof,2}]} = rpc:call(Node, epp, parse_file, [File, [],[]]),
+    true = test_server:stop_node(Node),
+    ok.
+
+otp_11728(doc) ->
+    ["OTP-11728. Bugfix circular macro."];
+otp_11728(suite) ->
+    [];
+otp_11728(Config) when is_list(Config) ->
+    Dir = ?config(priv_dir, Config),
+    H = <<"-define(MACRO,[[]++?MACRO]).">>,
+    HrlFile = filename:join(Dir, "otp_11728.hrl"),
+    ok = file:write_file(HrlFile, H),
+    C = <<"-module(otp_11728).
+           -compile(export_all).
+
+           -include(\"otp_11728.hrl\").
+
+           function_name()->
+               A=?MACRO, % line 7
+               ok">>,
+    ErlFile = filename:join(Dir, "otp_11728.erl"),
+    ok = file:write_file(ErlFile, C),
+    {ok, L} = epp:parse_file(ErlFile, [Dir], []),
+    true = lists:member({error,{7,epp,{circular,'MACRO',none}}}, L),
+    _ = file:delete(HrlFile),
+    _ = file:delete(ErlFile),
+    ok.
+
+%% Check the new API for setting the default encoding.
+encoding(Config) when is_list(Config) ->
+    Dir = ?config(priv_dir, Config),
+    ErlFile = filename:join(Dir, "encoding.erl"),
+
+    %% Try a latin-1 file with no encoding given.
+    C1 = <<"-module(encoding).
+           %% ",246,"
+	  ">>,
+    ok = file:write_file(ErlFile, C1),
+    {ok,[{attribute,1,file,_},
+	 {attribute,1,module,encoding},
+	 {error,_},
+	 {error,{2,epp,cannot_parse}},
+	 {eof,2}]} = epp:parse_file(ErlFile, []),
+    {ok,[{attribute,1,file,_},
+	 {attribute,1,module,encoding},
+	 {eof,3}]} =
+	epp:parse_file(ErlFile, [{default_encoding,latin1}]),
+    {ok,[{attribute,1,file,_},
+	 {attribute,1,module,encoding},
+	 {eof,3}],[{encoding,none}]} =
+	epp:parse_file(ErlFile, [{default_encoding,latin1},extra]),
+
+    %% Try a latin-1 file with encoding given in a comment.
+    C2 = <<"-module(encoding).
+           %% encoding: latin-1
+           %% ",246,"
+	  ">>,
+    ok = file:write_file(ErlFile, C2),
+    {ok,[{attribute,1,file,_},
+	 {attribute,1,module,encoding},
+	 {eof,4}]} =
+	epp:parse_file(ErlFile, []),
+    {ok,[{attribute,1,file,_},
+	 {attribute,1,module,encoding},
+	 {eof,4}]} =
+	epp:parse_file(ErlFile, [{default_encoding,latin1}]),
+    {ok,[{attribute,1,file,_},
+	 {attribute,1,module,encoding},
+	 {eof,4}]} =
+	epp:parse_file(ErlFile, [{default_encoding,utf8}]),
+    {ok,[{attribute,1,file,_},
+	 {attribute,1,module,encoding},
+	 {eof,4}],[{encoding,latin1}]} =
+	epp:parse_file(ErlFile, [extra]),
+    {ok,[{attribute,1,file,_},
+	 {attribute,1,module,encoding},
+	 {eof,4}],[{encoding,latin1}]} =
+	epp:parse_file(ErlFile, [{default_encoding,latin1},extra]),
+    {ok,[{attribute,1,file,_},
+	 {attribute,1,module,encoding},
+	 {eof,4}],[{encoding,latin1}]} =
+	epp:parse_file(ErlFile, [{default_encoding,utf8},extra]),
+    ok.
+
 
 check(Config, Tests) ->
     eval_tests(Config, fun check_test/2, Tests).
@@ -1370,3 +1599,8 @@ ln2({error,M}) ->
     {error,ln2(M)};
 ln2(M) ->
     M.
+
+%% +fnu means a peer node has to be started; slave will not do
+start_node(Name, Xargs) ->
+    ?line PA = filename:dirname(code:which(?MODULE)),
+    test_server:start_node(Name, peer, [{args, "-pa " ++ PA ++ " " ++ Xargs}]).

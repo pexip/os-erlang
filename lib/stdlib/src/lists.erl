@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 1996-2011. All Rights Reserved.
+%% Copyright Ericsson AB 1996-2013. All Rights Reserved.
 %%
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -22,7 +22,7 @@
 -compile({no_auto_import,[min/2]}).
 
 -export([append/2, append/1, subtract/2, reverse/1,
-	 nth/2, nthtail/2, prefix/2, suffix/2, last/1, 
+	 nth/2, nthtail/2, prefix/2, suffix/2, droplast/1, last/1,
 	 seq/2, seq/3, sum/1, duplicate/2, min/1, max/1, sublist/2, sublist/3,
 	 delete/2,
 	 unzip/1, unzip3/1, zip/2, zip3/3, zipwith/3, zipwith3/4,
@@ -33,15 +33,66 @@
 	 keysort/2, keymerge/3, rkeymerge/3, rukeymerge/3, 
 	 ukeysort/2, ukeymerge/3, keymap/3]).
 
-%% Bifs: member/2, reverse/2
-%% Bifs: keymember/3, keysearch/3, keyfind/3
-
 -export([merge/3, rmerge/3, sort/2, umerge/3, rumerge/3, usort/2]).
 
 -export([all/2,any/2,map/2,flatmap/2,foldl/3,foldr/3,filter/2,
-	 partition/2,zf/2,
+	 partition/2,zf/2,filtermap/2,
 	 mapfoldl/3,mapfoldr/3,foreach/2,takewhile/2,dropwhile/2,splitwith/2,
 	 split/2]).
+
+%%% BIFs
+-export([keyfind/3, keymember/3, keysearch/3, member/2, reverse/2]).
+
+%% Shadowed by erl_bif_types: lists:keyfind/3
+-spec keyfind(Key, N, TupleList) -> Tuple | false when
+      Key :: term(),
+      N :: pos_integer(),
+      TupleList :: [Tuple],
+      Tuple :: tuple().
+
+keyfind(_, _, _) ->
+    erlang:nif_error(undef).
+
+%% Shadowed by erl_bif_types: lists:keymember/3
+-spec keymember(Key, N, TupleList) -> boolean() when
+      Key :: term(),
+      N :: pos_integer(),
+      TupleList :: [Tuple],
+      Tuple :: tuple().
+
+keymember(_, _, _) ->
+    erlang:nif_error(undef).
+
+%% Shadowed by erl_bif_types: lists:keysearch/3
+-spec keysearch(Key, N, TupleList) -> {value, Tuple} | false when
+      Key :: term(),
+      N :: pos_integer(),
+      TupleList :: [Tuple],
+      Tuple :: tuple().
+
+keysearch(_, _, _) ->
+    erlang:nif_error(undef).
+
+%% Shadowed by erl_bif_types: lists:member/2
+-spec member(Elem, List) -> boolean() when
+      Elem :: T,
+      List :: [T],
+      T :: term().
+
+member(_, _) ->
+    erlang:nif_error(undef).
+
+%% Shadowed by erl_bif_types: lists:reverse/2
+-spec reverse(List1, Tail) -> List2 when
+      List1 :: [T],
+      Tail :: term(),
+      List2 :: [T],
+      T :: term().
+
+reverse(_, _) ->
+    erlang:nif_error(undef).
+
+%%% End of BIFs
 
 %% member(X, L) -> (true | false)
 %%  test if X is a member of the list L
@@ -84,7 +135,7 @@ append([]) -> [].
 
 subtract(L1, L2) -> L1 -- L2.
 
-%% reverse(L) reverse all elements in the list L. Is now a BIF!
+%% reverse(L) reverse all elements in the list L. reverse/2 is now a BIF!
 
 -spec reverse(List1) -> List2 when
       List1 :: [T],
@@ -151,6 +202,19 @@ prefix([_|_], List) when is_list(List) -> false.
 suffix(Suffix, List) ->
     Delta = length(List) - length(Suffix),
     Delta >= 0 andalso nthtail(Delta, List) =:= Suffix.
+
+%% droplast(List) returns the list dropping its last element
+
+-spec droplast(List) -> InitList when
+      List :: [T, ...],
+      InitList :: [T],
+      T :: term().
+
+%% This is the simple recursive implementation
+%% reverse(tl(reverse(L))) is faster on average,
+%% but creates more garbage.
+droplast([_T])  -> [];
+droplast([H|T]) -> [H|droplast(T)].
 
 %% last(List) returns the last element in a list.
 
@@ -579,8 +643,9 @@ flatlength([H|T], L) when is_list(H) ->
 flatlength([_|T], L) ->
     flatlength(T, L + 1);
 flatlength([], L) -> L.
-
+
 %% keymember(Key, Index, [Tuple]) Now a BIF!
+%% keyfind(Key, Index, [Tuple]) A BIF!
 %% keysearch(Key, Index, [Tuple]) Now a BIF!
 %% keydelete(Key, Index, [Tuple])
 %% keyreplace(Key, Index, [Tuple], NewTuple)
@@ -628,9 +693,10 @@ keydelete3(_, _, []) -> [].
 -spec keyreplace(Key, N, TupleList1, NewTuple) -> TupleList2 when
       Key :: term(),
       N :: pos_integer(),
-      TupleList1 :: [tuple()],
-      TupleList2 :: [tuple()],
-      NewTuple :: tuple().
+      TupleList1 :: [Tuple],
+      TupleList2 :: [Tuple],
+      NewTuple :: Tuple,
+      Tuple :: tuple().
 
 keyreplace(K, N, L, New) when is_integer(N), N > 0, is_tuple(New) ->
     keyreplace3(K, N, L, New).
@@ -660,9 +726,10 @@ keytake(_K, _N, [], _L) -> false.
 -spec keystore(Key, N, TupleList1, NewTuple) -> TupleList2 when
       Key :: term(),
       N :: pos_integer(),
-      TupleList1 :: [tuple()],
-      TupleList2 :: [tuple(), ...],
-      NewTuple :: tuple().
+      TupleList1 :: [Tuple],
+      TupleList2 :: [Tuple, ...],
+      NewTuple :: Tuple,
+      Tuple :: tuple().
 
 keystore(K, N, L, New) when is_integer(N), N > 0, is_tuple(New) ->
     keystore2(K, N, L, New).
@@ -740,8 +807,9 @@ keysort_1(_I, X, _EX, [], R) ->
       TupleList1 :: [T1],
       TupleList2 :: [T2],
       TupleList3 :: [(T1 | T2)],
-      T1 :: tuple(),
-      T2 :: tuple().
+      T1 :: Tuple,
+      T2 :: Tuple,
+      Tuple :: tuple().
 
 keymerge(Index, T1, L2) when is_integer(Index), Index > 0 -> 
     case L2 of
@@ -842,8 +910,9 @@ ukeysort_1(_I, X, _EX, []) ->
       TupleList1 :: [T1],
       TupleList2 :: [T2],
       TupleList3 :: [(T1 | T2)],
-      T1 :: tuple(),
-      T2 :: tuple().
+      T1 :: Tuple,
+      T2 :: Tuple,
+      Tuple :: tuple().
 
 ukeymerge(Index, L1, T2) when is_integer(Index), Index > 0 ->
     case L1 of
@@ -873,8 +942,9 @@ rukeymerge(Index, T1, L2) when is_integer(Index), Index > 0 ->
 -spec keymap(Fun, N, TupleList1) -> TupleList2 when
       Fun :: fun((Term1 :: term()) -> Term2 :: term()),
       N :: pos_integer(),
-      TupleList1 :: [tuple()],
-      TupleList2 :: [tuple()].
+      TupleList1 :: [Tuple],
+      TupleList2 :: [Tuple],
+      Tuple :: tuple().
 
 keymap(Fun, Index, [Tup|Tail]) ->
    [setelement(Index, Tup, Fun(element(Index, Tup)))|keymap(Fun, Index, Tail)];
@@ -1106,7 +1176,7 @@ rumerge(T1, []) ->
     T1;
 rumerge(T1, [H2 | T2]) ->
     lists:reverse(rumerge2_1(T1, T2, [], H2), []).
-
+
 %% all(Predicate, List)
 %% any(Predicate, List)
 %% map(Function, List)
@@ -1121,8 +1191,7 @@ rumerge(T1, [H2 | T2]) ->
 %% takewhile(Predicate, List)
 %% dropwhile(Predicate, List)
 %% splitwith(Predicate, List)
-%%  for list programming. Function here is a 'fun'. For backward compatibility,
-%%  {Module,Function} is still accepted.
+%%  for list programming. Function here is a 'fun'.
 %% 
 %%  The name zf is a joke!
 %%
@@ -1235,18 +1304,28 @@ partition(Pred, [H | T], As, Bs) ->
 partition(Pred, [], As, Bs) when is_function(Pred, 1) ->
     {reverse(As), reverse(Bs)}.
 
--spec zf(fun((T) -> boolean() | {'true', X}), [T]) -> [(T | X)].
+-spec filtermap(Fun, List1) -> List2 when
+      Fun :: fun((Elem) -> boolean() | {'true', Value}),
+      List1 :: [Elem],
+      List2 :: [Elem | Value],
+      Elem :: term(),
+      Value :: term().
 
-zf(F, [Hd|Tail]) ->
+filtermap(F, [Hd|Tail]) ->
     case F(Hd) of
 	true ->
-	    [Hd|zf(F, Tail)];
+	    [Hd|filtermap(F, Tail)];
 	{true,Val} ->
-	    [Val|zf(F, Tail)];
+	    [Val|filtermap(F, Tail)];
 	false ->
-	    zf(F, Tail)
+	    filtermap(F, Tail)
     end;
-zf(F, []) when is_function(F, 1) -> [].
+filtermap(F, []) when is_function(F, 1) -> [].
+
+-spec zf(fun((T) -> boolean() | {'true', X}), [T]) -> [(T | X)].
+
+zf(F, L) ->
+    filtermap(F, L).
 
 -spec foreach(Fun, List) -> ok when
       Fun :: fun((Elem :: T) -> term()),

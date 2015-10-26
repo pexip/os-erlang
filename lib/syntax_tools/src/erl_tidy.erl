@@ -14,10 +14,8 @@
 %% Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307
 %% USA
 %%
-%% $Id$
-%%
-%% @copyright 1999-2006 Richard Carlsson
-%% @author Richard Carlsson <richardc@it.uu.se>
+%% @copyright 1999-2014 Richard Carlsson
+%% @author Richard Carlsson <carlsson.richard@gmail.com>
 %% @end
 %% =====================================================================
 
@@ -103,7 +101,7 @@ dir(Dir) ->
 %%   <dt>{regexp, string()}</dt>
 %%
 %%       <dd>The value denotes a regular expression (see module
-%%       `regexp').  Tidying will only be applied to those
+%%       `re').  Tidying will only be applied to those
 %%       regular files whose names match this pattern. The default
 %%       value is `".*\\.erl$"', which matches normal
 %%       Erlang source file names.</dd>
@@ -124,7 +122,7 @@ dir(Dir) ->
 %%
 %% See the function {@link file/2} for further options.
 %%
-%% @see //stdlib/regexp
+%% @see //stdlib/re
 %% @see file/2
 
 -record(dir, {follow_links = false :: boolean(),
@@ -153,7 +151,7 @@ dir_1(Dir, Regexp, Env) ->
             lists:foreach(fun (X) -> dir_2(X, Regexp, Dir, Env) end,
                           Files);
         {error, _} ->
-            report_error("error reading directory `~s'",
+            report_error("error reading directory `~ts'",
                          [filename(Dir)]),
             exit(error)
     end.
@@ -182,7 +180,7 @@ dir_2(Name, Regexp, Dir, Env) ->
 
 dir_3(Name, Dir, Regexp, Env) ->
     Dir1 = filename:join(Dir, Name),
-    verbose("tidying directory `~s'.", [Dir1], Env#dir.options),
+    verbose("tidying directory `~ts'.", [Dir1], Env#dir.options),
     dir_1(Dir1, Regexp, Env).
 
 dir_4(File, Regexp, Env) ->
@@ -191,7 +189,7 @@ dir_4(File, Regexp, Env) ->
             Opts = [{outfile, File}, {dir, ""} | Env#dir.options],
             case catch file(File, Opts) of
                 {'EXIT', Value} ->
-                    warn("error tidying `~s'.~n~p", [File,Value], Opts);
+                    warn("error tidying `~ts'.~n~p", [File,Value], Opts);
                 _ ->
                     ok
             end;
@@ -271,6 +269,13 @@ file(Name) ->
 %%       is typically most useful if the `verbose' flag is enabled, to
 %%       generate reports about the program files without affecting
 %%       them. The default value is `false'.</dd>
+%%
+%%   <dt>{stdout, boolean()}</dt>
+%%
+%%      <dd>If the value is `true', instead of the file being written
+%%      to disk it will be printed to stdout. The default value is
+%%      `false'.</dd>
+%%
 %% </dl>
 %%
 %% See the function `module/2' for further options.
@@ -311,12 +316,18 @@ file_2(Name, Opts) ->
         true ->
             ok;
         false ->
-            write_module(Tree, Name, Opts1),
-            ok
-    end.
+			case proplists:get_bool(stdout, Opts1) of
+				true ->
+					print_module(Tree, Opts1),
+					ok;
+				false ->
+					write_module(Tree, Name, Opts1),
+					ok
+			end
+	end.
 
 read_module(Name, Opts) ->
-    verbose("reading module `~s'.", [filename(Name)], Opts),
+    verbose("reading module `~ts'.", [filename(Name)], Opts),
     case epp_dodger:parse_file(Name, [no_fail]) of
         {ok, Forms} ->
             check_forms(Forms, Name),
@@ -337,7 +348,7 @@ check_forms(Fs, Name) ->
                                       "unknown error"
                               end,
                           report_error({Name, erl_syntax:get_pos(F),
-                                        "\n  ~s"}, [S]),
+                                        "\n  ~ts"}, [S]),
                           exit(error);
                       _ ->
                           ok
@@ -359,24 +370,26 @@ write_module(Tree, Name, Opts) ->
                        {value, directory} ->
                            ok;
                        {value, _} ->
-                           report_error("`~s' is not a directory.",
+                           report_error("`~ts' is not a directory.",
                                         [filename(Dir)]),
                            exit(error);
                        none ->
                            case file:make_dir(Dir) of
                                ok ->
-                                   verbose("created directory `~s'.",
+                                   verbose("created directory `~ts'.",
                                            [filename(Dir)], Opts),
                                    ok;
                                E ->
                                    report_error("failed to create "
-                                                "directory `~s'.",
+                                                "directory `~ts'.",
                                                 [filename(Dir)]),
                                    exit({make_dir, E})
                            end
                    end,
                    filename(filename:join(Dir, Name1))
            end,
+    Encoding = [{encoding,Enc} || Enc <- [epp:read_encoding(Name)],
+                                 Enc =/= none],
     case proplists:get_bool(backups, Opts) of
         true ->
             backup_file(File, Opts);
@@ -384,9 +397,9 @@ write_module(Tree, Name, Opts) ->
             ok
     end,
     Printer = proplists:get_value(printer, Opts),
-    FD = open_output_file(File),
-    verbose("writing to file `~s'.", [File], Opts),
-    V = (catch {ok, output(FD, Printer, Tree, Opts)}),
+    FD = open_output_file(File, Encoding),
+    verbose("writing to file `~ts'.", [File], Opts),
+    V = (catch {ok, output(FD, Printer, Tree, Opts++Encoding)}),
     ok = file:close(FD),
     case V of
         {ok, _} ->
@@ -398,6 +411,10 @@ write_module(Tree, Name, Opts) ->
             error_write_file(File),
             throw(R)
     end.
+
+print_module(Tree, Opts) ->
+	Printer = proplists:get_value(printer, Opts),
+	io:format(Printer(Tree, Opts)).
 
 output(FD, Printer, Tree, Opts) ->
     io:put_chars(FD, Printer(Tree, Opts)),
@@ -434,8 +451,8 @@ file_type(Name, Links) ->
             throw(R)
     end.
 
-open_output_file(FName) ->
-    case catch file:open(FName, [write]) of
+open_output_file(FName, Options) ->
+    case catch file:open(FName, [write]++Options) of
         {ok, FD} ->
             FD;
         {error, R} ->
@@ -471,7 +488,7 @@ backup_file_1(Name, Opts) ->
                          filename:basename(Name) ++ Suffix),
     case catch file:rename(Name, Dest) of
         ok ->
-            verbose("made backup of file `~s'.", [Name], Opts);
+            verbose("made backup of file `~ts'.", [Name], Opts);
         {error, R} ->
             error_backup_file(Name),
             exit({error, R});
@@ -941,7 +958,7 @@ hidden_uses_2(Tree, Used) ->
 -record(env, {file		       :: file:filename(),
               module                   :: atom(),
               current                  :: fa(),
-              imports = dict:new()     :: dict(),
+              imports = dict:new()     :: dict:dict(atom(), atom()),
               context = normal	       :: context(),
               verbosity = 1	       :: 0 | 1 | 2,
               quiet = false            :: boolean(),
@@ -953,12 +970,12 @@ hidden_uses_2(Tree, Used) ->
 	      old_guard_tests = false  :: boolean()}).
 
 -record(st, {varc              :: non_neg_integer(),
-	     used = sets:new() :: set(),
-	     imported          :: set(),
-	     vars              :: set(),
-	     functions         :: set(),
+	     used = sets:new() :: sets:set({atom(), arity()}),
+	     imported          :: sets:set({atom(), arity()}),
+	     vars              :: sets:set(atom()),
+	     functions         :: sets:set({atom(), arity()}),
 	     new_forms = []    :: [erl_syntax:syntaxTree()],
-	     rename            :: dict()}).
+	     rename            :: dict:dict(mfa(), {atom(), atom()})}).
 
 visit_used(Names, Defs, Roots, Imports, Module, Opts) ->
     File = proplists:get_value(file, Opts, ""),
@@ -1804,7 +1821,7 @@ get_free_vars_1([{free, B} | _Bs]) -> B;
 get_free_vars_1([_ | Bs]) -> get_free_vars_1(Bs);
 get_free_vars_1([]) -> [].
 
-filename([C | T]) when is_integer(C), C > 0, C =< 255 ->
+filename([C | T]) when is_integer(C), C > 0 ->
     [C | filename(T)];
 filename([H|T]) ->
     filename(H) ++ filename(T);
@@ -1839,17 +1856,17 @@ report_export_vars(F, L, Type, Opts) ->
 	   [Type], Opts).
 
 error_read_file(Name) ->
-    report_error("error reading file `~s'.", [filename(Name)]).
+    report_error("error reading file `~ts'.", [filename(Name)]).
 
 error_write_file(Name) ->
-    report_error("error writing to file `~s'.", [filename(Name)]).
+    report_error("error writing to file `~ts'.", [filename(Name)]).
 
 error_backup_file(Name) ->
-    report_error("could not create backup of file `~s'.",
+    report_error("could not create backup of file `~ts'.",
                  [filename(Name)]).
 
 error_open_output(Name) ->
-    report_error("cannot open file `~s' for output.", [filename(Name)]).
+    report_error("cannot open file `~ts' for output.", [filename(Name)]).
 
 verbosity(Opts) ->
     case proplists:get_bool(quiet, Opts) of 
@@ -1908,9 +1925,9 @@ format({"", L, D}, Vs) when is_integer(L), L > 0 ->
 format({"", _L, D}, Vs) ->
     format(D, Vs);
 format({F, L, D}, Vs) when is_integer(L), L > 0 ->
-    [io_lib:fwrite("~s:~w: ", [filename(F), L]), format(D, Vs)];
+    [io_lib:fwrite("~ts:~w: ", [filename(F), L]), format(D, Vs)];
 format({F, _L, D}, Vs) ->
-    [io_lib:fwrite("~s: ", [filename(F)]), format(D, Vs)];
+    [io_lib:fwrite("~ts: ", [filename(F)]), format(D, Vs)];
 format(S, Vs) when is_list(S) ->
     [io_lib:fwrite(S, Vs), $\n].
 

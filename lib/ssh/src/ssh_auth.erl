@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2008-2010. All Rights Reserved.
+%% Copyright Ericsson AB 2008-2013. All Rights Reserved.
 %%
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -21,75 +21,87 @@
 
 -module(ssh_auth).
 
--include("ssh.hrl").
+-include_lib("public_key/include/public_key.hrl").
 
+-include("ssh.hrl").
 -include("ssh_auth.hrl").
 -include("ssh_transport.hrl").
 
 -export([publickey_msg/1, password_msg/1, keyboard_interactive_msg/1,
 	 service_request_msg/1, init_userauth_request_msg/1,
 	 userauth_request_msg/1, handle_userauth_request/3,
-	 handle_userauth_info_request/3, handle_userauth_info_response/2,
-	 userauth_messages/0
+	 handle_userauth_info_request/3, handle_userauth_info_response/2
 	]).
 
 %%--------------------------------------------------------------------
 %%% Internal application API
 %%--------------------------------------------------------------------
-publickey_msg([Cb, #ssh{user = User,
+publickey_msg([Alg, #ssh{user = User,
 		       session_id = SessionId,
 		       service = Service,
 		       opts = Opts} = Ssh]) ->
-    ssh_bits:install_messages(userauth_pk_messages()),
-    Alg = Cb:alg_name(),
-    case ssh_file:private_identity_key(Alg, Opts) of
-	{ok, PrivKey} ->
-	    PubKeyBlob = ssh_file:encode_public_key(PrivKey),
+
+    Hash = sha, %% Maybe option?!
+    KeyCb = proplists:get_value(key_cb, Opts, ssh_file),
+
+    case KeyCb:user_key(Alg, Opts) of
+	{ok, Key} ->
+	    StrAlgo = algorithm_string(Alg),
+	    PubKeyBlob = encode_public_key(Key),
 	    SigData = build_sig_data(SessionId, 
-				     User, Service, Alg, PubKeyBlob),
-	    Sig = Cb:sign(PrivKey, SigData),
-	    SigBlob = list_to_binary([?string(Alg), ?binary(Sig)]),
+				     User, Service, PubKeyBlob, StrAlgo),
+	    Sig = ssh_transport:sign(SigData, Hash, Key),
+	    SigBlob = list_to_binary([?string(StrAlgo), ?binary(Sig)]),
 	    ssh_transport:ssh_packet(
 	      #ssh_msg_userauth_request{user = User,
 					service = Service,
 					method = "publickey",
 					data = [?TRUE,
-						?string(Alg),
+						?string(StrAlgo),
 						?binary(PubKeyBlob),
 						?binary(SigBlob)]},
 	      Ssh);
-	_Error ->
-	  not_ok
+     	_Error ->
+	    not_ok
     end.
 
 password_msg([#ssh{opts = Opts, io_cb = IoCb,
 		   user = User, service = Service} = Ssh]) ->
-    ssh_bits:install_messages(userauth_passwd_messages()),
     Password = case proplists:get_value(password, Opts) of
 		   undefined -> 
-		       IoCb:read_password("ssh password: ");
+		       user_interaction(IoCb, Ssh);
 		   PW -> 
 		       PW
 	       end,
-    ssh_transport:ssh_packet(
-      #ssh_msg_userauth_request{user = User,
-				service = Service,
-				method = "password",
-				data =
-				<<?BOOLEAN(?FALSE),
-				 ?STRING(list_to_binary(Password))>>},
-      Ssh).
+    case Password of
+	not_ok ->
+	    not_ok;
+	_  ->
+	    ssh_transport:ssh_packet(
+	      #ssh_msg_userauth_request{user = User,
+					service = Service,
+					method = "password",
+					data =
+					    <<?BOOLEAN(?FALSE),
+					      ?STRING(unicode:characters_to_binary(Password))>>},
+	      Ssh)
+    end.
+
+user_interaction(ssh_no_io, _) ->
+    not_ok;
+user_interaction(IoCb, Ssh) ->
+    IoCb:read_password("ssh password: ", Ssh).
+
 
 %% See RFC 4256 for info on keyboard-interactive
 keyboard_interactive_msg([#ssh{user = User,
-			      service = Service} = Ssh]) ->
-    ssh_bits:install_messages(userauth_keyboard_interactive_messages()),
+			       service = Service} = Ssh]) ->
     ssh_transport:ssh_packet(
       #ssh_msg_userauth_request{user = User,
 				service = Service,
 				method = "keyboard-interactive",
 				data = << ?STRING(<<"">>),
-					?STRING(<<>>) >> }, 
+					  ?STRING(<<>>) >> },
       Ssh).
 
 service_request_msg(Ssh) ->
@@ -103,16 +115,36 @@ init_userauth_request_msg(#ssh{opts = Opts} = Ssh) ->
 					    service = "ssh-connection",
 					    method = "none",
 					    data = <<>>},
-	    CbFirst = proplists:get_value(public_key_alg, Opts, 
-					  ?PREFERRED_PK_ALG),
-	    CbSecond = other_cb(CbFirst),
-	    AllowUserInt =  proplists:get_value(allow_user_interaction, Opts,
-						true),
-	    Prefs = method_preference(CbFirst, CbSecond, AllowUserInt),
-	    ssh_transport:ssh_packet(Msg, Ssh#ssh{user = User,
-					    userauth_preference = Prefs,
-					    userauth_methods = none,
-					    service = "ssh-connection"});
+	    case proplists:get_value(pref_public_key_algs, Opts, false) of
+		false ->
+		    FirstAlg = proplists:get_value(public_key_alg, Opts, ?PREFERRED_PK_ALG),
+		    SecondAlg = other_alg(FirstAlg),
+		    AllowUserInt =  proplists:get_value(user_interaction, Opts, true),
+		    Prefs = method_preference(FirstAlg, SecondAlg, AllowUserInt),
+		    ssh_transport:ssh_packet(Msg, Ssh#ssh{user = User,
+							  userauth_preference = Prefs,
+							  userauth_methods = none,
+							  service = "ssh-connection"});
+		Algs ->
+		    FirstAlg = lists:nth(1, Algs),
+		    case length(Algs) =:= 2 of
+			true ->
+			    SecondAlg = other_alg(FirstAlg),
+			    AllowUserInt =  proplists:get_value(user_interaction, Opts, true),
+			    Prefs = method_preference(FirstAlg, SecondAlg, AllowUserInt),
+			    ssh_transport:ssh_packet(Msg, Ssh#ssh{user = User,
+								  userauth_preference = Prefs,
+								  userauth_methods = none,
+								  service = "ssh-connection"});
+			_ ->
+			    AllowUserInt = proplists:get_value(user_interaction, Opts, true),
+			    Prefs = method_preference(FirstAlg, AllowUserInt),
+			    ssh_transport:ssh_packet(Msg, Ssh#ssh{user = User,
+								  userauth_preference = Prefs,
+								  userauth_methods = none,
+								  service = "ssh-connection"})
+		    end
+	    end;
 	{error, no_user} ->
 	    ErrStr = "Could not determine the users name",
 	    throw(#ssh_msg_disconnect{code = ?SSH_DISCONNECT_ILLEGAL_USER_NAME,
@@ -158,14 +190,13 @@ handle_userauth_request(#ssh_msg_userauth_request{user = User,
 						  data = Data}, _, 
 			#ssh{opts = Opts} = Ssh) ->
     <<_:8, ?UINT32(Sz), BinPwd:Sz/binary>> = Data,
-    Password = binary_to_list(BinPwd),
-    
+    Password = unicode:characters_to_list(BinPwd),
     case check_password(User, Password, Opts) of
 	true ->
 	    {authorized, User,
 	     ssh_transport:ssh_packet(#ssh_msg_userauth_success{}, Ssh)};
 	false  ->
-	    {not_authorized, {User, {passwd, Password}}, 
+	    {not_authorized, {User, {error,"Bad user or password"}}, 
 	     ssh_transport:ssh_packet(#ssh_msg_userauth_failure{
 		     authentications = "",
 		     partial_success = false}, Ssh)}
@@ -192,18 +223,17 @@ handle_userauth_request(#ssh_msg_userauth_request{user = User,
 	?TRUE ->
 	    case verify_sig(SessionId, User, "ssh-connection", Alg,
 			    KeyBlob, SigWLen, Opts) of
-		ok ->
+		true ->
 		    {authorized, User, 
 		     ssh_transport:ssh_packet(
 		       #ssh_msg_userauth_success{}, Ssh)};
-		{error, Reason} ->
-		    {not_authorized, {User, {error, Reason}}, 
+		false ->
+		    {not_authorized, {User, undefined}, 
 		     ssh_transport:ssh_packet(#ssh_msg_userauth_failure{
 			     authentications="publickey,password",
 			     partial_success = false}, Ssh)}
 	    end;
 	?FALSE ->
-	    ssh_bits:install_messages(userauth_pk_messages()),
 	    {not_authorized, {User, undefined},
 	     ssh_transport:ssh_packet(
 	       #ssh_msg_userauth_pk_ok{algorithm_name = Alg,
@@ -228,7 +258,6 @@ handle_userauth_info_request(
     PromptInfos = decode_keyboard_interactive_prompts(NumPrompts,Data),
     Resps = keyboard_interact_get_responses(IoCb, Opts,
 					    Name, Instr, PromptInfos),
-    %%?dbg(true, "keyboard_interactive_reply: resps=~n#~p ~n", [Resps]),
     RespBin = list_to_binary(
 		lists:map(fun(S) -> <<?STRING(list_to_binary(S))>> end,
 			  Resps)),
@@ -240,38 +269,31 @@ handle_userauth_info_request(
 handle_userauth_info_response(#ssh_msg_userauth_info_response{},
 			      _Auth) ->
     throw(#ssh_msg_disconnect{code = ?SSH_DISCONNECT_SERVICE_NOT_AVAILABLE,
-			      description = "Server does not support" 
-			      "keyboard-interactive", 
+			      description = "Server does not support"
+			      "keyboard-interactive",
 			      language = "en"}).
-userauth_messages() ->
-    [ {ssh_msg_userauth_request, ?SSH_MSG_USERAUTH_REQUEST,
-       [string, 
-	string, 
-	string, 
-	'...']},
 
-      {ssh_msg_userauth_failure, ?SSH_MSG_USERAUTH_FAILURE,
-       [string, 
-	boolean]},
-
-      {ssh_msg_userauth_success, ?SSH_MSG_USERAUTH_SUCCESS,
-       []},
-
-      {ssh_msg_userauth_banner, ?SSH_MSG_USERAUTH_BANNER,
-       [string, 
-	string]}].
 %%--------------------------------------------------------------------
 %%% Internal functions
 %%--------------------------------------------------------------------
-method_preference(Callback1, Callback2, true) ->
-    [{"publickey", ?MODULE, publickey_msg, [Callback1]},
-     {"publickey", ?MODULE, publickey_msg,[Callback2]},
+method_preference(Alg1, Alg2, true) ->
+    [{"publickey", ?MODULE, publickey_msg, [Alg1]},
+     {"publickey", ?MODULE, publickey_msg,[Alg2]},
      {"password", ?MODULE, password_msg, []},
      {"keyboard-interactive", ?MODULE, keyboard_interactive_msg, []}
     ];
-method_preference(Callback1, Callback2, false) ->
-    [{"publickey", ?MODULE, publickey_msg, [Callback1]},
-     {"publickey", ?MODULE, publickey_msg,[Callback2]},
+method_preference(Alg1, Alg2, false) ->
+    [{"publickey", ?MODULE, publickey_msg, [Alg1]},
+     {"publickey", ?MODULE, publickey_msg,[Alg2]},
+     {"password", ?MODULE, password_msg, []}
+    ].
+method_preference(Alg1, true) ->
+    [{"publickey", ?MODULE, publickey_msg, [Alg1]},
+     {"password", ?MODULE, password_msg, []},
+     {"keyboard-interactive", ?MODULE, keyboard_interactive_msg, []}
+    ];
+method_preference(Alg1, false) ->
+    [{"publickey", ?MODULE, publickey_msg, [Alg1]},
      {"password", ?MODULE, password_msg, []}
     ].
 
@@ -295,7 +317,6 @@ user_name(Opts) ->
     end.
 
 check_password(User, Password, Opts) ->
-    %%?dbg(true, " ~p ~p ~p ~n", [User, Password, Opts]),
     case proplists:get_value(pwdfun, Opts) of
 	undefined ->
 	    Static = get_password_option(Opts, User),
@@ -312,28 +333,25 @@ get_password_option(Opts, User) ->
     end.
 	    
 verify_sig(SessionId, User, Service, Alg, KeyBlob, SigWLen, Opts) ->
-    case ssh_file:lookup_user_key(User, Alg, Opts) of
-	{ok, OurKey} ->
-	    {ok, Key} = ssh_file:decode_public_key_v2(KeyBlob, Alg),
-	    case OurKey of
-		Key ->
-		    NewSig = build_sig_data(SessionId, 
-					    User, Service, Alg, KeyBlob),
-		    <<?UINT32(AlgSigLen), AlgSig:AlgSigLen/binary>> = SigWLen,
-		    <<?UINT32(AlgLen), _Alg:AlgLen/binary,
-		     ?UINT32(SigLen), Sig:SigLen/binary>> = AlgSig,
-		    M = alg_to_module(Alg),
-		    M:verify(OurKey, NewSig, Sig);
-		_ ->
-		    {error, key_unacceptable}
-	    end;
-	Error -> Error
+    {ok, Key} = decode_public_key_v2(KeyBlob, Alg),
+    KeyCb =  proplists:get_value(key_cb, Opts, ssh_file),
+
+    case KeyCb:is_auth_key(Key, User, Opts) of
+	true ->
+	    PlainText = build_sig_data(SessionId, User,
+				       Service, KeyBlob, Alg),
+	    <<?UINT32(AlgSigLen), AlgSig:AlgSigLen/binary>> = SigWLen,
+	    <<?UINT32(AlgLen), _Alg:AlgLen/binary,
+	      ?UINT32(SigLen), Sig:SigLen/binary>> = AlgSig,
+	    ssh_transport:verify(PlainText, sha, Sig, Key);
+	false ->
+	    false
     end.
 
-build_sig_data(SessionId, User, Service, Alg, KeyBlob) ->
+build_sig_data(SessionId, User, Service, KeyBlob, Alg) ->
     Sig = [?binary(SessionId),
 	   ?SSH_MSG_USERAUTH_REQUEST,
-	   ?string(User),
+	   ?string_utf8(User),
 	   ?string(Service),
 	   ?binary(<<"publickey">>),
 	   ?TRUE,
@@ -341,13 +359,13 @@ build_sig_data(SessionId, User, Service, Alg, KeyBlob) ->
 	   ?binary(KeyBlob)],
     list_to_binary(Sig).
 
-decode_keyboard_interactive_prompts(NumPrompts, Data) ->
-    Types = lists:append(lists:duplicate(NumPrompts, [string, boolean])),
-    pairwise_tuplify(ssh_bits:decode(Data, Types)).
+algorithm_string('ssh-rsa') ->
+    "ssh-rsa";
+algorithm_string('ssh-dss') ->
+     "ssh-dss".
 
-pairwise_tuplify([E1, E2 | Rest]) -> [{E1, E2} | pairwise_tuplify(Rest)];
-pairwise_tuplify([])              -> [].
-    
+decode_keyboard_interactive_prompts(_NumPrompts, Data) ->
+    ssh_message:decode_keyboard_interactive_prompts(Data, []).
 
 keyboard_interact_get_responses(IoCb, Opts, Name, Instr, PromptInfos) ->
     NumPrompts = length(PromptInfos),
@@ -356,11 +374,11 @@ keyboard_interact_get_responses(IoCb, Opts, Name, Instr, PromptInfos) ->
 	    %% Special case/fallback for just one prompt
 	    %% (assumed to be the password prompt)
 	    case proplists:get_value(password, Opts) of
-		undefined -> keyboard_interact(IoCb, Name, Instr, PromptInfos);
+		undefined -> keyboard_interact(IoCb, Name, Instr, PromptInfos, Opts);
 		PW        -> [PW]
 	    end;
 	undefined ->
-	    keyboard_interact(IoCb, Name, Instr, PromptInfos);
+	    keyboard_interact(IoCb, Name, Instr, PromptInfos, Opts);
 	KbdInteractFun ->
 	    Prompts = lists:map(fun({Prompt, _Echo}) -> Prompt end,
 				PromptInfos),
@@ -374,50 +392,45 @@ keyboard_interact_get_responses(IoCb, Opts, Name, Instr, PromptInfos) ->
 	    end
     end.
 
-keyboard_interact(IoCb, Name, Instr, Prompts) ->
+keyboard_interact(IoCb, Name, Instr, Prompts, Opts) ->
     if Name /= "" -> IoCb:format("~s", [Name]);
        true       -> ok
     end,
     if Instr /= "" -> IoCb:format("~s", [Instr]);
        true        -> ok
     end,
-    lists:map(fun({Prompt, true})  -> IoCb:read_line(Prompt);
-		 ({Prompt, false}) -> IoCb:read_password(Prompt)
+    lists:map(fun({Prompt, true})  -> IoCb:read_line(Prompt, Opts);
+		 ({Prompt, false}) -> IoCb:read_password(Prompt, Opts)
 	      end,
 	      Prompts).
 
-userauth_passwd_messages() ->
-    [ 
-      {ssh_msg_userauth_passwd_changereq, ?SSH_MSG_USERAUTH_PASSWD_CHANGEREQ,
-       [string, 
-	string]}
-     ].
+other_alg('ssh-rsa') ->
+    'ssh-dss';
+other_alg('ssh-dss') ->
+    'ssh-rsa'.
+decode_public_key_v2(<<?UINT32(Len0), _:Len0/binary,
+		       ?UINT32(Len1), BinE:Len1/binary,
+		       ?UINT32(Len2), BinN:Len2/binary>>
+			 ,"ssh-rsa") ->
+    E = ssh_bits:erlint(Len1, BinE),
+    N = ssh_bits:erlint(Len2, BinN),
+    {ok, #'RSAPublicKey'{publicExponent = E, modulus = N}};
+decode_public_key_v2(<<?UINT32(Len0), _:Len0/binary,
+		       ?UINT32(Len1), BinP:Len1/binary,
+		       ?UINT32(Len2), BinQ:Len2/binary,
+		       ?UINT32(Len3), BinG:Len3/binary,
+		       ?UINT32(Len4), BinY:Len4/binary>>
+			 , "ssh-dss") ->
+    P = ssh_bits:erlint(Len1, BinP),
+    Q = ssh_bits:erlint(Len2, BinQ),
+    G = ssh_bits:erlint(Len3, BinG),
+    Y = ssh_bits:erlint(Len4, BinY),
+    {ok, {Y, #'Dss-Parms'{p = P, q = Q, g = G}}};
 
-userauth_keyboard_interactive_messages() ->
-    [ {ssh_msg_userauth_info_request, ?SSH_MSG_USERAUTH_INFO_REQUEST,
-       [string, 
-	string,
-	string,
-	uint32,
-	'...']},
+decode_public_key_v2(_, _) ->
+    {error, bad_format}.
 
-      {ssh_msg_userauth_info_response, ?SSH_MSG_USERAUTH_INFO_RESPONSE,
-       [uint32, 
-	'...']}
-     ].
-
-userauth_pk_messages() ->
-    [ {ssh_msg_userauth_pk_ok, ?SSH_MSG_USERAUTH_PK_OK,
-       [string, % algorithm name
-	binary]} % key blob
-     ].
-
-alg_to_module("ssh-dss") ->
-    ssh_dsa;
-alg_to_module("ssh-rsa") ->
-    ssh_rsa.
-
-other_cb(ssh_rsa) -> 
-    ssh_dsa;
-other_cb(ssh_dsa) -> 
-    ssh_rsa.
+encode_public_key(#'RSAPrivateKey'{publicExponent = E, modulus = N}) ->
+    ssh_bits:encode(["ssh-rsa",E,N], [string,mpint,mpint]);
+encode_public_key(#'DSAPrivateKey'{p = P, q = Q, g = G, y = Y}) ->
+    ssh_bits:encode(["ssh-dss",P,Q,G,Y], [string,mpint,mpint,mpint,mpint]).

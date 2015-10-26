@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %% 
-%% Copyright Ericsson AB 2002-2011. All Rights Reserved.
+%% Copyright Ericsson AB 2002-2013. All Rights Reserved.
 %% 
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -100,7 +100,7 @@ format_error({?ERR_GUARDREMOTECALL, Module, Name, Arithy}) ->
 				[Module,Name,Arithy]));
 format_error({?ERR_GUARDELEMENT, Str}) ->
     lists:flatten(
-      io_lib:format("the language element ~s (in guard) cannot be translated "
+      io_lib:format("the language element ~ts (in guard) cannot be translated "
 		    "into match_spec", [Str]));
 format_error({?ERR_GUARDBINCONSTRUCT, Var}) ->
     lists:flatten(
@@ -126,7 +126,7 @@ format_error({?ERR_BODYREMOTECALL, Module, Name, Arithy}) ->
 				[Module,Name,Arithy]));
 format_error({?ERR_BODYELEMENT, Str}) ->
     lists:flatten(
-      io_lib:format("the language element ~s (in body) cannot be translated "
+      io_lib:format("the language element ~ts (in body) cannot be translated "
 		    "into match_spec", [Str]));
 format_error({?ERR_BODYBINCONSTRUCT, Var}) ->
     lists:flatten(
@@ -333,17 +333,18 @@ form({function,Line,Name0,Arity0,Clauses0}) ->
 form(AnyOther) ->
     AnyOther.
 function(Name, Arity, Clauses0) ->
-    {Clauses1,_} = clauses(Clauses0,gb_sets:new()),
+    Clauses1 = clauses(Clauses0),
     {Name,Arity,Clauses1}.
-clauses([C0|Cs],Bound) ->
-    {C1,Bound1} = clause(C0,Bound),
-    {C2,Bound2} = clauses(Cs,Bound1),
-    {[C1|C2],Bound2};
-clauses([],Bound) -> {[],Bound}.
+clauses([C0|Cs]) ->
+    C1 = clause(C0,gb_sets:new()),
+    C2 = clauses(Cs),
+    [C1|C2];
+clauses([]) -> [].
+
 clause({clause,Line,H0,G0,B0},Bound) ->
     {H1,Bound1} = copy(H0,Bound),
-    {B1,Bound2} = copy(B0,Bound1),
-    {{clause,Line,H1,G0,B1},Bound2}.
+    {B1,_Bound2} = copy(B0,Bound1),
+    {clause,Line,H1,G0,B1}.
 
 copy({call,Line,{remote,_Line2,{atom,_Line3,ets},{atom,_Line4,fun2ms}},
       As0},Bound) ->
@@ -368,6 +369,13 @@ copy({var,_Line,Name} = VarDef,Bound) ->
 copy({'fun',Line,{clauses,Clauses}},Bound) -> % Dont export bindings from funs
     {NewClauses,_IgnoredBindings} = copy_list(Clauses,Bound),
     {{'fun',Line,{clauses,NewClauses}},Bound};
+copy({named_fun,Line,Name,Clauses},Bound) -> % Dont export bindings from funs
+    Bound1 = case Name of
+                 '_' -> Bound;
+                 Name -> gb_sets:add(Name,Bound)
+             end,
+    {NewClauses,_IgnoredBindings} = copy_list(Clauses,Bound1),
+    {{named_fun,Line,Name,NewClauses},Bound};
 copy({'case',Line,Of,ClausesList},Bound) -> % Dont export bindings from funs
     {NewOf,NewBind0} = copy(Of,Bound),
     {NewClausesList,NewBindings} = copy_case_clauses(ClausesList,NewBind0,[]),
@@ -880,7 +888,6 @@ translate_language_element(Atom) ->
     end.
 
 old_bool_test(atom,1) -> is_atom;
-old_bool_test(constant,1) -> is_constant;
 old_bool_test(float,1) -> is_float;
 old_bool_test(integer,1) -> is_integer;
 old_bool_test(list,1) -> is_list;
@@ -895,7 +902,6 @@ old_bool_test(record,2) -> is_record;
 old_bool_test(_,_) -> undefined.
 
 bool_test(is_atom,1) -> true;
-bool_test(is_constant,1) -> true;
 bool_test(is_float,1) -> true;
 bool_test(is_integer,1) -> true;
 bool_test(is_list,1) -> true;
@@ -904,6 +910,7 @@ bool_test(is_pid,1) -> true;
 bool_test(is_port,1) -> true;
 bool_test(is_reference,1) -> true;
 bool_test(is_tuple,1) -> true;
+bool_test(is_map,1) -> true;
 bool_test(is_binary,1) -> true;
 bool_test(is_function,1) -> true;
 bool_test(is_record,2) -> true;
@@ -918,6 +925,7 @@ real_guard_function(node,0) -> true;
 real_guard_function(node,1) -> true;
 real_guard_function(round,1) -> true;
 real_guard_function(size,1) -> true;
+real_guard_function(map_size,1) -> true;
 real_guard_function(tl,1) -> true;
 real_guard_function(trunc,1) -> true;
 real_guard_function(self,0) -> true;

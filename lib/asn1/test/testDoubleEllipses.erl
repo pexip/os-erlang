@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2007-2010. All Rights Reserved.
+%% Copyright Ericsson AB 2007-2013. All Rights Reserved.
 %%
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -19,7 +19,6 @@
 %%
 -module(testDoubleEllipses).
 
--export([compile/3]).
 -export([main/1]).
 
 -include_lib("test_server/include/test_server.hrl").
@@ -34,79 +33,28 @@
 -record('SetAlt',{a,d,b,e,c,f,g}).
 -record('SetAltV2',{a,d,b,e,h,i,c,f,g}).
 
-
-
-
-compile(Config,Rules,Options) ->
-
-    ?line DataDir = ?config(data_dir,Config),
-    ?line OutDir = ?config(priv_dir,Config),
-    ?line true = code:add_patha(?config(priv_dir,Config)),
-    ?line ok = asn1ct:compile(DataDir ++ "DoubleEllipses",[Rules,{outdir,OutDir}]++Options).
-
-
 main(_Rules) ->
-    %% SEQUENCE
-    ?line {ok,Bytes} = 
-	asn1_wrapper:encode('DoubleEllipses','Seq',#'Seq'{a = 10,c = true}),
-    ?line {ok,#'SeqV2'{a=10,b = asn1_NOVALUE, c = true}} = 
-	asn1_wrapper:decode('DoubleEllipses','SeqV2',Bytes),
-    ?line {ok,Bytes2} = 
-	asn1_wrapper:encode('DoubleEllipses','SeqV2',
-			    #'SeqV2'{a=10,b = false, c = true}),
-    ?line {ok,#'Seq'{a = 10, c = true}} =
-	asn1_wrapper:decode('DoubleEllipses','Seq',Bytes2),
+    roundtrip('Seq', #'Seq'{a=10,c=true}),
+    roundtrip('SeqV2', #'SeqV2'{a=10,b=false,c=true}),
+    roundtrip('SeqAlt',
+	      #'SeqAlt'{a=10,d=12,b = <<2#1010:4>>,
+			e=true,c=false,f=14,g=16}),
+    roundtrip('SeqAltV2',
+	      #'SeqAltV2'{a=10,d=12,
+			  b = <<2#1010:4>>,
+			  e=true,h="PS",i=13,c=false,f=14,g=16}),
     
-    ?line {ok,Bytes3} =
-	asn1_wrapper:encode('DoubleEllipses','SeqAlt',
-			    #'SeqAlt'{a = 10, d = 12, 
-				      b = [1,0,1,0], e = true,
-				      c = false, f = 14, g = 16}),
-    ?line {ok,#'SeqAltV2'{a = 10, d = 12, 
-			  b = [1,0,1,0], e = true,
-			  h = asn1_NOVALUE, i = asn1_NOVALUE,
-			  c = false, f = 14, g = 16}} =
-	asn1_wrapper:decode('DoubleEllipses','SeqAltV2',Bytes3),
-    ?line {ok,Bytes4} =
-	asn1_wrapper:encode('DoubleEllipses','SeqAltV2',
-			    #'SeqAltV2'{a = 10, d = 12, 
-				      b = [1,0,1,0], e = true,
-				      h = "PS", i = 13,
-				      c = false, f = 14, g = 16}),
-     ?line {ok,#'SeqAlt'{a = 10, d = 12, 
-			 b = [1,0,1,0], e = true,
-			 c = false, f = 14, g = 16}} =
-	asn1_wrapper:decode('DoubleEllipses','SeqAlt',Bytes4),
-    
-    %% SET
-    ?line {ok,Bytes5} = 
-	asn1_wrapper:encode('DoubleEllipses','Set',#'Set'{a = 10,c = true}),
-    ?line {ok,#'SetV2'{a=10,b = asn1_NOVALUE, c = true}} = 
-	asn1_wrapper:decode('DoubleEllipses','SetV2',Bytes5),
-    ?line {ok,Bytes6} = 
-	asn1_wrapper:encode('DoubleEllipses','SetV2',
-			    #'SetV2'{a=10,b = false, c = true}),
-    ?line {ok,#'Set'{a = 10, c = true}} =
-	asn1_wrapper:decode('DoubleEllipses','Set',Bytes6),
-    
-    ?line {ok,Bytes7} =
-	asn1_wrapper:encode('DoubleEllipses','SetAlt',
-			    #'SetAlt'{a = 10, d = 12, 
-				      b = [1,0,1,0], e = true,
-				      c = false, f = 14, g = 16}),
-    ?line {ok,#'SetAltV2'{a = 10, d = 12, 
-			  b = [1,0,1,0], e = true,
-			  h = asn1_NOVALUE, i = asn1_NOVALUE,
-			  c = false, f = 14, g = 16}} =
-	asn1_wrapper:decode('DoubleEllipses','SetAltV2',Bytes7),
-    ?line {ok,Bytes8} =
-	asn1_wrapper:encode('DoubleEllipses','SetAltV2',
-			    #'SetAltV2'{a = 10, d = 12, 
-				      b = [1,0,1,0], e = true,
-				      h = "PS", i = 13,
-				      c = false, f = 14, g = 16}),
-     ?line {ok,#'SetAlt'{a = 10, d = 12, 
-			 b = [1,0,1,0], e = true,
-			 c = false, f = 14, g = 16}} =
-	asn1_wrapper:decode('DoubleEllipses','SetAlt',Bytes8),
+    roundtrip('Set', #'Set'{a=10,c=true}),
+    roundtrip('SetV2', #'SetV2'{a=10,b=false,c=true}),
+    roundtrip('SetAlt',
+	      #'SetAlt'{a=10,d=12,
+			b = <<2#1010:4>>,
+			e=true,c=false,f=14,g=16}),
+    roundtrip('SetAltV2',
+	      #'SetAltV2'{a=10,d=12,
+			  b = <<2#1010:4>>,
+			  e=true,h="PS",i=13,c=false,f=14,g=16}),
     ok.
+
+roundtrip(T, V) ->
+    asn1_test_lib:roundtrip('DoubleEllipses', T, V).

@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2007-2010. All Rights Reserved.
+%% Copyright Ericsson AB 2007-2014. All Rights Reserved.
 %%
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -29,15 +29,34 @@
 
 -include("ssl_alert.hrl").
 -include("ssl_record.hrl").
+-include("ssl_internal.hrl").
 
--export([alert_txt/1, reason_code/2]).
+-export([encode/3, decode/1, alert_txt/1, reason_code/2]).
 
 %%====================================================================
 %% Internal application API
 %%====================================================================
+
 %%--------------------------------------------------------------------
--spec reason_code(#alert{}, client | server) -> closed | esslconnect |
-						esslaccept | string().
+-spec encode(#alert{}, ssl_record:ssl_version(), #connection_states{}) -> 
+		    {iolist(), #connection_states{}}.
+%%
+%% Description: Encodes an alert
+%%--------------------------------------------------------------------
+encode(#alert{} = Alert, Version, ConnectionStates) ->
+    ssl_record:encode_alert_record(Alert, Version, ConnectionStates).
+
+%%--------------------------------------------------------------------
+-spec decode(binary()) -> [#alert{}] | #alert{}.
+%%
+%% Description: Decode alert(s), will return a singel own alert if peer
+%% sends garbage or too many warning alerts.
+%%--------------------------------------------------------------------
+decode(Bin) ->
+    decode(Bin, [], 0).
+
+%%--------------------------------------------------------------------
+-spec reason_code(#alert{}, client | server) -> closed | {essl, string()}.
 %%
 %% Description: Returns the error reason that will be returned to the
 %% user.
@@ -45,12 +64,8 @@
 
 reason_code(#alert{description = ?CLOSE_NOTIFY}, _) ->
     closed;
-reason_code(#alert{description = ?HANDSHAKE_FAILURE}, client) ->
-    esslconnect;
-reason_code(#alert{description = ?HANDSHAKE_FAILURE}, server) ->
-    esslaccept;
 reason_code(#alert{description = Description}, _) ->
-    description_txt(Description).
+    {tls_alert, description_txt(Description)}.
 
 %%--------------------------------------------------------------------
 -spec alert_txt(#alert{}) -> string().
@@ -65,6 +80,22 @@ alert_txt(#alert{level = Level, description = Description, where = {Mod,Line}}) 
 %%--------------------------------------------------------------------
 %%% Internal functions
 %%--------------------------------------------------------------------
+
+%% It is very unlikely that an correct implementation will send more than one alert at the time
+%% So it there is more than 10 warning alerts we consider it an error
+decode(<<?BYTE(Level), ?BYTE(_), _/binary>>, _, N) when Level == ?WARNING, N > ?MAX_ALERTS ->
+    ?ALERT_REC(?FATAL, ?DECODE_ERROR);
+decode(<<?BYTE(Level), ?BYTE(Description), Rest/binary>>, Acc, N) when Level == ?WARNING ->
+    Alert = ?ALERT_REC(Level, Description),
+    decode(Rest, [Alert | Acc], N + 1);
+decode(<<?BYTE(Level), ?BYTE(Description), _Rest/binary>>, Acc, _) when Level == ?FATAL->
+    Alert = ?ALERT_REC(Level, Description),
+    lists:reverse([Alert | Acc]); %% No need to decode rest fatal alert will end the connection
+decode(<<?BYTE(_Level), _/binary>>, _, _) ->
+    ?ALERT_REC(?FATAL, ?ILLEGAL_PARAMETER);
+decode(<<>>, Acc, _) ->
+    lists:reverse(Acc, []).
+
 level_txt(?WARNING) ->
     "Warning:";
 level_txt(?FATAL) ->
@@ -84,6 +115,8 @@ description_txt(?DECOMPRESSION_FAILURE) ->
     "decompression failure";
 description_txt(?HANDSHAKE_FAILURE) ->
     "handshake failure";
+description_txt(?NO_CERTIFICATE_RESERVED) ->
+    "No certificate reserved";
 description_txt(?BAD_CERTIFICATE) ->
     "bad certificate";
 description_txt(?UNSUPPORTED_CERTIFICATE) ->
@@ -115,4 +148,18 @@ description_txt(?INTERNAL_ERROR) ->
 description_txt(?USER_CANCELED) ->
     "user canceled";
 description_txt(?NO_RENEGOTIATION) ->
-    "no renegotiation".
+    "no renegotiation";
+description_txt(?UNSUPPORTED_EXTENSION) ->
+    "unsupported extension";
+description_txt(?CERTIFICATE_UNOBTAINABLE) ->
+    "certificate unobtainable";
+description_txt(?UNRECOGNISED_NAME) ->
+    "unrecognised name";
+description_txt(?BAD_CERTIFICATE_STATUS_RESPONSE) ->
+    "bad certificate status response";
+description_txt(?BAD_CERTIFICATE_HASH_VALUE) ->
+    "bad certificate hash value";
+description_txt(?UNKNOWN_PSK_IDENTITY) ->
+    "unknown psk identity";
+description_txt(Enum) ->
+    lists:flatten(io_lib:format("unsupported/unknown alert: ~p", [Enum])).

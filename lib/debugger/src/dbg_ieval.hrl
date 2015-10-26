@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %% 
-%% Copyright Ericsson AB 2005-2009. All Rights Reserved.
+%% Copyright Ericsson AB 2005-2011. All Rights Reserved.
 %% 
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -21,6 +21,8 @@
 		module,           % MFA which called the currently
 		function,         %  interpreted function
 		arguments,        %
-		last_call = false % True if current expression is
-	       }).                % the VERY last to be evaluated
-                                  % (ie at all, not only in a clause)
+
+		%% True if the current expression is at the top level
+		%% (i.e. the next call will leave interpreted code).
+		top = false
+	       }).

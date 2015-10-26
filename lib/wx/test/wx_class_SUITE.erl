@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2008-2011. All Rights Reserved.
+%% Copyright Ericsson AB 2008-2014. All Rights Reserved.
 %%
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -50,7 +50,7 @@ suite() -> [{ct_hooks,[ts_install_cth]}].
 all() ->
     [calendarCtrl, treeCtrl, notebook, staticBoxSizer,
      clipboard, helpFrame, htmlWindow, listCtrlSort, listCtrlVirtual,
-     radioBox, systemSettings].
+     radioBox, systemSettings, taskBarIcon, toolbar, popup].
 
 groups() ->
     [].
@@ -82,13 +82,14 @@ calendarCtrl(Config) ->
 	true ->
 	    ?log("DateAttr is null~n",[]);
 	false ->
-	    ?log("DateAttr is useable~n",[])
+	    ?log("DateAttr is useable~n",[]),
+	    DateAttr = ?mt(wxCalendarDateAttr, wxCalendarDateAttr:new()),
+	    wxCalendarDateAttr:setBackgroundColour(DateAttr, {0,243,0}),
+	    wxCalendarCtrl:setAttr(Cal, Day, DateAttr),
+	    DateAttr1 = ?mt(wxCalendarDateAttr, wxCalendarCtrl:getAttr(Cal,Day)),
+	    io:format("DateAttr ~p~n",[DateAttr1]),
+	    ?m({0,243,0,255}, wxCalendarDateAttr:getBackgroundColour(DateAttr1))
     end,
-    DateAttr = ?mt(wxCalendarDateAttr, wxCalendarDateAttr:new()),
-    wxCalendarDateAttr:setBackgroundColour(DateAttr, {0,243,0}),
-    wxCalendarCtrl:setAttr(Cal, Day, DateAttr),
-    DateAttr1 = ?mt(wxCalendarDateAttr, wxCalendarCtrl:getAttr(Cal,Day)),
-    ?m({0,243,0,255}, wxCalendarDateAttr:getBackgroundColour(DateAttr1)),
 
     ?m({YMD, _},wxCalendarCtrl:getDate(Cal)),
 
@@ -129,10 +130,18 @@ treeCtrl(Config) ->
     wxWindow:setSizerAndFit(Panel, Sizer),
     wxFrame:show(Frame),
 
+    ok = wxTreeCtrl:expand(Tree, Root),
     ?m([], wxTreeCtrl:getItemData(Tree, Root)),
     ?m({data,item1}, wxTreeCtrl:getItemData(Tree, Item1)),
     ?m({data,item2}, wxTreeCtrl:getItemData(Tree, Item2)),
     ?m({data,item3}, wxTreeCtrl:getItemData(Tree, Item3)),
+
+    {true, {X0,Y0,W0,H0}} = ?m({_,_},wxTreeCtrl:getBoundingRect(Tree, Item1, [{textOnly, true}])),
+    ?m({true, {_,Y1,_,_}} when Y1 > Y0, wxTreeCtrl:getBoundingRect(Tree, Item2)),
+    ?m({Item1, _}, wxTreeCtrl:hitTest(Tree, {X0+W0 div 2, Y0+H0 div 2})),
+    ?m(true, wxTreeCtrl:isTreeItemIdOk(Item1)),
+    ?m({0, _}, wxTreeCtrl:hitTest(Tree, {X0+W0+W0, Y0+H0+4*H0})),
+    ?m(false, wxTreeCtrl:isTreeItemIdOk(0)),
 
     wxFrame:connect(Tree, command_tree_item_expanded),
     wxFrame:connect(Tree, command_tree_item_collapsed),
@@ -335,21 +344,21 @@ listCtrlSort(Config) ->
     Wx = wx:new(),
     Frame = wxFrame:new(Wx, ?wxID_ANY, "Frame"),
 
-    LC = wxListCtrl:new(Frame, [{style, ?wxLC_REPORT bor ?wxLC_SORT_ASCENDING}]),
+    LC = wxListCtrl:new(Frame, [{style, ?wxLC_REPORT}]),
 
     %% must be done crashes in wxwidgets otherwise.
     wxListCtrl:insertColumn(LC, 0, "Column"),
 
     Add = fun(Int) ->
-		  wxListCtrl:insertItem(LC, Int, integer_to_list(Int)),
+		  wxListCtrl:insertItem(LC, Int, "ABC " ++ integer_to_list(Int)),
 		  %% ItemData Can only be integers currently
-		  wxListCtrl:setItemData(LC, Int, abs(2500-Int))
+		  wxListCtrl:setItemData(LC, Int, abs(50-Int))
 	  end,
 
-    wx:foreach(Add, lists:seq(0,5000)),
+    wx:foreach(Add, lists:seq(0,50)),
     wxWindow:show(Frame),
 
-    timer:sleep(200),
+    timer:sleep(2000),
 
     Sort = fun() ->
 		   wxListCtrl:sortItems(LC, fun(A, B) ->
@@ -365,11 +374,12 @@ listCtrlSort(Config) ->
     io:format("Sorted ~p ~n",[Time]),
 
     Item = wxListItem:new(),
+    wxListItem:setMask(Item, ?wxLIST_MASK_TEXT),
     _List = wx:map(fun(Int) ->
 			   wxListItem:setId(Item, Int),
 			   ?m(true, wxListCtrl:getItem(LC, Item)),
-			   io:format("~s~n",[wxListItem:getText(Item)])
-		   end, lists:seq(0,100)),
+			   io:format("~p: ~s~n",[Int, wxListItem:getText(Item)])
+		   end, lists:seq(0,10)),
     wxListItem:destroy(Item),
 
     wx_test_lib:wx_destroy(Frame,Config).
@@ -469,4 +479,82 @@ textCtrl(Config) ->
     wxTextCtrl:appendText(TC, "This line is in default color\n"),
     wxTextAttr:destroy(Attr),
     wxWindow:show(Frame),
+    wx_test_lib:wx_destroy(Frame,Config).
+
+taskBarIcon(TestInfo) when is_atom(TestInfo) -> wx_test_lib:tc_info(TestInfo);
+taskBarIcon(Config) ->
+    Wx = wx:new(),
+    Frame = wxFrame:new(Wx, ?wxID_ANY, "Frame"),
+    TBI = wxTaskBarIcon:new(),
+    Image = wxImage:new(filename:join(code:priv_dir(debugger), "erlang_bug.png")),
+    io:format("Image ~p~n",[wxImage:ok(Image)]),
+    Icon = wxIcon:new(filename:join(code:priv_dir(debugger), "erlang_bug.png"), [{type, ?wxBITMAP_TYPE_PNG}]),
+    wxTaskBarIcon:setIcon(TBI, Icon, [{tooltip, "Testing wxTaskBarIcon"}]),
+    wxWindow:show(Frame),
+    wxTaskBarIcon:connect(TBI, taskbar_left_down, [{callback, fun(Ev,_) -> io:format("Left clicked: ~p~n",[Ev]) end}]),
+    wxTaskBarIcon:connect(TBI, taskbar_right_down, [{callback,fun(Ev,_) -> io:format("Right clicked: ~p~n",[Ev]) end}]),
+    wx_test_lib:wx_destroy(Frame,Config).
+
+toolbar(TestInfo) when is_atom(TestInfo) -> wx_test_lib:tc_info(TestInfo);
+toolbar(Config) ->
+    Wx = wx:new(),
+    Frame = wxFrame:new(Wx, ?wxID_ANY, "Frame"),
+    TB = wxFrame:createToolBar(Frame),
+    wxToolBar:addTool(TB, 747, "PressMe", wxArtProvider:getBitmap("wxART_COPY", [{size, {16,16}}]),
+		      [{shortHelp, "Press Me"}]),
+
+    Add = fun(#wx{}, _) ->
+		  wxToolBar:addTool(TB, -1, "Added", wxArtProvider:getBitmap("wxART_TICK_MARK", [{size, {16,16}}]),
+				    [{shortHelp, "Test 2 popup text"}])
+	  end,
+
+    wxFrame:connect(Frame, command_menu_selected, [{callback, Add}, {id, 747}]),
+    wxFrame:show(Frame),
+    wx_test_lib:wx_destroy(Frame,Config).
+
+
+popup(TestInfo) when is_atom(TestInfo) -> wx_test_lib:tc_info(TestInfo);
+popup(Config) ->
+    Wx = wx:new(),
+    Frame = wxFrame:new(Wx, ?wxID_ANY, "Frame"),
+    TB = wxFrame:createToolBar(Frame),
+    wxToolBar:addTool(TB, 747, "PressMe", wxArtProvider:getBitmap("wxART_COPY", [{size, {16,16}}]),
+		      [{shortHelp, "Press Me"}]),
+
+    Log = fun(#wx{id=Id, event=Ev}, Obj) ->
+		  io:format("Got ~p from ~p~n", [Id, Ev]),
+		  wxEvent:skip(Obj)
+	  end,
+    CreatePopup = fun() ->
+			  Pop = wxPopupTransientWindow:new(Frame),
+			  Panel = wxPanel:new(Pop),
+			  Sz = wxBoxSizer:new(?wxVERTICAL),
+			  wxSizer:add(Sz, wxButton:new(Panel, 42, [{label, "A button"}])),
+			  wxSizer:add(Sz, Txt = wxStaticText:new(Panel, 43, "Some static text")),
+			  wxSizer:add(Sz, wxButton:new(Panel, 44, [{label, "B button"}])),
+			  wxPanel:setSizerAndFit(Panel, Sz),
+			  wxSizer:setSizeHints(Sz, Pop),
+			  wxWindow:connect(Pop, command_button_clicked, [{callback, Log}]),
+			  wxWindow:connect(Txt, left_up, [{callback, Log}]),
+			  wxWindow:connect(Txt, middle_up, [{callback, Log}]),
+			  wxWindow:connect(Txt, right_up, [{callback, Log}]),
+			  wxWindow:connect(Pop, show, [{callback, Log}]),
+			  Pos = wx_misc:getMousePosition(),
+			  wxPopupTransientWindow:position(Pop, Pos, {-1, -1}),
+			  wxPopupTransientWindow:popup(Pop),
+			  Pop
+		  end,
+    wxFrame:connect(Frame, command_menu_selected, [{id, 747}]),
+    wxFrame:show(Frame),
+
+    Pop = CreatePopup(),
+    Scale = case wx_test_lib:user_available(Config) of
+		true -> 25;
+		false -> 1
+	    end,
+    receive
+	#wx{} -> CreatePopup()
+    after 200*Scale ->
+	    wxPopupTransientWindow:dismiss(Pop)
+    end,
     wx_test_lib:wx_destroy(Frame,Config).

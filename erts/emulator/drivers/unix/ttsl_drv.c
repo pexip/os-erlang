@@ -1,7 +1,7 @@
 /*
  * %CopyrightBegin%
  *
- * Copyright Ericsson AB 1996-2010. All Rights Reserved.
+ * Copyright Ericsson AB 1996-2013. All Rights Reserved.
  *
  * The contents of this file are subject to the Erlang Public License,
  * Version 1.1, (the "License"); you may not use this file except in
@@ -42,6 +42,9 @@ static ErlDrvData ttysl_start(ErlDrvPort, char*);
 #include <locale.h>
 #include <unistd.h>
 #include <termios.h>
+#ifdef HAVE_WCWIDTH
+#include <wchar.h>
+#endif
 #ifdef HAVE_FCNTL_H
 #include <fcntl.h>
 #endif
@@ -95,6 +98,9 @@ static int lpos;                /* The current "cursor position" in the line buf
  */
 #define CONTROL_TAG 0x10000000U /* Control character, value in first position */
 #define ESCAPED_TAG 0x01000000U /* Escaped character, value in first position */
+#ifdef HAVE_WCWIDTH
+#define WIDE_TAG    0x02000000U /* Wide character, value in first position    */
+#endif
 #define TAG_MASK    0xFF000000U
 
 #define MAXSIZE (1 << 16)
@@ -106,7 +112,7 @@ static int lpos;                /* The current "cursor position" in the line buf
 
 /* Main interface functions. */
 static void ttysl_stop(ErlDrvData);
-static void ttysl_from_erlang(ErlDrvData, char*, int);
+static void ttysl_from_erlang(ErlDrvData, char*, ErlDrvSizeT);
 static void ttysl_from_tty(ErlDrvData, ErlDrvEvent);
 static void ttysl_stop_select(ErlDrvEvent, void*);
 static Sint16 get_sint16(char*);
@@ -141,7 +147,8 @@ static void update_cols(void);
 static int tty_init(int,int,int,int);
 static int tty_set(int);
 static int tty_reset(int);
-static int ttysl_control(ErlDrvData, unsigned int, char *, int, char **, int);
+static ErlDrvSSizeT ttysl_control(ErlDrvData, unsigned int,
+				  char *, ErlDrvSizeT, char **, ErlDrvSizeT);
 #ifdef ERTS_NOT_USED
 static RETSIGTYPE suspend(int);
 #endif
@@ -242,7 +249,7 @@ static ErlDrvData ttysl_start(ErlDrvPort port, char* buf)
 #ifndef HAVE_TERMCAP
     return ERL_DRV_ERROR_GENERAL;
 #else
-    char *s, *t, c, *l;
+    char *s, *t, *l;
     int canon, echo, sig;	/* Terminal characteristics */
     int flag;
     extern int using_oldshell; /* set this to let the rest of erts know */
@@ -262,7 +269,6 @@ static ErlDrvData ttysl_start(ErlDrvPort port, char* buf)
 	s++;
 	/* Find end of this argument (start of next) and insert NUL. */
 	if ((t = strchr(s, ' '))) {
-	    c = *t;
 	    *t = '\0';
 	}
 	if ((flag = ((*s == '+') ? 1 : ((*s == '-') ? -1 : 0)))) {
@@ -346,13 +352,13 @@ static void ttysl_get_window_size(Uint32 *width, Uint32 *height)
     *height = DEF_HEIGHT;
 }
     
-static int ttysl_control(ErlDrvData drv_data,
-			 unsigned int command,
-			 char *buf, int len,
-			 char **rbuf, int rlen)
+static ErlDrvSSizeT ttysl_control(ErlDrvData drv_data,
+				  unsigned int command,
+				  char *buf, ErlDrvSizeT len,
+				  char **rbuf, ErlDrvSizeT rlen)
 {
     char resbuff[2*sizeof(Uint32)];
-    int res_size;
+    ErlDrvSizeT res_size;
     switch (command) {
     case CTRL_OP_GET_WINSIZE:
 	{
@@ -597,12 +603,20 @@ static int check_buf_size(byte *s, int n)
 	} 
 	if (utf8_mode) { /* That is, terminal is UTF8 compliant */
 	    if (ch >= 128 || isprint(ch)) {
-		DEBUGLOG(("Printable(UTF-8:%d):%d",(pos - opos),ch));
-		size++; /* Buffer contains wide characters... */
+#ifdef HAVE_WCWIDTH
+		int width;
+#endif
+		DEBUGLOG(("Printable(UTF-8:%d):%d",pos,ch));
+		size++;
+#ifdef HAVE_WCWIDTH
+		if ((width = wcwidth(ch)) > 1) {
+		    size += width - 1;
+		}
+#endif
 	    } else if (ch == '\t') {
 		size += 8;
 	    } else {
-		DEBUGLOG(("Magic(UTF-8:%d):%d",(pos - opos),ch));
+		DEBUGLOG(("Magic(UTF-8:%d):%d",pos,ch));
 		size += 2;
 	    }
 	} else {
@@ -634,14 +648,14 @@ static int check_buf_size(byte *s, int n)
 }
 
 
-static void ttysl_from_erlang(ErlDrvData ttysl_data, char* buf, int count)
+static void ttysl_from_erlang(ErlDrvData ttysl_data, char* buf, ErlDrvSizeT count)
 {
     if (lpos > MAXSIZE) 
 	put_chars((byte*)"\n", 1);
 
     switch (buf[0]) {
     case OP_PUTC:
-	DEBUGLOG(("OP: Putc(%d)",count-1));
+	DEBUGLOG(("OP: Putc(%lu)",(unsigned long) count-1));
 	if (check_buf_size((byte*)buf+1, count-1) == 0)
 	    return; 
 	put_chars((byte*)buf+1, count-1);
@@ -731,7 +745,7 @@ static Sint16 get_sint16(char *s)
 {
     return ((*s << 8) | ((byte*)s)[1]);
 }
-
+
 static int start_lbuf(void)
 {
     if (!lbuf && !(lbuf = ( Uint32*) driver_alloc(lbuf_size * sizeof(Uint32))))
@@ -823,7 +837,7 @@ static int del_chars(int n)
 	r = llen - lpos - l;	/* Characters after deleted */
 	/* Fix up buffer and buffer pointers. */
 	if (r > 0)
-	    memcpy(lbuf + lpos, lbuf + pos, r * sizeof(Uint32));
+	    memmove(lbuf + lpos, lbuf + pos, r * sizeof(Uint32));
 	llen -= l;
 	/* Write out characters after, blank the tail and jump back to lpos. */
 	write_buf(lbuf + lpos, r);
@@ -842,7 +856,7 @@ static int del_chars(int n)
 	move_cursor(lpos, lpos-l);	/* Move back */
 	/* Fix up buffer and buffer pointers. */
 	if (r > 0)
-	    memcpy(lbuf + pos, lbuf + lpos, r * sizeof(Uint32));
+	    memmove(lbuf + pos, lbuf + lpos, r * sizeof(Uint32));
 	lpos -= l;
 	llen -= l;
 	/* Write out characters after, blank the tail and jump back to lpos. */
@@ -868,12 +882,22 @@ static int step_over_chars(int n)
     end = lbuf + llen;
     c = lbuf + lpos;
     for ( ; n > 0 && c < end; --n) {
+#ifdef HAVE_WCWIDTH
+	while (*c & WIDE_TAG) {
+	    c++;
+	}
+#endif
 	c++;
 	while (c < end && (*c & TAG_MASK) && ((*c & ~TAG_MASK) == 0))
 	    c++;
     }
     for ( ; n < 0 && c > beg; n++) {
 	--c;
+#ifdef HAVE_WCWIDTH
+	while (c > beg + 1 && (c[-1] & WIDE_TAG)) {
+	    --c;
+	}
+#endif
 	while (c > beg && (*c & TAG_MASK) && ((*c & ~TAG_MASK) == 0))
 	    --c;
     }
@@ -899,6 +923,15 @@ static int insert_buf(byte *s, int n)
 	    ++pos;
 	}
 	if ((utf8_mode && (ch >= 128 || isprint(ch))) || (ch <= 255 && isprint(ch))) {
+#ifdef HAVE_WCWIDTH
+	    int width;
+	    if ((width = wcwidth(ch)) > 1) {
+		while (--width) {
+		    DEBUGLOG(("insert_buf: Wide(UTF-8):%d,%d",width,ch));
+		    lbuf[lpos++] = (WIDE_TAG | ((Uint32) ch));
+		}
+	    }
+#endif
 	    DEBUGLOG(("insert_buf: Printable(UTF-8):%d",ch));
 	    lbuf[lpos++] = (Uint32) ch;
 	} else if (ch >= 128) { /* not utf8 mode */
@@ -912,11 +945,15 @@ static int insert_buf(byte *s, int n)
 		lbuf[lpos++] = (CONTROL_TAG | ((Uint32) ch));
 		ch = 0;
 	    } while (lpos % 8);
-	} else if (ch == '\n' || ch == '\r') {
+	} else if (ch == '\e' || ch == '\n' || ch == '\r') {
 	    write_buf(lbuf + buffpos, lpos - buffpos);
-	    outc('\r');
-	    if (ch == '\n')
-		outc('\n');
+            if (ch == '\e') {
+                outc('\e');
+            } else {
+                outc('\r');
+                if (ch == '\n')
+                    outc('\n');
+            }
 	    if (llen > lpos) {
 		memcpy(lbuf, lbuf + lpos, llen - lpos);
 	    }
@@ -1002,6 +1039,10 @@ static int write_buf(Uint32 *s, int n)
 	    if (octbuff != octtmp) {
 		driver_free(octbuff);
 	    }
+#ifdef HAVE_WCWIDTH
+	} else if (*s & WIDE_TAG) {
+	    --n; s++;
+#endif
 	} else {
 	    DEBUGLOG(("Very unexpected character %d",(int) *s));
 	    ++n;
@@ -1050,7 +1091,7 @@ static int move_cursor(int from, int to)
       move_left(-dc);
     return TRUE;
 }
-
+
 static int start_termcap(void)
 {
     int eres;
@@ -1146,7 +1187,7 @@ static int move_down(int n)
       tputs(down, 1, outc);
     return TRUE;
 }
-		    
+
 
 /*
  * Updates cols if terminal has resized (SIGWINCH). Should be called
@@ -1168,7 +1209,7 @@ static void update_cols(void)
 	cols = width;
     }
 }
-		    
+
 
 /*
  * Put a terminal device into non-canonical mode with ECHO off.

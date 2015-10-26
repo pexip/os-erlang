@@ -2,7 +2,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2001-2011. All Rights Reserved.
+%% Copyright Ericsson AB 2001-2012. All Rights Reserved.
 %%
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -31,7 +31,7 @@
 
 -module(hipe_beam_to_icode).
 
--export([module/2, mfa/3]).
+-export([module/2]).
 
 %%-----------------------------------------------------------------------
 
@@ -41,6 +41,9 @@
 %%
 %%-ifndef(DEBUG).
 %%-define(DEBUG,6).
+%% Choose one of two tracing methods
+%%-define(DEBUG_BIF_CALL_TRACE,true).
+%%-define(IO_FORMAT_CALL_TRACE,true).
 %%-endif.
 
 -include("../main/hipe.hrl").
@@ -51,8 +54,27 @@
 -define(no_debug_msg(Str,Xs),ok).
 %%-define(no_debug_msg(Str,Xs),msg(Str,Xs)).
 
--define(mk_debugcode(MFA, Env, Code),
-	case MFA of
+-ifdef(DEBUG_BIF_CALL_TRACE).
+
+%% Use BIF hipe_bifs_debug_native_called_2 to trace function calls
+mk_debug_calltrace({_M,_F,A}=MFA, Env, Code) ->
+    MFAVar = mk_var(new),
+    Ignore = mk_var(new),    
+    MkMfa = hipe_icode:mk_move(MFAVar,hipe_icode:mk_const(MFA)),
+    Args = [mk_var({x,I-1}) || I <- lists:seq(1,A)],
+    ArgTup = mk_var(new),
+    MkArgTup = hipe_icode:mk_primop([ArgTup], mktuple, Args),
+    Call = hipe_icode:mk_primop([Ignore], debug_native_called,
+				[MFAVar,ArgTup]),
+    {[MkMfa,MkArgTup,Call | Code], Env}.
+
+-endif.
+
+-ifdef(IO_FORMAT_CALL_TRACE).
+
+%% Use io:format to trace function calls
+mk_debug_calltrace(MFA, Env, Code) ->
+    case MFA of
 	  {io,_,_} ->
 	    %% We do not want to loop infinitely if we are compiling
 	    %% the module io.
@@ -69,14 +91,15 @@
 	    Call =
 	      hipe_icode:mk_call([Ignore],io,format,[StringVar,MFAVar],remote),
 	    {[MkMfa,MkString,Call | Code], Env}
-	end).
+    end.
+-endif.
+
 
 %%-----------------------------------------------------------------------
-%% Exported types
+%% Types
 %%-----------------------------------------------------------------------
 
 -type hipe_beam_to_icode_ret() :: [{mfa(),#icode{}}].
-
 
 %%-----------------------------------------------------------------------
 %% Internal data structures
@@ -111,55 +134,6 @@ trans_beam_function_chunk(FunBeamCode, ClosureInfo) ->
   {MFA,Icode}.
 
 %%-----------------------------------------------------------------------
-%% @doc
-%% Translates the BEAM code of a single function into Icode.
-%%   Returns a tuple whose first argument is list of {{M,F,A}, ICode}
-%%   pairs, where the first entry is that of the given MFA, and the
-%%   following (in undefined order) are those of the funs that are
-%%   defined in the function, and recursively, in the funs.  The
-%%   second argument of the tuple is the HiPE compiler options
-%%   contained in the file.
-%% @end
-%%-----------------------------------------------------------------------
-
--spec mfa(list(), mfa(), comp_options()) -> hipe_beam_to_icode_ret().
-
-mfa(BeamFuns, {M,F,A} = MFA, Options)
-  when is_atom(M), is_atom(F), is_integer(A) ->
-  BeamCode0 = [beam_disasm:function__code(Fn) || Fn <- BeamFuns],
-  {ModCode, ClosureInfo} = preprocess_code(BeamCode0),
-  mfa_loop([MFA], [], sets:new(), ModCode, ClosureInfo, Options).
-
-mfa_loop([{M,F,A} = MFA | MFAs], Acc, Seen, ModCode, ClosureInfo,
-	 Options) when is_atom(M), is_atom(F), is_integer(A) ->
-  case sets:is_element(MFA, Seen) of
-    true ->
-      mfa_loop(MFAs, Acc, Seen, ModCode, ClosureInfo, Options);
-    false ->
-      {Icode, FunMFAs} = mfa_get(M, F, A, ModCode, ClosureInfo, Options),
-      mfa_loop(FunMFAs ++ MFAs, [{MFA, Icode} | Acc],
-	       sets:add_element(MFA, Seen),
-	       ModCode, ClosureInfo, Options)
-  end;
-mfa_loop([], Acc, _, _, _, _) ->
-  lists:reverse(Acc).
-
-mfa_get(M, F, A, ModCode, ClosureInfo, Options) ->
-  BeamCode = get_fun(ModCode, M,F,A),
-  pp_beam([BeamCode], Options),  % cheat by using a list
-  Icode = trans_mfa_code(M,F,A, BeamCode, ClosureInfo),
-  FunMFAs = get_fun_mfas(BeamCode),
-  {Icode, FunMFAs}.
-
-get_fun_mfas([{patched_make_fun,{M,F,A} = MFA,_,_,_}|BeamCode])
-  when is_atom(M), is_atom(F), is_integer(A) ->
-  [MFA|get_fun_mfas(BeamCode)];
-get_fun_mfas([_|BeamCode]) ->
-  get_fun_mfas(BeamCode);
-get_fun_mfas([]) ->
-  [].
-
-%%-----------------------------------------------------------------------
 %% The main translation function.
 %%-----------------------------------------------------------------------
 
@@ -176,7 +150,7 @@ trans_mfa_code(M,F,A, FunBeamCode, ClosureInfo) ->
   MFA = {M,F,A},
   %% Debug code
   ?IF_DEBUG_LEVEL(5,
-		  {Code3,_Env3} = ?mk_debugcode(MFA, Env2, Code2),
+		  {Code3,_Env3} = mk_debug_calltrace(MFA, Env1, Code2),
 		  {Code3,_Env3} = {Code2,Env1}),
   %% For stack optimization
   Leafness = leafness(Code3),
@@ -281,10 +255,14 @@ needs_redtest(Leafness) ->
 %%-----------------------------------------------------------------------
 
 %%--- label & func_info combo ---
+trans_fun([{label,_}=F,{func_info,_,_,_}=FI|Instructions], Env) ->
+  %% Handle old code without a line instruction.
+  trans_fun([F,{line,[]},FI|Instructions], Env);
 trans_fun([{label,B},{label,_},
 	   {func_info,M,F,A},{label,L}|Instructions], Env) ->
   trans_fun([{label,B},{func_info,M,F,A},{label,L}|Instructions], Env);
 trans_fun([{label,B},
+	   {line,_},
 	   {func_info,{atom,_M},{atom,_F},_A},
 	   {label,L}|Instructions], Env) ->
   %% Emit code to handle function_clause errors.  The BEAM test instructions
@@ -360,19 +338,19 @@ trans_fun([{call_ext_last,_N,{extfunc,M,F,A},_}|Instructions], Env) ->
 %%--- bif0 ---
 trans_fun([{bif,BifName,nofail,[],Reg}|Instructions], Env) ->
   BifInst = trans_bif0(BifName,Reg),
-  [hipe_icode:mk_comment({bif0,BifName}),BifInst|trans_fun(Instructions,Env)];
+  [BifInst|trans_fun(Instructions,Env)];
 %%--- bif1 ---
 trans_fun([{bif,BifName,{f,Lbl},[_] = Args,Reg}|Instructions], Env) ->
   {BifInsts,Env1} = trans_bif(1,BifName,Lbl,Args,Reg,Env),
-  [hipe_icode:mk_comment({bif1,BifName})|BifInsts] ++ trans_fun(Instructions,Env1);
+  BifInsts ++ trans_fun(Instructions,Env1);
 %%--- bif2 ---
 trans_fun([{bif,BifName,{f,Lbl},[_,_] = Args,Reg}|Instructions], Env) ->
   {BifInsts,Env1} = trans_bif(2,BifName,Lbl,Args,Reg,Env),
-  [hipe_icode:mk_comment({bif2,BifName})|BifInsts] ++ trans_fun(Instructions,Env1);
+  BifInsts ++ trans_fun(Instructions,Env1);
 %%--- bif3 ---
 trans_fun([{bif,BifName,{f,Lbl},[_,_,_] = Args,Reg}|Instructions], Env) ->
   {BifInsts,Env1} = trans_bif(3,BifName,Lbl,Args,Reg,Env),
-  [hipe_icode:mk_comment({bif3,BifName})|BifInsts] ++ trans_fun(Instructions,Env1);
+  BifInsts ++ trans_fun(Instructions,Env1);
 %%--- allocate
 trans_fun([{allocate,StackSlots,_}|Instructions], Env) ->
   trans_allocate(StackSlots) ++ trans_fun(Instructions,Env);
@@ -510,10 +488,6 @@ trans_fun([{test,is_nil,{f,Lbl},[Arg]}|Instructions], Env) ->
 trans_fun([{test,is_binary,{f,Lbl},[Arg]}|Instructions], Env) ->
   {Code,Env1} = trans_type_test(binary,Lbl,Arg,Env),
   [Code | trans_fun(Instructions,Env1)];
-%%--- is_constant ---
-trans_fun([{test,is_constant,{f,Lbl},[Arg]}|Instructions], Env) ->
-  {Code,Env1} = trans_type_test(constant,Lbl,Arg,Env),
-  [Code | trans_fun(Instructions,Env1)];
 %%--- is_list ---
 trans_fun([{test,is_list,{f,Lbl},[Arg]}|Instructions], Env) ->
   {Code,Env1} = trans_type_test(list,Lbl,Arg,Env),
@@ -535,6 +509,10 @@ trans_fun([{test,test_arity,{f,Lbl},[Reg,N]}|Instructions], Env) ->
   I = hipe_icode:mk_type([trans_arg(Reg)],{tuple,N}, 
 			 hipe_icode:label_name(True),map_label(Lbl)),
   [I,True | trans_fun(Instructions,Env)];
+%%--- is_map ---
+trans_fun([{test,is_map,{f,Lbl},[Arg]}|Instructions], Env) ->
+  {Code,Env1} = trans_type_test(map,Lbl,Arg,Env),
+  [Code | trans_fun(Instructions,Env1)];
 %%--------------------------------------------------------------------
 %%--- select_val ---
 trans_fun([{select_val,Reg,{f,Lbl},{list,Cases}}|Instructions], Env) ->
@@ -865,7 +843,7 @@ trans_fun([{test,bs_test_tail2,{f,Lbl},[Ms,Numbits]}| Instructions], Env) ->
   trans_op_call({hipe_bs_primop,{bs_test_tail,Numbits}}, 
 		Lbl, [MsVar], [], Env, Instructions);
 %%--------------------------------------------------------------------
-%% New bit syntax instructions added in February 2004 (R10B).
+%% bit syntax instructions added in February 2004 (R10B).
 %%--------------------------------------------------------------------
 trans_fun([{bs_init2,{f,Lbl},Size,_Words,_LiveRegs,{field_flags,Flags0},X}|
 	   Instructions], Env) ->
@@ -1080,7 +1058,7 @@ trans_fun([{arithfbif,fnegate,Lab,[SrcR],DestR}|Instructions], Env) ->
       trans_fun([{arithbif,'-',Lab,[{float,0.0},SrcR],DestR}|Instructions], Env)
   end;
 %%--------------------------------------------------------------------
-%% New apply instructions added in April 2004 (R10B).
+%% apply instructions added in April 2004 (R10B).
 %%--------------------------------------------------------------------
 trans_fun([{apply,Arity}|Instructions], Env) ->
   BeamArgs = extract_fun_args(Arity+2), %% +2 is for M and F
@@ -1096,21 +1074,21 @@ trans_fun([{apply_last,Arity,_N}|Instructions], Env) -> % N is StackAdjustment?
    hipe_icode:mk_enter_primop(#apply_N{arity=Arity}, [M,F|Args])
    | trans_fun(Instructions,Env)];
 %%--------------------------------------------------------------------
-%% New test instruction added in April 2004 (R10B).
+%% test for boolean added in April 2004 (R10B).
 %%--------------------------------------------------------------------
 %%--- is_boolean ---
 trans_fun([{test,is_boolean,{f,Lbl},[Arg]}|Instructions], Env) ->
   {Code,Env1} = trans_type_test(boolean,Lbl,Arg,Env),
   [Code | trans_fun(Instructions,Env1)];
 %%--------------------------------------------------------------------
-%% New test instruction added in June 2005 for R11
+%% test for function with specific arity added in June 2005 (R11).
 %%--------------------------------------------------------------------
 %%--- is_function2 ---
 trans_fun([{test,is_function2,{f,Lbl},[Arg,Arity]}|Instructions], Env) ->
   {Code,Env1} = trans_type_test2(function2,Lbl,Arg,Arity,Env),
   [Code | trans_fun(Instructions,Env1)];
 %%--------------------------------------------------------------------
-%% New garbage-collecting BIFs added in January 2006 for R11B.
+%% garbage collecting BIFs added in January 2006 (R11B).
 %%--------------------------------------------------------------------
 trans_fun([{gc_bif,'-',Fail,_Live,[SrcR],DstR}|Instructions], Env) ->
   %% Unary minus. Change this to binary minus.
@@ -1128,19 +1106,67 @@ trans_fun([{gc_bif,Name,Fail,_Live,SrcRs,DstR}|Instructions], Env) ->
       trans_fun([{bif,Name,Fail,SrcRs,DstR}|Instructions], Env)
   end;
 %%--------------------------------------------------------------------
-%% New test instruction added in July 2007 for R12.
+%% test for bitstream added in July 2007 (R12).
 %%--------------------------------------------------------------------
 %%--- is_bitstr ---
 trans_fun([{test,is_bitstr,{f,Lbl},[Arg]}|Instructions], Env) ->
   {Code,Env1} = trans_type_test(bitstr, Lbl, Arg, Env),
   [Code | trans_fun(Instructions, Env1)];
 %%--------------------------------------------------------------------
-%% New stack triming instruction added in October 2007 for R12.
+%% stack triming instruction added in October 2007 (R12).
 %%--------------------------------------------------------------------
 trans_fun([{trim,N,NY}|Instructions], Env) ->
   %% trim away N registers leaving NY registers
   Moves = trans_trim(N, NY),
   Moves ++ trans_fun(Instructions, Env);
+%%--------------------------------------------------------------------
+%% line instruction added in Fall 2012 (R15).
+%%--------------------------------------------------------------------
+trans_fun([{line,_}|Instructions], Env) ->
+  trans_fun(Instructions,Env);
+%%--------------------------------------------------------------------
+%% Map instructions added in Spring 2014 (17.0).
+%%--------------------------------------------------------------------
+trans_fun([{test,has_map_fields,{f,Lbl},Map,{list,Keys}}|Instructions], Env) ->
+  {MapMove, MapVar, Env1} = mk_move_and_var(Map, Env),
+  %% We assume that hipe_icode:mk_call has no side-effects, and reuse
+  %% the help function of get_map_elements below, discarding the value
+  %% assignment instruction list.
+  {TestInstructions, _GetInstructions, Env2} =
+    trans_map_query(MapVar, map_label(Lbl), Env1,
+		    lists:flatten([[K, {r, 0}] || K <- Keys])),
+  [MapMove, TestInstructions | trans_fun(Instructions, Env2)];
+trans_fun([{get_map_elements,{f,Lbl},Map,{list,KVPs}}|Instructions], Env) ->
+  {MapMove, MapVar, Env1} = mk_move_and_var(Map, Env),
+  {TestInstructions, GetInstructions, Env2} =
+    trans_map_query(MapVar, map_label(Lbl), Env1, KVPs),
+  [MapMove, TestInstructions, GetInstructions | trans_fun(Instructions, Env2)];
+%%--- put_map_assoc ---
+trans_fun([{put_map_assoc,{f,Lbl},Map,Dst,_N,{list,Pairs}}|Instructions], Env) ->
+  {MapMove, MapVar, Env1} = mk_move_and_var(Map, Env),
+  TempMapVar = mk_var(new),
+  TempMapMove = hipe_icode:mk_move(TempMapVar, MapVar),
+  {PutInstructions, Env2}
+    = case Lbl > 0 of
+	true ->
+	  gen_put_map_instrs(exists, assoc, TempMapVar, Dst, Lbl, Pairs, Env1);
+	false ->
+	  gen_put_map_instrs(new, assoc, TempMapVar, Dst, new, Pairs, Env1)
+      end,
+  [MapMove, TempMapMove, PutInstructions | trans_fun(Instructions, Env2)];
+%%--- put_map_exact ---
+trans_fun([{put_map_exact,{f,Lbl},Map,Dst,_N,{list,Pairs}}|Instructions], Env) ->
+  {MapMove, MapVar, Env1} = mk_move_and_var(Map, Env),
+  TempMapVar = mk_var(new),
+  TempMapMove = hipe_icode:mk_move(TempMapVar, MapVar),
+  {PutInstructions, Env2}
+    = case Lbl > 0 of
+	true ->
+	  gen_put_map_instrs(exists, exact, TempMapVar, Dst, Lbl, Pairs, Env1);
+	false ->
+	  gen_put_map_instrs(new, exact, TempMapVar, Dst, new, Pairs, Env1)
+      end,
+  [MapMove, TempMapMove, PutInstructions | trans_fun(Instructions, Env2)];
 %%--------------------------------------------------------------------
 %%--- ERROR HANDLING ---
 %%--------------------------------------------------------------------
@@ -1341,7 +1367,7 @@ trans_bin([{bs_put_integer,{f,Lbl},Size,Unit,{field_flags,Flags0},Source}|
   SrcInstrs ++ trans_bin_call({hipe_bs_primop, Name}, 
 			     Lbl, [Src|Args], [Offset], Base, Offset, Env2, Instructions);
 %%----------------------------------------------------------------
-%% New binary construction instructions added in R12B-5 (Fall 2008).
+%% binary construction instructions added in Fall 2008 (R12B-5).
 %%----------------------------------------------------------------
 trans_bin([{bs_put_utf8,{f,Lbl},_FF,A3}|Instructions], Base, Offset, Env) ->
   Src = trans_arg(A3),
@@ -1392,7 +1418,7 @@ trans_bs_get_or_skip_utf32(Lbl, Ms, Flags0, X, Instructions, Env) ->
 		      Lbl, [Dst,MsVar], [MsVar], Env1, Instructions).
 
 %%-----------------------------------------------------------------------
-%% trans_arith(Op, SrcVars, Des, Lab, Env) -> { Icode, NewEnv }
+%% trans_arith(Op, SrcVars, Des, Lab, Env) -> {Icode, NewEnv}
 %%     A failure label of type {f,0} means in a body.
 %%     A failure label of type {f,L} where L>0 means in a guard.
 %%        Within a guard a failure should branch to the next guard and
@@ -1498,7 +1524,7 @@ clone_dst(Dest) ->
 
 
 %%-----------------------------------------------------------------------
-%% trans_type_test(Test, Lbl, Arg, Env) -> { Icode, NewEnv }
+%% trans_type_test(Test, Lbl, Arg, Env) -> {Icode, NewEnv}
 %%     Handles all unary type tests like is_integer etc. 
 %%-----------------------------------------------------------------------
 
@@ -1510,7 +1536,7 @@ trans_type_test(Test, Lbl, Arg, Env) ->
   {[Move,I,True],Env1}.
 
 %%
-%% This handles binary type tests. Currently, the only such is the new
+%% This handles binary type tests. Currently, the only such is the
 %% is_function/2 BIF.
 %%
 trans_type_test2(function2, Lbl, Arg, Arity, Env) ->
@@ -1521,9 +1547,105 @@ trans_type_test2(function2, Lbl, Arg, Arity, Env) ->
 			 hipe_icode:label_name(True), map_label(Lbl)),
   {[Move1,Move2,I,True],Env2}.
 
+%%
+%% Handles the get_map_elements instruction and the has_map_fields
+%% test instruction.
+%%
+trans_map_query(_MapVar, _FailLabel, Env, []) ->
+  {[], [], Env};
+trans_map_query(MapVar, FailLabel, Env, [Key,Val|KVPs]) ->
+  {Move,KeyVar,Env1} = mk_move_and_var(Key,Env),
+  PassLabel = mk_label(new),
+  BoolVar = hipe_icode:mk_new_var(),
+  ValVar = mk_var(Val),
+  IsKeyCall = hipe_icode:mk_call([BoolVar], maps, is_key, [KeyVar, MapVar],
+				 remote),
+  TrueTest = hipe_icode:mk_if('=:=', [BoolVar, hipe_icode:mk_const(true)],
+			      hipe_icode:label_name(PassLabel), FailLabel),
+  GetCall = hipe_icode:mk_call([ValVar], maps, get,  [KeyVar, MapVar], remote),
+  {TestList, GetList, Env2} = trans_map_query(MapVar, FailLabel, Env1, KVPs),
+  {[Move, IsKeyCall, TrueTest, PassLabel|TestList], [GetCall|GetList], Env2}.
+
+%%
+%% Generates a fail label if necessary when translating put_map_* instructions.
+%%
+gen_put_map_instrs(exists, Op, TempMapVar, Dst, FailLbl, Pairs, Env) ->
+  TrueLabel = mk_label(new),
+  IsMapCode = hipe_icode:mk_type([TempMapVar], map,
+				 hipe_icode:label_name(TrueLabel), map_label(FailLbl)),
+  DstMapVar = mk_var(Dst),
+  {ReturnLbl, PutInstructions, Env1}
+    = case Op of
+	assoc ->
+	  trans_put_map_assoc(TempMapVar, DstMapVar, Pairs, Env, []);
+	exact ->
+	  trans_put_map_exact(TempMapVar, DstMapVar,
+			      map_label(FailLbl), Pairs, Env, [])
+      end,
+  {[IsMapCode, TrueLabel, PutInstructions, ReturnLbl], Env1};
+gen_put_map_instrs(new, Op, TempMapVar, Dst, new, Pairs, Env) ->
+  TrueLabel = mk_label(new),
+  FailLbl = mk_label(new),
+  IsMapCode = hipe_icode:mk_type([TempMapVar], map,
+				 hipe_icode:label_name(TrueLabel),
+				 hipe_icode:label_name(FailLbl)),
+  DstMapVar = mk_var(Dst),
+  {ReturnLbl, PutInstructions, Env1}
+    = case Op of
+	assoc ->
+	  trans_put_map_assoc(TempMapVar, DstMapVar, Pairs, Env, []);
+	exact ->
+	  trans_put_map_exact(TempMapVar, DstMapVar,
+	    hipe_icode:label_name(FailLbl), Pairs, Env, [])
+      end,
+  Fail = hipe_icode:mk_fail([hipe_icode:mk_const(badarg)], error),
+  {[IsMapCode, TrueLabel, PutInstructions, FailLbl, Fail, ReturnLbl], Env1}.
+
+%%-----------------------------------------------------------------------
+%% This function generates the instructions needed to insert several
+%% (Key, Value) pairs into an existing map, each recursive call inserts
+%% one (Key, Value) pair.
+%%-----------------------------------------------------------------------
+trans_put_map_assoc(MapVar, DestMapVar, [], Env, Acc) ->
+  MoveToReturnVar = hipe_icode:mk_move(DestMapVar, MapVar),
+  ReturnLbl = mk_label(new),
+  GotoReturn = hipe_icode:mk_goto(hipe_icode:label_name(ReturnLbl)),
+  {ReturnLbl, lists:reverse([GotoReturn, MoveToReturnVar | Acc]), Env};
+trans_put_map_assoc(MapVar, DestMapVar, [Key, Value | Rest], Env, Acc) ->
+  {MoveKey, KeyVar, Env1} = mk_move_and_var(Key, Env),
+  {MoveVal, ValVar, Env2} = mk_move_and_var(Value, Env1),
+  BifCall = hipe_icode:mk_call([MapVar], maps, put,
+			       [KeyVar, ValVar, MapVar], remote),
+  trans_put_map_assoc(MapVar, DestMapVar, Rest, Env2,
+		      [BifCall, MoveVal, MoveKey | Acc]).
+
+%%-----------------------------------------------------------------------
+%% This function generates the instructions needed to update several
+%% (Key, Value) pairs in an existing map, each recursive call inserts
+%% one (Key, Value) pair.
+%%-----------------------------------------------------------------------
+trans_put_map_exact(MapVar, DestMapVar, _FLbl, [], Env, Acc) ->
+  MoveToReturnVar = hipe_icode:mk_move(DestMapVar, MapVar),
+  ReturnLbl = mk_label(new),
+  GotoReturn = hipe_icode:mk_goto(hipe_icode:label_name(ReturnLbl)),
+  {ReturnLbl, lists:reverse([GotoReturn, MoveToReturnVar | Acc]), Env};
+trans_put_map_exact(MapVar, DestMapVar, FLbl, [Key, Value | Rest], Env, Acc) ->
+  SuccLbl = mk_label(new),
+  {MoveKey, KeyVar, Env1} = mk_move_and_var(Key, Env),
+  {MoveVal, ValVar, Env2} = mk_move_and_var(Value, Env1),
+  IsKey = hipe_icode:mk_new_var(),
+  BifCallIsKey = hipe_icode:mk_call([IsKey], maps, is_key,
+				    [KeyVar, MapVar], remote),
+  IsKeyTest = hipe_icode:mk_if('=:=', [IsKey, hipe_icode:mk_const(true)],
+			       hipe_icode:label_name(SuccLbl), FLbl),
+  BifCallPut = hipe_icode:mk_call([MapVar], maps, put,
+				  [KeyVar, ValVar, MapVar], remote),
+  Acc1 = [BifCallPut, SuccLbl, IsKeyTest, BifCallIsKey, MoveVal, MoveKey | Acc],
+  trans_put_map_exact(MapVar, DestMapVar, FLbl, Rest, Env2, Acc1).
+
 %%-----------------------------------------------------------------------
 %% trans_puts(Code, Environment) -> 
-%%            { Movs, Code, Vars, NewEnv }
+%%            {Movs, Code, Vars, NewEnv}
 %%-----------------------------------------------------------------------
 
 trans_puts(Code, Env) ->
@@ -1869,20 +1991,12 @@ patch_make_funs([], FunIndex, Acc) ->
 
 find_mfa([{label,_}|Code]) ->
   find_mfa(Code);
+find_mfa([{line,_}|Code]) ->
+  find_mfa(Code);
 find_mfa([{func_info,{atom,M},{atom,F},A}|_]) 
   when is_atom(M), is_atom(F), is_integer(A), 0 =< A, A =< 255 ->
   {M, F, A}.
 
-%%-----------------------------------------------------------------------
-
-%% Localize a particular function in a module
-get_fun([[L, {func_info,{atom,M},{atom,F},A} | Is] | _], M,F,A) ->
-  [L, {func_info,{atom,M},{atom,F},A} | Is];
-get_fun([[_L1,_L2, {func_info,{atom,M},{atom,F},A} = MFA| _Is] | _], M,F,A) ->
-  ?WARNING_MSG("Consecutive labels found; please re-create the .beam file~n", []),
-  [_L1,_L2, MFA | _Is];
-get_fun([_|Rest], M,F,A) ->
-  get_fun(Rest, M,F,A).    
 
 %%-----------------------------------------------------------------------
 %% Takes a list of arguments and returns the constants of them into

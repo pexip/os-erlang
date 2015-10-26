@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 1997-2011. All Rights Reserved.
+%% Copyright Ericsson AB 1997-2014. All Rights Reserved.
 %%
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -20,7 +20,7 @@
 
 -export([all/0, suite/0,groups/0,init_per_suite/1, end_per_suite/1, 
 	 init_per_group/2,end_per_group/2, 
-	 interesting/1,random_ref_comp/1,random_ref_sr_comp/1,
+	 interesting/1,scope_return/1,random_ref_comp/1,random_ref_sr_comp/1,
 	 random_ref_fla_comp/1,parts/1, bin_to_list/1, list_to_bin/1,
 	 copy/1, referenced/1,guard/1,encode_decode/1,badargs/1,longest_common_trap/1]).
 
@@ -40,7 +40,7 @@
 -export([init_per_testcase/2, end_per_testcase/2]).
 % Default timetrap timeout (set in init_per_testcase).
 % Some of these testcases are really heavy...
--define(default_timeout, ?t:minutes(20)).
+-define(default_timeout, ?t:minutes(30)).
 
 -endif.
 
@@ -67,7 +67,7 @@ end_per_testcase(_Case, Config) ->
 suite() -> [{ct_hooks,[ts_install_cth]}].
 
 all() -> 
-    [interesting, random_ref_fla_comp, random_ref_sr_comp,
+    [scope_return,interesting, random_ref_fla_comp, random_ref_sr_comp,
      random_ref_comp, parts, bin_to_list, list_to_bin, copy,
      referenced, guard, encode_decode, badargs,
      longest_common_trap].
@@ -248,6 +248,10 @@ badargs(Config) when is_list(Config) ->
 	   binary:matches(<<1,2,3>>,
 			{ac,ets:match_spec_compile([{'_',[],['$_']}])},
 			[{scope,{0,1}}])),
+    %% OTP-11350
+    badarg = ?MASK_ERROR(
+		binary:matches(<<"foo">>, 
+			       [<<>>, <<"f">>])),
     ?line badarg =
 	?MASK_ERROR(binary:longest_common_prefix(
 		      [<<0:10000,1,2,4,1:3>>,
@@ -378,6 +382,20 @@ subj() ->
   Subject= <<X1/binary>>,
   Subject.
 
+
+scope_return(doc) ->
+    ["Test correct return values for scopes (OTP-9701)."];
+scope_return(Config) when is_list(Config) ->
+    N=10000,
+    Bin=binary:copy(<<"a">>,N),
+    scope_loop(Bin,0,N).
+
+scope_loop(_,N,N) ->
+    ok;
+scope_loop(Bin,N,M) ->
+    ?line {N,1} = binary:match(Bin,<<"a">>,[{scope,{N,1}}]),
+    ?line {N,1} = binary:match(Bin,[<<"a">>,<<"b">>],[{scope,{N,1}}]),
+    scope_loop(Bin,N+1,M).
 
 interesting(doc) ->
     ["Try some interesting patterns"];
@@ -1317,9 +1335,9 @@ one_random_number(N) ->
 one_random(N) ->
     M = ((N - 1) rem 68) + 1,
     element(M,{$a,$b,$c,$d,$e,$f,$g,$h,$i,$j,$k,$l,$m,$n,$o,$p,$q,$r,$s,$t,
-	       $u,$v,$w,$x,$y,$z,$å,$ä,$ö,$A,$B,$C,$D,$E,$F,$G,$H,
-	       $I,$J,$K,$L,$M,$N,$O,$P,$Q,$R,$S,$T,$U,$V,$W,$X,$Y,$Z,$Å,
-	       $Ä,$Ö,$0,$1,$2,$3,$4,$5,$6,$7,$8,$9}).
+	       $u,$v,$w,$x,$y,$z,$Ã¥,$Ã¤,$Ã¶,$A,$B,$C,$D,$E,$F,$G,$H,
+	       $I,$J,$K,$L,$M,$N,$O,$P,$Q,$R,$S,$T,$U,$V,$W,$X,$Y,$Z,$Ã…,
+	       $Ã„,$Ã–,$0,$1,$2,$3,$4,$5,$6,$7,$8,$9}).
 
 random_number({Min,Max}) -> % Min and Max are *length* of number in
                             % decimal positions

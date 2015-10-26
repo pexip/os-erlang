@@ -39,6 +39,8 @@
 -export([float_1_function/1]).
 -export([action_function/1]).
 -export([warnings/1]).
+-export([no_warnings/1]).
+-export([eep37/1]).
 -export([init_per_testcase/2, end_per_testcase/2]).
 
 init_per_testcase(_Func, Config) ->
@@ -55,8 +57,8 @@ all() ->
     [from_shell, basic_ets, basic_dbg, records,
      record_index, multipass, bitsyntax, record_defaults,
      andalso_orelse, float_1_function, action_function,
-     warnings, top_match, old_guards, autoimported,
-     semicolon].
+     warnings, no_warnings, top_match, old_guards, autoimported,
+     semicolon, eep37].
 
 groups() -> 
     [].
@@ -153,6 +155,34 @@ warnings(Config) when is_list(Config) ->
 	     "              end)">>,
     ?line [{_,[{_,ms_transform,{?WARN_NUMBER_SHADOW,'Y'}}]}] =
 	compile_ww(Prog7),
+    ok.
+
+no_warnings(suite) ->
+    [];
+no_warnings(doc) ->
+    ["Check that variables bound in other function clauses don't generate "
+     "warning"];
+no_warnings(Config) when is_list(Config) ->
+    ?line setup(Config),
+    Prog = <<"tmp(X) when X > 100 ->\n",
+	     "   Y=X,\n"
+	     "   Y;\n"
+	     "tmp(X) ->\n"
+	     "   ets:fun2ms(fun(Y) ->\n"
+	     "                  {X, 3*Y}\n"
+	     "              end)">>,
+    ?line [] = compile_no_ww(Prog),
+
+    Prog2 = <<"tmp(X) when X > 100 ->\n",
+	     "   Y=X,\n"
+	     "   Y;\n"
+	     "tmp(X) when X < 200 ->\n"
+	     "   ok;\n"
+	     "tmp(X) ->\n"
+	     "   ets:fun2ms(fun(Y) ->\n"
+	     "                  {X, 3*Y}\n"
+	     "              end)">>,
+    ?line [] = compile_no_ww(Prog2),
     ok.
 
 andalso_orelse(suite) ->
@@ -426,7 +456,6 @@ old_guards(Config) when is_list(Config) ->
     ?line setup(Config),
     Tests = [
 	     {atom,is_atom},
-	     {constant,is_constant},
 	     {float,is_float},
 	     {integer,is_integer},
 	     {list,is_list},
@@ -461,7 +490,6 @@ old_guards(Config) when is_list(Config) ->
     ?line [{'$1',[{is_integer,'$1'},
 		  {is_float,'$1'},
 		  {is_atom,'$1'},
-		  {is_constant,'$1'},
 		  {is_list,'$1'},
 		  {is_number,'$1'},
 		  {is_pid,'$1'},
@@ -473,7 +501,7 @@ old_guards(Config) when is_list(Config) ->
 	    [true]}] =
 	compile_and_run(RD, <<
 			     "ets:fun2ms(fun(X) when integer(X),"
-			     "float(X), atom(X), constant(X),"
+			     "float(X), atom(X),"
 			     "list(X), number(X), pid(X),"
 			     "port(X), reference(X), tuple(X),"
 			     "binary(X), record(X,a) -> true end)"
@@ -501,7 +529,6 @@ autoimported(Config) when is_list(Config) ->
 	       {self,0},
                %{float,1}, see float_1_function/1
 	       {is_atom,1},
-	       {is_constant,1},
 	       {is_float,1},
 	       {is_integer,1},
 	       {is_list,1},
@@ -780,6 +807,14 @@ action_function(Config) when is_list(Config) ->
     ok.
 
 
+eep37(Config) when is_list(Config) ->
+    setup(Config),
+    [{'$1',[],['$1']}] =
+        compile_and_run(<<"F = fun _Ms() ->\n"
+                          "            ets:fun2ms(fun (X) -> X end)\n"
+                          "    end,\n"
+                          "F()">>).
+
 
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -833,6 +868,20 @@ compile_ww(Records,Expr) ->
     "-export([tmp/0]).\n",
     Records/binary,"\n",
     "tmp() ->\n",
+    Expr/binary,".\n">>,
+    FN=temp_name(),
+    file:write_file(FN,Prog),
+    {ok,Forms} = epp:parse_file(FN,"",""),
+    {ok,tmp,_Bin,Wlist} = compile:forms(Forms,[return_warnings,
+					       nowarn_unused_vars,
+					       nowarn_unused_record]),
+    Wlist.
+
+compile_no_ww(Expr) ->
+    Prog = <<
+	"-module(tmp).\n",
+    "-include_lib(\"stdlib/include/ms_transform.hrl\").\n",
+    "-export([tmp/1]).\n\n",
     Expr/binary,".\n">>,
     FN=temp_name(),
     file:write_file(FN,Prog),

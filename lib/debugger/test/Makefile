@@ -1,7 +1,7 @@
 #
 # %CopyrightBegin%
 #
-# Copyright Ericsson AB 1998-2011. All Rights Reserved.
+# Copyright Ericsson AB 1998-2012. All Rights Reserved.
 #
 # The contents of this file are subject to the Erlang Public License,
 # Version 1.1, (the "License"); you may not use this file except in
@@ -43,6 +43,8 @@ MODULES= \
 	exception_SUITE \
 	fun_SUITE \
 	lc_SUITE \
+	line_number_SUITE \
+	map_SUITE \
 	record_SUITE \
 	trycatch_SUITE \
 	test_lib \
@@ -97,10 +99,10 @@ include $(ERL_TOP)/make/otp_release_targets.mk
 release_spec: opt
 
 release_tests_spec: make_emakefile
-	$(INSTALL_DIR) $(RELSYSDIR)
-	$(INSTALL_DATA) $(EMAKEFILE) $(ERL_FILES) $(RELSYSDIR)
-	$(INSTALL_DATA) debugger.spec debugger.cover $(RELSYSDIR)
-	chmod -R u+w $(RELSYSDIR)
-	@tar cf - *_SUITE_data | (cd $(RELSYSDIR); tar xf -)
+	$(INSTALL_DIR) "$(RELSYSDIR)"
+	$(INSTALL_DATA) $(EMAKEFILE) $(ERL_FILES) "$(RELSYSDIR)"
+	$(INSTALL_DATA) debugger.spec debugger.cover "$(RELSYSDIR)"
+	chmod -R u+w "$(RELSYSDIR)"
+	@tar cf - *_SUITE_data | (cd "$(RELSYSDIR)"; tar xf -)
 
 release_docs_spec:

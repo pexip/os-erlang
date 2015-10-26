@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %% 
-%% Copyright Ericsson AB 1996-2011. All Rights Reserved.
+%% Copyright Ericsson AB 1996-2013. All Rights Reserved.
 %% 
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -43,24 +43,24 @@ start_link() ->
     gen_server:start_link({local, disksup}, disksup, [], []).
 
 get_disk_data() ->
-    os_mon:call(disksup, get_disk_data).
+    os_mon:call(disksup, get_disk_data, infinity).
 
 get_check_interval() ->
-    os_mon:call(disksup, get_check_interval).
+    os_mon:call(disksup, get_check_interval, infinity).
 set_check_interval(Minutes) ->
     case param_type(disk_space_check_interval, Minutes) of
 	true ->
-	    os_mon:call(disksup, {set_check_interval, Minutes});
+	    os_mon:call(disksup, {set_check_interval, Minutes}, infinity);
 	false ->
 	    erlang:error(badarg)
     end.
 
 get_almost_full_threshold() ->
-    os_mon:call(disksup, get_almost_full_threshold).
+    os_mon:call(disksup, get_almost_full_threshold, infinity).
 set_almost_full_threshold(Float) ->
     case param_type(disk_almost_full_threshold, Float) of
 	true ->
-	    os_mon:call(disksup, {set_almost_full_threshold, Float});
+	    os_mon:call(disksup, {set_almost_full_threshold, Float}, infinity);
 	false ->
 	    erlang:error(badarg)
     end.
@@ -81,10 +81,12 @@ param_type(disk_space_check_interval, Val) when is_integer(Val),
 param_type(disk_almost_full_threshold, Val) when is_number(Val),
 						 0=<Val,
 						 Val=<1 -> true;
+param_type(disksup_posix_only, Val) when Val==true; Val==false -> true;
 param_type(_Param, _Val) -> false.
 
 param_default(disk_space_check_interval) -> 30;
-param_default(disk_almost_full_threshold) -> 0.80.
+param_default(disk_almost_full_threshold) -> 0.80;
+param_default(disksup_posix_only) -> false.
 
 %%----------------------------------------------------------------------
 %% gen_server callbacks
@@ -94,7 +96,8 @@ init([]) ->
     process_flag(trap_exit, true),
     process_flag(priority, low),
 
-    OS = get_os(),
+    PosixOnly = os_mon:get_env(disksup, disksup_posix_only),
+    OS = get_os(PosixOnly),
     Port = case OS of
 		{unix, Flavor} when Flavor==sunos4;
 				    Flavor==solaris;
@@ -102,6 +105,7 @@ init([]) ->
 				    Flavor==dragonfly;
 				    Flavor==darwin;
 				    Flavor==linux;
+				    Flavor==posix;
 				    Flavor==openbsd;
 				    Flavor==netbsd;
 				    Flavor==irix64;
@@ -205,14 +209,16 @@ format_status(_Opt, [_PDict, #state{os = OS, threshold = Threshold,
 %% Internal functions
 %%----------------------------------------------------------------------
 
-get_os() ->
+get_os(PosixOnly) ->
     case os:type() of
 	{unix, sunos} ->
-	    case os:version() of
+            case os:version() of
 		{5,_,_} -> {unix, solaris};
 		{4,_,_} -> {unix, sunos4};
 		V -> exit({unknown_os_version, V})
-	    end;
+            end;
+	{unix, _} when PosixOnly ->
+	    {unix, posix};
         {unix, irix64} -> {unix, irix};
 	OS ->
 	    OS
@@ -259,14 +265,17 @@ check_disk_space({unix, irix}, Port, Threshold) ->
 check_disk_space({unix, linux}, Port, Threshold) ->
     Result = my_cmd("/bin/df -lk", Port),
     check_disks_solaris(skip_to_eol(Result), Threshold);
+check_disk_space({unix, posix}, Port, Threshold) ->
+    Result = my_cmd("df -k -P", Port),
+    check_disks_solaris(skip_to_eol(Result), Threshold);
 check_disk_space({unix, dragonfly}, Port, Threshold) ->
     Result = my_cmd("/bin/df -k -t ufs,hammer", Port),
     check_disks_solaris(skip_to_eol(Result), Threshold);
 check_disk_space({unix, freebsd}, Port, Threshold) ->
-    Result = my_cmd("/bin/df -k -t ufs", Port),
+    Result = my_cmd("/bin/df -k -l", Port),
     check_disks_solaris(skip_to_eol(Result), Threshold);
 check_disk_space({unix, openbsd}, Port, Threshold) ->
-    Result = my_cmd("/bin/df -k -t ffs", Port),
+    Result = my_cmd("/bin/df -k -l", Port),
     check_disks_solaris(skip_to_eol(Result), Threshold);
 check_disk_space({unix, netbsd}, Port, Threshold) ->
     Result = my_cmd("/bin/df -k -t ffs", Port),
@@ -275,8 +284,8 @@ check_disk_space({unix, sunos4}, Port, Threshold) ->
     Result = my_cmd("df", Port),
     check_disks_solaris(skip_to_eol(Result), Threshold);
 check_disk_space({unix, darwin}, Port, Threshold) ->
-    Result = my_cmd("/bin/df -k -t ufs,hfs", Port),
-    check_disks_solaris(skip_to_eol(Result), Threshold).
+    Result = my_cmd("/bin/df -i -k -t ufs,hfs", Port),
+    check_disks_susv3(skip_to_eol(Result), Threshold).
 
 % This code works for Linux and FreeBSD as well
 check_disks_solaris("", _Threshold) ->
@@ -296,6 +305,26 @@ check_disks_solaris(Str, Threshold) ->
 	     check_disks_solaris(RestStr, Threshold)];
 	_Other ->
 	    check_disks_solaris(skip_to_eol(Str),Threshold)
+    end.
+
+% Parse per SUSv3 specification, notably recent OS X
+check_disks_susv3("", _Threshold) ->
+    [];
+check_disks_susv3("\n", _Threshold) ->
+    [];
+check_disks_susv3(Str, Threshold) ->
+    case io_lib:fread("~s~d~d~d~d%~d~d~d%~s", Str) of
+    {ok, [_FS, KB, _Used, _Avail, Cap, _IUsed, _IFree, _ICap, MntOn], RestStr} ->
+	    if
+		Cap >= Threshold ->
+		    set_alarm({disk_almost_full, MntOn}, []);
+		true ->
+		    clear_alarm({disk_almost_full, MntOn})
+	    end,
+	    [{MntOn, KB, Cap} |
+	     check_disks_susv3(RestStr, Threshold)];
+	_Other ->
+	    check_disks_susv3(skip_to_eol(Str),Threshold)
     end.
 
 %% Irix: like Linux with an extra FS type column and no '%'.

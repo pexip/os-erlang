@@ -26,8 +26,12 @@ INCLUDE=../include
 
 ERL_COMPILE_FLAGS += -pa $(EBIN) -I$(INCLUDE) +warn_unused_vars +nowarn_shadow_vars +warn_unused_import +warn_obsolete_guard
 
+PARSE_TRANSFORM = eunit_autoexport.erl
+
+BEHAVIOUR_SOURCES= \
+	eunit_listener.erl
+
 SOURCES= \
-	eunit_autoexport.erl \
 	eunit_striptests.erl \
 	eunit.erl \
 	eunit_tests.erl \
@@ -39,11 +43,16 @@ SOURCES= \
 	eunit_data.erl \
 	eunit_tty.erl \
 	eunit_surefire.erl \
-	eunit_listener.erl
 
 INCLUDE_FILES = eunit.hrl
 
-OBJECTS=$(SOURCES:%.erl=$(EBIN)/%.$(EMULATOR)) $(APP_TARGET) $(APPUP_TARGET)
+PARSE_TRANSFORM_BIN = $(PARSE_TRANSFORM:%.erl=$(EBIN)/%.$(EMULATOR))
+
+TARGET_FILES= $(SOURCES:%.erl=$(EBIN)/%.$(EMULATOR))
+
+BEHAVIOUR_TARGET_FILES= $(BEHAVIOUR_SOURCES:%.erl=$(EBIN)/%.$(EMULATOR))
+
+OBJECTS= $(TARGET_FILES) $(BEHAVIOUR_TARGET_FILES) $(APP_TARGET) $(APPUP_TARGET)
 
 INCLUDE_DELIVERABLES = $(INCLUDE_FILES:%=$(INCLUDE)/%)
 
@@ -59,7 +68,9 @@ APPUP_TARGET= $(EBIN)/$(APPUP_FILE)
 # Targets
 # ----------------------------------------------------
 
-debug opt: $(OBJECTS)
+$(TARGET_FILES): $(BEHAVIOUR_TARGET_FILES)
+
+debug opt: $(PARSE_TRANSFORM_BIN) $(OBJECTS)
 
 docs:
 
@@ -84,17 +95,19 @@ info:
 realclean: clean
 
 $(EBIN)/%.$(EMULATOR):%.erl
-	erlc -W $(ERL_COMPILE_FLAGS) -o$(EBIN) $<
+	$(erlc_verbose)erlc -W $(ERL_COMPILE_FLAGS) -o$(EBIN) $<
+
+$(OBJECTS): $(PARSE_TRANSFORM_BIN)
 
 # ----------------------------------------------------
 # Special Build Targets
 # ----------------------------------------------------
 
 $(APP_TARGET): $(APP_SRC) ../vsn.mk
-	sed -e 's;%VSN%;$(VSN);' $< > $@
+	$(vsn_verbose)sed -e 's;%VSN%;$(VSN);' $< > $@
 
 $(APPUP_TARGET): $(APPUP_SRC) ../vsn.mk
-	sed -e 's;%VSN%;$(VSN);' $< > $@
+	$(vsn_verbose)sed -e 's;%VSN%;$(VSN);' $< > $@
 
 # ----------------------------------------------------
 # Release Target
@@ -102,12 +115,12 @@ $(APPUP_TARGET): $(APPUP_SRC) ../vsn.mk
 include $(ERL_TOP)/make/otp_release_targets.mk
 
 release_spec: opt
-	$(INSTALL_DIR) $(RELSYSDIR)/ebin
-	$(INSTALL_DATA) $(OBJECTS) $(RELSYSDIR)/ebin
-	$(INSTALL_DIR) $(RELSYSDIR)/src
-	$(INSTALL_DATA) $(SOURCES) $(RELSYSDIR)/src
-	$(INSTALL_DIR) $(RELSYSDIR)/include
-	$(INSTALL_DATA) $(INCLUDE_DELIVERABLES) $(RELSYSDIR)/include
+	$(INSTALL_DIR) "$(RELSYSDIR)/ebin"
+	$(INSTALL_DATA) $(PARSE_TRANSFORM_BIN) $(OBJECTS) "$(RELSYSDIR)/ebin"
+	$(INSTALL_DIR) "$(RELSYSDIR)/src"
+	$(INSTALL_DATA) $(PARSE_TRANSFORM) $(SOURCES) "$(RELSYSDIR)/src"
+	$(INSTALL_DIR) "$(RELSYSDIR)/include"
+	$(INSTALL_DATA) $(INCLUDE_DELIVERABLES) "$(RELSYSDIR)/include"
 
 release_docs_spec:
 

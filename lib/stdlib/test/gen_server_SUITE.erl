@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 1996-2011. All Rights Reserved.
+%% Copyright Ericsson AB 1996-2014. All Rights Reserved.
 %%
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -32,12 +32,14 @@
 	 spec_init_local_registered_parent/1, 
 	 spec_init_global_registered_parent/1,
 	 otp_5854/1, hibernate/1, otp_7669/1, call_format_status/1,
-	 error_format_status/1, call_with_huge_message_queue/1
+	 error_format_status/1, terminate_crash_format/1,
+	 get_state/1, replace_state/1, call_with_huge_message_queue/1
 	]).
 
 % spawn export
--export([spec_init_local/2, spec_init_global/2, 
-	 spec_init_default_timeout/2, spec_init_anonymous/1,
+-export([spec_init_local/2, spec_init_global/2, spec_init_via/2,
+	 spec_init_default_timeout/2, spec_init_global_default_timeout/2,
+         spec_init_anonymous/1,
 	 spec_init_anonymous_default_timeout/1,
 	 spec_init_not_proc_lib/1, cast_fast_messup/0]).
 
@@ -55,7 +57,9 @@ all() ->
      call_remote_n3, spec_init,
      spec_init_local_registered_parent,
      spec_init_global_registered_parent, otp_5854, hibernate,
-     otp_7669, call_format_status, error_format_status,
+     otp_7669,
+     call_format_status, error_format_status, terminate_crash_format,
+     get_state, replace_state,
      call_with_huge_message_queue].
 
 groups() -> 
@@ -199,16 +203,37 @@ start(Config) when is_list(Config) ->
 		  test_server:fail(not_stopped)
 	  end,
 
+    %% via register
+    ?line dummy_via:reset(),
+    ?line {ok, Pid6} =
+	gen_server:start({via, dummy_via, my_test_name},
+			 gen_server_SUITE, [], []),
+    ?line ok = gen_server:call({via, dummy_via, my_test_name}, started_p),
+    ?line {error, {already_started, Pid6}} =
+	gen_server:start({via, dummy_via, my_test_name},
+			 gen_server_SUITE, [], []),
+    ?line ok = gen_server:call({via, dummy_via, my_test_name}, stop),
+    test_server:sleep(1),
+    ?line {'EXIT', {noproc,_}} = (catch gen_server:call(Pid6, started_p, 10)),
+
+    %% via register linked
+    ?line dummy_via:reset(),
+    ?line {ok, Pid7} =
+	gen_server:start_link({via, dummy_via, my_test_name},
+			      gen_server_SUITE, [], []),
+    ?line ok = gen_server:call({via, dummy_via, my_test_name}, started_p),
+    ?line {error, {already_started, Pid7}} =
+	gen_server:start({via, dummy_via, my_test_name},
+			 gen_server_SUITE, [], []),
+    ?line ok = gen_server:call({via, dummy_via, my_test_name}, stop),
+    ?line receive
+	      {'EXIT', Pid7, stopped} ->
+		  ok
+	  after 5000 ->
+		  test_server:fail(not_stopped)
+	  end,
     test_server:messages_get(),
 
-    %% Must wait for all error messages before going to next test.
-    %% (otherwise it interferes too much with real time characteristics).
-    case os:type() of
-	vxworks ->
-	    receive after 5000 -> ok end;
-	_ ->
-	    ok
-    end,
     process_flag(trap_exit, OldFl),
     ok.
 
@@ -250,7 +275,7 @@ crash(Config) when is_list(Config) ->
     receive
 	{error,_GroupLeader4,{Pid4,
 			      "** Generic server"++_,
-			      [Pid4,crash,state4,crashed]}} ->
+			      [Pid4,crash,{formatted, state4},crashed]}} ->
 	    ok;
 	Other4a ->
  	    ?line io:format("Unexpected: ~p", [Other4a]),
@@ -694,7 +719,7 @@ multicall_down(Config) when is_list(Config) ->
     %% We use 'global' as a gen_server to call.
     ?line {Good, Bad} = gen_server:multi_call([Name, node()],
 					      global_name_server,
-					      {whereis, gurkburk},
+					      info,
 					      3000),
     io:format("good = ~p, bad = ~p~n", [Good, Bad]),
     ?line [Name] = Bad,
@@ -720,7 +745,7 @@ spec_init(suite) ->
 spec_init(Config) when is_list(Config) ->
     
     OldFlag = process_flag(trap_exit, true),
-    
+
     ?line {ok, Pid0} = start_link(spec_init_local, [{ok, my_server}, []]),
     ?line ok = gen_server:call(Pid0, started_p),
     ?line ok = gen_server:call(Pid0, stop),
@@ -790,6 +815,14 @@ spec_init(Config) when is_list(Config) ->
 	    test_server:fail(gen_server_did_not_die)
     end,
 
+    %% Before the OTP-10130 fix this failed because a timeout message
+    %% was generated as the spawned process crashed because a {global, Name}
+    %% was matched as a timeout value instead of matching on scope.
+    {ok, _PidHurra} =
+	start_link(spec_init_global_default_timeout, [{ok, hurra}, []]),
+    timer:sleep(1000),
+    ok = gen_server:call(_PidHurra, started_p),
+    
     ?line Pid5 = 
 	erlang:spawn_link(?MODULE, spec_init_not_proc_lib, [[]]),
     receive 
@@ -853,6 +886,8 @@ otp_5854(doc) ->
 otp_5854(Config) when is_list(Config) ->
     OldFlag = process_flag(trap_exit, true),
 
+    ?line dummy_via:reset(),
+
     %% Make sure gen_server:enter_loop does not accept {local,Name}
     %% when it's another process than the calling one which is
     %% registered under that name
@@ -880,6 +915,18 @@ otp_5854(Config) when is_list(Config) ->
 	    ?line test_server:fail(gen_server_started)
     end,
     global:unregister_name(armitage),
+
+    %% (same for {via, Mod, Name})
+    dummy_via:register_name(armitage, self()),
+    ?line {ok, Pid3} =
+	start_link(spec_init_via, [{not_ok, armitage}, []]),
+    receive
+	{'EXIT', Pid3, {process_not_registered_via, dummy_via}} ->
+	    ok
+    after 1000 ->
+	    ?line test_server:fail(gen_server_started)
+    end,
+    dummy_via:unregister_name(armitage),
 
     process_flag(trap_exit, OldFlag),
     ok.
@@ -979,7 +1026,7 @@ error_format_status(Config) when is_list(Config) ->
     receive
 	{error,_GroupLeader,{Pid,
 			     "** Generic server"++_,
-			     [Pid,crash,State,crashed]}} ->
+			     [Pid,crash,{formatted, State},crashed]}} ->
 	    ok;
 	Other ->
 	    ?line io:format("Unexpected: ~p", [Other]),
@@ -989,21 +1036,115 @@ error_format_status(Config) when is_list(Config) ->
     process_flag(trap_exit, OldFl),
     ok.
 
+%% Verify that error when terminating correctly calls our format_status/2 fun
+%%
+terminate_crash_format(Config) when is_list(Config) ->
+    error_logger_forwarder:register(),
+    OldFl = process_flag(trap_exit, true),
+    State = crash_terminate,
+    {ok, Pid} = gen_server:start_link(?MODULE, {state, State}, []),
+    gen_server:call(Pid, stop),
+    receive {'EXIT', Pid, {crash, terminate}} -> ok end,
+    receive
+	{error,_GroupLeader,{Pid,
+			     "** Generic server"++_,
+			     [Pid,stop, {formatted, State},{crash, terminate}]}} ->
+	    ok;
+	Other ->
+	    io:format("Unexpected: ~p", [Other]),
+	    ?t:fail()
+    after 5000 ->
+	    io:format("Timeout: expected error logger msg", []),
+	    ?t:fail()
+    end,
+    ?t:messages_get(),
+    process_flag(trap_exit, OldFl),
+    ok.
+
+%% Verify that sys:get_state correctly returns gen_server state
+%%
+get_state(suite) ->
+    [];
+get_state(doc) ->
+    ["Test that sys:get_state/1,2 return the gen_server state"];
+get_state(Config) when is_list(Config) ->
+    State = self(),
+    {ok, _Pid} = gen_server:start_link({local, get_state},
+                                             ?MODULE, {state,State}, []),
+    State = sys:get_state(get_state),
+    State = sys:get_state(get_state, 5000),
+    {ok, Pid} = gen_server:start_link(?MODULE, {state,State}, []),
+    State = sys:get_state(Pid),
+    State = sys:get_state(Pid, 5000),
+    ok = sys:suspend(Pid),
+    State = sys:get_state(Pid),
+    ok = sys:resume(Pid),
+    ok.
+
+%% Verify that sys:replace_state correctly replaces gen_server state
+%%
+replace_state(suite) ->
+    [];
+replace_state(doc) ->
+    ["Test that sys:replace_state/1,2 replace the gen_server state"];
+replace_state(Config) when is_list(Config) ->
+    State = self(),
+    {ok, _Pid} = gen_server:start_link({local, replace_state},
+                                             ?MODULE, {state,State}, []),
+    State = sys:get_state(replace_state),
+    NState1 = "replaced",
+    Replace1 = fun(_) -> NState1 end,
+    NState1 = sys:replace_state(replace_state, Replace1),
+    NState1 = sys:get_state(replace_state),
+    {ok, Pid} = gen_server:start_link(?MODULE, {state,NState1}, []),
+    NState1 = sys:get_state(Pid),
+    Suffix = " again",
+    NState2 = NState1 ++ Suffix,
+    Replace2 = fun(S) -> S ++ Suffix end,
+    NState2 = sys:replace_state(Pid, Replace2, 5000),
+    NState2 = sys:get_state(Pid, 5000),
+    %% verify no change in state if replace function crashes
+    Replace3 = fun(_) -> throw(fail) end,
+    {'EXIT',{{callback_failed,
+	      {gen_server,system_replace_state},{throw,fail}},_}} =
+	(catch sys:replace_state(Pid, Replace3)),
+    NState2 = sys:get_state(Pid, 5000),
+    %% verify state replaced if process sys suspended
+    ok = sys:suspend(Pid),
+    Suffix2 = " and again",
+    NState3 = NState2 ++ Suffix2,
+    Replace4 = fun(S) -> S ++ Suffix2 end,
+    NState3 = sys:replace_state(Pid, Replace4),
+    ok = sys:resume(Pid),
+    NState3 = sys:get_state(Pid, 5000),
+    ok.
+
 %% Test that the time for a huge message queue is not
 %% significantly slower than with an empty message queue.
 call_with_huge_message_queue(Config) when is_list(Config) ->
+    case test_server:is_native(gen) of
+	true ->
+	    {skip,
+	     "gen is native - huge message queue optimization "
+	     "is not implemented"};
+	false ->
+	    do_call_with_huge_message_queue()
+		end.
+
+do_call_with_huge_message_queue() ->
     ?line Pid = spawn_link(fun echo_loop/0),
 
-    ?line {Time,ok} = tc(fun() -> calls(10, Pid) end),
+    ?line {Time,ok} = tc(fun() -> calls(10000, Pid) end),
 
     ?line [self() ! {msg,N} || N <- lists:seq(1, 500000)],
     erlang:garbage_collect(),
-    ?line {NewTime,ok} = tc(fun() -> calls(10, Pid) end),
+    ?line {NewTime,ok} = tc(fun() -> calls(10000, Pid) end),
     io:format("Time for empty message queue: ~p", [Time]),
     io:format("Time for huge message queue: ~p", [NewTime]),
 
+    IsCover = test_server:is_cover(),
     case (NewTime+1) / (Time+1) of
-	Q when Q < 10 ->
+	Q when Q < 10; IsCover ->
 	    ok;
 	Q ->
 	    io:format("Q = ~p", [Q]),
@@ -1060,12 +1201,36 @@ spec_init_global({not_ok, Name}, Options) ->
     %% Supervised init can occur here  ...
     gen_server:enter_loop(?MODULE, Options, {}, {global, Name}, infinity).
 
-spec_init_default_timeout({ok, Name}, Options) -> 
+spec_init_via({ok, Name}, Options) ->
+    process_flag(trap_exit, true),
+    dummy_via:register_name(Name, self()),
+    proc_lib:init_ack({ok, self()}),
+    %% Supervised init can occur here  ...
+    gen_server:enter_loop(?MODULE, Options, {},
+			  {via, dummy_via, Name}, infinity);
+
+spec_init_via({not_ok, Name}, Options) ->
+    process_flag(trap_exit, true),
+    proc_lib:init_ack({ok, self()}),
+    %% Supervised init can occur here  ...
+    gen_server:enter_loop(?MODULE, Options, {},
+			  {via, dummy_via, Name}, infinity).
+
+spec_init_default_timeout({ok, Name}, Options) ->
     process_flag(trap_exit, true),
     register(Name, self()),
     proc_lib:init_ack({ok, self()}),
     %% Supervised init can occur here  ...
     gen_server:enter_loop(?MODULE, Options, {}, {local, Name}).
+
+%% OTP-10130, A bug was introduced where global scope was not matched when
+%% enter_loop/4 was called (no timeout).
+spec_init_global_default_timeout({ok, Name}, Options) ->
+    process_flag(trap_exit, true),
+    global:register_name(Name, self()),
+    proc_lib:init_ack({ok, self()}),
+    %% Supervised init can occur here  ...
+    gen_server:enter_loop(?MODULE, Options, {}, {global, Name}).
 
 spec_init_anonymous(Options) ->
     process_flag(trap_exit, true),
@@ -1185,10 +1350,12 @@ terminate({From, stopped}, _State) ->
 terminate({From, stopped_info}, _State) ->
     From ! {self(), stopped_info},
     ok;
+terminate(_, crash_terminate) ->
+    exit({crash, terminate});
 terminate(_Reason, _State) ->
     ok.
 
 format_status(terminate, [_PDict, State]) ->
-    State;
+    {formatted, State};
 format_status(normal, [_PDict, _State]) ->
     format_status_called.

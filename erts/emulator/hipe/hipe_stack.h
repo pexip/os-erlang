@@ -1,7 +1,7 @@
 /*
  * %CopyrightBegin%
  *
- * Copyright Ericsson AB 2001-2011. All Rights Reserved.
+ * Copyright Ericsson AB 2001-2012. All Rights Reserved.
  *
  * The contents of this file are subject to the Erlang Public License,
  * Version 1.1, (the "License"); you may not use this file except in
@@ -35,6 +35,10 @@ struct sdesc {
 	struct sdesc *next;	/* hash collision chain */
     } bucket;
     unsigned int summary; /* frame size, exn handler presence flag, arity */
+#ifdef DEBUG
+    Eterm dbg_M, dbg_F;
+    unsigned dbg_A;
+#endif
     unsigned int livebits[1]; /* size depends on arch & data in summary field */
 };
 
@@ -115,14 +119,5 @@ extern int hipe_fill_stacktrace(Process*, int, Eterm**);
  */
 extern Eterm *fullsweep_nstack(Process *p, Eterm *n_htop);
 extern void gensweep_nstack(Process *p, Eterm **ptr_old_htop, Eterm **ptr_n_htop);
-
-#ifdef HYBRID
-#ifdef INCREMENTAL
-extern Eterm *ma_fullsweep_nstack(Process *p, Eterm *n_htop, Eterm *n_hend);
-#else
-extern Eterm *ma_fullsweep_nstack(Process *p, Eterm *n_htop);
-#endif
-extern void ma_gensweep_nstack(Process *p, Eterm **ptr_old_htop, Eterm **ptr_n_htop);
-#endif /* HYBRID */
 
 #endif /* HIPE_STACK_H */

@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 1997-2010. All Rights Reserved.
+%% Copyright Ericsson AB 1997-2014. All Rights Reserved.
 %%
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -36,7 +36,6 @@
 	 dump_log_load_regulation/1,
 	
 	 dump_log_update_in_place/1,
-	 embedded_mnemosyne/1,
 	 event_module/1,
 	 ignore_fallback_at_startup/1,
 	 inconsistent_database/1,
@@ -104,7 +103,7 @@ end_per_testcase(Func, Conf) ->
 all() -> 
     [access_module, auto_repair, backup_module, debug, dir,
      dump_log_load_regulation, {group, dump_log_thresholds},
-     dump_log_update_in_place, embedded_mnemosyne,
+     dump_log_update_in_place,
      event_module, ignore_fallback_at_startup,
      inconsistent_database, max_wait_for_decision,
      send_compressed, app_test, {group, schema_config},
@@ -597,53 +596,14 @@ dump_log_load_regulation(Config) when is_list(Config) ->
 	 {n_branches, length(Nodes) * 10},
 	 {n_accounts_per_branch, 5},
 	 {replica_type, disc_copies},
-	 {stop_after, timer:seconds(30)},
-	 {report_interval, timer:seconds(10)},
+	 {stop_after, timer:seconds(15)},
+	 {report_interval, timer:seconds(3)},
 	 {use_running_mnesia, true},
 	 {reuse_history_id, true}],
     
     ?match({ok, _}, mnesia_tpcb:start(Args)),
     
     ?verify_mnesia(Nodes, []),
-    ?cleanup(1, Config),
-    ok.
-
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-
-embedded_mnemosyne(doc) ->
-    ["Start Mnemosyne as an embedded part of Mnesia",
-     "on some of the nodes"];
-embedded_mnemosyne(suite) ->
-    [];
-embedded_mnemosyne(Config) when is_list(Config) ->
-    Nodes = ?acquire_nodes(1, Config),
-    Param = embedded_mnemosyne,
-
-    %% Normal 
-    NoMnem = false,
-    ?match(NoMnem, mnesia:system_info(Param)),
-    ?match(undefined, whereis(mnemosyne_catalog)),
-    ?match([], mnesia_test_lib:stop_mnesia(Nodes)),
-
-    %% Bad
-    Bad = arne_anka,
-    ?match({error, {bad_type, Param, Bad}},
-	   mnesia:start([{Param, Bad}])),
-
-    case code:priv_dir(mnemosyne) of
-	{error, _} -> %% No mnemosyne on later systems
-	    ok;
-	_ ->
-	    %% Mnemosyne as embedded application
-	    Mnem = true,
-	    ?match(undefined, whereis(mnemosyne_catalog)),
-	    ?match(ok,mnesia:start([{Param, Mnem}])),
-	    ?match(Mnem, mnesia:system_info(Param)),
-	    ?match(Pid when is_pid(Pid), whereis(mnemosyne_catalog)),
-	    ?match([], mnesia_test_lib:stop_mnesia(Nodes)),
-	    ?match(undefined, whereis(mnemosyne_catalog))
-    end,
-    ?verify_mnesia([], Nodes),
     ?cleanup(1, Config),
     ok.
 
@@ -679,10 +639,10 @@ send_compressed(Config) ->
 	     end,
     
     ?match([], mnesia_test_lib:kill_mnesia([N2])),
-    
+    sys:get_status(mnesia_monitor), %% sync N1
     ?match([], mnesia_test_lib:kill_mnesia([N1])),
     ?match(ok, mnesia:start([{send_compressed, 9}])),
-    ?match(ok, mnesia:wait_for_tables([t0,t1,t2], 5000)),
+    ?match(ok, mnesia:wait_for_tables([t0,t1,t2], 25000)),
 
     ?match({atomic, ok}, mnesia:transaction(Create, [t0])),
     ?match({atomic, ok}, mnesia:transaction(Create, [t1])),
@@ -1198,6 +1158,7 @@ dynamic_basic(Config) when is_list(Config) ->
 
     %%% SYNC!!!
     timer:sleep(1000),
+    sys:get_status(mnesia_monitor),
 
     ?match([N3,N1], sort(rpc:call(N1, mnesia, system_info, [running_db_nodes]))),
     ?match([N3,N1], sort(rpc:call(N3, mnesia, system_info, [running_db_nodes]))),

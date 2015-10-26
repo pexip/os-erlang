@@ -1,19 +1,19 @@
 %%
 %% %CopyrightBegin%
-%% 
+%%
 %% Copyright Ericsson AB 1996-2011. All Rights Reserved.
-%% 
+%%
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
 %% compliance with the License. You should have received a copy of the
 %% Erlang Public License along with this software. If not, it can be
 %% retrieved online at http://www.erlang.org/.
-%% 
+%%
 %% Software distributed under the License is distributed on an "AS IS"
 %% basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See
 %% the License for the specific language governing rights and limitations
 %% under the License.
-%% 
+%%
 %% %CopyrightEnd%
 %%
 
@@ -46,15 +46,32 @@
 
 -define(match(ExpectedRes,Expr),
 	fun() ->
-		AcTuAlReS = (catch (Expr)),
-		case AcTuAlReS of
-		    ExpectedRes ->
-			?verbose("ok, ~n Result as expected:~p~n",[AcTuAlReS]),
-			{success,AcTuAlReS};
-		    _ ->
-			?error("Not Matching Actual result was:~n ~p~n",
-			       [AcTuAlReS]),
-			{fail,AcTuAlReS}
+		try Expr of
+		    _AR_0 = ExpectedRes ->
+			?verbose("ok, ~n Result as expected:~p~n",[_AR_0]),
+			{success,_AR_0};
+		    _AR_0 ->
+			?error("Not Matching Actual result was:~n ~p~n",[_AR_0]),
+			{fail,_AR_0}
+		catch
+		    exit:{aborted, _ER_1} when
+			  element(1, _ER_1) =:= node_not_running;
+			  element(1, _ER_1) =:= bad_commit;
+			  element(1, _ER_1) =:= cyclic ->
+			%% Need to re-raise these to restart transaction
+			erlang:raise(exit, {aborted, _ER_1}, erlang:get_stacktrace());
+		    exit:_AR_1 ->
+			case fun(_AR_EXIT_) -> {'EXIT', _AR_EXIT_} end(_AR_1) of
+			    _AR_2 = ExpectedRes ->
+				?verbose("ok, ~n Result as expected:~p~n",[_AR_2]),
+				{success,_AR_2};
+			    _AR_2 ->
+				?error("Not Matching Actual result was:~n ~p~n", [_AR_2]),
+				{fail,_AR_2}
+			end;
+		    _:_AR_1 ->
+			?error("Not Matching Actual result was:~n ~p~n", [_AR_1]),
+			{fail,_AR_1}
 		end
 	end()).
 
@@ -112,7 +129,7 @@
 -define(remote_deactivate_debug_fun(N, I),
 	rpc:call(N, mnesia_lib, deactivate_debug_fun, [I, ?FILE, ?LINE])).
 
--define(is_debug_compiled, 
+-define(is_debug_compiled,
 	case mnesia_lib:is_debug_compiled() of
 	    false ->
 		?skip("Mnesia is not debug compiled, test case ignored.~n", []);
@@ -120,7 +137,7 @@
 		ok
 	end).
 
--define(needs_disc(Config), 
+-define(needs_disc(Config),
 	case mnesia_test_lib:diskless(Config) of
 	    false ->
 		ok;
@@ -128,5 +145,5 @@
 		?skip("Must have disc, test case ignored.~n", [])
 	end).
 
--define(verify_mnesia(Ups, Downs), 
+-define(verify_mnesia(Ups, Downs),
 	mnesia_test_lib:verify_mnesia(Ups, Downs, ?FILE, ?LINE)).

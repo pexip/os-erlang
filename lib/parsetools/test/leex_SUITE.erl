@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %% 
-%% Copyright Ericsson AB 2010-2011. All Rights Reserved.
+%% Copyright Ericsson AB 2010-2013. All Rights Reserved.
 %% 
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -42,7 +42,9 @@
 -export([
 	 file/1, compile/1, syntax/1,
 	 
-	 pt/1, man/1, ex/1, ex2/1, not_yet/1]).
+	 pt/1, man/1, ex/1, ex2/1, not_yet/1,
+
+         otp_10302/1, otp_11286/1, unicode/1]).
 
 % Default timetrap timeout (set in init_per_testcase).
 -define(default_timeout, ?t:minutes(1)).
@@ -63,7 +65,8 @@ all() ->
 
 groups() -> 
     [{checks, [], [file, compile, syntax]},
-     {examples, [], [pt, man, ex, ex2, not_yet]}].
+     {examples, [], [pt, man, ex, ex2, not_yet, unicode]},
+     {tickets, [], [otp_10302, otp_11286]}].
 
 init_per_suite(Config) ->
     Config.
@@ -397,6 +400,24 @@ pt(Config) when is_list(Config) ->
     ?line run(Config, Ts),
     ok.
 
+unicode(suite) ->
+    [];
+unicode(Config) when is_list(Config) ->
+    Ts = [{unicode_1, 
+	   <<"%% -*- coding: utf-8 -*-\n"
+	     "Definitions.\n"
+	     "RTLarrow    = (←)\n"
+	     "Rules.\n"
+	     "{RTLarrow}  : {token,{'<-',TokenLine}}.\n"
+	     "Erlang code.\n"
+	     "-export([t/0]).\n"
+	     "t() -> {ok, [{'<-', 1}], 1} = string(\"←\"), ok.">>,
+           default,
+           ok}],
+
+    ?line run(Config, Ts),
+    ok.
+
 man(doc) ->
     "Examples from the manpage.";
 man(suite) -> [];
@@ -645,7 +666,6 @@ reserved_word('fun') -> true;
 reserved_word('if') -> true;
 reserved_word('let') -> true;
 reserved_word('of') -> true;
-reserved_word('query') -> true;
 reserved_word('receive') -> true;
 reserved_word('when') -> true;
 reserved_word('bnot') -> true;
@@ -875,6 +895,173 @@ not_yet(Config) when is_list(Config) ->
 
     ok.
 
+otp_10302(doc) ->
+    "OTP-10302. Unicode characters scanner/parser.";
+otp_10302(suite) -> [];
+otp_10302(Config) when is_list(Config) ->
+    Dir = ?privdir,
+    Filename = filename:join(Dir, "file.xrl"),
+    Ret = [return, {report, true}],
+
+    ok = file:write_file(Filename,<<
+         "%% coding: UTF-8\n"
+         "ä"
+     >>),
+    {error,[{_,[{2,leex,cannot_parse}]}],[]} =
+        leex:file(Filename, Ret),
+
+    ok = file:write_file(Filename,<<
+         "%% coding: UTF-8\n"
+         "Definitions.\n"
+         "ä"
+     >>),
+    {error,[{_,[{3,leex,cannot_parse}]}],[]} = leex:file(Filename, Ret),
+
+    ok = file:write_file(Filename,<<
+         "%% coding: UTF-8\n"
+         "Definitions.\n"
+         "A = a\n"
+         "L = [{A}-{Z}]\n"
+         "Z = z\n"
+         "Rules.\n"
+         "{L}+ : {token,{list_to_atom(TokenChars),Häpp}}.\n"
+     >>),
+    {error,[{_,[{7,leex,cannot_parse}]}],[]} = leex:file(Filename, Ret),
+
+    ok = file:write_file(Filename,<<
+         "%% coding: UTF-8\n"
+         "Definitions.\n"
+         "A = a\n"
+         "L = [{A}-{Z}]\n"
+         "Z = z\n"
+         "Rules.\n"
+         "{L}+ : {token,{list_to_atom(TokenChars)}}.\n"
+         "Erlang code.\n"
+         "-export([t/0]).\n"
+         "t() ->\n"
+         "    Häpp\n"
+      >>),
+    {error,[{_,[{11,leex,cannot_parse}]}],[]} = leex:file(Filename, Ret),
+
+    Mini = <<"Definitions.\n"
+             "D  = [0-9]\n"
+             "Rules.\n"
+             "{L}+  : {token,{word,TokenLine,TokenChars}}.\n"
+             "Erlang code.\n">>,
+    LeexPre = filename:join(Dir, "leexinc.hrl"),
+    ?line ok = file:write_file(LeexPre, <<"%% coding: UTF-8\n ä">>),
+    PreErrors = run_test(Config, Mini, LeexPre),
+    {error,[{IncludeFile,[{2,leex,cannot_parse}]}],[]} = PreErrors,
+    "leexinc.hrl" = filename:basename(IncludeFile),
+
+    Ts = [{uni_1,
+       <<"%% coding: UTF-8\n"
+         "Definitions.\n"
+         "A = a\n"
+         "L = [{A}-{Z}]\n"
+         "Z = z\n"
+         "Rules.\n"
+         "{L}+ : {token,{list_to_atom(TokenChars),\n"
+         "begin HÃ¤pp = foo, HÃ¤pp end,"
+         " 'HÃ¤pp',\"\\x{400}B\",\"Ã¶rn_Ð\"}}.\n"
+         "Erlang code.\n"
+         "-export([t/0]).\n"
+         "t() ->\n"
+         "    %% HÃ¤pp, 'HÃ¤pp',\"\\x{400}B\",\"Ã¶rn_Ð\"\n"
+         "    {ok, [R], 1} = string(\"tip\"),\n"
+         "    {tip,foo,'HÃ¤pp',[1024,66],[246,114,110,95,1024]} = R,\n"
+         "    HÃ¤pp = foo,\n"
+         "    {tip, HÃ¤pp, 'HÃ¤pp',\"\\x{400}B\",\"Ã¶rn_Ð\"} = R,\n"
+         "    ok.\n">>,
+          default,
+          ok},
+      {uni_2,
+       <<"%% coding: Latin-1\n"
+         "Definitions.\n"
+         "A = a\n"
+         "L = [{A}-{Z}]\n"
+         "Z = z\n"
+         "Rules.\n"
+         "{L}+ : {token,{list_to_atom(TokenChars),\n"
+         "begin Häpp = foo, Häpp end,"
+         " 'Häpp',\"\\x{400}B\",\"Ã¶rn_Ð\"}}.\n"
+         "Erlang code.\n"
+         "-export([t/0]).\n"
+         "t() ->\n"
+         "    %% Häpp, 'Häpp',\"\\x{400}B\",\"Ã¶rn_Ð\"\n"
+         "    {ok, [R], 1} = string(\"tip\"),\n"
+         "    {tip,foo,'Häpp',[1024,66],[195,182,114,110,95,208,128]} = R,\n"
+         "    Häpp = foo,\n"
+         "    {tip, Häpp, 'Häpp',\"\\x{400}B\",\"Ã¶rn_Ð\"} = R,\n"
+         "    ok.\n">>,
+          default,
+          ok}],
+    run(Config, Ts),
+
+    ok.
+
+otp_11286(doc) ->
+    "OTP-11286. A Unicode filename bug; both Leex and Yecc.";
+otp_11286(suite) -> [];
+otp_11286(Config) when is_list(Config) ->
+    Node = start_node(otp_11286, "+fnu"),
+    Dir = ?privdir,
+    UName = [1024] ++ "u",
+    UDir = filename:join(Dir, UName),
+    ok = rpc:call(Node, file, make_dir, [UDir]),
+
+    %% Note: Cannot use UName as filename since the filename is used
+    %% as module name. To be fixed in R18.
+    Filename = filename:join(UDir, 'OTP-11286.xrl'),
+    Scannerfile = filename:join(UDir, 'OTP-11286.erl'),
+    Options = [return, {scannerfile, Scannerfile}],
+
+    Mini1 = <<"%% coding: utf-8\n"
+              "Definitions.\n"
+              "D  = [0-9]\n"
+              "Rules.\n"
+              "{L}+  : {token,{word,TokenLine,TokenChars}}.\n"
+              "Erlang code.\n">>,
+    ok = rpc:call(Node, file, write_file, [Filename, Mini1]),
+    {ok, _, []} = rpc:call(Node, leex, file, [Filename, Options]),
+    {ok,_,_} = rpc:call(Node, compile, file,
+                  [Scannerfile,[basic_validation,return]]),
+
+    Mini2 = <<"Definitions.\n"
+              "D  = [0-9]\n"
+              "Rules.\n"
+              "{L}+  : {token,{word,TokenLine,TokenChars}}.\n"
+              "Erlang code.\n">>,
+    ok = rpc:call(Node, file, write_file, [Filename, Mini2]),
+    {ok, _, []} = rpc:call(Node, leex, file, [Filename, Options]),
+    {ok,_,_} = rpc:call(Node, compile, file,
+                  [Scannerfile,[basic_validation,return]]),
+
+    Mini3 = <<"%% coding: latin-1\n"
+              "Definitions.\n"
+              "D  = [0-9]\n"
+              "Rules.\n"
+              "{L}+  : {token,{word,TokenLine,TokenChars}}.\n"
+              "Erlang code.\n">>,
+    ok = rpc:call(Node, file, write_file, [Filename, Mini3]),
+    {ok, _, []} = rpc:call(Node, leex, file, [Filename, Options]),
+    {ok,_,_} = rpc:call(Node, compile, file,
+                  [Scannerfile,[basic_validation,return]]),
+
+    true = test_server:stop_node(Node),
+    ok.
+
+start_node(Name, Args) ->
+    [_,Host] = string:tokens(atom_to_list(node()), "@"),
+    ct:log("Trying to start ~w@~s~n", [Name,Host]),
+    case test_server:start_node(Name, peer, [{args,Args}]) of
+	{error,Reason} ->
+	    test_server:fail(Reason);
+	{ok,Node} ->
+	    ct:log("Node ~p started~n", [Node]),
+	    Node
+    end.
+
 unwritable(Fname) ->
     {ok, Info} = file:read_file_info(Fname),
     Mode = Info#file_info.mode - 8#00200,
@@ -906,7 +1093,7 @@ run_test(Config, Def, Pre) ->
     XrlFile = filename:join(DataDir, DefFile),
     ErlFile = filename:join(DataDir, Filename),
     Opts = [return, warn_unused_vars,{outdir,DataDir}],
-    ok = file:write_file(XrlFile, Def),
+    ok = file:write_file(XrlFile, Def, [{encoding, unicode}]),
     LOpts = [return, {report, false} | 
              case Pre of
                  default ->

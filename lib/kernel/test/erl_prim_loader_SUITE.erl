@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 1996-2011. All Rights Reserved.
+%% Copyright Ericsson AB 1996-2014. All Rights Reserved.
 %%
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -24,7 +24,7 @@
 -export([all/0, suite/0,groups/0,init_per_suite/1, end_per_suite/1, 
 	 init_per_group/2,end_per_group/2]).
 
--export([get_path/1, set_path/1, get_file/1,
+-export([get_path/1, set_path/1, get_file/1, normalize_and_backslash/1,
 	 inet_existing/1, inet_coming_up/1, inet_disconnects/1,
 	 multiple_slaves/1, file_requests/1,
 	 local_archive/1, remote_archive/1,
@@ -39,7 +39,8 @@
 suite() -> [{ct_hooks,[ts_install_cth]}].
 
 all() -> 
-    [get_path, set_path, get_file, inet_existing,
+    [get_path, set_path, get_file,
+     normalize_and_backslash, inet_existing,
      inet_coming_up, inet_disconnects, multiple_slaves,
      file_requests, local_archive, remote_archive,
      primary_archive, virtual_dir_in_archive].
@@ -107,59 +108,69 @@ get_file(Config) when is_list(Config) ->
     ?line error = erl_prim_loader:get_file({dummy}),
     ok.
 
+normalize_and_backslash(Config) ->
+    %% Test OTP-11170
+    case os:type() of
+	{win32,_} ->
+	    {skip, "not on windows"};
+	_ ->
+	    test_normalize_and_backslash(Config)
+    end.
+test_normalize_and_backslash(Config) ->
+    PrivDir = ?config(priv_dir,Config),
+    Dir = filename:join(PrivDir,"\\"),
+    File = filename:join(Dir,"file-OTP-11170"),
+    ok = file:make_dir(Dir),
+    ok = file:write_file(File,"a file to test OTP-11170"),
+    {ok,["file-OTP-11170"]} = file:list_dir(Dir),
+    {ok,["file-OTP-11170"]} = erl_prim_loader:list_dir(Dir),
+    ok = file:delete(File),
+    ok = file:del_dir(Dir),
+    ok.
+
 inet_existing(doc) -> ["Start a node using the 'inet' loading method, ",
 		       "from an already started boot server."];
 inet_existing(Config) when is_list(Config) ->
-    case os:type() of
-	vxworks ->
-	    {comment, "VxWorks: tested separately"};
-	_ ->
-	    ?line Name = erl_prim_test_inet_existing,
-	    ?line Host = host(),
-	    ?line Cookie = atom_to_list(erlang:get_cookie()),
-	    ?line IpStr = ip_str(Host),
-	    ?line LFlag = get_loader_flag(os:type()),
-	    ?line Args = LFlag ++ " -hosts " ++ IpStr ++
-		" -setcookie " ++ Cookie,
-	    ?line {ok, BootPid} = erl_boot_server:start_link([Host]),
-	    ?line {ok, Node} = start_node(Name, Args),
-	    ?line {ok,[["inet"]]} = rpc:call(Node, init, get_argument, [loader]),
-	    ?line stop_node(Node),
-	    ?line unlink(BootPid),
-	    ?line exit(BootPid, kill),
-	    ok
-    end.
+    Name = erl_prim_test_inet_existing,
+    Host = host(),
+    Cookie = atom_to_list(erlang:get_cookie()),
+    IpStr = ip_str(Host),
+    LFlag = get_loader_flag(os:type()),
+    Args = LFlag ++ " -hosts " ++ IpStr ++
+	" -setcookie " ++ Cookie,
+    {ok, BootPid} = erl_boot_server:start_link([Host]),
+    {ok, Node} = start_node(Name, Args),
+    {ok,[["inet"]]} = rpc:call(Node, init, get_argument, [loader]),
+    stop_node(Node),
+    unlink(BootPid),
+    exit(BootPid, kill),
+    ok.
 
 inet_coming_up(doc) -> ["Start a node using the 'inet' loading method, ",
 			"but start the boot server afterwards."];
 inet_coming_up(Config) when is_list(Config) ->
-    case os:type() of
-	vxworks ->
-	    {comment, "VxWorks: tested separately"};
-	_ ->
-	    ?line Name = erl_prim_test_inet_coming_up,
-	    ?line Cookie = atom_to_list(erlang:get_cookie()),
-	    ?line Host = host(),
-	    ?line IpStr = ip_str(Host),
-	    ?line LFlag = get_loader_flag(os:type()),
-	    ?line Args = LFlag ++ 
-		" -hosts " ++ IpStr ++
-		" -setcookie " ++ Cookie,
-	    ?line {ok, Node} = start_node(Name, Args, [{wait, false}]),
+    Name = erl_prim_test_inet_coming_up,
+    Cookie = atom_to_list(erlang:get_cookie()),
+    Host = host(),
+    IpStr = ip_str(Host),
+    LFlag = get_loader_flag(os:type()),
+    Args = LFlag ++ 
+	" -hosts " ++ IpStr ++
+	" -setcookie " ++ Cookie,
+    {ok, Node} = start_node(Name, Args, [{wait, false}]),
 
-	    %% Wait a while, then start boot server, and wait for node to start.
-	    ?line test_server:sleep(test_server:seconds(6)),
-	    io:format("erl_boot_server:start_link([~p]).", [Host]),
-	    ?line {ok, BootPid} = erl_boot_server:start_link([Host]),
-	    ?line wait_really_started(Node, 25),
+    %% Wait a while, then start boot server, and wait for node to start.
+    test_server:sleep(test_server:seconds(6)),
+    io:format("erl_boot_server:start_link([~p]).", [Host]),
+    {ok, BootPid} = erl_boot_server:start_link([Host]),
+    wait_really_started(Node, 25),
 
-	    %% Check loader argument, then cleanup.
-	    ?line {ok,[["inet"]]} = rpc:call(Node, init, get_argument, [loader]),
-	    ?line stop_node(Node),
-	    ?line unlink(BootPid),
-	    ?line exit(BootPid, kill),
-	    ok
-    end.
+    %% Check loader argument, then cleanup.
+    {ok,[["inet"]]} = rpc:call(Node, init, get_argument, [loader]),
+    stop_node(Node),
+    unlink(BootPid),
+    exit(BootPid, kill),
+    ok.
 
 wait_really_started(Node, 0) ->
     test_server:fail({not_booted,Node});
@@ -175,10 +186,10 @@ wait_really_started(Node, N) ->
 inet_disconnects(doc) -> ["Start a node using the 'inet' loading method, ",
 			  "then lose the connection."];
 inet_disconnects(Config) when is_list(Config) ->
-    case os:type() of
-	vxworks ->
-	    {comment, "VxWorks: tested separately"};
-	_ ->
+    case test_server:is_native(erl_boot_server) of
+	true ->
+	    {skip,"erl_boot_server is native"};
+	false ->
 	    ?line Name = erl_prim_test_inet_disconnects,
 	    ?line Host = host(),
 	    ?line Cookie = atom_to_list(erlang:get_cookie()),
@@ -249,8 +260,6 @@ multiple_slaves(doc) ->
      "verify that the boot server manages"];
 multiple_slaves(Config) when is_list(Config) ->
     case os:type() of
-	vxworks ->
-	    {comment, "VxWorks: tested separately"};
 	{ose,_} ->
 	    {comment, "OSE: multiple nodes not supported"};
 	_ ->
@@ -319,6 +328,30 @@ file_requests(Config) when is_list(Config) ->
     {ok,Info} = file:read_file_info(code:which(test_server)),
     ?line {ok,Info} = rpc:call(Node, erl_prim_loader, read_file_info,
 			       [code:which(test_server)]),
+
+    PrivDir = ?config(priv_dir,Config),
+    Dir = filename:join(PrivDir,?MODULE_STRING++"_file_requests"),
+    ok = file:make_dir(Dir),
+    Alias = filename:join(Dir,"symlink"),
+    case file:make_symlink(code:which(test_server), Alias) of
+	{error, enotsup} ->
+	    %% Links not supported on this platform
+	    ok;
+	{error, eperm} ->
+	    {win32,_} = os:type(),
+	    %% Windows user not privileged to create symlinks"
+	    ok;
+	ok ->
+	    %% Reading file info for link should return file info for
+	    %% link target
+	    {ok,Info} = rpc:call(Node, erl_prim_loader, read_file_info,
+				 [Alias]),
+	    #file_info{type=regular} = Info,
+	    {ok,#file_info{type=symlink}} =
+		rpc:call(Node, erl_prim_loader, read_link_info,
+			 [Alias])
+    end,
+
     {ok,Cwd} = file:get_cwd(),
     ?line {ok,Cwd} = rpc:call(Node, erl_prim_loader, get_cwd, []),
     case file:get_cwd("C:") of
@@ -426,7 +459,9 @@ primary_archive(Config) when is_list(Config) ->
     ExpectedEbins = [Archive, DictDir ++ "/ebin", DummyDir ++ "/ebin"],
     io:format("ExpectedEbins: ~p\n", [ExpectedEbins]),
     ?line {ok, FileInfo} = prim_file:read_file_info(Archive),
-    ?line {ok, Ebins} = rpc:call(Node, erl_prim_loader, set_primary_archive, [Archive, ArchiveBin, FileInfo]),
+    ?line {ok, Ebins} = rpc:call(Node, erl_prim_loader, set_primary_archive,
+				 [Archive, ArchiveBin, FileInfo,
+				  fun escript:parse_file/1]),
     ?line ExpectedEbins = lists:sort(Ebins), % assert
     
     ?line {ok, TopFiles2} = rpc:call(Node, erl_prim_loader, list_dir, [Archive]),
@@ -435,7 +470,9 @@ primary_archive(Config) when is_list(Config) ->
     ?line ok = test_archive(Node, Archive, DictDir, BeamName),
     
     %% Cleanup
-    ?line {ok, []} = rpc:call(Node, erl_prim_loader, set_primary_archive, [undefined, undefined, undefined]),
+    ?line {ok, []} = rpc:call(Node, erl_prim_loader, set_primary_archive,
+			      [undefined, undefined, undefined,
+			       fun escript:parse_file/1]),
     ?line stop_node(Node),
     ?line ok = file:delete(Archive),
     ok.

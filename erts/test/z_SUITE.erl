@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2008-2011. All Rights Reserved.
+%% Copyright Ericsson AB 2008-2013. All Rights Reserved.
 %%
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -116,7 +116,7 @@ find_cerl(false) ->
     end;
 find_cerl(DBTop) ->
     case catch filelib:wildcard(filename:join([DBTop,
-					       "otp_src_R*",
+					       "otp_src_*",
 					       "bin",
 					       "cerl"])) of
 	[Cerl | _ ] ->
@@ -166,9 +166,12 @@ core_search_conf(RunByTS, DBTop, XDir) ->
 
 file_inspect(#core_search_conf{file = File}, Core) ->
     FRes0 = os:cmd(File ++ " " ++ Core),
-    FRes = case regexp:match(FRes0, Core) of
-	       {match, S, E} ->
+    FRes = case string:str(FRes0, Core) of
+	       0 ->
+		   FRes0;
+	       S ->
 		   L = length(FRes0),
+		   E = length(Core),
 		   case S of
 		       1 ->
 			   lists:sublist(FRes0, E+1, L+1);
@@ -178,23 +181,22 @@ file_inspect(#core_search_conf{file = File}, Core) ->
 			       " "
 			       ++
 			       lists:sublist(FRes0, E+1, L+1)
-		   end;
-	       _ -> FRes0
+		   end
 	   end,
-    case regexp:match(FRes, "[Tt][Ee][Xx][Tt]") of
+    case re:run(FRes, "text|ascii", [caseless,{capture,none}]) of
+	match ->
+	    not_a_core;
 	nomatch ->
-	    case regexp:match(FRes, "[Aa][Ss][Cc][Ii][Ii]") of
-		nomatch ->
-		    probably_a_core;
-		_ ->
-		    not_a_core
-	    end;
-	_ ->
-	    not_a_core
+	    probably_a_core
     end.
 
-mk_readable(F) ->
-    catch file:write_file_info(F, #file_info{mode = 8#00444}).
+mk_readable(F) ->    
+    try
+	{ok, Old} = file:read_file_info(F),
+	file:write_file_info(F, Old#file_info{mode = 8#00444})
+    catch	
+	_:_ -> io:format("Failed to \"chmod\" core file ~p\n", [F])
+    end.
 
 ignore_core(C) ->
     filelib:is_regular(filename:join([filename:dirname(C),
@@ -229,6 +231,20 @@ mod_time_list(F) ->
 str_strip(S) ->
     string:strip(string:strip(string:strip(S), both, $\n), both, $\r).
 
+dump_core(#core_search_conf{ cerl = false }, _) ->
+    ok;
+dump_core(_, {ignore, _Core}) ->
+    ok;
+dump_core(#core_search_conf{ cerl = Cerl }, Core) ->
+    Dump = case test_server:is_debug() of
+	       true ->
+		   os:cmd(Cerl ++ " -debug -dump " ++ Core);
+	       _ ->
+		   os:cmd(Cerl ++ " -dump " ++ Core)
+	   end,
+    ct:log("~ts~n~n~ts",[Core,Dump]).
+
+
 format_core(Conf, {ignore, Core}) ->
     format_core(Conf, Core, "[ignored] ");
 format_core(Conf, Core) ->
@@ -239,8 +255,8 @@ format_core(#core_search_conf{file = false}, Core, Ignore) ->
 	      [Ignore, Core] ++ mod_time_list(Core));
 format_core(#core_search_conf{file = File}, Core, Ignore) ->
     FRes = str_strip(os:cmd(File ++ " " ++ Core)),
-    case catch regexp:match(FRes, Core) of
-	{match, _, _} ->
+    case catch re:run(FRes, Core, [caseless,{capture,none}]) of
+	match ->
 	    io:format("  ~s~s " ++ time_fstr() ++ "~n",
 		      [Ignore, FRes] ++ mod_time_list(Core));
 	_ ->
@@ -252,11 +268,16 @@ core_file_search(#core_search_conf{search_dir = Base,
 				   extra_search_dir = XBase,
 				   cerl = Cerl,
 				   run_by_ts = RunByTS} = Conf) ->
-    case Cerl of
-	false -> ok;
-	_ -> catch io:format("A cerl script that probably can be used for "
-			     "inspection of emulator cores:~n  ~s~n",
-			     [Cerl])
+    case {Cerl,test_server:is_debug()} of
+	{false,_} -> ok;
+	{_,true} ->
+	    catch io:format("A cerl script that probably can be used for "
+			    "inspection of emulator cores:~n  ~s -debug~n",
+			    [Cerl]);
+	_ ->
+	    catch io:format("A cerl script that probably can be used for "
+			    "inspection of emulator cores:~n  ~s~n",
+			    [Cerl])
     end,
     io:format("Searching for core-files in: ~s~s~n",
 	      [case XBase of
@@ -327,6 +348,8 @@ core_file_search(#core_search_conf{search_dir = Base,
 					 ["Ignored core-files found:",
 					  lists:reverse(ICores)]
 				 end]),
+
+	    lists:foreach(fun(C) -> dump_core(Conf,C) end, Cores),
 	    case {RunByTS, ICores, FCores} of
 		{true, [], []} -> ok;
 		{true, _, []} -> {comment, Res};

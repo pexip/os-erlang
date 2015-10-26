@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %% 
-%% Copyright Ericsson AB 2008-2011. All Rights Reserved.
+%% Copyright Ericsson AB 2008-2014. All Rights Reserved.
 %% 
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -23,6 +23,7 @@
 -define(public_key, true).
 
 -include("OTP-PUB-KEY.hrl").
+-include("PKCS-FRAME.hrl").
 
 -record('SubjectPublicKeyInfoAlgorithm', {
  	  algorithm, 
@@ -67,21 +68,23 @@
 -record(revoke_state, {
 	  reasons_mask,
 	  cert_status,
-	  interim_reasons_mask
+	  interim_reasons_mask,
+	  valid_ext
 	 }).
 
--type public_key()           ::  rsa_public_key() | dsa_public_key().
--type rsa_public_key()       ::  #'RSAPublicKey'{}.
--type rsa_private_key()      ::  #'RSAPrivateKey'{}.
--type dsa_private_key()      ::  #'DSAPrivateKey'{}.
--type dsa_public_key()       :: {integer(), #'Dss-Parms'{}}.
--type pki_asn1_type()        ::  'Certificate' | 'RSAPrivateKey' | 'RSAPublicKey'
-			       | 'DSAPrivateKey' | 'DSAPublicKey' | 'DHParameter'
-                               | 'SubjectPublicKeyInfo'.
--type pem_entry()            :: {pki_asn1_type(), binary(), %% DER or Encrypted DER
-				 not_encrypted | {Cipher :: string(), Salt :: binary()}}.
--type asn1_type()            :: atom(). %% see "OTP-PUB-KEY.hrl
--type ssh_file()             :: openssh_public_key | rfc4716_public_key | known_hosts |
-				auth_keys.
+-record('ECPoint', {
+	  point
+	 }).
+
+-define(unspecified, 0).
+-define(keyCompromise, 1).
+-define(cACompromise, 2).
+-define(affiliationChanged, 3).
+-define(superseded, 4).
+-define(cessationOfOperation, 5).
+-define(certificateHold, 6).
+-define(removeFromCRL, 8).
+-define(privilegeWithdrawn, 9).
+-define(aACompromise, 10).
 
 -endif. % -ifdef(public_key).

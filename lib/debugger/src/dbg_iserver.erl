@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %% 
-%% Copyright Ericsson AB 1998-2011. All Rights Reserved.
+%% Copyright Ericsson AB 1998-2012. All Rights Reserved.
 %% 
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -97,13 +97,10 @@ ensure_started() ->
 %%
 %% Key                        Value
 %% ---                        -----
-%% attributes                 Attr
-%% exports                    Exp
 %% defs                       []
 %% mod_bin                    Binary
 %% mod_raw                    Raw Binary
 %% mod_file                   File
-%% module                     Mod
 %% {Mod,Name,Arity,Exported}  Cs
 %% {'fun',Mod,Index,Uniq}     {Name,Arity,Cs}
 %% Line                       {Pos,PosNL}
@@ -117,7 +114,7 @@ init([]) ->
     process_flag(trap_exit, true),
     global:register_name(?MODULE, self()),
     Db = ets:new(?MODULE, [ordered_set, protected]),
-    {ok, #state{db=Db, auto=false, stack=all}}.
+    {ok, #state{db=Db, auto=false, stack=no_tail}}.
 
 %% Attaching to a process
 handle_call({attached, AttPid, Pid}, _From, State) ->
@@ -191,10 +188,7 @@ handle_call({new_break, Point, Options}, _From, State) ->
 handle_call(all_breaks, _From, State) ->
     {reply, State#state.breaks, State};
 handle_call({all_breaks, Mod}, _From, State) ->
-    Reply = lists:filter(fun({{M,_L}, _Options}) ->
-				 M =/= Mod
-			 end,
-			 State#state.breaks),
+    Reply = [Break || Break = {{M, _},_} <- State#state.breaks, M =:= Mod],
     {reply, Reply, State};
 
 %% From Meta process

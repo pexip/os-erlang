@@ -2,7 +2,7 @@
 
 # %CopyrightBegin%
 # 
-# Copyright Ericsson AB 2004-2011. All Rights Reserved.
+# Copyright Ericsson AB 2004-2013. All Rights Reserved.
 # 
 # The contents of this file are subject to the Erlang Public License,
 # Version 1.1, (the "License"); you may not use this file except in
@@ -44,6 +44,6 @@ $(EBIN)/snmpc_mib_gram.$(EMULATOR): \
 	../../include/snmp_types.hrl \
 	snmpc_mib_gram.erl
 
-$(BIN)/snmpc: snmpc.src
-	$(PERL) -p -e 's?%VSN%?$(VSN)? ' < $< > $@
-	chmod 755 $@
+$(BIN)/snmpc: snmpc.src ../../vsn.mk
+	$(vsn_verbose)$(PERL) -p -e 's?%VSN%?$(VSN)? ' < $< > $@
+	$(V_at)chmod 755 $@

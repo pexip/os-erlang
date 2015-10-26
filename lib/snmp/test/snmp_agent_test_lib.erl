@@ -1,7 +1,7 @@
 %% 
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2005-2011. All Rights Reserved.
+%% Copyright Ericsson AB 2005-2014. All Rights Reserved.
 %%
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -28,7 +28,7 @@
 	 start_mt_agent/1,        start_mt_agent/2, 
 	 stop_agent/1,
 
-	 start_sup/0,      stop_sup/2,
+	 %% start_sup/0,      stop_sup/2,
 	 start_subagent/3, stop_subagent/1, 
 	 start_sub_sup/1,  start_sub_sup/2, 
 
@@ -39,7 +39,7 @@
 
 	 get_req/2, get_next_req/1,
 
-	 config/5,
+	 config/5, config/6,
 	 delete_files/1, 
 	 copy_file/2, 
 	 update_usm/2, 
@@ -58,7 +58,7 @@
 	 init_all/1, finish_all/1,
 	 init_case/1,
 	 try_test/2, try_test/3, try_test/4,
-	 expect/2, expect/3, expect/4, expect/6, 
+	 expect/3, expect/4, expect/5, expect/7, 
 	 
 	 regs/0,
 	 rpc/3
@@ -119,20 +119,10 @@
 %%% didn't undo (since it failed).
 %%%-----------------------------------------------------------------
 
-init_all(Config0) when is_list(Config0) ->
+init_all(Config) when is_list(Config) ->
+
     ?LOG("init_all -> entry with"
-	 "~n   Config0: ~p",[Config0]),
-
-    %% --
-    %% Fix config:
-    %% 
-
-    DataDir0     = ?config(data_dir, Config0),
-    DataDir1     = filename:split(filename:absname(DataDir0)),
-    [_|DataDir2] = lists:reverse(DataDir1),
-    DataDir3     = filename:join(lists:reverse(DataDir2) ++ [?snmp_test_data]),
-    Config1      = lists:keydelete(data_dir, 1, Config0),
-    Config       = [{data_dir, DataDir3 ++ "/"}|Config1],
+	 "~n   Config: ~p",[Config]),
 
     %% -- 
     %% Start nodes
@@ -143,33 +133,42 @@ init_all(Config0) when is_list(Config0) ->
 
 
     %% -- 
-    %% Create necessary files
+    %% Create necessary files ( and dirs ) 
     %% 
 
-    PrivDir = ?config(priv_dir, Config),
-    ?DBG("init_all -> PrivDir ~p", [PrivDir]),
+    SuiteTopDir = ?config(snmp_suite_top_dir, Config),
+    ?DBG("init_all -> SuiteTopDir ~p", [SuiteTopDir]),
 
-    TopDir = filename:join(PrivDir, snmp_agent_test),
-    case file:make_dir(TopDir) of
-	ok ->
-	    ok;
-	{error, eexist} ->
-	    ok;
-	Error ->
-	    ?FAIL({failed_creating_subsuite_top_dir, Error})
-    end,
-
-    DataDir = ?config(data_dir, Config),
-    ?DBG("init_all -> DataDir ~p", [DataDir]),
-
-    ?line ok = file:make_dir(MgrDir = filename:join(TopDir, "mgr_dir/")),
-    ?DBG("init_all -> MgrDir ~p", [MgrDir]),
-
-    ?line ok = file:make_dir(AgentDir = filename:join(TopDir, "agent_dir/")),
+    AgentDir = join(SuiteTopDir, "agent/"), 
+    ?line ok = file:make_dir(AgentDir),
     ?DBG("init_all -> AgentDir ~p", [AgentDir]),
 
-    ?line ok = file:make_dir(SaDir = filename:join(TopDir, "sa_dir/")),
+    AgentDbDir = join(AgentDir, "db/"), 
+    ?line ok   = file:make_dir(AgentDbDir),
+    ?DBG("init_all -> AgentDbDir ~p", [AgentDbDir]),
+
+    AgentLogDir = join(AgentDir, "log/"), 
+    ?line ok    = file:make_dir(AgentLogDir),
+    ?DBG("init_all -> AgentLogDir ~p", [AgentLogDir]),
+
+    AgentConfDir = join(AgentDir, "conf/"), 
+    ?line ok     = file:make_dir(AgentConfDir),
+    ?DBG("init_all -> AgentConfDir ~p", [AgentConfDir]),
+
+    MgrDir   = join(SuiteTopDir, "mgr/"), 
+    ?line ok = file:make_dir(MgrDir),
+    ?DBG("init_all -> MgrDir ~p", [MgrDir]),
+
+    SaDir    = join(SuiteTopDir, "sa/"), 
+    ?line ok = file:make_dir(SaDir),
     ?DBG("init_all -> SaDir ~p", [SaDir]),
+
+    SaDbDir  = join(SaDir, "db/"), 
+    ?line ok = file:make_dir(SaDbDir),
+    ?DBG("init_all -> SaDbDir ~p", [SaDbDir]),
+
+    %% MibDir = ?config(mib_dir, Config),
+    %% ?DBG("init_all -> MibDir ~p", [DataDir]),
 
 
     %% -- 
@@ -184,11 +183,11 @@ init_all(Config0) when is_list(Config0) ->
     
     ?DBG("init_all -> application mnesia: set_env dir",[]),
     ?line application_controller:set_env(mnesia, dir, 
-					 filename:join(TopDir, "Mnesia1")),
+					 join(AgentDbDir, "Mnesia1")),
 
     ?DBG("init_all -> application mnesia: set_env dir on node ~p",[SaNode]),
-    ?line rpc:call(SaNode, application_controller, set_env,
-		   [mnesia, dir,  filename:join(TopDir, "Mnesia2")]),
+    ?line rpc:call(SaNode, application_controller, set_env, 
+		   [mnesia, dir,  join(SaDir, "Mnesia2")]),
 
     ?DBG("init_all -> create mnesia schema",[]),
     ?line ok = mnesia:create_schema([SaNode, node()]),
@@ -199,13 +198,18 @@ init_all(Config0) when is_list(Config0) ->
     ?DBG("init_all -> start application mnesia on ~p",[SaNode]),
     ?line ok = rpc:call(SaNode, application, start, [mnesia]),
     Ip = ?LOCALHOST(),
-    [{snmp_sa,   SaNode}, 
-     {snmp_mgr,  MgrNode}, 
-     {agent_dir, AgentDir ++ "/"},
-     {mgr_dir,   MgrDir ++ "/"},
-     {sa_dir,    SaDir ++ "/"}, 
-     {mib_dir,   DataDir}, 
-     {ip,        Ip} | 
+    [{snmp_sa,        SaNode}, 
+     {snmp_mgr,       MgrNode}, 
+     {snmp_master,    node()}, 
+     {agent_dir,      AgentDir ++ "/"},
+     {agent_db_dir,   AgentDbDir ++ "/"},
+     {agent_log_dir,  AgentLogDir ++ "/"},
+     {agent_conf_dir, AgentConfDir ++ "/"},
+     {sa_dir,         SaDir ++ "/"}, 
+     {sa_db_dir,      SaDbDir ++ "/"}, 
+     {mgr_dir,        MgrDir ++ "/"},
+     %% {mib_dir,        DataDir}, 
+     {ip,             Ip} | 
      Config].
 
 
@@ -220,18 +224,22 @@ finish_all(Config) when is_list(Config) ->
 %% --- This one *must* be run first in each case ---
 
 init_case(Config) when is_list(Config) ->
-    ?DBG("init_case -> entry with"
-	   "~n   Config: ~p", [Config]),
-    SaNode     = ?config(snmp_sa, Config),
-    MgrNode    = ?config(snmp_mgr, Config),
-    MasterNode = node(),
 
+    ?DBG("init_case -> entry with"
+	 "~n   Config: ~p", [Config]),
+
+    SaNode     = ?config(snmp_sa,     Config),
+    MgrNode    = ?config(snmp_mgr,    Config),
+    MasterNode = ?config(snmp_master, Config),
+    %% MasterNode = node(),
+    IpFamily  = proplists:get_value(ipfamily, Config, inet),
+    
     SaHost         = ?HOSTNAME(SaNode),
     MgrHost        = ?HOSTNAME(MgrNode),
     MasterHost     = ?HOSTNAME(MasterNode),
-    {ok, MasterIP} = snmp_misc:ip(MasterHost),
-    {ok, MIP}      = snmp_misc:ip(MgrHost),
-    {ok, SIP}      = snmp_misc:ip(SaHost),
+    {ok, MasterIP} = snmp_misc:ip(MasterHost, IpFamily),
+    {ok, MIP}      = snmp_misc:ip(MgrHost, IpFamily),
+    {ok, SIP}      = snmp_misc:ip(SaHost, IpFamily),
 
 
     put(mgr_node,    MgrNode),
@@ -243,10 +251,11 @@ init_case(Config) when is_list(Config) ->
     put(mip,         tuple_to_list(MIP)),
     put(masterip,    tuple_to_list(MasterIP)),
     put(sip,         tuple_to_list(SIP)),
+    put(ipfamily,    IpFamily),
     
     MibDir = ?config(mib_dir, Config),
     put(mib_dir, MibDir),
-    StdM = filename:join(code:priv_dir(snmp), "mibs") ++ "/",
+    StdM = join(code:priv_dir(snmp), "mibs") ++ "/",
     put(std_mib_dir, StdM),
 
     MgrDir = ?config(mgr_dir, Config),
@@ -292,11 +301,16 @@ call(N,M,F,A) ->
 		 "~n   Loc: ~p", [Rn, Loc]),
 	    put(test_server_loc, Loc),
 	    exit(Rn);
-	{done, Ret, Zed} -> 
+	{done, Ret, _Zed} -> 
 	    ?DBG("call -> done:"
 		 "~n   Ret: ~p"
-		 "~n   Zed: ~p", [Ret, Zed]),
-	    Ret
+		 "~n   Zed: ~p", [Ret, _Zed]),
+	    case Ret of
+		{error, Reason} ->
+		    exit(Reason);
+		OK ->
+		    OK
+	    end
     end.
 
 wait(From, Env, M, F, A) ->
@@ -326,15 +340,10 @@ run(Mod, Func, Args, Opts) ->
     CtxEngineID = snmp_misc:get_option(context_engine_id, Opts, EngineID),
     Community = snmp_misc:get_option(community, Opts, "all-rights"),
     ?DBG("run -> start crypto app",[]),
-    Crypto = case os:type() of
-		 vxworks ->
-		     no_crypto;
-		 _ ->
-		     ?CRYPTO_START()
-	     end,
-    ?DBG("run -> Crypto: ~p", [Crypto]),
+    _CryptoRes = ?CRYPTO_START(),
+    ?DBG("run -> Crypto: ~p", [_CryptoRes]),
     catch snmp_test_mgr:stop(), % If we had a running mgr from a failed case
-    StdM = filename:join(code:priv_dir(snmp), "mibs") ++ "/",
+    StdM = join(code:priv_dir(snmp), "mibs") ++ "/",
     Vsn = get(vsn), 
     ?DBG("run -> config:"
 	   "~n   M:           ~p"
@@ -351,6 +360,7 @@ run(Mod, Func, Args, Opts) ->
 			      {packet_server_debug,true},
 			      {debug,true},
 			      {agent, get(master_host)}, 
+			      {ipfamily, get(ipfamily)},
 			      {agent_udp, 4000},
 			      {trap_udp, 5000},
 			      {recbuf,65535},
@@ -406,126 +416,255 @@ start_v3_agent(Config, Opts) when is_list(Config) andalso is_list(Opts) ->
 start_bilingual_agent(Config) when is_list(Config) ->
     start_agent(Config, [v1,v2]).
  
-start_bilingual_agent(Config, Opts) when is_list(Config) andalso is_list(Opts) ->
+start_bilingual_agent(Config, Opts) 
+  when is_list(Config) andalso is_list(Opts) ->
     start_agent(Config, [v1,v2], Opts).
  
 start_mt_agent(Config) when is_list(Config) ->
-    start_agent(Config, [v2], [{snmp_multi_threaded, true}]).
+    start_agent(Config, [v2], [{multi_threaded, true}]).
  
 start_mt_agent(Config, Opts) when is_list(Config) andalso is_list(Opts) ->
-    start_agent(Config, [v2], [{snmp_multi_threaded, true}|Opts]).
+    start_agent(Config, [v2], [{multi_threaded, true}|Opts]).
  
 start_agent(Config, Vsns) ->
     start_agent(Config, Vsns, []).
 start_agent(Config, Vsns, Opts) -> 
+
     ?LOG("start_agent -> entry (~p) with"
 	"~n   Config: ~p"
 	"~n   Vsns:   ~p"
 	"~n   Opts:   ~p", [node(), Config, Vsns, Opts]),
     
-    ?line AgentDir = ?config(agent_dir, Config),
-    ?line SaNode   = ?config(snmp_sa,   Config),
+    ?line AgentLogDir  = ?config(agent_log_dir,  Config),
+    ?line AgentConfDir = ?config(agent_conf_dir, Config),
+    ?line AgentDbDir   = ?config(agent_db_dir,   Config),
+    ?line SaNode       = ?config(snmp_sa,        Config),
 
-%%     AgentConfig = 
-%% 	[{agent_type, master},
-%% 	 %% {multi_threaded,         MultiT},
-%% 	 %% {priority,               Prio}, 
-%% 	 %% {error_report_mod,       ErrorReportMod},
-%% 	 {versions,   Vsns},
-%% 	 {db_dir,     AgentDir}, 
-%% 	 %% {db_init_error,          DbInitError},
-%% 	 %% {set_mechanism,          SetModule},
-%% 	 %% {authentication_service, AuthModule},
-%% 	 {audit_trail_log, [{type,   read_write},
-%% 			    {dir,    AgentDir},
-%% 			    {size,   {10240, 10}},
-%% 			    {repair, true}]},
-%% 	 {config, [{verbosity,  info},
-%% 		   {dir,        AgentDir},
-%% 		   {force_load, false}]},
-%% 	 {mibs, Mibs},
-%% 	 %% {mib_storage, MibStorage}, 
-%% 	 {local_db, []},
-%% 	 {mib_server, []},
-%% 	 {symbolic_store, []},
-%% 	 {note_store, []}, 
-%% 	 {net_if, []}, 
-%% 	 %% {supervisor,             SupOpts}
-%% 	],
+    Env = app_agent_env_init(
+	    [{versions,         Vsns}, 
+	     {agent_type,       master},
+	     {agent_verbosity,  trace},
+	     {db_dir,           AgentDbDir},
+	     {audit_trail_log,  [{type, read_write},
+				 {dir,  AgentLogDir},
+				 {size, {10240, 10}}]},
+	     {config,           [{dir, AgentConfDir},
+				 {force_load, false}, 
+				 {verbosity,  trace}]}, 
+	     {local_db,         [{repair,    true},
+				 {verbosity, log}]}, 
+	     {mib_server,       [{verbosity, log}]},
+	     {symbolic_store,   [{verbosity, log}]},
+	     {note_store,       [{verbosity, log}]},
+	     {net_if,           [{verbosity, trace}]}],
+	    Opts),
     
-    app_env_init(vsn_init(Vsns) ++ 
-		 [{audit_trail_log, read_write_log},
-		  {audit_trail_log_dir, AgentDir},
-		  {audit_trail_log_size, {10240, 10}},
-		  {force_config_reload, false},
-		  {snmp_agent_type, master},
-		  {snmp_config_dir, AgentDir},
-		  {snmp_db_dir, AgentDir},
-		  {snmp_local_db_auto_repair, true},
-		  {snmp_local_db_verbosity, log},
-		  {snmp_master_agent_verbosity, trace},
-		  {snmp_supervisor_verbosity, trace},
-		  {snmp_mibserver_verbosity, log},
-		  {snmp_symbolic_store_verbosity, log},
-		  {snmp_note_store_verbosity, log},
-		  {snmp_net_if_verbosity, trace}],
-		 Opts),
-
 
     process_flag(trap_exit,true),
 
     {ok, AppSup} = snmp_app_sup:start_link(),
     unlink(AppSup),
-    ?DBG("start_agent -> snmp app supervisor: ~p",[AppSup]),
+    ?DBG("start_agent -> snmp app supervisor: ~p", [AppSup]),
 
-    ?DBG("start_agent -> start master agent (old style)",[]),
-    ?line Sup = start_sup(), 
+    ?DBG("start_agent -> start master agent",[]),
+    ?line Sup = start_sup(Env), 
 
-    ?DBG("start_agent -> unlink from supervisor",[]),
+    ?DBG("start_agent -> unlink from supervisor", []),
     ?line unlink(Sup),
     ?line SaDir = ?config(sa_dir, Config),
-    ?DBG("start_agent -> (rpc) start sub on ~p",[SaNode]),
+    ?DBG("start_agent -> (rpc) start sub on ~p", [SaNode]),
     ?line {ok, Sub} = start_sub_sup(SaNode, SaDir),
     ?DBG("start_agent -> done",[]),
     ?line [{snmp_sup, {Sup, self()}}, {snmp_sub, Sub} | Config].
 
 
-vsn_init(Vsn) ->
-    vsn_init([v1,v2,v3], Vsn, []).
+app_agent_env_init(Env0, Opts) ->
+    ?DBG("app_agent_env_init -> unload snmp",[]),
+    ?line application:unload(snmp),
 
-vsn_init([], _Vsn, Acc) ->
-    Acc;
-vsn_init([V|Vsns], Vsn, Acc) ->
-    case lists:member(V, Vsn) of
-        true ->
-            vsn_init(Vsns, Vsn, [{V, true}|Acc]);
-        false ->
-            vsn_init(Vsns, Vsn, [{V, false}|Acc])
+    ?DBG("app_agent_env_init -> load snmp",[]),
+    ?line application:load(snmp),
+
+    ?DBG("app_agent_env_init -> "
+	 "merge or maybe replace (snmp agent) app env",[]),
+    Env = add_or_maybe_merge_agent_env(Opts, Env0),
+    ?DBG("app_agent_env_init -> merged env: "
+	 "~n   ~p", [Env]),
+
+    %% We put it into the app environment just as 
+    %% a precaution, since when starting normally, 
+    %% this is where the environment is extracted from.
+    app_agent_set_env(Env),
+    Env.
+
+app_agent_set_env(Value) ->
+    application_controller:set_env(snmp, agent, Value).
+
+add_or_maybe_merge_agent_env([], Env) ->
+    ?DBG("merging agent env -> merged", []),
+    lists:keysort(1, Env);
+add_or_maybe_merge_agent_env([{Key, Value1}|Opts], Env) ->
+    ?DBG("merging agent env -> add, replace or merge ~p", [Key]),
+    case lists:keysearch(Key, 1, Env) of
+	{value, {Key, Value1}} ->
+	    %% Identical, move on
+	    ?DBG("merging agent env -> "
+		 "no need to merge ~p - identical - keep: "
+		 "~n   ~p", [Key, Value1]),
+	    add_or_maybe_merge_agent_env(Opts, Env);
+	{value, {Key, Value2}} ->
+	    %% Another value, merge or replace
+	    NewValue = merge_or_replace_agent_env(Key, Value1, Value2),
+	    Env2 = lists:keyreplace(Key, 1, Env, {Key, NewValue}), 
+	    add_or_maybe_merge_agent_env(Opts, Env2);
+	false ->
+	    ?DBG("merging agent env -> no old ~p to merge with - add: "
+		 "~n   ~p", [Key, Value1]),
+	    add_or_maybe_merge_agent_env(Opts, [{Key, Value1}|Env])
     end.
 
-app_env_init(Env0, Opts) ->
-    ?DBG("app_env_init -> unload snmp",[]),
-    ?line application:unload(snmp),
-    ?DBG("app_env_init -> load snmp",[]),
-    ?line application:load(snmp),
-    ?DBG("app_env_init -> initiate (snmp) application env",[]),
-    F1 = fun({Key, Val} = New, Acc0) -> 
-                 ?DBG("app_env_init -> "
-                     "updating setting ~p to ~p", [Key, Val]),
-                 case lists:keyreplace(Key, 1, Acc0, New) of
-		     Acc0 ->
-			 [New|Acc0];
-		     Acc ->
-			 Acc
-		 end
-         end, 
-    Env = lists:foldr(F1, Env0, Opts),
-    ?DBG("app_env_init -> Env: ~p",[Env]),
-    F2 = fun({Key,Val}) ->
-                 ?DBG("app_env_init -> setting ~p to ~p",[Key, Val]),
-                 application_controller:set_env(snmp, Key, Val)
-         end,
-    lists:foreach(F2, Env).
+merge_or_replace_agent_env(versions, NewVersions, _OldVersions) ->
+    ?DBG("merging agent env -> versions replaced: ~p -> ~p", 
+	 [NewVersions, _OldVersions]),
+    NewVersions;
+merge_or_replace_agent_env(agent_type, NewType, _OldType) ->
+    ?DBG("merging agent env -> agent type replaced: ~p -> ~p", 
+	 [NewType, _OldType]),
+    NewType;
+merge_or_replace_agent_env(agent_verbosity, NewVerbosity, _OldVerbosity) ->
+    ?DBG("merging agent env -> agent verbosity replaced: ~p -> ~p", 
+	 [NewVerbosity, _OldVerbosity]),
+    NewVerbosity;
+merge_or_replace_agent_env(db_dir, NewDbDir, _OldDbDir) ->
+    ?DBG("merging agent env -> db-dir replaced: ~p -> ~p", 
+	 [NewDbDir, _OldDbDir]),
+    NewDbDir;
+merge_or_replace_agent_env(audit_trail_log, NewATL, OldATL) ->
+    merge_or_replace_agent_env_atl(NewATL, OldATL);
+merge_or_replace_agent_env(config, NewConfig, OldConfig) ->
+    merge_or_replace_agent_env_config(NewConfig, OldConfig);
+merge_or_replace_agent_env(local_db, NewLdb, OldLdb) ->
+    merge_or_replace_agent_env_ldb(NewLdb, OldLdb);
+merge_or_replace_agent_env(mib_storage, NewMst, OldMst) ->
+    merge_or_replace_agent_env_mib_storage(NewMst, OldMst);
+merge_or_replace_agent_env(mib_server, NewMibs, OldMibs) ->
+    merge_or_replace_agent_env_mib_server(NewMibs, OldMibs);
+merge_or_replace_agent_env(symbolic_store, NewSymStore, OldSymStore) ->
+    merge_or_replace_agent_env_symbolic_store(NewSymStore, OldSymStore);
+merge_or_replace_agent_env(note_store, NewNoteStore, OldNoteStore) ->
+    merge_or_replace_agent_env_note_store(NewNoteStore, OldNoteStore);
+merge_or_replace_agent_env(net_if, NewNetIf, OldNetIf) ->
+    merge_or_replace_agent_env_net_if(NewNetIf, OldNetIf);
+merge_or_replace_agent_env(Key, NewValue, OldValue) ->
+    ?FAIL({not_implemented_merge_or_replace, 
+	   Key, NewValue, OldValue}).
+
+merge_or_replace_agent_env_atl(New, Old) ->
+    ATL = merge_agent_options(New, Old),
+    ?DBG("merging agent env -> audit-trail-log merged: "
+	 "~n   ~p | ~p -> ~p", [New, Old, ATL]),
+    ATL.
+
+merge_or_replace_agent_env_config(New, Old) ->
+    Config = merge_agent_options(New, Old),
+    case lists:keymember(dir, 1, Config) of
+	true ->
+	    ?DBG("merging agent env -> config merged: "
+		 "~n   ~p | ~p -> ~p", [New, Old, Config]),
+	    Config;
+	false ->
+	    ?FAIL({missing_mandatory_option, {config, dir}})
+    end.
+
+merge_or_replace_agent_env_ldb(New, Old) ->
+    LDB = merge_agent_options(New, Old),
+    ?DBG("merging agent env -> local-db merged: "
+	 "~n   ~p | ~p -> ~p", [New, Old, LDB]),
+    LDB.
+
+merge_or_replace_agent_env_mib_storage(NewMibStorage, OldMibStorage) ->
+    %% Shall we merge or replace?
+    %% module is mandatory. We will only merge if NewModule is
+    %% equal to OldModule. 
+    NewModule = 
+	case lists:keysearch(module, 1, NewMibStorage) of
+	    {value, {module, M}} ->
+		M;
+	    false ->
+		?FAIL({missing_mandatory_option, {mib_storage, module}})
+	end,
+    case lists:keysearch(module, 1, OldMibStorage) of
+	{value, {module, NewModule}} ->
+	    %% Same module => merge
+	    %% Non-ex new options => remove
+	    %% Ex new options and non-ex old options => replace
+	    %% Otherwise merge
+	    case lists:keysearch(options, 1, NewMibStorage) of
+		false ->
+		    ?DBG("merging agent env -> "
+			 "no mib-storage ~p merge needed - "
+			 "no new options (= remove old options)", [NewModule]),
+		    NewMibStorage;
+		{value, {options, NewOptions}} ->
+		    case lists:keysearch(options, 1, OldMibStorage) of
+			false ->
+			    ?DBG("merging agent env -> "
+				 "no mib-storage ~p merge needed - "
+				 "no old options", [NewModule]),
+			    NewMibStorage;
+			{value, {options, OldOptions}} ->
+			    MergedOptions = 
+				merge_agent_options(NewOptions, OldOptions), 
+			    ?DBG("merging agent env -> mib-storage ~p merged: "
+				 "~n   Options: ~p | ~p -> ~p", 
+				 [NewModule, 
+				  NewOptions, OldOptions, MergedOptions]),
+			    [{module,  NewModule}, 
+			     {options, MergedOptions}]
+		    end
+	    end;
+	_ ->
+	    %% Diff module => replace
+	    ?DBG("merging agent env -> "
+		 "no mib-storage ~p merge needed - "
+		 "new module", [NewModule]),
+	    NewMibStorage
+    end.
+
+merge_or_replace_agent_env_mib_server(New, Old) ->
+    MibServer = merge_agent_options(New, Old),
+    ?DBG("merging agent env -> mib-server merged: "
+	 "~n   ~p | ~p -> ~p", [New, Old, MibServer]),
+    MibServer.
+
+merge_or_replace_agent_env_symbolic_store(New, Old) ->
+    SymbolicStore = merge_agent_options(New, Old),
+    ?DBG("merging agent env -> symbolic-store merged: "
+	 "~n   ~p | ~p -> ~p", [New, Old, SymbolicStore]),
+    SymbolicStore.
+
+merge_or_replace_agent_env_note_store(New, Old) ->
+    NoteStore = merge_agent_options(New, Old),
+    ?DBG("merging agent env -> note-store merged: "
+	 "~n   ~p | ~p -> ~p", [New, Old, NoteStore]),
+    NoteStore.
+
+merge_or_replace_agent_env_net_if(New, Old) ->
+    NetIf = merge_agent_options(New, Old),
+    ?DBG("merging agent env -> net-if merged: "
+	 "~n   ~p | ~p -> ~p", [New, Old, NetIf]),
+    NetIf.
+
+merge_agent_options([], Options) ->
+    lists:keysort(1, Options);
+merge_agent_options([{Key, _Value} = Opt|Opts], Options) ->
+    case lists:keysearch(Key, 1, Options) of
+	{value, _} ->
+	    NewOptions = lists:keyreplace(Key, 1, Options, Opt), 
+	    merge_agent_options(Opts, NewOptions);
+	false ->
+	    merge_agent_options(Opts, [Opt|Options])
+    end.
 
 
 stop_agent(Config) when is_list(Config) ->
@@ -540,9 +679,9 @@ stop_agent(Config) when is_list(Config) ->
 	(catch process_info(Sup)),
 	(catch process_info(Par))]),
     
-    Info = agent_info(Sup),
+    _Info = agent_info(Sup),
     ?DBG("stop_agent -> Agent info: "
-	 "~n   ~p", [Info]),
+	 "~n   ~p", [_Info]),
     
     stop_sup(Sup, Par),
 
@@ -560,8 +699,8 @@ stop_agent(Config) when is_list(Config) ->
     lists:keydelete(snmp_sub, 1, C1).
 
 
-start_sup() ->
-    case (catch snmpa_app:start(normal)) of
+start_sup(Env) ->
+    case (catch snmp_app_sup:start_agent(normal, Env)) of
 	{ok, S} ->
 	    ?DBG("start_agent -> started, Sup: ~p",[S]),
 	    S;
@@ -569,7 +708,7 @@ start_sup() ->
 	Else ->
 	    ?DBG("start_agent -> unknown result: ~n~p",[Else]),
 	    %% Get info about the apps we depend on
-	    ?FAIL({start_failed,Else, ?IS_MNESIA_RUNNING()})
+	    ?FAIL({start_failed, Else, ?IS_MNESIA_RUNNING()})
     end.
 
 stop_sup(Pid, _) when (node(Pid) =:= node()) ->
@@ -610,7 +749,7 @@ start_sub_sup(Node, Dir) ->
     
 start_sub_sup(Dir) ->
     ?DBG("start_sub -> entry",[]),
-    Opts = [{db_dir, Dir}, 
+    Opts = [{db_dir,     Dir}, 
             {supervisor, [{verbosity, trace}]}],
     {ok, P} = snmpa_supervisor:start_sub_sup(Opts),
     unlink(P),
@@ -627,7 +766,7 @@ start_subagent(SaNode, RegTree, Mib) ->
     MA = whereis(snmp_master_agent),
     ?DBG("start_subagent -> MA: ~p", [MA]),
     MibDir = get(mib_dir),
-    Mib1   = join(MibDir,Mib),
+    Mib1   = join(MibDir, Mib),
     Mod    = snmpa_supervisor,
     Func   = start_sub_agent,
     Args   = [MA, RegTree, [Mib1]], 
@@ -664,28 +803,25 @@ mibs(StdMibDir,MibDir) ->
      join(MibDir, "Test2.bin"),
      join(MibDir, "TestTrapv2.bin")].
 
-join(D,F) ->
-    filename:join(D,F).
-
 
 %% --- various mib load/unload functions ---
 
 load_master(Mib) ->
     ?DBG("load_master -> entry with"
 	"~n   Mib: ~p", [Mib]),
-    snmpa:unload_mibs(snmp_master_agent, [Mib]),	% Unload for safety
-    ok = snmpa:load_mibs(snmp_master_agent, [get(mib_dir) ++ Mib]).
+    snmpa:unload_mib(snmp_master_agent, Mib),	% Unload for safety
+    ok = snmpa:load_mib(snmp_master_agent, join(get(mib_dir), Mib)).
 
 load_master_std(Mib) ->
     ?DBG("load_master_std -> entry with"
 	"~n   Mib: ~p", [Mib]),
-    snmpa:unload_mibs(snmp_master_agent, [Mib]),	% Unload for safety
-    ok = snmpa:load_mibs(snmp_master_agent, [get(std_mib_dir) ++ Mib]).
+    snmpa:unload_mib(snmp_master_agent, Mib),	% Unload for safety
+    ok = snmpa:load_mibs(snmp_master_agent, join(get(std_mib_dir), Mib)).
 
 unload_master(Mib) ->
     ?DBG("unload_master -> entry with"
 	"~n   Mib: ~p", [Mib]),
-    ok = snmpa:unload_mibs(snmp_master_agent, [Mib]).
+    ok = snmpa:unload_mib(snmp_master_agent, Mib).
 
 loaded_mibs() ->
     ?DBG("loaded_mibs -> entry",[]),
@@ -706,35 +842,33 @@ agent_info(Sup) ->
 
 
 %% --- 
+%% The first two arguments are simple to be able to find where in the 
+%% (test) code this call is made. 
 
-expect(Id, A) -> 
-    Fun = fun() -> do_expect(A) end,
-    expect2(Id, Fun).
+expect(Mod, Line, What) -> 
+    Fun = fun() -> do_expect(What) end,
+    expect2(Mod, Line, Fun).
 
-expect(Id, A, B) ->          
-    Fun = fun() -> do_expect(A, B) end,
-    expect2(Id, Fun).
+expect(Mod, Line, What, ExpVBs) ->          
+    Fun = fun() -> do_expect(What, ExpVBs) end,
+    expect2(Mod, Line, Fun).
 	 
-expect(Id, A, B, C) -> 
-    Fun = fun() -> do_expect(A, B, C) end,
-    expect2(Id, Fun).
+expect(Mod, Line, Error, Index, ExpVBS) -> 
+    Fun = fun() -> do_expect(Error, Index, ExpVBS) end,
+    expect2(Mod, Line, Fun).
 
-expect(Id, A, B, C, D, E) -> 
-    Fun = fun() -> do_expect(A, B, C, D, E) end,
-    expect2(Id, Fun).
+expect(Mod, Line, Type, Enterp, Generic, Specific, ExpVBs) -> 
+    Fun = fun() -> do_expect(Type, Enterp, Generic, Specific, ExpVBs) end,
+    expect2(Mod, Line, Fun).
 
-expect2(Id, F) ->
-    io:format("~w:expect2 -> entry with"
-	      "~n   Id:   ~w"
-	      "~n", [?MODULE, Id]),
+expect2(Mod, Line, F) ->
+    io:format("EXPECT for ~w:~w~n", [Mod, Line]),
     case F() of
 	{error, Reason} ->
-	    {error, Id, Reason};
+	    io:format("EXPECT failed at ~w:~w => ~n~p~n", [Mod, Line, Reason]),
+	    throw({error, {expect, Mod, Line, Reason}});
 	Else ->
-	    io:format("~w:expect2 -> "
-		      "~n   Id:   ~w"
-		      "~n   Else: ~p"
-		      "~n", [?MODULE, Id, Else]),
+	    io:format("EXPECT result for ~w:~w => ~n~p~n", [Mod, Line, Else]),
 	    Else
     end.
 
@@ -744,7 +878,6 @@ expect2(Id, F) ->
 get_timeout() ->
     get_timeout(os:type()).
 
-get_timeout(vxworks) -> 7000;
 get_timeout(_)       -> 3500.
 
 receive_pdu(To) ->
@@ -769,21 +902,15 @@ do_expect(Expect) when is_atom(Expect) ->
 
 do_expect({any_pdu, To}) 
   when is_integer(To) orelse (To =:= infinity) ->
-    io:format("~w:do_expect(any_pdu) -> entry with"
-	      "~n   To:   ~w"
-	      "~n", [?MODULE, To]),
+    io:format("EXPECT any PDU~n", []),
     receive_pdu(To);
 
 do_expect({any_trap, To}) ->
-    io:format("~w:do_expect(any_trap) -> entry with"
-	      "~n   To:   ~w"
-	      "~n", [?MODULE, To]),
+    io:format("EXPECT any TRAP within ~w~n", [To]),
     receive_trap(To);
 
 do_expect({timeout, To}) ->
-    io:format("~w:do_expect(timeout) -> entry with"
-	      "~n   To:   ~w"
-	      "~n", [?MODULE, To]),
+    io:format("EXPECT nothing within ~w~n", [To]),
     receive
 	X ->
 	    {error, {unexpected, X}}
@@ -793,14 +920,18 @@ do_expect({timeout, To}) ->
     end;
 
 do_expect({Err, To}) 
-  when is_atom(Err) andalso (is_integer(To) orelse (To =:= infinity)) ->
+  when (is_atom(Err) andalso 
+	((is_integer(To) andalso To > 0) orelse (To =:= infinity))) ->
+    io:format("EXPECT error ~w within ~w~n", [Err, To]),
     do_expect({{error, Err}, To});
 
 do_expect({error, Err}) when is_atom(Err) ->
     Check = fun(_, R) -> R end,
+    io:format("EXPECT error ~w~n", [Err]),
     do_expect2(Check, any, Err, any, any, get_timeout());
 do_expect({{error, Err}, To}) ->
     Check = fun(_, R) -> R end,
+    io:format("EXPECT error ~w within ~w~n", [Err, To]),
     do_expect2(Check, any, Err, any, any, To);
 
 %% exp_varbinds() -> [exp_varbind()]
@@ -810,16 +941,25 @@ do_expect({{error, Err}, To}) ->
 %% ExpVBs         -> exp_varbinds() | {VbsCondition, exp_varbinds()}
 do_expect(ExpVBs) ->
     Check = fun(_, R) -> R end,
+    io:format("EXPECT 'get-response'"
+	      "~n   with"
+	      "~n      Varbinds: ~p~n", [ExpVBs]),
     do_expect2(Check, 'get-response', noError, 0, ExpVBs, get_timeout()).
 
 
 do_expect(v2trap, ExpVBs) ->
     Check = fun(_, R) -> R end,
+    io:format("EXPECT 'snmpv2-trap'"
+	      "~n   with"
+	      "~n      Varbinds: ~p~n", [ExpVBs]),
     do_expect2(Check, 'snmpv2-trap', noError, 0, ExpVBs, get_timeout());
 
 
 do_expect(report, ExpVBs) ->
     Check = fun(_, R) -> R end,
+    io:format("EXPECT 'report'"
+	      "~n   with"
+	      "~n      Varbinds: ~p~n", [ExpVBs]),
     do_expect2(Check, 'report', noError, 0, ExpVBs, get_timeout());
 
 
@@ -827,16 +967,13 @@ do_expect(inform, ExpVBs) ->
     do_expect({inform, true}, ExpVBs);
 
 do_expect({inform, false}, ExpVBs) ->
-    io:format("~w:do_expect(inform, false) -> entry with"
-	      "~n   ExpVBs: ~p"
-	      "~n", [?MODULE, ExpVBs]),
     Check = fun(_, R) -> R end,
+    io:format("EXPECT 'inform-request' (false)"
+	      "~n   with"
+	      "~n      Varbinds: ~p~n", [ExpVBs]),
     do_expect2(Check, 'inform-request', noError, 0, ExpVBs, get_timeout());
 
 do_expect({inform, true}, ExpVBs) ->
-    io:format("~w:do_expect(inform, true) -> entry with"
-	      "~n   ExpVBs: ~p"
-	      "~n", [?MODULE, ExpVBs]),
     Check = 
 	fun(PDU, ok) ->
 		RespPDU = PDU#pdu{type         = 'get-response',
@@ -847,6 +984,9 @@ do_expect({inform, true}, ExpVBs) ->
 	   (_, Err) ->
 		Err
 	end,
+    io:format("EXPECT 'inform-request' (true)"
+	      "~n   with"
+	      "~n      Varbinds: ~p~n", [ExpVBs]),
     do_expect2(Check, 'inform-request', noError, 0, ExpVBs, get_timeout());
 
 do_expect({inform, {error, EStat, EIdx}}, ExpVBs) 
@@ -861,6 +1001,11 @@ do_expect({inform, {error, EStat, EIdx}}, ExpVBs)
 	   (_, Err) ->
 		Err
 	end,
+    io:format("EXPECT 'inform-request' (error)"
+	      "~n   with"
+	      "~n      Error Status: ~p"
+	      "~n      Error Index:  ~p"
+	      "~n      Varbinds:     ~p~n", [EStat, EIdx, ExpVBs]),
     do_expect2(Check, 'inform-request', noError, 0, ExpVBs, get_timeout()).
 
 
@@ -871,6 +1016,12 @@ do_expect(Err, Idx, ExpVBs, To)
   when is_atom(Err) andalso 
        (is_integer(Idx) orelse is_list(Idx) orelse (Idx == any)) ->
     Check = fun(_, R) -> R end,
+    io:format("EXPECT 'get-response'"
+	      "~n   with"
+	      "~n      Error:    ~p"
+	      "~n      Index:    ~p"
+	      "~n      Varbinds: ~p"
+	      "~n   within ~w~n", [Err, Idx, ExpVBs, To]),
     do_expect2(Check, 'get-response', Err, Idx, ExpVBs, To).
 
 
@@ -878,15 +1029,13 @@ do_expect(Type, Enterp, Generic, Specific, ExpVBs) ->
     do_expect(Type, Enterp, Generic, Specific, ExpVBs, 3500).
 
 do_expect(trap, Enterp, Generic, Specific, ExpVBs, To) ->
-    io:format("~w:do_expect(trap) -> entry with"
-	      "~n   Enterp:   ~w"
-	      "~n   Generic:  ~w"
-	      "~n   Specific: ~w"
-	      "~n   ExpVBs:   ~w"
-	      "~n   To:       ~w"
-	      "~nwhen"
-	      "~n   Time:   ~w"
-	      "~n", [?MODULE, Enterp, Generic, Specific, ExpVBs, To, t()]),
+    io:format("EXPECT trap"
+	      "~n   with"
+	      "~n      Enterp:   ~w"
+	      "~n      Generic:  ~w"
+	      "~n      Specific: ~w"
+	      "~n      Varbinds: ~w"
+	      "~n   within ~w~n", [Enterp, Generic, Specific, ExpVBs, To]),
     PureE = purify_oid(Enterp),
     case receive_trap(To) of
 	#trappdu{enterprise    = PureE, 
@@ -916,49 +1065,51 @@ do_expect2(Check, Type, Err, Idx, ExpVBs, To)
        (is_list(ExpVBs) orelse (ExpVBs =:= any)) andalso
        (is_integer(To) orelse (To =:= infinity)) ->
 
-    io:format("~w:do_expect2 -> entry with"
-	      "~n   Type:   ~w"
-	      "~n   Err:    ~w"
-	      "~n   Idx:    ~w"
-	      "~n   ExpVBs: ~w"
-	      "~n   To:     ~w"
-	      "~nwhen"
-	      "~n   Time:   ~w"
-	      "~n", [?MODULE, Type, Err, Idx, ExpVBs, To, t()]),
-
     case receive_pdu(To) of
 
 	#pdu{type         = Type, 
 	     error_status = Err,
 	     error_index  = Idx} when ExpVBs =:= any -> 
+	    io:format("EXPECT received expected pdu (1)~n", []),
 	    ok;
 
 	#pdu{type         = Type, 
 	     request_id   = ReqId, 
 	     error_status = Err2,
 	     error_index  = Idx} when ExpVBs =:= any -> 
+	    io:format("EXPECT received expected pdu with "
+		      "unexpected error status (2): "
+		      "~n   Error Status: ~p~n", [Err2]),
 	    {error, {unexpected_error_status, Err, Err2, ReqId}};
 
 	#pdu{error_status = Err} when (Type   =:= any) andalso 
 				      (Idx    =:= any) andalso 
 				      (ExpVBs =:= any) -> 
+	    io:format("EXPECT received expected pdu (3)~n", []),
 	    ok;
 
 	#pdu{request_id   = ReqId, 
 	     error_status = Err2} when (Type   =:= any) andalso 
 				       (Idx    =:= any) andalso 
 				       (ExpVBs =:= any) -> 
+	    io:format("EXPECT received expected pdu with "
+		      "unexpected error status (4): "
+		      "~n   Error Status: ~p~n", [Err2]),
 	    {error, {unexpected_error_status, Err, Err2, ReqId}};
 
 	#pdu{type         = Type, 
 	     error_status = Err} when (Idx =:= any) andalso 
 				      (ExpVBs =:= any) -> 
+	    io:format("EXPECT received expected pdu (5)~n", []),
 	    ok;
 
 	#pdu{type         = Type, 
 	     request_id   = ReqId, 
 	     error_status = Err2} when (Idx =:= any) andalso 
 				       (ExpVBs =:= any) -> 
+	    io:format("EXPECT received expected pdu with "
+		      "unexpected error status (6): "
+		      "~n   Error Status: ~p~n", [Err2]),
 	    {error, {unexpected_error_status, Err, Err2, ReqId}};
 
 	#pdu{type         = Type, 
@@ -967,8 +1118,13 @@ do_expect2(Check, Type, Err, Idx, ExpVBs, To)
 	     error_index  = EI} when is_list(Idx) andalso (ExpVBs =:= any) -> 
 	    case lists:member(EI, Idx) of
 		true ->
+		    io:format("EXPECT received expected pdu with "
+			      "expected error index (7)~n", []),
 		    ok;
 		false ->
+		    io:format("EXPECT received expected pdu with "
+			      "unexpected error index (8): "
+			      "~n   Error Index: ~p~n", [EI]),
 		    {error, {unexpected_error_index, EI, Idx, ReqId}}
 	    end;
 
@@ -978,8 +1134,15 @@ do_expect2(Check, Type, Err, Idx, ExpVBs, To)
 	     error_index  = EI} when is_list(Idx) andalso (ExpVBs =:= any) -> 
 	    case lists:member(EI, Idx) of
 		true ->
+		    io:format("EXPECT received expected pdu with "
+			      "unexpected error status (9): "
+			      "~n   Error Status: ~p~n", [Err2]),
 		    {error, {unexpected_error_status, Err, Err2, ReqId}};
 		false ->
+		    io:format("EXPECT received expected pdu with "
+			      "unexpected error (10): "
+			      "~n   Error Status: ~p"
+			      "~n   Error index:  ~p~n", [Err2, EI]),
 		    {error, {unexpected_error, {Err, Idx}, {Err2, EI}, ReqId}}
 	    end;
 
@@ -987,6 +1150,12 @@ do_expect2(Check, Type, Err, Idx, ExpVBs, To)
 	     request_id   = ReqId, 
 	     error_status = Err2, 
 	     error_index  = Idx2} when ExpVBs =:= any ->
+	    io:format("EXPECT received unexpected pdu with (11) "
+		      "~n   Type:         ~p"
+		      "~n   ReqId:        ~p"
+		      "~n   Errot status: ~p"
+		      "~n   Error index:  ~p"
+		      "~n", [Type2, ReqId, Err2, Idx2]),
 	    {error, 
 	     {unexpected_pdu, 
 	      {Type, Err, Idx}, {Type2, Err2, Idx2}, ReqId}};
@@ -995,11 +1164,26 @@ do_expect2(Check, Type, Err, Idx, ExpVBs, To)
 	     error_status = Err, 
 	     error_index  = Idx,
 	     varbinds     = VBs} = PDU ->
+	    io:format("EXPECT received pdu (12): "
+		      "~n   [exp] Type:         ~p"
+		      "~n   [exp] Error Status: ~p"
+		      "~n   [exp] Error Index:  ~p"
+		      "~n   VBs:                ~p"
+		      "~nwhen"
+		      "~n   ExpVBs:             ~p"
+		      "~n", [Type, Err, Idx, VBs, ExpVBs]),
 	    Check(PDU, check_vbs(purify_oids(ExpVBs), VBs));
 
 	#pdu{type         = Type, 
 	     error_status = Err, 
 	     varbinds     = VBs} = PDU when Idx =:= any ->
+	    io:format("EXPECT received pdu (13): "
+		      "~n   [exp] Type:         ~p"
+		      "~n   [exp] Error Status: ~p"
+		      "~n   VBs:                ~p"
+		      "~nwhen"
+		      "~n   ExpVBs:             ~p"
+		      "~n", [Type, Err, VBs, ExpVBs]),
 	    Check(PDU, check_vbs(purify_oids(ExpVBs), VBs));
 
 	#pdu{type         = Type, 
@@ -1007,6 +1191,15 @@ do_expect2(Check, Type, Err, Idx, ExpVBs, To)
 	     error_status = Err, 
 	     error_index  = EI,
 	     varbinds     = VBs} = PDU when is_list(Idx) ->
+	    io:format("EXPECT received pdu (14): "
+		      "~n   [exp] Type:         ~p"
+		      "~n   ReqId:              ~p"
+		      "~n   [exp] Error Status: ~p"
+		      "~n   [exp] Error Index:  ~p"
+		      "~n   VBs:                ~p"
+		      "~nwhen"
+		      "~n   ExpVBs:             ~p"
+		      "~n", [Type, ReqId, Err, EI, VBs, ExpVBs]),
 	    PureVBs = purify_oids(ExpVBs), 
 	    case lists:member(EI, Idx) of
 		true ->
@@ -1020,6 +1213,13 @@ do_expect2(Check, Type, Err, Idx, ExpVBs, To)
 	     error_status = Err2, 
 	     error_index  = Idx2,
 	     varbinds     = VBs2} ->
+	    io:format("EXPECT received unexpected pdu with (15) "
+		      "~n   Type:         ~p"
+		      "~n   ReqId:        ~p"
+		      "~n   Errot status: ~p"
+		      "~n   Error index:  ~p"
+		      "~n   Varbinds:     ~p"
+		      "~n", [Type2, ReqId, Err2, Idx2, VBs2]),
 	    {error, 
 	     {unexpected_pdu, 
 	      {Type,  Err,  Idx, purify_oids(ExpVBs)}, 
@@ -1027,6 +1227,9 @@ do_expect2(Check, Type, Err, Idx, ExpVBs, To)
 	      ReqId}};
 	
 	Error ->
+	    io:format("EXPECT received error (16):  "
+		      "~n   Error: ~p"
+		      "~n", [Error]),
 	    Error
     end.
 
@@ -1103,10 +1306,10 @@ get_req(Id, Vars) ->
 	{ok, Val} ->
 	    ?DBG("get_req -> response: ~p",[Val]),
 	    Val;
-	{error, _, {ExpFmt, ExpArg}, {ActFmt, ActArg}} ->
+	{error, _, {_ExpFmt, ExpArg}, {_ActFmt, ActArg}} ->
 	    ?DBG("get_req -> error for ~p: "
-		 "~n   " ++ ExpFmt ++ 
-		 "~n   " ++ ActFmt, 
+		 "~n   " ++ _ExpFmt ++ 
+		 "~n   " ++ _ActFmt, 
 		 [Id] ++ ExpArg ++ ActArg),
 	    exit({unexpected_response, ExpArg, ActArg});
 	Error ->
@@ -1167,30 +1370,63 @@ stop_node(Node) ->
 %%% Configuration
 %%%-----------------------------------------------------------------
 
-config(Vsns, MgrDir, AgentDir, MIp, AIp) ->
-    ?line snmp_config:write_agent_snmp_files(AgentDir, Vsns, MIp, 
- 					     ?TRAP_UDP, AIp, 4000, 
- 					     "test"),
-    ?line case update_usm(Vsns, AgentDir) of
+config(Vsns, MgrDir, AgentConfDir, MIp, AIp) ->
+    config(Vsns, MgrDir, AgentConfDir, MIp, AIp, inet).
+
+config(Vsns, MgrDir, AgentConfDir, MIp, AIp, IpFamily) ->
+    ?LOG("config -> entry with"
+	 "~n   Vsns:         ~p"
+	 "~n   MgrDir:       ~p"
+	 "~n   AgentConfDir: ~p"
+	 "~n   MIp:          ~p"
+	 "~n   AIp:          ~p"
+	 "~n   IpFamily:     ~p",
+	 [Vsns, MgrDir, AgentConfDir, MIp, AIp, IpFamily]),
+    ?line {Domain, ManagerAddr} =
+	case IpFamily of
+	    inet6 ->
+		Ipv6Domain = transportDomainUdpIpv6,
+		AgentIpv6Addr = {AIp, 4000},
+		ManagerIpv6Addr = {MIp, ?TRAP_UDP},
+		?line ok =
+		    snmp_config:write_agent_snmp_files(
+		      AgentConfDir, Vsns,
+		      Ipv6Domain, ManagerIpv6Addr, AgentIpv6Addr, "test"),
+		{Ipv6Domain, ManagerIpv6Addr};
+	    _ ->
+		?line ok =
+		    snmp_config:write_agent_snmp_files(
+		      AgentConfDir, Vsns, MIp, ?TRAP_UDP, AIp, 4000, "test"),
+		{snmpUDPDomain, {MIp, ?TRAP_UDP}}
+	  end,
+
+    ?line case update_usm(Vsns, AgentConfDir) of
 	      true ->
-		  ?line copy_file(filename:join(AgentDir, "usm.conf"),
-				  filename:join(MgrDir, "usm.conf")),
+		  ?line copy_file(join(AgentConfDir, "usm.conf"),
+				  join(MgrDir, "usm.conf")),
 		  ?line update_usm_mgr(Vsns, MgrDir);
 	      false ->
 		  ?line ok
 	  end,
-    ?line update_community(Vsns, AgentDir),
-    ?line update_vacm(Vsns, AgentDir),
-    ?line write_target_addr_conf(AgentDir, MIp, ?TRAP_UDP, Vsns),
-    ?line write_target_params_conf(AgentDir, Vsns),
-    ?line write_notify_conf(AgentDir),
+    ?line update_community(Vsns, AgentConfDir),
+    ?line update_vacm(Vsns, AgentConfDir),
+    ?line write_target_addr_conf(AgentConfDir, Domain, ManagerAddr, Vsns),
+    ?line write_target_params_conf(AgentConfDir, Vsns),
+    ?line write_notify_conf(AgentConfDir),
     ok.
 
 delete_files(Config) ->
-    Dir = ?config(agent_dir, Config),
-    {ok, List} = file:list_dir(Dir),
-    lists:foreach(fun(FName) -> file:delete(filename:join(Dir, FName)) end,
-		  List).
+    AgentDir = ?config(agent_dir, Config),
+    delete_files(AgentDir, [db, conf]).
+
+delete_files(_AgentFiles, []) ->
+    ok;
+delete_files(AgentDir, [DirName|DirNames]) ->
+    Dir = join(AgentDir, DirName),
+    {ok, Files} = file:list_dir(Dir),
+    lists:foreach(fun(FName) -> file:delete(join(Dir, FName)) end,
+		  Files),
+    delete_files(AgentDir, DirNames).
 
 update_usm(Vsns, Dir) ->
     case lists:member(v3, Vsns) of
@@ -1264,19 +1500,19 @@ update_usm_mgr(Vsns, Dir) ->
     end.
 
 rewrite_usm_mgr(Dir, ShaKey, DesKey) -> 
-    ?line ok = file:rename(filename:join(Dir,"usm.conf"),
-			   filename:join(Dir,"usm.old")),
+    ?line ok = file:rename(join(Dir,"usm.conf"),
+			   join(Dir,"usm.old")),
     Conf = [{"agentEngine", "newUser", "newUser", zeroDotZero, 
 	     usmHMACSHAAuthProtocol, "", "", 
 	     usmDESPrivProtocol, "", "", "", ShaKey, DesKey}, 
 	    {"mgrEngine", "newUser", "newUser", zeroDotZero, 
 	     usmHMACSHAAuthProtocol, "", "", 
 	     usmDESPrivProtocol, "", "", "", ShaKey, DesKey}], 
-    ok = snmp_config:write_agent_usm_config(Dir, "", Conf).
+    ?line ok = snmp_config:write_agent_usm_config(Dir, "", Conf).
 
 reset_usm_mgr(Dir) ->
-    ?line ok = file:rename(filename:join(Dir,"usm.old"),
-			   filename:join(Dir,"usm.conf")).
+    ?line ok = file:rename(join(Dir,"usm.old"),
+			   join(Dir,"usm.conf")).
 
 
 update_community([v3], _Dir) -> 
@@ -1298,30 +1534,31 @@ update_vacm(_Vsn, Dir) ->
     
     
 write_community_conf(Dir, Conf) ->
-    snmp_config:write_agent_community_config(Dir, "", Conf).
+    ?line ok = snmp_config:write_agent_community_config(Dir, "", Conf).
 
 write_target_addr_conf(Dir, Conf) ->
-    snmp_config:write_agent_target_addr_config(Dir, "", Conf).
+    ?line ok = snmp_config:write_agent_target_addr_config(Dir, "", Conf).
 
-write_target_addr_conf(Dir, ManagerIp, UDP, Vsns) -> 
-    snmp_config:write_agent_snmp_target_addr_conf(Dir, ManagerIp, UDP, Vsns).
+write_target_addr_conf(Dir, Ip_or_Domain, Port_or_Addr, Vsns) ->
+    ?line ok =
+	snmp_config:write_agent_snmp_target_addr_conf(
+	  Dir, Ip_or_Domain, Port_or_Addr, Vsns).
 
 rewrite_target_addr_conf(Dir, NewPort) -> 
     ?DBG("rewrite_target_addr_conf -> entry with"
 	 "~n   NewPort: ~p", [NewPort]),
-    TAFile = filename:join(Dir, "target_addr.conf"),
+    TAFile = join(Dir, "target_addr.conf"),
     case file:read_file_info(TAFile) of
 	{ok, _} -> 
 	    ok;
-	{error, R} -> 
+	{error, _R} -> 
 	    ?ERR("failure reading file info of "
-		 "target address config file: ~p",[R]),
+		 "target address config file: ~p", [_R]),
 	    ok  
     end,
 
     ?line [TrapAddr|Addrs] = 
-	snmp_conf:read(TAFile, 
-		       fun(R) -> rewrite_target_addr_conf_check(R) end),
+	snmp_conf:read(TAFile, fun rewrite_target_addr_conf_check/1),
 
     ?DBG("rewrite_target_addr_conf -> TrapAddr: ~p",[TrapAddr]),
 
@@ -1329,8 +1566,8 @@ rewrite_target_addr_conf(Dir, NewPort) ->
     
     ?DBG("rewrite_target_addr_conf -> NewAddrs: ~p",[NewAddrs]),
 
-    ?line ok = file:rename(filename:join(Dir,"target_addr.conf"),
-			   filename:join(Dir,"target_addr.old")),
+    ?line ok = file:rename(join(Dir,"target_addr.conf"),
+			   join(Dir,"target_addr.old")),
 
     ?line ok = snmp_config:write_agent_target_addr_config(Dir, "", NewAddrs).
 
@@ -1348,8 +1585,8 @@ rewrite_target_addr_conf2(_NewPort,O) ->
     O.
 
 reset_target_addr_conf(Dir) ->
-    ?line ok = file:rename(filename:join(Dir,"target_addr.old"),
-			   filename:join(Dir,"target_addr.conf")).
+    ?line ok = file:rename(join(Dir, "target_addr.old"),
+			   join(Dir, "target_addr.conf")).
 
 write_target_params_conf(Dir, Vsns) -> 
     F = fun(v1) -> {"target_v1", v1,  v1,  "all-rights", noAuthNoPriv};
@@ -1357,28 +1594,28 @@ write_target_params_conf(Dir, Vsns) ->
 	   (v3) -> {"target_v3", v3,  usm, "all-rights", noAuthNoPriv}
 	end,
     Conf = [F(Vsn) || Vsn <- Vsns],
-    snmp_config:write_agent_target_params_config(Dir, "", Conf).
+    ?line ok = snmp_config:write_agent_target_params_config(Dir, "", Conf).
 
 rewrite_target_params_conf(Dir, SecName, SecLevel) 
   when is_list(SecName) andalso is_atom(SecLevel) -> 
-    ?line ok = file:rename(filename:join(Dir,"target_params.conf"),
-			   filename:join(Dir,"target_params.old")),
+    ?line ok = file:rename(join(Dir,"target_params.conf"),
+			   join(Dir,"target_params.old")),
     Conf = [{"target_v3", v3, usm, SecName, SecLevel}],
-    snmp_config:write_agent_target_params_config(Dir, "", Conf).
+    ?line ok = snmp_config:write_agent_target_params_config(Dir, "", Conf).
 
 reset_target_params_conf(Dir) ->
-    ?line ok = file:rename(filename:join(Dir,"target_params.old"),
-			   filename:join(Dir,"target_params.conf")).
+    ?line ok = file:rename(join(Dir,"target_params.old"),
+			   join(Dir,"target_params.conf")).
 
 write_notify_conf(Dir) -> 
     Conf = [{"standard trap",   "std_trap",   trap}, 
 	    {"standard inform", "std_inform", inform}],
-    snmp_config:write_agent_notify_config(Dir, "", Conf).
+    ?line ok = snmp_config:write_agent_notify_config(Dir, "", Conf).
 
 write_view_conf(Dir) -> 
     Conf = [{2, [1,3,6], included, null},
 	    {2, ?tDescr_instance, excluded, null}], 
-    snmp_config:write_agent_view_config(Dir, "", Conf).
+    ?line ok = snmp_config:write_agent_view_config(Dir, "", Conf).
 
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -1386,7 +1623,6 @@ write_view_conf(Dir) ->
 copy_file(From, To) ->
     {ok, Bin} = file:read_file(From),
     ok = file:write_file(To, Bin).
-
 
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -1432,6 +1668,9 @@ rpc(Node, F, A) ->
     rpc:call(Node, snmpa, F, A).
 
 
+join(Dir, File) ->
+    filename:join(Dir, File).
+
 %% await_pdu(To) ->
 %%     await_response(To, pdu).
 %% 
@@ -1466,18 +1705,17 @@ rpc(Node, F, A) ->
 %% 
 %% 
 %% t() ->
-%%     {A,B,C} = erlang:now(),
+%%     {A,B,C} = os:timestamp(),
 %%     A*1000000000+B*1000+(C div 1000).
 %% 
 %% 
 %% timeout() ->
 %%     timeout(os:type()).
 %% 
-%% timeout(vxworks) -> 7000;
 %% timeout(_)       -> 3500.
     
 
 %% Time in milli seconds
-t() ->
-    {A,B,C} = erlang:now(),
-    A*1000000000+B*1000+(C div 1000).
+%% t() ->
+%%     {A,B,C} = os:timestamp(),
+%%     A*1000000000+B*1000+(C div 1000).

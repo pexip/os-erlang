@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %% 
-%% Copyright Ericsson AB 2002-2011. All Rights Reserved.
+%% Copyright Ericsson AB 2002-2014. All Rights Reserved.
 %% 
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -29,15 +29,19 @@
 	 start_link/3, 
 	 request/2, 
 	 cancel_request/2,
-	 request_canceled/3,
 	 request_done/2, 
 	 retry_request/2, 
 	 redirect_request/2,
 	 insert_session/2, 
+	 lookup_session/2, 
+	 update_session/4, 
 	 delete_session/2, 
+	 which_sessions/1, 
+	 which_session_info/1, 
 	 set_options/2, 
+	 get_options/2, 
 	 store_cookies/3,
-	 which_cookies/1, which_cookies/2, 
+	 which_cookies/1, which_cookies/2, which_cookies/3, 
 	 reset_cookies/1, 
 	 session_type/1,
 	 info/1
@@ -57,16 +61,8 @@
 	  options = #options{}
 	 }).
 
--record(handler_info, 
-	{
-	  id,      % Id of the request:          request_id()
-	  starter, % Pid of the handler starter process (temp): pid()
-	  handler, % Pid of the handler process: pid()
-	  from,    % From for the request:  from()
-	  state    % State of the handler: initiating | started | operational | canceled
-	 }).
-
 -define(DELAY, 500).
+
 
 %%====================================================================
 %% Internal Application API
@@ -147,22 +143,7 @@ redirect_request(Request, ProfileName) ->
 %%--------------------------------------------------------------------
 
 cancel_request(RequestId, ProfileName) ->
-    call(ProfileName, {cancel_request, RequestId}).
-
-
-%%--------------------------------------------------------------------
-%% Function: request_canceled(RequestId, ProfileName) -> ok
-%%	RequestId - ref()
-%%      ProfileName = atom()
-%%
-%% Description: Confirms that a request has been canceld. Intended to
-%% be called by the httpc handler process.
-%%--------------------------------------------------------------------
-
-request_canceled(RequestId, ProfileName, From) ->
-    gen_server:reply(From, ok),
-    cast(ProfileName, {request_canceled, RequestId}).
-
+    cast(ProfileName, {cancel_request, RequestId}).
 
 %%--------------------------------------------------------------------
 %% Function: request_done(RequestId, ProfileName) -> ok
@@ -193,12 +174,48 @@ insert_session(Session, ProfileName) ->
 
 
 %%--------------------------------------------------------------------
-%% Function: delete_session(SessionId, ProfileName) -> _
+%% Function: lookup_session(SessionId, ProfileName) -> _
+%%      SessionId - term()
+%%      ProfileName - atom()
+%%
+%% Description: Looks up a session record in the httpc manager
+%% table <ProfileName>__session_db. 
+%%--------------------------------------------------------------------
+
+lookup_session(SessionId, ProfileName) ->
+    SessionDbName = session_db_name(ProfileName), 
+    ?hcrt("lookup session", [{session_id, SessionId}, {profile, ProfileName}]),
+    ets:lookup(SessionDbName, SessionId).
+
+
+%%--------------------------------------------------------------------
+%% Function: update_session(ProfileName, SessionId, Pos, Value) -> _
+%%	Session - #session{}
+%%      ProfileName - atom()
+%%
+%% Description: Update, only one field (Pos) of the session record
+%%              identified by the SessionId, the session information 
+%%              of the httpc manager table <ProfileName>__session_db. 
+%%              Intended to be called by the httpc request handler process.
+%%--------------------------------------------------------------------
+
+update_session(ProfileName, SessionId, Pos, Value) ->
+    SessionDbName = session_db_name(ProfileName), 
+    ?hcrt("update session", 
+	  [{id,      SessionId}, 
+	   {pos,     Pos}, 
+	   {value,   Value}, 
+	   {profile, ProfileName}]),
+    ets:update_element(SessionDbName, SessionId, {Pos, Value}).
+
+
+%%--------------------------------------------------------------------
+%% Function: delete_session(SessionId, ProfileName) -> void()
 %%	SessionId -  {{Host, Port}, HandlerPid}
 %%      ProfileName - atom()
 %% 
 %% Description: Deletes session information from the httpc manager
-%% table httpc_manager_session_db_<Profile>. Intended to be called by
+%% table <ProfileName>__session_db. Intended to be called by
 %% the httpc request handler process.
 %%--------------------------------------------------------------------
 
@@ -206,6 +223,57 @@ delete_session(SessionId, ProfileName) ->
     SessionDbName = session_db_name(ProfileName), 
     ?hcrt("delete session", [{session_is, SessionId}, {profile, ProfileName}]),
     ets:delete(SessionDbName, SessionId).
+
+
+%%--------------------------------------------------------------------
+%% Function: which sessions(ProfileName) -> SessionsInfo
+%%      ProfileName - atom()
+%%      SessionsInfo - {GoodSessions, BadSessions, NonSessions}
+%%      GoodSessions - [#session{}]
+%%      BadSessions  - [tuple()]
+%%      NonSessions  - [term()]
+%%
+%% Description: Produces a list of all sessions in the session db.
+%% Used for debugging and since that is the intent, there is some
+%% checking and transforming done, which produces the results.
+%%--------------------------------------------------------------------
+
+which_sessions(ProfileName) ->
+    ?hcrt("which_sessions", [{profile, ProfileName}]),
+    SessionDbName = session_db_name(ProfileName), 
+    which_sessions2(SessionDbName).
+
+which_sessions2(SessionDbName) ->
+    Sessions     = which_sessions_order(ets:tab2list(SessionDbName)),
+    GoodSessions = [GoodSession || {good_session, GoodSession} <- Sessions],
+    BadSessions  = [BadSession  || {bad_session,  BadSession}  <- Sessions],
+    NonSessions  = [NonSession  || {non_session,  NonSession}  <- Sessions],
+    {lists:keysort(#session.id, GoodSessions), 
+     lists:keysort(#session.id, BadSessions), 
+     lists:sort(NonSessions)}.
+
+which_sessions_order([]) ->
+    [];
+which_sessions_order([Session|Sessions]) when is_record(Session, session) ->
+    [{good_session, Session} | which_sessions_order(Sessions)];
+which_sessions_order([BadSession|Sessions]) 
+  when is_tuple(BadSession) andalso 
+       (element(1, BadSession) =:= session) ->
+    [{bad_session, BadSession} | which_sessions_order(Sessions)];
+which_sessions_order([NonSession|Sessions]) ->
+    [{non_session, NonSession} | which_sessions_order(Sessions)].
+
+
+%%--------------------------------------------------------------------
+%% Function: which session_info(ProfileName) -> list()
+%%
+%% Description: Produces a ets table info list of the sessions table
+%%--------------------------------------------------------------------
+
+which_session_info(ProfileName) ->
+    SessionDbName = session_db_name(ProfileName), 
+    ?hcrt("which_session_info", [{profile, ProfileName}]),
+    ets:info(SessionDbName).
 
 
 %%--------------------------------------------------------------------
@@ -225,6 +293,21 @@ delete_session(SessionId, ProfileName) ->
 
 set_options(Options, ProfileName) ->
     cast(ProfileName, {set_options, Options}).
+
+
+%%--------------------------------------------------------------------
+%% Function: get_options(OptionItems, ProfileName) -> Values
+%%
+%%	OptionItems = [OptionItem]
+%%	OptionItem = Any or all fields of the current #options{} record 
+%%      Values = [{OptionItem, Value}]
+%%      Value = term()
+%% 
+%% Description: Gets the specified options used by the client.
+%%--------------------------------------------------------------------
+
+get_options(Options, ProfileName) ->
+    call(ProfileName, {get_options, Options}).
 
 
 %%--------------------------------------------------------------------
@@ -256,19 +339,29 @@ reset_cookies(ProfileName) ->
 
 
 %%--------------------------------------------------------------------
-%% Function: which_cookies(Url, ProfileName) -> [cookie()]
+%% Function: which_cookies(ProfileName)               -> [cookie()]
+%%           which_cookies(Url, ProfileName)          -> [cookie()]
+%%           which_cookies(Url, Options, ProfileName) -> [cookie()]
 %%
 %%	Url = string()
+%%	Options = [option()]
 %%      ProfileName = atom()
+%%      option() = {ipv6_host_with_brackets, boolean()}
 %%
 %% Description: Retrieves the cookies that would be sent when 
 %% requesting <Url>.
 %%--------------------------------------------------------------------
 
-which_cookies(ProfileName) ->
+which_cookies(ProfileName) when is_atom(ProfileName) ->
     call(ProfileName, which_cookies).
-which_cookies(Url, ProfileName) ->
-    call(ProfileName, {which_cookies, Url}).
+
+which_cookies(Url, ProfileName) 
+  when is_list(Url) andalso is_atom(ProfileName) ->
+    which_cookies(Url, [], ProfileName).
+
+which_cookies(Url, Options, ProfileName) 
+  when is_list(Url) andalso is_list(Options) andalso is_atom(ProfileName) ->
+    call(ProfileName, {which_cookies, Url, Options}).
 
 
 %%--------------------------------------------------------------------
@@ -331,8 +424,7 @@ do_init(ProfileName, CookiesDir) ->
     %% Create handler db
     ?hcrt("create handler/request db", []),
     HandlerDbName = handler_db_name(ProfileName), 
-    ets:new(HandlerDbName, 
-	    [protected, set, named_table, {keypos, #handler_info.id}]),
+    ets:new(HandlerDbName, [protected, set, named_table, {keypos, 1}]),
 
     %% Cookie DB
     ?hcrt("create cookie db", []),
@@ -366,25 +458,6 @@ handle_call({request, Request}, _, State) ->
 	    {stop, Error, httpc_response:error(Request, Error), State}
     end;
 
-handle_call({cancel_request, RequestId}, From, State) ->
-    ?hcri("cancel_request", [{request_id, RequestId}]),
-    case ets:lookup(State#state.handler_db, RequestId) of
-	[] ->
-	    %% The request has allready compleated make sure
-	    %% it is deliverd to the client process queue so
-	    %% it can be thrown away by httpc:cancel_request
-	    %% This delay is hopfully a temporary workaround.
-	    %% Note that it will not not delay the manager,
-	    %% only the client that called httpc:cancel_request
-	    timer:apply_after(?DELAY, gen_server, reply, [From, ok]),
-	    {noreply, State};
-	[{_, Pid, _}] ->
-	    httpc_handler:cancel(RequestId, Pid, From),
-	    {noreply, State#state{cancel = 
-				  [{RequestId, Pid, From} |
-				   State#state.cancel]}}
-    end;
-
 handle_call(reset_cookies, _, #state{cookie_db = CookieDb} = State) ->
     ?hcrv("reset cookies", []),
     httpc_cookie:reset_db(CookieDb),
@@ -395,16 +468,23 @@ handle_call(which_cookies, _, #state{cookie_db = CookieDb} = State) ->
     CookieHeaders = httpc_cookie:which_cookies(CookieDb),
     {reply, CookieHeaders, State};
 
-handle_call({which_cookies, Url}, _, #state{cookie_db = CookieDb} = State) ->
-    ?hcrv("which cookies", [{url, Url}]),
-    case http_uri:parse(Url) of
-	{Scheme, _, Host, Port, Path, _} ->
+handle_call({which_cookies, Url, Options}, _, 
+	    #state{cookie_db = CookieDb} = State) ->
+    ?hcrv("which cookies", [{url, Url}, {options, Options}]),
+    case uri_parse(Url, Options) of
+	{ok, {Scheme, _, Host, Port, Path, _}} ->
 	    CookieHeaders = 
 		httpc_cookie:header(CookieDb, Scheme, {Host, Port}, Path),
 	    {reply, CookieHeaders, State};
-	Msg ->
-	    {reply, Msg, State}
+	{error, _} = ERROR ->
+	    {reply, ERROR, State}
     end;
+
+handle_call({get_options, OptionItems}, _, #state{options = Options} = State) ->
+    ?hcrv("get options", [{option_items, OptionItems}]),
+    Reply = [{OptionItem, get_option(OptionItem, Options)} || 
+		OptionItem <- OptionItems], 
+    {reply, Reply, State};
 
 handle_call(info, _, State) ->
     ?hcrv("info", []),
@@ -439,19 +519,19 @@ handle_cast({retry_or_redirect_request, Request}, State) ->
 	    {stop, Error, State}
     end;
 
-handle_cast({request_canceled, RequestId}, State) ->
-    ?hcrv("request canceled", [{request_id, RequestId}]),
-    ets:delete(State#state.handler_db, RequestId),
-    case lists:keysearch(RequestId, 1, State#state.cancel) of
-	{value, Entry = {RequestId, _, From}} ->
-	    ?hcrt("found in cancel", [{from, From}]),
-	    {noreply, 
-	     State#state{cancel = lists:delete(Entry, State#state.cancel)}};
-	Else ->
-	    ?hcrt("not found in cancel", [{else, Else}]),
-	   {noreply, State}
+handle_cast({cancel_request, RequestId}, 
+	    #state{handler_db = HandlerDb} = State) ->
+    case ets:lookup(HandlerDb, RequestId) of
+	[] ->
+	    %% Request already compleated nothing to 
+	    %% cancel
+	    {noreply, State};
+	[{_, Pid, _}] ->
+	    httpc_handler:cancel(RequestId, Pid),
+	    ets:delete(State#state.handler_db, RequestId),
+	    {noreply, State}
     end;
-
+  
 handle_cast({request_done, RequestId}, State) ->
     ?hcrv("request done", [{request_id, RequestId}]),
     ets:delete(State#state.handler_db, RequestId),
@@ -461,6 +541,7 @@ handle_cast({set_options, Options}, State = #state{options = OldOptions}) ->
     ?hcrv("set options", [{options, Options}, {old_options, OldOptions}]),
     NewOptions = 
 	#options{proxy                 = get_proxy(Options, OldOptions),
+		 https_proxy           = get_https_proxy(Options, OldOptions),
 		 pipeline_timeout      = get_pipeline_timeout(Options, OldOptions), 
 		 max_pipeline_length   = get_max_pipeline_length(Options, OldOptions), 
 		 max_keep_alive_length = get_max_keep_alive_length(Options, OldOptions), 
@@ -512,22 +593,8 @@ handle_info({'EXIT', _, _}, State) ->
     %% Handled in DOWN
     {noreply, State};
 handle_info({'DOWN', _, _, Pid, _}, State) ->
-    ets:match_delete(State#state.handler_db, {'_', Pid, '_'}),
-
-    %% If there where any canceled request, handled by the
-    %% the process that now has terminated, the
-    %% cancelation can be viewed as sucessfull!
-    NewCanceldList =
-	lists:foldl(fun(Entry = {_, HandlerPid, From}, Acc)  ->
-			    case HandlerPid of
-				Pid ->
-				    gen_server:reply(From, ok),
-				    lists:delete(Entry, Acc);
-				_ ->
-				    Acc
-			    end 
-		    end, State#state.cancel, State#state.cancel),
-    {noreply, State#state{cancel = NewCanceldList}};
+    ets:match_delete(State#state.handler_db, {'_', Pid, '_'}),  
+    {noreply, State};
 handle_info(Info, State) ->
     Report = io_lib:format("Unknown message in "
 			   "httpc_manager:handle_info ~p~n", [Info]),
@@ -548,8 +615,69 @@ terminate(_, State) ->
 %% Func: code_change(_OldVsn, State, Extra) -> {ok, NewState}
 %% Purpose: Convert process state when code is changed
 %%--------------------------------------------------------------------
-code_change(_OldVsn, State, _Extra) ->
+code_change(_, 
+	    #state{session_db = SessionDB} = State, 
+	    upgrade_from_pre_5_8_1) ->
+    Upgrade = 
+	fun({session, 
+	     Id, ClientClose, Scheme, Socket, SocketType, QueueLen, Type}) ->
+		{ok, #session{id           = Id, 
+			      client_close = ClientClose, 
+			      scheme       = Scheme, 
+			      socket       = Socket, 
+			      socket_type  = SocketType,
+			      queue_length = QueueLen, 
+			      type         = Type}};
+	   (_) -> % Already upgraded (by handler)
+		ignore
+	end,
+    (catch update_session_table(SessionDB, Upgrade)),
+    {ok, State};
+
+code_change(_, 
+	    #state{session_db = SessionDB} = State, 
+	    downgrade_to_pre_5_8_1) ->
+    Downgrade = 
+	fun(#session{id           = Id, 
+		     client_close = ClientClose, 
+		     scheme       = Scheme, 
+		     socket       = Socket, 
+		     socket_type  = SocketType,
+		     queue_length = QueueLen, 
+		     type         = Type}) ->
+		{ok, {session, 
+		      Id, ClientClose, Scheme, Socket, SocketType, 
+		      QueueLen, Type}};
+	   (_) -> % Already downgraded (by handler)
+		ignore
+	end,
+    (catch update_session_table(SessionDB, Downgrade)),
+    {ok, State};
+
+code_change(_, State, _) ->
     {ok, State}.
+
+%% This function is used to catch everything that falls through the cracks...
+update_session_table(SessionDB, Transform) ->
+    ets:safe_fixtable(SessionDB, true),
+    update_session_table(SessionDB, ets:first(SessionDB), Transform),
+    ets:safe_fixtable(SessionDB, false).
+
+update_session_table(_SessionDB, '$end_of_table', _Transform) ->
+    ok;
+update_session_table(SessionDB, Key, Transform) ->
+    case ets:lookup(SessionDB, Key) of
+	[OldSession] ->
+	    case Transform(OldSession) of
+		{ok, NewSession} -> 
+		    ets:insert(SessionDB, NewSession);
+		ignore ->
+		    ok
+	    end;
+	_ ->
+	    ok
+    end,
+    update_session_table(SessionDB, ets:next(SessionDB, Key), Transform).
 
 
 %%--------------------------------------------------------------------
@@ -557,39 +685,42 @@ code_change(_OldVsn, State, _Extra) ->
 %%--------------------------------------------------------------------
 
 get_manager_info(#state{handler_db = HDB, 
-			cookie_db  = CDB} = _State) ->
+			session_db = SDB, 
+			cookie_db  = CDB, 
+			options    = Options} = _State) ->
     HandlerInfo = get_handler_info(HDB),
+    SessionInfo = which_sessions2(SDB), 
+    OptionsInfo = 
+	[{Item, get_option(Item, Options)} || 
+		  Item <- record_info(fields, options)], 
     CookieInfo  = httpc_cookie:which_cookies(CDB),
-    [{handlers, HandlerInfo}, {cookies, CookieInfo}].
+    [{handlers, HandlerInfo}, 
+     {sessions, SessionInfo}, 
+     {options,  OptionsInfo}, 
+     {cookies,  CookieInfo}].
+
+sort_handlers(Unsorted) ->
+    sort_handlers2(lists:keysort(1, Unsorted)).
+
+sort_handlers2([]) ->
+    [];
+sort_handlers2([{HandlerPid, RequestId}|L]) ->
+    {Handler, Rest} = sort_handlers2(HandlerPid, [RequestId], L),
+    [Handler | sort_handlers2(Rest)].
+
+sort_handlers2(HandlerPid, Reqs, []) ->
+    {{HandlerPid, lists:sort(Reqs)}, []};
+sort_handlers2(HandlerPid, Reqs, [{HandlerPid, ReqId}|Rest]) ->
+    sort_handlers2(HandlerPid, [ReqId|Reqs], Rest);
+sort_handlers2(HandlerPid1, Reqs, [{HandlerPid2, _}|_] = Rest) 
+  when HandlerPid1 =/= HandlerPid2 ->
+    {{HandlerPid1, lists:sort(Reqs)}, Rest}.
 
 get_handler_info(Tab) ->
-    Pattern = #handler_info{handler = '$1',
-			    state   = '$2', 
-			    _ = '_'},
-    Handlers1 = [{Pid, State} || [Pid, State] <- ets:match(Tab, Pattern)],
-    F = fun({Pid, State} = Elem, Acc) when State =/= canceled -> 
-		case lists:keymember(Pid, 1, Acc) of
-		    true ->
-			Acc;
-		    false ->
-			[Elem | Acc]
-		end;
-	   (_, Acc) ->
-		Acc
-	end,
-    Handlers2 = lists:foldl(F, [], Handlers1),
-    Handlers3 = [{Pid, State, 
-		  case (catch httpc_handler:info(Pid)) of
-		      {'EXIT', _} -> 
-			  %% Why would this crash? 
-			  %% Only if the process has died, but we don't 
-			  %% know about it?
-			  [];
-		      Else ->
-			  Else
-		  end} || 
-		    {Pid, State} <- Handlers2],
-    Handlers3.
+    Pattern   = {'$2', '$1', '_'},
+    Handlers1 = [{Pid, Id} || [Pid, Id] <- ets:match(Tab, Pattern)],
+    Handlers2 = sort_handlers(Handlers1), 
+    [{Pid, Reqs, httpc_handler:info(Pid)} || {Pid, Reqs} <- Handlers2].
 
 handle_request(#request{settings = 
 			#http_options{version = "HTTP/0.9"}} = Request,
@@ -642,19 +773,21 @@ handle_request(Request, State = #state{options = Options}) ->
     {reply, {ok, NewRequest#request.id}, State}.
 
 
-start_handler(Request, State) ->
+start_handler(#request{id   = Id, 
+		       from = From} = Request, 
+	      #state{profile_name = ProfileName, 
+		     handler_db   = HandlerDb, 
+		     options      = Options}) ->
     {ok, Pid} =
 	case is_inets_manager() of
 	    true ->
 		httpc_handler_sup:start_child([whereis(httpc_handler_sup),
-					       Request, State#state.options,
-					       State#state.profile_name]);
+					       Request, Options, ProfileName]);
 	    false ->
-		httpc_handler:start_link(self(), Request, State#state.options,
-					 State#state.profile_name)
+		httpc_handler:start_link(self(), Request, Options, ProfileName)
 	end,
-    ets:insert(State#state.handler_db, {Request#request.id,
-					Pid, Request#request.from}),
+    HandlerInfo = {Id, Pid, From}, 
+    ets:insert(HandlerDb, HandlerInfo), 
     erlang:monitor(process, Pid).
 
 
@@ -679,13 +812,14 @@ select_session(Method, HostPort, Scheme, SessionType,
 			       scheme       = Scheme,
 			       queue_length = '$2',
 			       type         = SessionType,
+			       available    = true, 
 			       _            = '_'},
 	    %% {'_', {HostPort, '$1'}, false, Scheme, '_', '$2', SessionTyp}, 
 	    Candidates = ets:match(SessionDb, Pattern), 
 	    ?hcrd("select session", [{host_port,  HostPort}, 
 				     {scheme,     Scheme}, 
 				     {type,       SessionType}, 
-				     {candidates, Candidates}]),
+				     {candidates, Candidates}]),	    
 	    select_session(Candidates, MaxKeepAlive, MaxPipe, SessionType);
 	false ->
 	    no_connection
@@ -710,13 +844,15 @@ select_session(Candidates, Max) ->
 	    {ok, HandlerPid}
     end.
 
-pipeline_or_keep_alive(Request, HandlerPid, State) ->
+pipeline_or_keep_alive(#request{id   = Id, 
+				from = From} = Request, 
+		       HandlerPid, 
+		       #state{handler_db = HandlerDb} = State) ->
     case (catch httpc_handler:send(Request, HandlerPid)) of
 	ok ->
-	    ets:insert(State#state.handler_db, {Request#request.id,
-						HandlerPid,
-						Request#request.from});
-	_  -> %timeout pipelining failed
+	    HandlerInfo = {Id, HandlerPid, From}, 
+	    ets:insert(HandlerDb, HandlerInfo);
+	_  -> % timeout pipelining failed
 	    start_handler(Request, State)
     end.
 
@@ -777,6 +913,19 @@ make_db_name(ProfileName, Post) ->
     list_to_atom(atom_to_list(ProfileName) ++ Post).
     
 
+%%--------------------------------------------------------------------------
+%% These functions is just simple wrappers to parse specifically HTTP URIs
+%%--------------------------------------------------------------------------
+
+scheme_defaults() ->
+    [{http, 80}, {https, 443}].
+
+uri_parse(URI, Opts) ->
+    http_uri:parse(URI, [{scheme_defaults, scheme_defaults()} | Opts]).
+
+
+%%--------------------------------------------------------------------------
+
 
 call(ProfileName, Msg) ->
     Timeout = infinity, 
@@ -788,8 +937,38 @@ cast(ProfileName, Msg) ->
    gen_server:cast(ProfileName, Msg).
 
 
+get_option(proxy, #options{proxy = Proxy}) ->
+    Proxy;
+get_option(https_proxy, #options{https_proxy = Proxy}) ->
+    Proxy;
+get_option(pipeline_timeout, #options{pipeline_timeout = Timeout}) ->
+    Timeout;
+get_option(max_pipeline_length, #options{max_pipeline_length = Length}) ->
+    Length;
+get_option(keep_alive_timeout, #options{keep_alive_timeout = Timeout}) ->
+    Timeout;
+get_option(max_keep_alive_length, #options{max_keep_alive_length = Length}) ->
+    Length;
+get_option(max_sessions, #options{max_sessions = MaxSessions}) ->
+    MaxSessions;
+get_option(cookies, #options{cookies = Cookies}) ->
+    Cookies;
+get_option(verbose, #options{verbose = Verbose}) ->
+    Verbose;
+get_option(ipfamily, #options{ipfamily = IpFamily}) ->
+    IpFamily;
+get_option(ip, #options{ip = IP}) ->
+    IP;
+get_option(port, #options{port = Port}) ->
+    Port;
+get_option(socket_opts, #options{socket_opts = SocketOpts}) ->
+    SocketOpts.
+
 get_proxy(Opts, #options{proxy = Default}) ->
     proplists:get_value(proxy, Opts, Default).
+
+get_https_proxy(Opts, #options{https_proxy = Default}) ->
+    proplists:get_value(https_proxy, Opts, Default).
 
 get_pipeline_timeout(Opts, #options{pipeline_timeout = Default}) ->
     proplists:get_value(pipeline_timeout, Opts, Default).

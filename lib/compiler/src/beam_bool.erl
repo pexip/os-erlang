@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2004-2010. All Rights Reserved.
+%% Copyright Ericsson AB 2004-2013. All Rights Reserved.
 %%
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -168,18 +168,18 @@ bopt_block(Reg, Fail, OldIs, [{block,Bl0}|Acc0], St0) ->
     end.
 
 %% ensure_opt_safe(OriginalCode, OptCode, FollowingCode, Fail,
-%%             ReversedPreceedingCode, State) -> ok
+%%             ReversedPrecedingCode, State) -> ok
 %%  Comparing the original code to the optimized code, determine
 %%  whether the optimized code is guaranteed to work in the same
 %%  way as the original code.
 %%
 %%  Throw an exception if the optimization is not safe.
 %%
-ensure_opt_safe(Bl, NewCode, OldIs, Fail, PreceedingCode, St) ->
+ensure_opt_safe(Bl, NewCode, OldIs, Fail, PrecedingCode, St) ->
     %% Here are the conditions that must be true for the
     %% optimization to be safe.
     %%
-    %% 1. If a register is INITIALIZED by PreceedingCode,
+    %% 1. If a register is INITIALIZED by PrecedingCode,
     %%    then if that register assigned a value in the original
     %%    code, but not in the optimized code, it must be UNUSED or KILLED
     %%    in the code that follows.
@@ -190,28 +190,49 @@ ensure_opt_safe(Bl, NewCode, OldIs, Fail, PreceedingCode, St) ->
     %%    by the code that follows.
     %%
     %% 3. Any register that is assigned a value in the optimized
-    %%    code must be UNUSED or KILLED in the following code
-    %%    (because the register might be assigned the wrong value,
-    %%    and even if the value is right it might no longer be
-    %%    assigned on *all* paths leading to its use).
+    %%    code must be UNUSED or KILLED in the following code,
+    %%    unless we can be sure that it is always assigned the same
+    %%    value.
 
-    InitInPreceeding = initialized_regs(PreceedingCode),
+    InitInPreceding = initialized_regs(PrecedingCode),
 
     PrevDst = dst_regs(Bl),
     NewDst = dst_regs(NewCode),
     NotSet = ordsets:subtract(PrevDst, NewDst),
-    MustBeKilled = ordsets:subtract(NotSet, InitInPreceeding),
-    MustBeUnused = ordsets:subtract(ordsets:union(NotSet, NewDst), MustBeKilled),
+    MustBeKilled = ordsets:subtract(NotSet, InitInPreceding),
 
     case all_killed(MustBeKilled, OldIs, Fail, St) of
 	false -> throw(all_registers_not_killed);
 	true -> ok
     end,
+    Same = assigned_same_value(Bl, NewCode),
+    MustBeUnused = ordsets:subtract(ordsets:union(NotSet, NewDst),
+				    ordsets:union(MustBeKilled, Same)),
     case none_used(MustBeUnused, OldIs, Fail, St) of
 	false -> throw(registers_used);
 	true -> ok
     end,
     ok.
+
+%% assigned_same_value(OldCode, NewCodeReversed) -> [DestinationRegs]
+%%  Return an ordset with a list of all y registers that are always
+%%  assigned the same value in the old and new code. Currently, we
+%%  are very conservative in that we only consider identical move
+%%  instructions in the same order.
+%%
+assigned_same_value(Old, New) ->
+    case reverse(New) of
+	[{block,Bl}|_] ->
+	    assigned_same_value(Old, Bl, []);
+	_ ->
+	    ordsets:new()
+    end.
+
+assigned_same_value([{set,[{y,_}=D],[S],move}|T1],
+		    [{set,[{y,_}=D],[S],move}|T2], Acc) ->
+    assigned_same_value(T1, T2, [D|Acc]);
+assigned_same_value(_, _, Acc) ->
+    ordsets:from_list(Acc).
 
 update_fail_label([{set,_,_,move}=I|Is], Fail, Acc) ->
     update_fail_label(Is, Fail, [I|Acc]);
@@ -297,6 +318,8 @@ split_block_label_used([{set,[_],_,{bif,_,{f,Fail}}}|_], Fail) ->
     true;
 split_block_label_used([{set,[_],_,{alloc,_,{gc_bif,_,{f,Fail}}}}|_], Fail) ->
     true;
+split_block_label_used([{set,[_],_,{alloc,_,{put_map,_,{f,Fail}}}}|_], Fail) ->
+    true;
 split_block_label_used([_|Is], Fail) ->
     split_block_label_used(Is, Fail);
 split_block_label_used([], _) -> false.
@@ -370,10 +393,14 @@ bopt_tree([{set,_,_,{bif,'xor',_}}|_], _, _) ->
     throw('xor');
 bopt_tree([{protected,[Dst],Code,_}|Is], Forest0, Pre) ->
     ProtForest0 = gb_trees:from_orddict([P || {_,any}=P <- gb_trees:to_list(Forest0)]),
-    {ProtPre,[{_,ProtTree}]} = bopt_tree(Code, ProtForest0, []),
-    Prot = {prot,ProtPre,ProtTree},
-    Forest = gb_trees:enter(Dst, Prot, Forest0),
-    bopt_tree(Is, Forest, Pre);    
+    case bopt_tree(Code, ProtForest0, []) of
+        {ProtPre,[{_,ProtTree}]} ->
+            Prot = {prot,ProtPre,ProtTree},
+            Forest = gb_trees:enter(Dst, Prot, Forest0),
+            bopt_tree(Is, Forest, Pre);
+        _Res ->
+            throw(not_boolean_expr)
+    end;
 bopt_tree([{set,[Dst],[Src],move}=Move|Is], Forest, Pre) ->
     case {Src,Dst} of
 	{{tmp,_},_} -> throw(move);
@@ -404,13 +431,17 @@ bopt_tree([], Forest, Pre) ->
 safe_bool_op(N, Ar) ->
     erl_internal:new_type_test(N, Ar) orelse erl_internal:comp_op(N, Ar).
 
+bopt_bool_args([V0,V0], Forest0) ->
+    {V,Forest} = bopt_bool_arg(V0, Forest0),
+    {[V,V],Forest};
 bopt_bool_args(As, Forest) ->
     mapfoldl(fun bopt_bool_arg/2, Forest, As).
 
 bopt_bool_arg({T,_}=R, Forest) when T =:= x; T =:= y; T =:= tmp ->
-    Val = case gb_trees:get(R, Forest) of
-	      any -> {test,is_eq_exact,fail,[R,{atom,true}]};
-	      Val0 -> Val0
+    Val = case gb_trees:lookup(R, Forest) of
+	      {value,any} -> {test,is_eq_exact,fail,[R,{atom,true}]};
+	      {value,Val0} -> Val0;
+              none -> throw(mixed)
 	  end,
     {Val,gb_trees:delete(R, Forest)};
 bopt_bool_arg(Term, Forest) ->
@@ -501,7 +532,9 @@ bopt_cg({prot,Pre0,Tree}, Fail, Rs0, Acc, St0) ->
 bopt_cg({atom,true}, _Fail, _Rs, Acc, St) ->
     {Acc,St};
 bopt_cg({atom,false}, Fail, _Rs, Acc, St) ->
-    {[{jump,{f,Fail}}|Acc],St}.
+    {[{jump,{f,Fail}}|Acc],St};
+bopt_cg(_, _, _, _, _) ->
+    throw(not_boolean_expr).
 
 bopt_cg_not({'and',As0}) ->
     As = [bopt_cg_not(A) || A <- As0],
@@ -514,7 +547,9 @@ bopt_cg_not({'not',Arg}) ->
 bopt_cg_not({test,Test,Fail,As}) ->
     {inverted_test,Test,Fail,As};
 bopt_cg_not({atom,Bool}) when is_boolean(Bool) ->
-    {atom,not Bool}.
+    {atom,not Bool};
+bopt_cg_not(_) ->
+    throw(not_boolean_expr).
 
 bopt_cg_not_not({'and',As}) ->
     {'and',[bopt_cg_not_not(A) || A <- As]};

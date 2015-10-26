@@ -1,11 +1,11 @@
-<?xml version="1.0" encoding="iso-8859-1" ?>
+<?xml version="1.0" encoding="utf-8" ?>
 <!DOCTYPE part SYSTEM "part.dtd">
 
 <part xmlns:xi="http://www.w3.org/2001/XInclude">
   <header>
     <copyright>
       <year>2008</year>
-      <year>2011</year>
+      <year>2014</year>
       <holder>Ericsson AB, All Rights Reserved</holder>
     </copyright>
     <legalnotice>
@@ -32,8 +32,10 @@
   </header>
   <description>
     <p> This application provides an API to public key infrastructure
-    from  RFC 3280 (X.509 certificates) and some public key formats defined
-    by the PKCS-standard. </p>
+    from <url href="http://www.ietf.org/rfc/rfc5280.txt">RFC
+    5280</url> (X.509 certificates) and public key formats defined by
+    the <url href="http://en.wikipedia.org/wiki/PKCS">
+    PKCS-standard</url></p>
   </description>
   <xi:include href="introduction.xml"/>
   <xi:include href="public_key_records.xml"/>

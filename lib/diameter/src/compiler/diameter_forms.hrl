@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2010-2011. All Rights Reserved.
+%% Copyright Ericsson AB 2010-2014. All Rights Reserved.
 %%
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -21,6 +21,13 @@
 %% Macros used when building abstract code.
 %%
 
+%% Generated functions that could have no generated clauses will have
+%% a trailing ?BADARG clause that should never execute as called
+%% by diameter.
+-define(BADARG(N), {?clause, [?VAR('_') || _ <- lists:seq(1,N)],
+                    [],
+                    [?APPLY(erlang, error, [?ATOM(badarg)])]}).
+
 %% Form tag with line number.
 -define(F(T), T, ?LINE).
 %% Yes, that's right. The replacement is to the first unmatched ')'.
@@ -29,6 +36,7 @@
 -define(clause,       ?F(clause)).
 -define(function,     ?F(function)).
 -define(call,         ?F(call)).
+-define(cons,         ?F(cons)).
 -define('fun',        ?F('fun')).
 -define(generate,     ?F(generate)).
 -define(lc,           ?F(lc)).
@@ -49,4 +57,6 @@
 -define(FIELDS(Fs),   [{?record_field, ?ATOM(F), V} || {F,V} <- Fs]).
 
 %% Literal term.
--define(TERM(T),      erl_parse:abstract(T, ?LINE)).
+-define(TERM(T), erl_parse:abstract(T, [
+                     {line, ?LINE},
+                     {encoding, fun diameter_codegen:is_printable_ascii/1}])).

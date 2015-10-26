@@ -1,7 +1,7 @@
 /*
  * %CopyrightBegin%
  *
- * Copyright Ericsson AB 1998-2011. All Rights Reserved.
+ * Copyright Ericsson AB 1998-2014. All Rights Reserved.
  *
  * The contents of this file are subject to the Erlang Public License,
  * Version 1.1, (the "License"); you may not use this file except in
@@ -35,6 +35,8 @@
 #include "bif.h"
 #include "big.h"
 #include "erl_binary.h"
+#include "erl_map.h"
+#include "erl_thr_progress.h"
 
 #include "erl_db_util.h"
 
@@ -137,21 +139,23 @@ set_tracee_flags(Process *tracee_p, Eterm tracer, Uint d_flags, Uint e_flags) {
     Uint flags;
 
     if (tracer == NIL) {
-	flags = tracee_p->trace_flags & ~TRACEE_FLAGS;
+	flags = ERTS_TRACE_FLAGS(tracee_p) & ~TRACEE_FLAGS;
     }  else {
-	flags = ((tracee_p->trace_flags & ~d_flags) | e_flags);
+	flags = ((ERTS_TRACE_FLAGS(tracee_p) & ~d_flags) | e_flags);
 	if (! flags) tracer = NIL;
     }
-    ret = tracee_p->tracer_proc != tracer || tracee_p->trace_flags != flags
-	? am_true : am_false;
-    tracee_p->tracer_proc = tracer;
-    tracee_p->trace_flags = flags;
+    ret = ((ERTS_TRACER_PROC(tracee_p) != tracer
+	    || ERTS_TRACE_FLAGS(tracee_p) != flags)
+	   ? am_true
+	   : am_false);
+    ERTS_TRACER_PROC(tracee_p) = tracer;
+    ERTS_TRACE_FLAGS(tracee_p) = flags;
     return ret;
 }
 /*
 ** Assuming all locks on tracee_p on entry
 **
-** Changes tracee_p->trace_flags and tracee_p->tracer_proc
+** Changes ERTS_TRACE_FLAGS(tracee_p) and ERTS_TRACER_PROC(tracee_p)
 ** according to input disable/enable flags and tracer.
 **
 ** Returns am_true|am_false on success, am_true if value changed,
@@ -172,17 +176,20 @@ set_match_trace(Process *tracee_p, Eterm fail_term, Eterm tracer,
 			  tracer, ERTS_PROC_LOCKS_ALL))) {
 	if (tracee_p != tracer_p) {
 	    ret = set_tracee_flags(tracee_p, tracer, d_flags, e_flags);
-	    tracer_p->trace_flags |= tracee_p->trace_flags ? F_TRACER : 0;
+	    ERTS_TRACE_FLAGS(tracer_p) |= (ERTS_TRACE_FLAGS(tracee_p)
+					   ? F_TRACER
+					   : 0);
 	    erts_smp_proc_unlock(tracer_p, ERTS_PROC_LOCKS_ALL);
 	}
     } else if (is_internal_port(tracer)) {
 	Port *tracer_port = 
-	    erts_id2port(tracer, tracee_p, ERTS_PROC_LOCKS_ALL);
+	    erts_id2port_sflgs(tracer,
+			       tracee_p,
+			       ERTS_PROC_LOCKS_ALL,
+			       ERTS_PORT_SFLGS_INVALID_TRACER_LOOKUP);
 	if (tracer_port) {
-	    if (! INVALID_TRACER_PORT(tracer_port, tracer)) {
-		ret = set_tracee_flags(tracee_p, tracer, d_flags, e_flags);
-	    }
-	    erts_smp_port_unlock(tracer_port);
+	    ret = set_tracee_flags(tracee_p, tracer, d_flags, e_flags);
+	    erts_port_release(tracer_port);
 	}
     } else {
 	ASSERT(is_nil(tracer));
@@ -476,7 +483,8 @@ void
 match_pseudo_process_init(void)
 {
 #ifdef ERTS_SMP
-    erts_smp_tsd_key_create(&match_pseudo_process_key);
+    erts_smp_tsd_key_create(&match_pseudo_process_key,
+			    "erts_match_pseudo_process_key");
     erts_smp_install_exit_handler(destroy_match_pseudo_process);
 #else
     match_pseudo_process = create_match_pseudo_process();
@@ -491,11 +499,11 @@ erts_match_set_release_result(Process* c_p)
 
 /* The trace control word. */
 
-static erts_smp_atomic_t trace_control_word;
+static erts_smp_atomic32_t trace_control_word;
 
 /* This needs to be here, before the bif table... */
 
-static Eterm db_set_trace_control_word_fake_1(Process *p, Eterm val);
+static Eterm db_set_trace_control_word_fake_1(BIF_ALIST_1);
 
 /*
 ** The table of callable bif's, i e guard bif's and 
@@ -555,6 +563,12 @@ static DMCGuardBif guard_tab[] =
     {
 	am_is_tuple,
 	&is_tuple_1,
+	1,
+	DBIF_ALL
+    },
+    {
+	am_is_map,
+	&is_map_1,
 	1,
 	DBIF_ALL
     },
@@ -621,6 +635,12 @@ static DMCGuardBif guard_tab[] =
     {
 	am_size,
 	&size_1,
+	1,
+	DBIF_ALL
+    },
+    {
+	am_map_size,
+	&map_size_1,
 	1,
 	DBIF_ALL
     },
@@ -908,14 +928,18 @@ static void db_free_tmp_uncompressed(DbTerm* obj);
 /*
 ** Pseudo BIF:s to be callable from the PAM VM.
 */
-
-BIF_RETTYPE db_get_trace_control_word_0(Process *p) 
+BIF_RETTYPE db_get_trace_control_word(Process *p)
 {
-    Uint32 tcw = (Uint32) erts_smp_atomic_read(&trace_control_word);
+    Uint32 tcw = (Uint32) erts_smp_atomic32_read_acqb(&trace_control_word);
     BIF_RET(erts_make_integer((Uint) tcw, p));
 }
 
-BIF_RETTYPE db_set_trace_control_word_1(Process *p, Eterm new) 
+BIF_RETTYPE db_get_trace_control_word_0(BIF_ALIST_0)
+{
+    BIF_RET(db_get_trace_control_word(BIF_P));
+}
+
+BIF_RETTYPE db_set_trace_control_word(Process *p, Eterm new)
 {
     Uint val;
     Uint32 old_tcw;
@@ -923,19 +947,27 @@ BIF_RETTYPE db_set_trace_control_word_1(Process *p, Eterm new)
 	BIF_ERROR(p, BADARG);
     if (val != ((Uint32)val))
 	BIF_ERROR(p, BADARG);
-    
-    old_tcw = (Uint32) erts_smp_atomic_xchg(&trace_control_word, (erts_aint_t) val);
+
+    old_tcw = (Uint32) erts_smp_atomic32_xchg_relb(&trace_control_word,
+						   (erts_aint32_t) val);
     BIF_RET(erts_make_integer((Uint) old_tcw, p));
 }
 
-static Eterm db_set_trace_control_word_fake_1(Process *p, Eterm new) 
+BIF_RETTYPE db_set_trace_control_word_1(BIF_ALIST_1)
 {
+    BIF_RET(db_set_trace_control_word(BIF_P, BIF_ARG_1));
+}
+
+static Eterm db_set_trace_control_word_fake_1(BIF_ALIST_1)
+{
+    Process *p = BIF_P;
+    Eterm new = BIF_ARG_1;
     Uint val;
     if (!term_to_Uint(new, &val))
 	BIF_ERROR(p, BADARG);
     if (val != ((Uint32)val))
 	BIF_ERROR(p, BADARG);
-    BIF_RET(db_get_trace_control_word_0(p));
+    BIF_RET(db_get_trace_control_word(p));
 }
 
 /*
@@ -1220,7 +1252,7 @@ static Eterm erts_match_set_run_ets(Process *p, Binary *mpsp,
     Eterm ret;
 
     ret = db_prog_match(p, mpsp, args, NULL, NULL, num_args,
-			ERTS_PAM_CONTIGUOUS_TUPLE | ERTS_PAM_COPY_RESULT,
+			ERTS_PAM_COPY_RESULT,
 			return_flags);
 #if defined(HARDDEBUG)
     if (is_non_value(ret)) {
@@ -1249,7 +1281,7 @@ void db_initialize_util(void){
 	  sizeof(DMCGuardBif), 
 	  (int (*)(const void *, const void *)) &cmp_guard_bif);
     match_pseudo_process_init();
-    erts_smp_atomic_init(&trace_control_word, 0);
+    erts_smp_atomic32_init_nob(&trace_control_word, 0);
 }
 
 
@@ -1703,6 +1735,7 @@ Eterm db_prog_match(Process *c_p, Binary *bprog,
     Process *current_scheduled;
     ErtsSchedulerData *esdp;
     Eterm (*bif)(Process*, ...);
+    Eterm bif_args[3];
     int fail_label;
     int atomic_trace;
 #if HALFWORD_HEAP
@@ -1733,14 +1766,14 @@ Eterm db_prog_match(Process *c_p, Binary *bprog,
 	if (! atomic_trace) {                               \
             erts_refc_inc(&bprog->refc, 2);                 \
 	    erts_smp_proc_unlock((p), ERTS_PROC_LOCK_MAIN); \
-	    erts_smp_block_system(0);                       \
+	    erts_smp_thr_progress_block();                  \
             atomic_trace = !0;                              \
 	}                                                   \
     } while (0)
 #define END_ATOMIC_TRACE(p)                               \
     do {                                                  \
 	if (atomic_trace) {                               \
-            erts_smp_release_system();                    \
+            erts_smp_thr_progress_unblock();              \
             erts_smp_proc_lock((p), ERTS_PROC_LOCK_MAIN); \
             if (erts_refc_dectest(&bprog->refc, 0) == 0) {\
                 erts_bin_free(bprog);                     \
@@ -1819,7 +1852,7 @@ restart:
 	    ep = termp;
 	    break;
 	case matchArrayBind: /* When the array size is unknown. */
-	    ASSERT(termp);
+	    ASSERT(termp || arity==0);
 	    n = *pc++;
 	    variables[n].term = dpm_array_to_list(psp, termp, arity);
 	    break;
@@ -1956,7 +1989,7 @@ restart:
 	    break;
 	case matchCall0:
 	    bif = (Eterm (*)(Process*, ...)) *pc++;
-	    t = (*bif)(build_proc);
+	    t = (*bif)(build_proc, bif_args);
 	    if (is_non_value(t)) {
 		if (do_catch)
 		    t = FAIL_TERM;
@@ -1967,7 +2000,7 @@ restart:
 	    break;
 	case matchCall1:
 	    bif = (Eterm (*)(Process*, ...)) *pc++;
-	    t = (*bif)(build_proc, esp[-1]);
+	    t = (*bif)(build_proc, esp-1);
 	    if (is_non_value(t)) {
 		if (do_catch)
 		    t = FAIL_TERM;
@@ -1978,7 +2011,9 @@ restart:
 	    break;
 	case matchCall2:
 	    bif = (Eterm (*)(Process*, ...)) *pc++;
-	    t = (*bif)(build_proc, esp[-1], esp[-2]);
+	    bif_args[0] = esp[-1];
+	    bif_args[1] = esp[-2];
+	    t = (*bif)(build_proc, bif_args);
 	    if (is_non_value(t)) {
 		if (do_catch)
 		    t = FAIL_TERM;
@@ -1990,7 +2025,10 @@ restart:
 	    break;
 	case matchCall3:
 	    bif = (Eterm (*)(Process*, ...)) *pc++;
-	    t = (*bif)(build_proc, esp[-1], esp[-2], esp[-3]);
+	    bif_args[0] = esp[-1];
+	    bif_args[1] = esp[-2];
+	    bif_args[2] = esp[-3];
+	    t = (*bif)(build_proc, bif_args);
 	    if (is_non_value(t)) {
 		if (do_catch)
 		    t = FAIL_TERM;
@@ -2155,7 +2193,7 @@ restart:
 	    pc += n;
 	    break;
 	case matchSelf:
-	    *esp++ = c_p->id;
+	    *esp++ = c_p->common.id;
 	    break;
 	case matchWaste:
 	    --esp;
@@ -2184,7 +2222,11 @@ restart:
 	    *esp++ = am_true;
 	    break;
 	case matchIsSeqTrace:
-	    if (SEQ_TRACE_TOKEN(c_p) != NIL)
+	    if (SEQ_TRACE_TOKEN(c_p) != NIL
+#ifdef USE_VM_PROBES
+		&& SEQ_TRACE_TOKEN(c_p) != am_have_dt_utag
+#endif
+		)
 		*esp++ = am_true;
 	    else
 		*esp++ = am_false;
@@ -2208,7 +2250,11 @@ restart:
 	    --esp;
 	    break;
 	case matchGetSeqToken:
-	    if (SEQ_TRACE_TOKEN(c_p) == NIL) 
+	    if (SEQ_TRACE_TOKEN(c_p) == NIL
+#ifdef USE_VM_PROBES
+		|| SEQ_TRACE_TOKEN(c_p) == am_have_dt_utag
+#endif
+		) 
 		*esp++ = NIL;
 	    else {
 		Eterm sender = SEQ_TRACE_TOKEN_SENDER(c_p);
@@ -2234,7 +2280,7 @@ restart:
 	case matchEnableTrace:
 	    if ( (n = erts_trace_flag2bit(esp[-1]))) {
 		BEGIN_ATOMIC_TRACE(c_p);
-		set_tracee_flags(c_p, c_p->tracer_proc, 0, n);
+		set_tracee_flags(c_p, ERTS_TRACER_PROC(c_p), 0, n);
 		esp[-1] = am_true;
 	    } else {
 		esp[-1] = FAIL_TERM;
@@ -2247,7 +2293,7 @@ restart:
 		BEGIN_ATOMIC_TRACE(c_p);
 		if ( (tmpp = get_proc(c_p, 0, esp[0], 0))) {
 		    /* Always take over the tracer of the current process */
-		    set_tracee_flags(tmpp, c_p->tracer_proc, 0, n);
+		    set_tracee_flags(tmpp, ERTS_TRACER_PROC(c_p), 0, n);
 		    esp[-1] = am_true;
 		}
 	    }
@@ -2255,7 +2301,7 @@ restart:
 	case matchDisableTrace:
 	    if ( (n = erts_trace_flag2bit(esp[-1]))) {
 		BEGIN_ATOMIC_TRACE(c_p);
-		set_tracee_flags(c_p, c_p->tracer_proc, n, 0);
+		set_tracee_flags(c_p, ERTS_TRACER_PROC(c_p), n, 0);
 		esp[-1] = am_true;
 	    } else {
 		esp[-1] = FAIL_TERM;
@@ -2268,7 +2314,7 @@ restart:
 		BEGIN_ATOMIC_TRACE(c_p);
 		if ( (tmpp = get_proc(c_p, 0, esp[0], 0))) {
 		    /* Always take over the tracer of the current process */
-		    set_tracee_flags(tmpp, c_p->tracer_proc, n, 0);
+		    set_tracee_flags(tmpp, ERTS_TRACER_PROC(c_p), n, 0);
 		    esp[-1] = am_true;
 		}
 	    }
@@ -2287,14 +2333,16 @@ restart:
 	    break;
 	case matchSilent:
 	    --esp;
+	    if (in_flags & ERTS_PAM_IGNORE_TRACE_SILENT)
+	      break;
 	    if (*esp == am_true) {
 		erts_smp_proc_lock(c_p, ERTS_PROC_LOCKS_ALL_MINOR);
-		c_p->trace_flags |= F_TRACE_SILENT;
+		ERTS_TRACE_FLAGS(c_p) |= F_TRACE_SILENT;
 		erts_smp_proc_unlock(c_p, ERTS_PROC_LOCKS_ALL_MINOR);
 	    }
 	    else if (*esp == am_false) {
 		erts_smp_proc_lock(c_p, ERTS_PROC_LOCKS_ALL_MINOR);
-		c_p->trace_flags &= ~F_TRACE_SILENT;
+		ERTS_TRACE_FLAGS(c_p) &= ~F_TRACE_SILENT;
 		erts_smp_proc_unlock(c_p, ERTS_PROC_LOCKS_ALL_MINOR);
 	    }
 	    break;
@@ -2302,11 +2350,11 @@ restart:
 	    {
 		/*    disable         enable                                */
 		Uint  d_flags  = 0,   e_flags  = 0;  /* process trace flags */
-		Eterm tracer = c_p->tracer_proc;
+		Eterm tracer = ERTS_TRACER_PROC(c_p);
 		/* XXX Atomicity note: Not fully atomic. Default tracer
 		 * is sampled from current process but applied to
 		 * tracee and tracer later after releasing main
-		 * locks on current process, so c_p->tracer_proc
+		 * locks on current process, so ERTS_TRACER_PROC(c_p)
 		 * may actually have changed when tracee and tracer
 		 * gets updated. I do not think nobody will notice.
 		 * It is just the default value that is not fully atomic.
@@ -2331,7 +2379,7 @@ restart:
 	    {
 		/*    disable         enable                                */
 		Uint  d_flags  = 0,   e_flags  = 0;  /* process trace flags */
-		Eterm tracer = c_p->tracer_proc;
+		Eterm tracer = ERTS_TRACER_PROC(c_p);
 		/* XXX Atomicity note. Not fully atomic. See above. 
 		 * Above it could possibly be solved, but not here.
 		 */
@@ -2453,7 +2501,7 @@ Eterm db_format_dmc_err_info(Process *p, DMCErrInfo *ei)
 	    vnum = tmp->variable;
 	}
 	if (vnum >= 0)
-	    sprintf(buff,tmp->error_string, vnum);
+	    erts_snprintf(buff,sizeof(buff)+20,tmp->error_string, vnum);
 	else
 	    strcpy(buff,tmp->error_string);
 	sl = strlen(buff);
@@ -2845,7 +2893,9 @@ void* db_store_term_comp(DbTableCommon *tb, DbTerm* old, Uint offset, Eterm obj)
     Uint new_sz = offset + db_size_dbterm_comp(tb, obj);
     byte* basep;
     DbTerm* newp;
+#ifdef DEBUG
     byte* top;
+#endif
 
     ASSERT(tb->compress);
     if (old != 0) {
@@ -2867,7 +2917,10 @@ void* db_store_term_comp(DbTableCommon *tb, DbTerm* old, Uint offset, Eterm obj)
     }
 
     newp->size = size_object(obj);
-    top = copy_to_comp(tb, obj, newp, new_sz);
+#ifdef DEBUG
+    top = 
+#endif
+	copy_to_comp(tb, obj, newp, new_sz);
     ASSERT(top <= basep + new_sz);
 
     /* ToDo: Maybe realloc if ((basep+new_sz) - top) > WASTED_SPACE_LIMIT */
@@ -2963,7 +3016,7 @@ Eterm db_copy_from_comp(DbTableCommon* tb, DbTerm* bp, Eterm** hpp,
     }
     ASSERT((*hpp - hp) <= bp->size);
 #ifdef DEBUG_CLONE
-    ASSERT(eq_rel(make_tuple(hp),make_tuple(bp->debug_clone),bp->debug_clone));
+    ASSERT(eq_rel(make_tuple(hp),NULL,make_tuple(bp->debug_clone),bp->debug_clone));
 #endif
     return make_tuple(hp);
 }
@@ -2986,7 +3039,7 @@ Eterm db_copy_element_from_ets(DbTableCommon* tb, Process* p,
 	hp += extra;
 	HRelease(p, endp, hp);
 #ifdef DEBUG_CLONE
-	ASSERT(eq_rel(copy, obj->debug_clone[pos], obj->debug_clone));
+	ASSERT(eq_rel(copy, NULL, obj->debug_clone[pos], obj->debug_clone));
 #endif
 	return copy;
     }
@@ -3378,8 +3431,7 @@ static DMCRet dmc_one_term(DMCContext *context,
     }
     default:
 	erl_exit(1, "db_match_compile: "
-		 "Bad object on heap: 0x%08lx\n",
-		 (unsigned long) c);
+		 "Bad object on heap: 0x%bex\n", c);
     }
     return retOk;
 }
@@ -4453,7 +4505,9 @@ static DMCRet dmc_fun(DMCContext *context,
 	if (context->err_info != NULL) {
 	    /* Ugly, should define a better RETURN_TERM_ERROR interface... */
 	    char buff[100];
-	    sprintf(buff, "Function %%T/%d does_not_exist.", (int)a - 1);
+	    erts_snprintf(buff, sizeof(buff),
+		    "Function %%T/%d does_not_exist.",
+		    (int)a - 1);
 	    RETURN_TERM_ERROR(buff, p[1], context, *constant);
 	} else {
 	    return retFail;
@@ -4468,7 +4522,7 @@ static DMCRet dmc_fun(DMCContext *context,
 	if (context->err_info != NULL) {
 	    /* Ugly, should define a better RETURN_TERM_ERROR interface... */
 	    char buff[100];
-	    sprintf(buff, 
+	    erts_snprintf(buff, sizeof(buff),
 		    "Function %%T/%d cannot be called in this context.",
 		    (int)a - 1);
 	    RETURN_TERM_ERROR(buff, p[1], context, *constant);
@@ -4732,9 +4786,10 @@ static int match_compact(ErlHeapFragment *expr, DMCErrInfo *err_info)
 	    for (j = 0; j < x && DMC_PEEK(heap,j) != n; ++j) 
 		;
 	    ASSERT(j < x);
-	    sprintf(buff+1,"%u", (unsigned) j);
+	    erts_snprintf(buff+1, sizeof(buff) - 1, "%u", (unsigned) j);
 	    /* Yes, writing directly into terms, they ARE off heap */
-	    *p = am_atom_put(buff, strlen(buff));
+	    *p = erts_atom_put((byte *) buff, strlen(buff),
+			       ERTS_ATOM_ENC_LATIN1, 1);
 	}
 	++p;
     }
@@ -4821,7 +4876,7 @@ static Eterm my_copy_struct(Eterm t, Eterm **hp, ErlOffHeap* off_heap)
 		ret = copy_struct(b,sz,hp,off_heap);
 	    } else {
 		erl_exit(1, "Trying to constant-copy non constant expression "
-			 "0x%08x in (d)ets:match compilation.", (unsigned long) t);
+			 "0x%bex in (d)ets:match compilation.", t);
 	    }
 	} else {
 	    sz = size_object(t);
@@ -4932,7 +4987,8 @@ static Eterm match_spec_test(Process *p, Eterm against, Eterm spec, int trace)
 	    save_cp = p->cp;
 	    p->cp = NULL;
 	    res = erts_match_set_run(p, mps, arr, n,
-				     ERTS_PAM_COPY_RESULT, &ret_flags);
+		      ERTS_PAM_COPY_RESULT|ERTS_PAM_IGNORE_TRACE_SILENT,
+		      &ret_flags);
 	    p->cp = save_cp;
 	} else {
 	    n = 0;
@@ -4969,8 +5025,8 @@ static Eterm match_spec_test(Process *p, Eterm against, Eterm spec, int trace)
 
 static Eterm seq_trace_fake(Process *p, Eterm arg1)
 {
-    Eterm result = seq_trace_info_1(p,arg1);
-    if (is_tuple(result) && *tuple_val(result) == 2) {
+    Eterm result = erl_seq_trace_info(p, arg1);
+    if (!is_non_value(result) && is_tuple(result) && *tuple_val(result) == 2) {
 	return (tuple_val(result))[2];
     }
     return result;
@@ -5355,7 +5411,7 @@ void db_match_dis(Binary *bp)
  	    erts_printf("Caller\n");
  	    break;
 	default:
-	    erts_printf("??? (0x%08x)\n", *t);
+	    erts_printf("??? (0x%bpx)\n", *t);
 	    ++t;
 	    break;
 	}
@@ -5367,13 +5423,13 @@ void db_match_dis(Binary *bp)
 	    first = 0;
 	else
 	    erts_printf(", ");
-	erts_printf("0x%08x", (unsigned long) tmp);
+	erts_printf("%p", tmp);
     }
     erts_printf("}\n");
     erts_printf("num_bindings: %d\n", prog->num_bindings);
     erts_printf("heap_size: %beu\n", prog->heap_size);
     erts_printf("stack_offset: %beu\n", prog->stack_offset);
-    erts_printf("text: 0x%08x\n", (unsigned long) prog->text);
+    erts_printf("text: %p\n", prog->text);
     erts_printf("stack_size: %d (words)\n", prog->heap_size-prog->stack_offset);
     
 }

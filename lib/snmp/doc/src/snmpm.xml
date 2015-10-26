@@ -1,10 +1,10 @@
-<?xml version="1.0" encoding="iso-8859-1" ?>
+<?xml version="1.0" encoding="utf-8" ?>
 <!DOCTYPE erlref SYSTEM "erlref.dtd">
 
 <erlref>
   <header>
     <copyright>
-      <year>2004</year><year>2011</year>
+      <year>2004</year><year>2014</year>
       <holder>Ericsson AB. All Rights Reserved.</holder>
     </copyright>
     <legalnotice>
@@ -68,6 +68,9 @@ sec_model() = any | v1 | v2c | usm
 sec_name() = string()
 sec_level() = noAuthNoPriv | authNoPriv | authPriv
 ]]></code>
+
+    <p>See also the <seealso marker="snmpa_conf#types">
+    data types in <c>snmpa_conf</c></seealso>.</p>
 
     <marker id="monitor"></marker>
   </section>
@@ -173,16 +176,16 @@ sec_level() = noAuthNoPriv | authNoPriv | authPriv
       </type>
       <desc>
         <p>Register the manager entity (=user) responsible for specific 
-          agent(s). </p>
+	agent(s). </p>
 
         <p><c>Module</c> is the callback module (snmpm_user behaviour) which 
-          will be called whenever something happens (detected 
-          agent, incoming reply or incoming trap/notification).
-          Note that this could have already been done as a 
-          consequence of the node config. (see users.conf).</p>
+	will be called whenever something happens (detected 
+	agent, incoming reply or incoming trap/notification).
+	Note that this could have already been done as a 
+	consequence of the node config. (see users.conf).</p>
 
-        <p>The argument <c>DefaultAgentConfig</c> is used as default values when 
-          this user register agents.</p>
+        <p>The argument <c>DefaultAgentConfig</c> is used as default 
+	values when this user register agents.</p>
 
         <p>The type of <c>Val</c> depends on <c>Item</c>: </p>
 <code type="none"><![CDATA[
@@ -279,7 +282,6 @@ sec_level = noAuthNoPriv | authNoPriv | authPriv
       <fsummary>Register this agent</fsummary>
       <type>
         <v>UserId = term()</v>
-        <v>Addr = ip_address()</v>
         <v>TargetName = target_name()</v>
         <v>Config = [agent_config()]</v>
         <v>agent_config() = {Item, Val}</v>
@@ -301,9 +303,9 @@ sec_level = noAuthNoPriv | authNoPriv | authPriv
 	<p>The type of <c>Val</c> depends on <c>Item</c>: </p>
 <code type="none"><![CDATA[
 [mandatory] engine_id = string()
-[mandatory] address = ip_address()
-[optional]  port = integer()
-[optional]  tdomain = transportDomainUdpIpv4 | transportDomainUdpIpv6
+[mandatory] tadress = transportAddress()  % Depends on tdomain
+[optional]  port = inet:port_number()
+[optional]  tdomain = transportDomain()
 [optional]  community = string()
 [optional]  timeout = integer() | snmp_timer()
 [optional]  max_message_size = integer()
@@ -314,7 +316,8 @@ sec_level = noAuthNoPriv | authNoPriv | authPriv
 ]]></code>
         <p>Note that if no <c>tdomain</c> is given, the default value,
 	<c>transportDomainUdpIpv4</c>, is used.</p>
-        <p>Note that if no <c>port</c> is given, the default value is used.</p>
+        <p>Note that if no <c>port</c> is given and if <c>taddress</c> does not
+	contain a port number, the default value is used.</p>
 
         <marker id="unregister_agent"></marker>
       </desc>
@@ -367,7 +370,7 @@ sec_level = noAuthNoPriv | authNoPriv | authPriv
         <p>Update agent config. The function <c>update_agent_info/3</c> 
 	should be used when several values needs to be updated atomically. </p>
 	<p>See function 
-	<seealso marker="#register_agent">register_agent</seealso>) 
+	<seealso marker="#register_agent">register_agent</seealso>
 	for more info about what kind of items are allowed. </p>
 
         <marker id="which_agents"></marker>
@@ -1210,32 +1213,79 @@ priv_key = [integer()]   (length is 16 if priv = usmDESPrivProtocol | usmAesCfb1
     </func>
 
     <func>
-      <name>log_to_txt(LogDir, Mibs)</name>
-      <name>log_to_txt(LogDir, Mibs, OutFile) -> ok | {error, Reason}</name>
-      <name>log_to_txt(LogDir, Mibs, OutFile, LogName) ->  ok | {error, Reason}</name>
-      <name>log_to_txt(LogDir, Mibs, OutFile, LogName, LogFile) ->  ok | {error, Reason}</name>
-      <name>log_to_txt(LogDir, Mibs, OutFile, LogName, LogFile, Start) ->  ok | {error, Reason}</name>
+      <name>log_to_txt(LogDir)</name>
+      <name>log_to_txt(LogDir, Block | Mibs)</name>
+      <name>log_to_txt(LogDir, Mibs, Block | OutFile) -> ok | {error, Reason}</name>
+      <name>log_to_txt(LogDir, Mibs, OutFile, Block | LogName) ->  ok | {error, Reason}</name>
+      <name>log_to_txt(LogDir, Mibs, OutFile, LogName, Block | LogFile) ->  ok | {error, Reason}</name>
+      <name>log_to_txt(LogDir, Mibs, OutFile, LogName, LogFile, Block | Start) ->  ok | {error, Reason}</name>
+      <name>log_to_txt(LogDir, Mibs, OutFile, LogName, LogFile, Block, Start)  -> ok | {error, Reason}</name>
       <name>log_to_txt(LogDir, Mibs, OutFile, LogName, LogFile, Start, Stop)  -> ok | {error, Reason}</name>
+      <name>log_to_txt(LogDir, Mibs, OutFile, LogName, LogFile, Block, Start, Stop)  -> ok | {error, Reason}</name>
       <fsummary>Convert an Audit Trail Log to text format</fsummary>
       <type>
         <v>LogDir = string()</v>
         <v>Mibs = [MibName]</v>
         <v>MibName = string()</v>
+        <v>Block = boolean()</v>
         <v>OutFile = string()</v>
         <v>LogName = string()</v>
         <v>LogFile = string()</v>
-        <v>Start = Stop = null | datetime() | {local_time,datetime()} |  {universal_time,datetime()} </v>
+        <v>Start = Stop = null | calendar:datetime() | {local_time, calendar:datetime()} | {universal_time, calendar:datetime()} </v>
         <v>Reason = disk_log_open_error() | file_open_error() | term()</v>
         <v>disk_log_open_error() = {LogName, term()}</v>
         <v>file_open_error() = {OutFile, term()}</v>
       </type>
       <desc>
         <p>Converts an Audit Trail Log to a readable text file. 
-          <c>OutFile</c> defaults to "./snmpm_log.txt". 
-          <c>LogName</c> defaults to "snmpm_log". 
-          <c>LogFile</c> defaults to "snmpm.log". 
-          See <seealso marker="snmp#log_to_txt">snmp:log_to_txt</seealso> 
-          for more info.</p>
+	<c>OutFile</c> defaults to "./snmpm_log.txt". 
+	<c>LogName</c> defaults to "snmpm_log". 
+	<c>LogFile</c> defaults to "snmpm.log". 
+	<p>The <c>Block</c> argument indicates if the log should be blocked
+	during conversion. This could be usefull when converting large 
+	logs (when otherwise the log could wrap during conversion). 
+	Defaults to <c>true</c>. </p>
+	See <seealso marker="snmp#log_to_txt">snmp:log_to_txt</seealso> 
+	for more info.</p>
+
+        <marker id="log_to_io"></marker>
+      </desc>
+    </func>
+
+    <func>
+      <name>log_to_io(LogDir) -> ok | {error, Reason}</name>
+      <name>log_to_io(LogDir, Block | Mibs) -> ok | {error, Reason}</name>
+      <name>log_to_io(LogDir, Mibs) -> ok | {error, Reason}</name>
+      <name>log_to_io(LogDir, Mibs, Block | LogName) ->  ok | {error, Reason}</name>
+      <name>log_to_io(LogDir, Mibs, LogName, Block | LogFile) ->  ok | {error, Reason}</name>
+      <name>log_to_io(LogDir, Mibs, LogName, LogFile, Block | Start) ->  ok | {error, Reason}</name>
+      <name>log_to_io(LogDir, Mibs, LogName, LogFile, Block, Start)  -> ok | {error, Reason}</name>
+      <name>log_to_io(LogDir, Mibs, LogName, LogFile, Start, Stop)  -> ok | {error, Reason}</name>
+      <name>log_to_io(LogDir, Mibs, LogName, LogFile, Block, Start, Stop)  -> ok | {error, Reason}</name>
+      <fsummary>Convert an Audit Trail Log to text format</fsummary>
+      <type>
+        <v>LogDir = string()</v>
+        <v>Mibs = [MibName]</v>
+        <v>MibName = string()</v>
+        <v>Block = boolean()</v>
+        <v>LogName = string()</v>
+        <v>LogFile = string()</v>
+        <v>Start = Stop = null | calendar:datetime() | {local_time, calendar:datetime()} | {universal_time, calendar:datetime()} </v>
+        <v>Reason = disk_log_open_error() | file_open_error() | term()</v>
+        <v>disk_log_open_error() = {LogName, term()}</v>
+        <v>file_open_error() = {OutFile, term()}</v>
+      </type>
+      <desc>
+        <p>Converts an Audit Trail Log to a readable format and 
+	prints it on stdio. 
+	<c>LogName</c> defaults to "snmpm_log". 
+	<c>LogFile</c> defaults to "snmpm.log". 
+	<p>The <c>Block</c> argument indicates if the log should be blocked
+	during conversion. This could be usefull when converting large 
+	logs (when otherwise the log could wrap during conversion). 
+	Defaults to <c>true</c>. </p>
+	See <seealso marker="snmp#log_to_io">snmp:log_to_io</seealso> 
+	for more info.</p>
 
         <marker id="change_log_size"></marker>
       </desc>

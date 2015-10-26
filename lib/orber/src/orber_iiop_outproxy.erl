@@ -2,7 +2,7 @@
 %%
 %% %CopyrightBegin%
 %% 
-%% Copyright Ericsson AB 1999-2009. All Rights Reserved.
+%% Copyright Ericsson AB 1999-2013. All Rights Reserved.
 %% 
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -69,13 +69,8 @@ request(Pid, true, Timeout, Msg, RequestId) ->
     gen_server:cast(Pid, {request, Timeout, Msg, RequestId, self(), MRef}),
     receive
 	{MRef, Reply} ->
-	    erlang:demonitor(MRef),
-            receive 
-                {'DOWN', MRef, _, _, _} -> 
-                    Reply
-            after 0 -> 
-                    Reply
-            end;
+	    erlang:demonitor(MRef, [flush]),
+            Reply;
 	{'DOWN', MRef, _, Pid, _Reason} when is_pid(Pid) ->
             receive
 		%% Clear EXIT message from queue
@@ -117,7 +112,8 @@ stop(Pid) ->
 %%-----------------------------------------------------------------
 init({connect, Host, Port, SocketType, SocketOptions, Parent, Key, NewKey}) ->
     process_flag(trap_exit, true), 
-    case catch orber_socket:connect(SocketType, Host, Port, SocketOptions) of
+    case catch orber_socket:connect(SocketType, Host, Port, 
+				    get_ip_family_opts(Host) ++ SocketOptions) of
 	{'EXCEPTION', _E} ->
 	    ignore;
 	%% We used to reply the below but since this would generate a CRASH REPORT
@@ -444,13 +440,7 @@ collect_fragments(GIOPHdr1, InBuffer, Bytes, Proxy, RequestId, MRef) ->
 	%% the reply and send it to the client.
 	{fragment, #giop_message{byte_order = ByteOrder,
 				 message    = Message} = GIOPHdr2, RequestId, MRef} ->
-	    erlang:demonitor(MRef),
-            receive 
-                {'DOWN', MRef, _, _, _} -> 
-		    ok
-            after 0 -> 
-		    ok
-            end,
+	    erlang:demonitor(MRef, [flush]),
 	    case catch cdr_decode:dec_message_header(null, GIOPHdr2, Message) of
 		{_, #fragment_header{}, FragBody, _, _} ->
 		    %% This buffer is all the fragments concatenated.
@@ -484,13 +474,8 @@ Unable to decode Reply or LocateReply header",[?LINE, NewGIOP, Error], ?DEBUG_LE
 	{MRef, {'EXCEPTION', E}} ->
 	    orber:dbg("[~p] orber_iiop:collect_fragments(~p);", 
 		      [?LINE, E], ?DEBUG_LEVEL),
-	    erlang:demonitor(MRef),
-            receive 
-                {'DOWN', MRef, _, _, _} -> 
-		    corba:raise(E)
-            after 0 -> 
-		    corba:raise(E)
-            end;
+	    erlang:demonitor(MRef, [flush]),
+            corba:raise(E);
 	{'DOWN', MRef, _, Proxy, Reason} when is_pid(Proxy) ->
 	    orber:dbg("[~p] orber_iiop:collect_fragments(~p);~n"
 		      "Monitor generated a DOWN message.", 
@@ -511,13 +496,8 @@ clear_queue(Proxy, RequestId, MRef) ->
 	{MRef, RequestId, cancelled} ->
 	    %% This is the last message that the proxy will send
 	    %% after we've cancelled the request.
-	    erlang:demonitor(MRef),
-	    receive 
-		{'DOWN', MRef, _, _, _} -> 
-		    ok
-	    after 0 -> 
-		    ok
-	    end;
+	    erlang:demonitor(MRef, [flush]),
+	    ok;
 	{'DOWN', MRef, _, Proxy, _Reason} ->
 	    %% The proxy terminated. Clear EXIT message from queue
             receive
@@ -528,3 +508,38 @@ clear_queue(Proxy, RequestId, MRef) ->
             end
     end.
 	    
+get_ip_family_opts(Host) ->
+    case inet:parse_address(Host) of
+	{ok, {_,_,_,_}} -> 
+	    [inet];
+	{ok, {_,_,_,_,_,_,_,_}} -> 
+	    [inet6];
+	{error, einval} ->
+	    check_family_for_name(Host, orber_env:ip_version())
+    end.
+
+check_family_for_name(Host, inet) ->
+    case inet:getaddr(Host, inet) of
+	{ok, _Address} ->
+	    [inet];
+	{error, _} ->
+	    case inet:getaddrs(Host, inet6) of
+		{ok, _Address} ->
+		    [inet6];
+		{error, _} ->
+		    [inet]
+	    end
+    end;
+check_family_for_name(Host, inet6) ->
+    case inet:getaddr(Host, inet6) of
+	{ok, _Address} ->
+	    [inet6];
+	{error, _} ->
+	    case inet:getaddr(Host, inet) of
+		{ok, _Address} ->
+		    [inet];
+		{error, _} ->
+		    [inet6]
+	    end
+    end.
+

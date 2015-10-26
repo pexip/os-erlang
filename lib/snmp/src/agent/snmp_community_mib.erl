@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %% 
-%% Copyright Ericsson AB 1999-2011. All Rights Reserved.
+%% Copyright Ericsson AB 1999-2014. All Rights Reserved.
 %% 
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -28,8 +28,10 @@
 -export([add_community/5, add_community/6, delete_community/1]).
 -export([check_community/1]).
 
+-include("snmpa_internal.hrl").
 -include("SNMP-COMMUNITY-MIB.hrl").
 -include("SNMP-TARGET-MIB.hrl").
+-include("SNMPv2-TM.hrl").
 -include("SNMPv2-TC.hrl").
 -include("snmp_types.hrl").
 
@@ -120,11 +122,19 @@ init_tabs(Comms) ->
 
 read_community_config_files(Dir) ->
     ?vdebug("read community config file",[]),
-    Gen    = fun(_) -> ok end,
-    Filter = fun(Comms) -> Comms end,
-    Check  = fun(Entry) -> check_community(Entry) end,
-    [Comms] = 
-	snmp_conf:read_files(Dir, [{Gen, Filter, Check, "community.conf"}]),
+    FileName = "community.conf", 
+    Gen      = fun(D, Reason) -> 
+		       warning_msg("failed reading config file ~s"
+				   "~n   Config Dir: ~s"
+				   "~n   Reason:     ~p", 
+				   [FileName, D, Reason]),
+		       ok 
+	     end,
+    Order    = fun snmp_conf:no_order/2,
+    Filter   = fun snmp_conf:no_filter/1,
+    Check    = fun(Entry, State) -> {check_community(Entry), State} end,
+    [Comms]  = 
+	snmp_conf:read_files(Dir, [{FileName, Gen, Order, Check, Filter}]),
     Comms.
 
 check_community({Index, CommunityName, SecName, CtxName, TransportTag}) ->
@@ -184,7 +194,7 @@ add_community(Idx, CommName, SecName, EngineId, CtxName, TransportTag) ->
     do_add_community(Community).
 
 do_add_community(Community) ->
-    case (catch check_community(Community)) of
+    try check_community(Community) of
 	{ok, Row} ->
 	    Key = element(1, Row),
 	    case table_cre_row(snmpCommunityTable, Key, Row) of
@@ -193,11 +203,12 @@ do_add_community(Community) ->
 		    {ok, Key};
 		false ->
 		    {error, create_failed}
-	    end;
+	    end
+    catch
 	{error, Reason} ->
 	    {error, Reason};
-	Error ->
-	    {error, Error}
+	Class:Reason ->
+	    {error, {Class, Reason, erlang:get_stacktrace()}}
     end.
 
 %% FIXME: does not work with mnesia
@@ -235,6 +246,10 @@ gc_tabs() ->
 %%-----------------------------------------------------------------
 community2vacm(Community, Addr) ->
     Idxs = ets:lookup(snmp_community_cache, Community),
+    ?vtrace("community2vacm ->~n"
+	    "  Community: ~p~n"
+	    "  Addr:      ~p~n"
+	    "  Idxs:      ~p", [Community, Addr, Idxs]),
     loop_c2v_rows(lists:keysort(2, Idxs), Addr).
 
 loop_c2v_rows([{_, CommunityIndex} | T], Addr) ->
@@ -242,6 +257,9 @@ loop_c2v_rows([{_, CommunityIndex} | T], Addr) ->
 	    "~n   CommunityIndex: ~p", [CommunityIndex]),
     case get_row(CommunityIndex) of
 	{_Community, VacmParams, Tag} ->
+	    ?vtrace("loop_c2v_rows ->~n"
+		    "  VacmParams: ~p~n"
+		    "  Tag:        ~p", [VacmParams, Tag]),
 	    {TDomain, TAddr} = Addr,
 	    case snmp_target_mib:is_valid_tag(Tag, TDomain, TAddr) of
 		true ->
@@ -498,7 +516,12 @@ snmpTargetAddrExtTable(get_next, RowIndex, Cols) ->
     NCols = conv1(Cols),
     conv2(next(snmpTargetAddrExtTable, RowIndex, NCols));
 snmpTargetAddrExtTable(set, RowIndex, Cols0) ->
-    case (catch verify_snmpTargetAddrExtTable_cols(Cols0, [])) of
+    case
+	(catch verify_snmpTargetAddrExtTable_cols(
+		 Cols0,
+		 get_snmpTargetAddrTDomain(RowIndex, Cols0),
+		 []))
+    of
 	{ok, Cols} ->
 	    NCols = conv3(Cols),
 	    snmp_generic:table_func(set, RowIndex, NCols, 
@@ -507,7 +530,11 @@ snmpTargetAddrExtTable(set, RowIndex, Cols0) ->
 	    Error
     end;
 snmpTargetAddrExtTable(is_set_ok, RowIndex, Cols0) ->
-    case (catch verify_snmpTargetAddrExtTable_cols(Cols0, [])) of
+    case (catch verify_snmpTargetAddrExtTable_cols(
+		  Cols0,
+		  get_snmpTargetAddrTDomain(RowIndex, Cols0),
+		  []))
+    of
 	{ok, Cols} ->
 	    NCols = conv3(Cols),
 	    snmp_generic:table_func(is_set_ok, RowIndex, NCols, 
@@ -517,29 +544,49 @@ snmpTargetAddrExtTable(is_set_ok, RowIndex, Cols0) ->
     end.
 
 
-verify_snmpTargetAddrExtTable_cols([], Cols) ->
-    {ok, lists:reverse(Cols)};
-verify_snmpTargetAddrExtTable_cols([{Col, Val0}|Cols], Acc) ->
-    Val = verify_snmpTargetAddrExtTable_col(Col, Val0),
-    verify_snmpTargetAddrExtTable_cols(Cols, [{Col, Val}|Acc]).
 
-verify_snmpTargetAddrExtTable_col(?snmpTargetAddrTMask, []) ->
+get_snmpTargetAddrTDomain(RowIndex, Col) ->
+    case
+	get(
+	  snmpTargetAddrTable, RowIndex,
+	  [?snmpTargetAddrRowStatus,?snmpTargetAddrTDomain])
+    of
+	[{value,?snmpTargetAddrRowStatus_active},ValueTDomain] ->
+	    case ValueTDomain of
+		{value,TDomain} ->
+		    TDomain;
+		_ ->
+		    ?snmpUDPDomain
+	    end;
+	_ ->
+	    wrongValue(Col)
+    end.
+
+
+
+verify_snmpTargetAddrExtTable_cols([], _TDomain, Cols) ->
+    {ok, lists:reverse(Cols)};
+verify_snmpTargetAddrExtTable_cols([{Col, Val0}|Cols], TDomain, Acc) ->
+    Val = verify_snmpTargetAddrExtTable_col(Col, TDomain, Val0),
+    verify_snmpTargetAddrExtTable_cols(Cols, TDomain, [{Col, Val}|Acc]).
+
+verify_snmpTargetAddrExtTable_col(?snmpTargetAddrTMask, _TDomain, []) ->
     [];
-verify_snmpTargetAddrExtTable_col(?snmpTargetAddrTMask, TMask) ->
-    case (catch snmp_conf:check_taddress(TMask)) of
+verify_snmpTargetAddrExtTable_col(?snmpTargetAddrTMask, TDomain, TMask) ->
+    case (catch snmp_conf:check_taddress(TDomain, TMask)) of
 	ok ->
 	    TMask; 
 	_ ->
 	    wrongValue(?snmpTargetAddrTMask)
     end;
-verify_snmpTargetAddrExtTable_col(?snmpTargetAddrMMS, MMS) ->
+verify_snmpTargetAddrExtTable_col(?snmpTargetAddrMMS, _TDomain, MMS) ->
     case (catch snmp_conf:check_packet_size(MMS)) of
 	ok ->
 	    MMS;
 	_ ->
 	    wrongValue(?snmpTargetAddrMMS)
     end;
-verify_snmpTargetAddrExtTable_col(_, Val) ->
+verify_snmpTargetAddrExtTable_col(_, _TDomain, Val) ->
     Val.
 
 db(snmpTargetAddrExtTable) -> db(snmpTargetAddrTable);
@@ -575,6 +622,7 @@ conv3([{Idx, Val}|T]) -> [{Idx+10, Val} | conv3(T)];
 conv3([]) -> [].
 
 
+
 get(Name, RowIndex, Cols) ->
     snmp_generic:handle_table_get(db(Name), RowIndex, Cols, foi(Name)).
 
@@ -600,6 +648,9 @@ set_sname(_) -> %% Keep it, if already set.
 
 error(Reason) ->
     throw({error, Reason}).
+
+warning_msg(F, A) ->
+    ?snmpa_warning("[COMMUNITY-MIB]: " ++ F, A).
 
 config_err(F, A) ->
     snmpa_error:config_err("[COMMUNITY-MIB]: " ++ F, A).

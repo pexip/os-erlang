@@ -1,7 +1,7 @@
 #
 # %CopyrightBegin%
 #
-# Copyright Ericsson AB 2008-2010. All Rights Reserved.
+# Copyright Ericsson AB 2008-2012. All Rights Reserved.
 #
 # The contents of this file are subject to the Erlang Public License,
 # Version 1.1, (the "License"); you may not use this file except in
@@ -38,12 +38,13 @@ RELSYSDIR = $(RELEASE_PATH)/lib/public_key-$(VSN)
 .SUFFIXES: .asn1
 .PRECIOUS: %.erl
 
-ASN_TOP = OTP-PUB-KEY
+ASN_TOP = OTP-PUB-KEY PKCS-FRAME
 ASN_MODULES = PKIX1Explicit88 PKIX1Implicit88 PKIX1Algorithms88 \
-	PKIXAttributeCertificate PKCS-1 PKCS-3 OTP-PKIX 
+	PKIXAttributeCertificate PKCS-1 PKCS-3 PKCS-7 PKCS-8 PKCS-10 PKCS5v2-0 OTP-PKIX \
+	InformationFramework RFC5639
 ASN_ASNS = $(ASN_MODULES:%=%.asn1)
-ASN_ERLS = $(ASN_TOP).erl
-ASN_HRLS = $(ASN_TOP).hrl
+ASN_ERLS = $(ASN_TOP:%=%.erl)
+ASN_HRLS = $(ASN_TOP:%=%.hrl)
 ASN_CONFIGS = OTP-PUB-KEY.asn1config
 ASN_DBS = $(ASN_MODULES:%=%.asn1db) OTP-PUB-KEY.asn1db  
 ASN_TABLES = $(ASN_MODULES:%=%.table)
@@ -65,7 +66,7 @@ EBIN = ../ebin
 EXTRA_ERLC_FLAGS = 
 ERL_COMPILE_FLAGS += $(EXTRA_ERLC_FLAGS)
 
-ASN_FLAGS = -bber_bin +der +compact_bit_string +optimize +noobj +asn1config +inline
+ASN_FLAGS = -bber +der +compact_bit_string +noobj +asn1config
 
 # ----------------------------------------------------
 # Targets
@@ -79,11 +80,11 @@ clean:
 
 docs:
 
-%.erl: %.set.asn
-	erlc $(ASN_FLAGS) $<
+%.erl %.hrl: %.set.asn
+	$(asn_verbose)erlc $(ASN_FLAGS) $<
 
-$(HRL_FILES):	$(ASN_HRLS)
-	cp -p $(ASN_HRLS) $(INCLUDE)
+$(INCLUDE)/%.hrl: %.hrl
+	$(gen_verbose)cp -p $<  $@
 
 # ----------------------------------------------------
 # Release Target
@@ -91,13 +92,13 @@ $(HRL_FILES):	$(ASN_HRLS)
 include $(ERL_TOP)/make/otp_release_targets.mk
 
 release_spec: opt
-	$(INSTALL_DIR) $(RELSYSDIR)/include
-	$(INSTALL_DATA) $(HRL_FILES) $(RELSYSDIR)/include
-	$(INSTALL_DIR) $(RELSYSDIR)/asn1
+	$(INSTALL_DIR) "$(RELSYSDIR)/include"
+	$(INSTALL_DATA) $(HRL_FILES) "$(RELSYSDIR)/include"
+	$(INSTALL_DIR) "$(RELSYSDIR)/asn1"
 	$(INSTALL_DATA) $(ASN_ASNS) $(ASN_ERLS) $(ASN_HRLS) $(ASN_CONFIGS) \
-		 $(GEN_ERLS) $(RELSYSDIR)/asn1
-	$(INSTALL_DIR) $(RELSYSDIR)/ebin
-	$(INSTALL_DATA) $(TARGET_FILES) $(RELSYSDIR)/ebin
+		 $(GEN_ERLS) "$(RELSYSDIR)/asn1"
+	$(INSTALL_DIR) "$(RELSYSDIR)/ebin"
+	$(INSTALL_DATA) $(TARGET_FILES) "$(RELSYSDIR)/ebin"
 
 release_docs_spec:
 
@@ -112,4 +113,13 @@ OTP-PUB-KEY.asn1db:		PKIX1Algorithms88.asn1 \
 				PKIXAttributeCertificate.asn1 \
 				PKCS-1.asn1\
 				PKCS-3.asn1\
-				OTP-PKIX.asn1
+		                PKCS-7.asn1\
+				PKCS-10.asn1\
+				InformationFramework.asn1\
+				OTP-PKIX.asn1 \
+				RFC5639.asn1
+
+$(EBIN)/PKCS-FRAME.beam: 	        PKCS-FRAME.erl PKCS-FRAME.hrl
+PKCS-FRAME.erl PKCS-FRAME.hrl:		PKCS-FRAME.asn1db
+PKCS-FRAME.asn1db:			PKCS5v2-0.asn1\
+					PKCS-8.asn1\

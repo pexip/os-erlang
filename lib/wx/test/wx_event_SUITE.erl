@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %% 
-%% Copyright Ericsson AB 2008-2011. All Rights Reserved.
+%% Copyright Ericsson AB 2008-2014. All Rights Reserved.
 %% 
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -47,7 +47,9 @@ suite() -> [{ct_hooks,[ts_install_cth]}].
 
 all() -> 
     [connect, disconnect, connect_msg_20, connect_cb_20,
-     mouse_on_grid, spin_event, connect_in_callback].
+     mouse_on_grid, spin_event, connect_in_callback, recursive,
+     dialog, char_events, callback_clean
+    ].
 
 groups() -> 
     [].
@@ -147,7 +149,7 @@ disconnect(Config) ->
     timer:sleep(1000),
     wx_test_lib:flush(),
 
-    ?m({'EXIT', {{badarg,_},_}}, wxEvtHandler:disconnect(Panel, non_existing_event_type)),
+    ?m(false, wxEvtHandler:disconnect(Panel, non_existing_event_type)),
     ?m(true, wxEvtHandler:disconnect(Panel, size)),
     ?m(ok, wxWindow:setSize(Panel, {200,102})),
     timer:sleep(1000),
@@ -301,33 +303,264 @@ connect_in_callback(TestInfo)
   when is_atom(TestInfo) -> wx_test_lib:tc_info(TestInfo);
 connect_in_callback(Config) ->
     Wx = ?mr(wx_ref, wx:new()),
+    %% wx:debug([driver,trace]),
+    %% io:format("gdb -p ~s~n",[os:getpid()]),
     Frame = wxFrame:new(Wx, ?wxID_ANY, "Connect in callback"),
     Panel = wxPanel:new(Frame, []),
-    
+
+    Tester = self(),
+
+    %% Connect in callbacks works different in 2.9
+    %% such that new events are not fired until the previous
+    %% callback have returned.
+
+    %% That means that a callback can not wait for other events
+    %% in receive since they will not come.
+    %% It also means that you can not attach a new callback directly from
+    %% the callback since that callback will be removed when the temporary
+    %% process that executes the outer callback (may) die(s) before the callback
+    %% is invoked
+
+    %% Thus connect in callbacks needs to done in a another process, and
+    %% not in the fun directly
+    Env = wx:get_env(),
+    TestWindow =
+	fun() ->
+		wx:set_env(Env),
+		Me = self(),
+		F1 = wxFrame:new(Frame, ?wxID_ANY, "Frame size event"),
+		wxFrame:connect(F1,size,[{callback,
+					  fun(_,_) ->
+						  io:format("CB2 got size~n",[]),
+						  Me ! {continue, F1}
+					  end}]),
+		wxWindow:show(F1),
+		receive
+		    {continue, F1} -> Tester ! {continue, F1}
+		end
+	end,
     wxFrame:connect(Frame,size,
-		    [{callback, 
-		      fun(#wx{event=#wxSize{}},_SizeEv) -> 
-			      io:format("Frame got size~n",[]),		 
-			      F1 = wxFrame:new(Frame, ?wxID_ANY, "Frame size event"),
-			      CBPid = self(),
-			      wxFrame:connect(F1,size,[{callback,
-							fun(_,_) ->
-								io:format("CB2 got size~n",[]),
-								CBPid ! continue
-							end}]),
-			      wxWindow:show(F1),
-			      receive continue -> wxFrame:destroy(F1) end
+		    [{callback,
+		      fun(#wx{event=#wxSize{}},_SizeEv) ->
+			      io:format("Frame got size~n",[]),
+			      spawn(TestWindow)
 		      end}]),
     wxPanel:connect(Panel,size,
-		    [{callback, 
-		      fun(#wx{event=#wxSize{}},_SizeEv) -> 
+		    [{callback,
+		      fun(#wx{event=#wxSize{}},_SizeEv) ->
 			      io:format("Panel got size~n",[]),
-			      F1 = wxFrame:new(Frame, ?wxID_ANY, "Panel size event"),
-			      wxFrame:connect(F1,size),
-			      wxWindow:show(F1),
-			      receive #wx{event=#wxSize{}} -> wxFrame:destroy(F1) end
-		      end}]),   
+			      spawn(fun() ->
+					    wx:set_env(Env),
+					    F1 = wxFrame:new(Frame, ?wxID_ANY,
+							     "Panel size event"),
+					    wxFrame:connect(F1,size),
+					    wxWindow:show(F1),
+					    receive
+						#wx{event=#wxSize{}} ->
+						    io:format("All Fine ~n",[]),
+						    wxFrame:destroy(F1)
+					    end
+				    end)
+		      end}]),
+    wxFrame:show(Frame),
+
+    ok = receive {continue, F1} -> wxFrame:destroy(F1)
+	 after 5000 -> timeout end,
+    wx_test_lib:flush(),
+    wx_test_lib:wx_destroy(Frame, Config).
+
+%% Test that event callback which triggers another callback works
+%% i.e. the callback invoker in driver will recurse
+recursive(TestInfo)   when is_atom(TestInfo) -> wx_test_lib:tc_info(TestInfo);
+recursive(Config) ->
+    Wx = wx:new(),
+    Frame = wxFrame:new(Wx, ?wxID_ANY, "Connect in callback"),
+    Panel = wxPanel:new(Frame, []),
+    Sz = wxBoxSizer:new(?wxVERTICAL),
+    ListBox = wxListBox:new(Panel, ?wxID_ANY, [{choices, ["foo", "bar", "baz"]}]),
+    wxSizer:add(Sz, ListBox, [{proportion, 1},{flag, ?wxEXPAND}]),
+    wxWindow:setSizer(Panel, Sz),
+    wxListBox:connect(ListBox, command_listbox_selected,
+		      [{callback,
+			fun(#wx{event=#wxCommand{commandInt=Id}}, _) ->
+				io:format("Selected ~p~n",[Id])
+			end}]),
+    wxListBox:setSelection(ListBox, 0),
+    wxListBox:connect(ListBox, size,
+		      [{callback,
+			fun(#wx{event=#wxSize{}}, _) ->
+				io:format("Size init ~n",[]),
+				case wxListBox:getCount(ListBox) > 0 of
+				    true ->  wxListBox:delete(ListBox, 0);
+				    false -> ok
+				end,
+				io:format("Size done ~n",[])
+			end}]),
     wxFrame:show(Frame),
     wx_test_lib:flush(),
-    
+
     wx_test_lib:wx_destroy(Frame, Config).
+
+
+dialog(TestInfo) when is_atom(TestInfo) -> wx_test_lib:tc_info(TestInfo);
+dialog(Config) ->
+    Wx = wx:new(),
+    Frame = wxFrame:new(Wx, ?wxID_ANY, "Testing"),
+    wxFrame:show(Frame),
+    Env = wx:get_env(),
+    Tester = self(),
+    PD = wxProgressDialog:new("Dialog","Testing",
+			      [%%{parent, Frame},
+			       {maximum,101},
+			       {style, ?wxPD_SMOOTH bor ?wxPD_AUTO_HIDE}]),
+    Forward = fun(#wx{event=#wxInitDialog{}}, Ev) ->
+		      ?mt(wxInitDialogEvent, Ev),
+		      io:format("Heyhoo~n", []),
+		      wxEvent:skip(Ev),
+		      Tester ! {progress_dialog,PD}
+	      end,
+    wxDialog:connect(PD, init_dialog, [{callback, Forward}]),
+    Recurse = fun(Recurse, N) ->
+		      true = wxProgressDialog:update(PD, min(N,100)),
+		      timer:sleep(5),
+		      Recurse(Recurse,N+1)
+	      end,
+    Run = fun() ->
+		  wx:set_env(Env),
+		  Recurse(Recurse, 0)
+	  end,
+    Worker = spawn_link(Run),
+    timer:sleep(500),
+    io:format("Got ~p~n", [wx_test_lib:flush()]),
+    unlink(Worker),
+    wxProgressDialog:destroy(PD),
+    wx_test_lib:wx_destroy(Frame, Config).
+
+
+
+char_events(TestInfo) when is_atom(TestInfo) -> wx_test_lib:tc_info(TestInfo);
+char_events(Config) ->
+    Wx = wx:new(),
+    Frame = wxFrame:new(Wx, ?wxID_ANY, "Press any key"),
+    Panel = wxPanel:new(Frame, []),
+    wxFrame:connect(Frame, enter_window, [{callback, fun(_,_) ->
+							     io:format("Set focus~n"),
+							     wxWindow:setFocus(Panel)
+						     end}]),
+    KeyEvent = fun(Ev,Obj) -> io:format("Got ~p~n",[Ev]), wxEvent:skip(Obj) end,
+    [wxWindow:connect(Panel, Types, [{callback,KeyEvent}])
+     || Types <- [key_down, key_up, char]],
+    wxWindow:connect(Frame, char_hook, [{callback,KeyEvent}]),
+
+    wxFrame:show(Frame),
+    wx_test_lib:flush(),
+
+    wx_test_lib:wx_destroy(Frame, Config).
+
+callback_clean(TestInfo) when is_atom(TestInfo) -> wx_test_lib:tc_info(TestInfo);
+callback_clean(Config) ->
+    %% Be sure that event handling are cleanup up correctly and don't keep references to old
+    %% fun's and event listeners
+    Wx = wx:new(),
+    Frame = wxFrame:new(Wx, ?wxID_ANY, "Frame Window"),
+    wxFrame:show(Frame),
+
+    %% wx:debug([verbose,driver]),
+    Dlg = wxDialog:new(Frame, ?wxID_ANY, "Testing"),
+    Panel = wxPanel:new(Dlg, []),
+    Sizer = wxBoxSizer:new(?wxVERTICAL),
+    Button = wxButton:new(Panel, 600, [{label, "Foobar"}]),
+    wxSizer:add(Sizer, Button, [{proportion,1}, {flag, ?wxEXPAND}]),
+    wxSizer:add(Sizer, wxDialog:createStdDialogButtonSizer(Dlg,?wxOK bor ?wxCANCEL)),
+    wxDialog:setSizerAndFit(Dlg, Sizer),
+
+    Env = wx:get_env(),
+    SetupEventHandlers =
+	fun() ->
+		wx:set_env(Env),
+		Me = self(),
+		Print = fun(#wx{id=ID, event=#wxCommand{}},Ev) ->
+				io:format("~p Clicked ~p~n", [self(), ID]),
+				Me ! #wx{event=#wxClose{}},
+				wxEvent:skip(Ev, [{skip, true}]);
+			   (#wx{id=ID, event=#wxClose{}},Ev) ->
+				io:format("~p Closed ~p~n", [self(), ID]),
+				wxEvent:skip(Ev, [{skip, true}])
+			end,
+
+		wxDialog:connect(Dlg, command_button_clicked,[{callback,Print}]),
+		wxDialog:connect(Dlg, close_window, [{skip, true}])
+	end,
+    ?m({[],[],[]}, white_box_check_event_handlers()),
+    Pid = spawn_link(fun() ->
+    			     SetupEventHandlers(),
+    			     receive #wx{event=#wxClose{}} -> ok;
+    				     remove -> ok
+    			     end
+    		     end),
+    timer:sleep(500), %% Give it time to remove it
+    ?m({[{Pid,_}],[_],[_]}, white_box_check_event_handlers()),
+
+    Pid ! remove,
+    timer:sleep(500), %% Give it time to remove it
+    ?m({[],[],[]}, white_box_check_event_handlers()),
+
+    SetupEventHandlers(),
+    ?m({[{_,_}],[_],[_]}, white_box_check_event_handlers()),
+
+    wxDialog:show(Dlg),
+    wx_test_lib:wx_close(Dlg, Config),
+    wxDialog:destroy(Dlg),
+    timer:sleep(500), %% Give it time to remove it
+    ?m({[],[],[]}, white_box_check_event_handlers()),
+
+    wx_test_lib:flush(),
+    io:format("**Deleting Frame**~n",[]),
+    wx_test_lib:wx_destroy(Frame, Config).
+    %% timer:sleep(infinity),
+    %% ok.
+
+
+white_box_check_event_handlers() ->
+    {_,_,Server,_} = wx:get_env(),
+    {status, _, _, [Env, _, _, _, Data]} = sys:get_status(Server),
+    [_H, _data, {data, [{_, Record}]}] = Data,
+    {state, _Port1, _Port2, Users, [], CBs, _Next} = Record,
+    {[{Pid, Evs} ||
+	 {Pid, {user, Evs}} <- gb_trees:to_list(Users),
+	 Evs =/= []], %% Ignore empty
+     gb_trees:to_list(CBs),
+     [Funs || Funs = {Id, {Fun,_}} <- Env, is_integer(Id), is_function(Fun)]
+    }.
+
+handler_clean(TestInfo) when is_atom(TestInfo) ->
+    wx_test_lib:tc_info(TestInfo);
+handler_clean(_Config) ->
+    wx:new(),
+    Init = fun() -> create_window() end,
+    Frame1 = wx_obj_test:start([{init, Init}]),
+    ?mt(wxFrame, Frame1),
+    wxWindow:show(Frame1),
+    ?m([_|_], lists:sort(wx_test_lib:flush())),
+    ?m({stop,_}, wx_obj_test:stop(Frame1, fun(_) -> normal end)),
+    ?m([{terminate,normal}], lists:sort(wx_test_lib:flush())),
+
+    Frame2 = wx_obj_test:start([{init, Init}]),
+    wxWindow:show(Frame2),
+    ?m([_|_], lists:sort(wx_test_lib:flush())),
+    ?m({stop,_}, wx_obj_test:stop(Frame2, fun(_) -> wxWindow:destroy(Frame2), normal end)),
+    ?m([{terminate,normal}], lists:sort(wx_test_lib:flush())),
+    timer:sleep(104),
+    ?m({[],[],[]}, white_box_check_event_handlers()),
+    ?m(ok, wx:destroy()),
+    ok.
+
+create_window() ->
+    Frame = wxFrame:new(wx:null(), ?wxID_ANY, "Test wx_object", [{size, {500, 400}}]),
+    Sz = wxBoxSizer:new(?wxHORIZONTAL),
+    Panel = wxPanel:new(Frame),
+    wxSizer:add(Sz, Panel, [{flag, ?wxEXPAND}, {proportion, 1}]),
+    wxWindow:connect(Frame, show),
+    %% wxPanel:connect(Panel, paint, [callback, {userData, foobar}]),
+    wxWindow:connect(Panel, size, [callback]),
+    {Frame, {Frame, Panel}}.

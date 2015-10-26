@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2010-2011. All Rights Reserved.
+%% Copyright Ericsson AB 2010-2012. All Rights Reserved.
 %%
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -25,9 +25,7 @@
 
 -export([suite/0,
          all/0,
-         groups/0,
-         init_per_group/2,
-         end_per_group/2]).
+         groups/0]).
 
 %% testcases
 -export([append/1,
@@ -50,13 +48,14 @@
 %% ===========================================================================
 
 suite() ->
-    [{timetrap, {seconds, 10}}].
+    [{timetrap, {seconds, 60}}].
 
 all() ->
-    [{group, all} | tc()].
+    [{group, all},
+     {group, all, [parallel]}].
 
 groups() ->
-    [{all, [parallel], tc()}].
+    [{all, [], tc()}].
 
 tc() ->
     [append,
@@ -70,12 +69,6 @@ tc() ->
      merge,
      update,
      update_counter].
-
-init_per_group(_, Config) ->
-    Config.
-
-end_per_group(_, _) ->
-    ok.
 
 %% ===========================================================================
 

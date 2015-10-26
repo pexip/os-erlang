@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2004-2011. All Rights Reserved.
+%% Copyright Ericsson AB 2004-2013. All Rights Reserved.
 %%
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -28,7 +28,7 @@
 	 overwrite_catchtag/1,overwrite_trytag/1,accessing_tags/1,bad_catch_try/1,
 	 cons_guard/1,
 	 freg_range/1,freg_uninit/1,freg_state/1,
-	 bin_match/1,bin_aligned/1,bad_dsetel/1,
+	 bin_match/1,bad_bin_match/1,bin_aligned/1,bad_dsetel/1,
 	 state_after_fault_in_catch/1,no_exception_in_catch/1,
 	 undef_label/1,illegal_instruction/1,failing_gc_guard_bif/1]).
 	 
@@ -47,17 +47,18 @@ suite() -> [{ct_hooks,[ts_install_cth]}].
 
 all() -> 
     test_lib:recompile(?MODULE),
-    [beam_files, compiler_bug, stupid_but_valid, xrange,
-     yrange, stack, call_last, merge_undefined, uninit,
-     unsafe_catch, dead_code, mult_labels,
-     overwrite_catchtag, overwrite_trytag, accessing_tags,
-     bad_catch_try, cons_guard, freg_range, freg_uninit,
-     freg_state, bin_match, bin_aligned, bad_dsetel,
-     state_after_fault_in_catch, no_exception_in_catch,
-     undef_label, illegal_instruction, failing_gc_guard_bif].
+    [beam_files,{group,p}].
 
 groups() -> 
-    [].
+    [{p,test_lib:parallel(),
+      [compiler_bug,stupid_but_valid,xrange,
+       yrange,stack,call_last,merge_undefined,uninit,
+       unsafe_catch,dead_code,mult_labels,
+       overwrite_catchtag,overwrite_trytag,accessing_tags,
+       bad_catch_try,cons_guard,freg_range,freg_uninit,
+       freg_state,bin_match,bad_bin_match,bin_aligned,bad_dsetel,
+       state_after_fault_in_catch,no_exception_in_catch,
+       undef_label,illegal_instruction,failing_gc_guard_bif]}].
 
 init_per_suite(Config) ->
     Config.
@@ -79,21 +80,18 @@ beam_files(Config) when is_list(Config) ->
     %% a grammatical error in the output of the io:format/2 call below. ;-)
     ?line [_,_|_] = Fs = filelib:wildcard(Wc),
     ?line io:format("~p files\n", [length(Fs)]),
-    beam_files_1(Fs, 0).
+    test_lib:p_run(fun do_beam_file/1, Fs).
 
-beam_files_1([F|Fs], Errors) ->
-    ?line case beam_validator:file(F) of
-	      ok ->
-		  beam_files_1(Fs, Errors);
-	      {error,Es} ->
-		  io:format("File:  ~s", [F]),
-		  io:format("Error: ~p\n", [Es]),
-		  beam_files_1(Fs, Errors+1)
-	  end;
-beam_files_1([], 0) -> ok;
-beam_files_1([], Errors) ->
-    ?line io:format("~p error(s)", [Errors]),
-    ?line ?t:fail().
+
+do_beam_file(F) ->
+    case beam_validator:file(F) of
+	ok ->
+	    ok;
+	{error,Es} ->
+	    io:format("File:  ~s", [F]),
+	    io:format("Error: ~p\n", [Es]),
+	    error
+    end.
 
 compiler_bug(Config) when is_list(Config) ->
     %% Check that the compiler returns an error if we try to
@@ -318,6 +316,11 @@ bin_match(Config) when is_list(Config) ->
 	[{{t,t,1},{{bs_save,0},4,no_bs_match_state}},
 	 {{t,x,1},{{bs_restore,1},16,{no_save_point,1}}}] = Errors,
     ok.
+
+bad_bin_match(Config) when is_list(Config) ->
+	[{{t,t,1},{return,5,{match_context,{x,0}}}}] =
+		do_val(bad_bin_match, Config),
+	ok.
 
 bin_aligned(Config) when is_list(Config) ->
     Errors = do_val(bin_aligned, Config),

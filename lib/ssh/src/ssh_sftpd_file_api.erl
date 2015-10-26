@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2007-2010. All Rights Reserved.
+%% Copyright Ericsson AB 2007-2012. All Rights Reserved.
 %%
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -21,27 +21,41 @@
 
 -module(ssh_sftpd_file_api).
 
--export([behaviour_info/1]).
+%% To be further specified later
+-callback close(file:io_device(), State::term()) ->
+    {ok, State::term()} | {{error, Reason::term()}, State::term()}.
+-callback delete(file:name(), State::term()) ->
+    {ok, State::term()} | {{error, Reason::term()}, State::term()}.
+-callback del_dir(file:name(), State::term()) ->
+    {ok, State::term()} | {{error, Reason::term()}, State::term()}.
+-callback get_cwd(State::term()) ->
+    {{ok, Dir::term()}, State::term()} | {{error, Reason::term()}, State::term()}.
+-callback is_dir(file:name(), State::term()) ->
+    {boolean(), State::term()}.
+-callback list_dir(file:name(), State::term()) ->
+    {{ok, Filenames::term()}, State::term()} | {{error, Reason::term()}, State::term()}.
+-callback make_dir(Dir::term(), State::term()) ->
+    {{ok, State::term()},State::term()} | {{error, Reason::term()}, State::term()}.
+-callback make_symlink(Path2::term(), Path::term(), State::term()) ->
+    {ok, State::term()} | {{error, Reason::term()}, State::term()}.
+-callback open(Path::term(), Flags::term(), State::term()) ->
+    {{ok, IoDevice::term()}, State::term()} | {{error, Reason::term()}, State::term()}.
+-callback position(file:io_device(), Offs::term(), State::term()) ->
+    {{ok, NewPosition::term()}, State::term()} | {{error, Reason::term()}, State::term()}.
+-callback read(file:io_device(), Len::term(), State::term()) ->
+    {{ok, Data::term()},State::term()} | {eof, State::term()} | {{error, Reason::term()}, State::term()}.
+-callback read_link(file:name(), State::term()) ->
+    {{ok, FileName::term()}, State::term()} | {{error, Reason::term()}, State::term()}.
+-callback read_link_info(file:name(), State::term()) ->
+    {{ok, FileInfo::term()}, State::term()} | {{error, Reason::term()}, State::term()}.
+-callback read_file_info(file:name(), State::term()) ->
+    {{ok, FileInfo::term()}, State::term()} | {{error, Reason::term()},State::term()}.
+-callback rename(file:name(), file:name(), State::term()) ->
+    {ok, State::term()} | {{error, Reason::term()}, State::term()}.
+-callback write(file:io_device(), Data::term(), State::term()) ->
+    {ok, State::term()} | {{error, Reason::term()}, State::term()}.
+-callback write_file_info(file:name(),Info::term(), State::term()) ->
+    {ok, State::term()} | {{error, Reason::term()}, State::term()}.
 
-behaviour_info(callbacks) ->
-    [
-     {close, 2}, 
-     {delete, 2}, 
-     {del_dir, 2}, 
-     {get_cwd, 1}, 
-     {is_dir, 2}, 
-     {list_dir, 2}, 
-     {make_dir, 2}, 
-     {make_symlink, 3}, 
-     {open, 3}, 
-     {position, 3}, 
-     {read, 3},
-     {read_file_info, 2}, 
-     {read_link, 2}, 
-     {read_link_info, 2}, 
-     {rename, 3},
-     {write, 3}, 
-     {write_file_info, 3}
-    ];
-behaviour_info(_) ->
-    undefined.
+
+

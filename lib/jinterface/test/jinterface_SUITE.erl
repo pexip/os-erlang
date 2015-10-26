@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2004-2011. All Rights Reserved.
+%% Copyright Ericsson AB 2004-2013. All Rights Reserved.
 %%
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -37,7 +37,10 @@
 	 erl_exit_with_reason_any_term/1,
 	 java_exit_with_reason_any_term/1,
 	 status_handler_localStatus/1, status_handler_remoteStatus/1,
-	 status_handler_connAttempt/1]).
+	 status_handler_connAttempt/1,
+	 maps/1,
+	 fun_equals/1
+     ]).
 
 -include_lib("common_test/include/ct.hrl").
 -include("test_server_line.hrl").
@@ -103,7 +106,9 @@ fundamental() ->
      nodename,             % Nodename.java
      register_and_whereis, % RegisterAndWhereis.java
      get_names,            % GetNames.java
-     boolean_atom          % BooleanAtom.java
+     boolean_atom,         % BooleanAtom.java
+     maps,                 % Maps.java
+     fun_equals            % FunEquals.java
     ].
 
 ping() ->
@@ -180,10 +185,15 @@ init_per_testcase(Case, _Config)
        Case =:= kill_mbox_from_erlang ->
     {skip, "Not yet implemented"};
 init_per_testcase(_Case,Config) ->
-    Dog = ?t:timetrap({seconds,10}),
+    Dog = ?t:timetrap({seconds,30}),
     [{watch_dog,Dog}|Config].
 
 end_per_testcase(_Case,Config) ->
+    case whereis(erl_link_server) of
+	undefined -> ok;
+	Pid -> exit(Pid,kill)
+    end,
+    jitu:kill_all_jnodes(),
     ?t:timetrap_cancel(?config(watch_dog,Config)),
     ok.
 
@@ -670,6 +680,29 @@ status_handler_connAttempt(Config) when is_list(Config) ->
 		   "NodeStatusHandler",
 		   [erlang:get_cookie(),node(),?status_handler_connAttempt]).
 
+%%%-----------------------------------------------------------------
+maps(doc) ->
+    ["Maps.java: "
+     "Tests OtpErlangMap encoding, decoding, toString, get"];
+maps(suite) ->
+    [];
+maps(Config) when is_list(Config) ->
+    ok = jitu:java(?config(java, Config),
+           ?config(data_dir, Config),
+           "Maps",
+           []).
+
+%%%-----------------------------------------------------------------
+fun_equals(doc) ->
+    ["FunEquals.java: "
+     "Test OtpErlangFun.equals()"];
+fun_equals(suite) ->
+    [];
+fun_equals(Config) when is_list(Config) ->
+    ok = jitu:java(?config(java, Config),
+           ?config(data_dir, Config),
+           "FunEquals",
+           []).
 
 %%%-----------------------------------------------------------------
 %%% INTERNAL FUNCTIONS

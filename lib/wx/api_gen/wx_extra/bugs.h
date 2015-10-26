@@ -34,3 +34,17 @@ class WXDLLIMPEXP_ADV wxGridCellNumberRenderer : public wxGridCellStringRenderer
    wxGridCellNumberRenderer();
 };
 
+// Enable test for valid wxTreeItemId's
+class WXDLLIMPEXP_ADV wxTreeCtrlBase : public wxControl
+{
+ public:
+    static bool IsTreeItemIdOk(wxTreeItemId id);
+};
+
+
+// Enable lost macro functionality
+class WXDLLEXPORT wxPanel : public wxWindow
+{
+ public:
+    void SetFocusIgnoringChildren();
+};

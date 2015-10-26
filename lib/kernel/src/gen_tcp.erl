@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %% 
-%% Copyright Ericsson AB 1997-2011. All Rights Reserved.
+%% Copyright Ericsson AB 1997-2013. All Rights Reserved.
 %% 
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -27,19 +27,21 @@
 -export([fdopen/2]).
 
 -include("inet_int.hrl").
+-include("file.hrl").
 
 -type option() ::
-        {active,          true | false | once} |
-        {bit8,            clear | set | on | off} |
+        {active,          true | false | once | -32768..32767} |
         {buffer,          non_neg_integer()} |
         {delay_send,      boolean()} |
         {deliver,         port | term} |
         {dontroute,       boolean()} |
         {exit_on_close,   boolean()} |
         {header,          non_neg_integer()} |
+        {high_msgq_watermark, pos_integer()} |
         {high_watermark,  non_neg_integer()} |
         {keepalive,       boolean()} |
         {linger,          {boolean(), non_neg_integer()}} |
+        {low_msgq_watermark, pos_integer()} |
         {low_watermark,   non_neg_integer()} |
         {mode,            list | binary} | list | binary |
         {nodelay,         boolean()} |
@@ -57,19 +59,21 @@
         {send_timeout,    non_neg_integer() | infinity} |
         {send_timeout_close, boolean()} |
         {sndbuf,          non_neg_integer()} |
-        {tos,             non_neg_integer()}.
+        {tos,             non_neg_integer()} |
+	{ipv6_v6only,     boolean()}.
 -type option_name() ::
         active |
-        bit8 |
         buffer |
         delay_send |
         deliver |
         dontroute |
         exit_on_close |
         header |
+        high_msgq_watermark |
         high_watermark |
         keepalive |
         linger |
+        low_msgq_watermark |
         low_watermark |
         mode |
         nodelay |
@@ -86,7 +90,8 @@
         send_timeout |
         send_timeout_close |
         sndbuf |
-        tos.
+        tos |
+	ipv6_v6only.
 -type connect_option() ::
         {ip, inet:ip_address()} |
         {fd, Fd :: non_neg_integer()} |
@@ -134,7 +139,7 @@ connect(Address, Port, Opts) ->
 connect(Address, Port, Opts, Time) ->
     Timer = inet:start_timer(Time),
     Res = (catch connect1(Address,Port,Opts,Timer)),
-    inet:stop_timer(Timer),
+    _ = inet:stop_timer(Timer),
     case Res of
 	{ok,S} -> {ok,S};
 	{error, einval} -> exit(badarg);
@@ -174,7 +179,7 @@ try_connect([], _Port, _Opts, _Timer, _Mod, Err) ->
       Port :: inet:port_number(),
       Options :: [listen_option()],
       ListenSocket :: socket(),
-      Reason :: inet:posix().
+      Reason :: system_limit | inet:posix().
 
 listen(Port, Opts) ->
     Mod = mod(Opts, undefined),
@@ -193,7 +198,7 @@ listen(Port, Opts) ->
 -spec accept(ListenSocket) -> {ok, Socket} | {error, Reason} when
       ListenSocket :: socket(),
       Socket :: socket(),
-      Reason :: closed | timeout | inet:posix().
+      Reason :: closed | timeout | system_limit | inet:posix().
 
 accept(S) ->
     case inet_db:lookup_socket(S) of
@@ -207,7 +212,7 @@ accept(S) ->
       ListenSocket :: socket(),
       Timeout :: timeout(),
       Socket :: socket(),
-      Reason :: closed | timeout | inet:posix().
+      Reason :: closed | timeout | system_limit | inet:posix().
 
 accept(S, Time) when is_port(S) ->
     case inet_db:lookup_socket(S) of
@@ -251,7 +256,7 @@ close(S) ->
 -spec send(Socket, Packet) -> ok | {error, Reason} when
       Socket :: socket(),
       Packet :: iodata(),
-      Reason :: inet:posix().
+      Reason :: closed | inet:posix().
 
 send(S, Packet) when is_port(S) ->
     case inet_db:lookup_socket(S) of
@@ -302,7 +307,7 @@ unrecv(S, Data) when is_port(S) ->
 	    Mod:unrecv(S, Data);
 	Error ->
 	    Error
-    end.    
+    end.
 
 %%
 %% Set controlling process
@@ -354,3 +359,4 @@ mod([_|Opts], Address) ->
     mod(Opts, Address);
 mod([], Address) ->
     mod(Address).
+

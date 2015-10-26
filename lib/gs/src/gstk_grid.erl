@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %% 
-%% Copyright Ericsson AB 1996-2009. All Rights Reserved.
+%% Copyright Ericsson AB 1996-2012. All Rights Reserved.
 %% 
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -19,6 +19,7 @@
 
 %%
 -module(gstk_grid).
+-compile([{nowarn_deprecated_function,{gs,val,2}}]).
 
 -export([event/5,create/3,config/3,option/5,read/3,delete/2,destroy/2,
 	 mk_create_opts_for_child/4,read_option/5]).

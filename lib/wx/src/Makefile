@@ -1,7 +1,7 @@
 #
 # %CopyrightBegin%
 #
-# Copyright Ericsson AB 2008-2011. All Rights Reserved.
+# Copyright Ericsson AB 2008-2012. All Rights Reserved.
 #
 # The contents of this file are subject to the Erlang Public License,
 # Version 1.1, (the "License"); you may not use this file except in
@@ -18,7 +18,14 @@
 #
 
 include ../vsn.mk
-include ../config.mk
+ifdef TERTIARY_BOOTSTRAP
+ VSN = $(WX_VSN)
+ include $(ERL_TOP)/make/target.mk
+ include $(ERL_TOP)/make/$(TARGET)/otp.mk
+ RELSYSDIR = $(RELEASE_PATH)/lib/wx-$(VSN)
+else # Normal build
+ include ../config.mk
+endif
 
 ESRC = .
 EGEN = gen
@@ -65,7 +72,11 @@ APPUP_SRC    = $(APPUP_FILE).src
 APPUP_TARGET = $(EBIN)/$(APPUP_FILE)
 
 # Targets
-debug opt: $(TARGET_FILES) $(APP_TARGET) $(APPUP_TARGET)
+ifdef TERTIARY_BOOTSTRAP
+ opt: $(EBIN)/wx_object.beam
+else
+ debug opt: $(TARGET_FILES) $(APP_TARGET) $(APPUP_TARGET)
+endif
 
 clean:  
 	rm -f $(TARGET_FILES) 
@@ -90,36 +101,34 @@ archive: opt
 # ----------------------------------------------------
 
 $(APP_TARGET): $(APP_SRC) ../vsn.mk Makefile
-	sed -e 's;%GEN_MODS%;$(GEN_MODS);' $< > $@.tmp
-	sed -e 's;%VSN%;$(VSN);' $@.tmp > $@
-	rm $@.tmp
+	$(gen_verbose)sed -e 's;%GEN_MODS%;$(GEN_MODS);' $< > $@.tmp
+	$(vsn_verbose)sed -e 's;%VSN%;$(VSN);' $@.tmp > $@
+	$(V_at)rm $@.tmp
 
 $(APPUP_TARGET): $(APPUP_SRC) ../vsn.mk Makefile
-	sed -e 's;%VSN%;$(VSN);' $< > $@
+	$(vsn_verbose)sed -e 's;%VSN%;$(VSN);' $< > $@
 
 # Rules
 $(EBIN)/%.beam: $(ESRC)/%.erl $(HEADER_FILES)
-	$(ERLC) -W -bbeam $(ERL_FLAGS) $(ERL_COMPILE_FLAGS) -o$(EBIN) $< 
+	$(V_ERLC) -W -bbeam $(ERL_FLAGS) $(ERL_COMPILE_FLAGS) -o$(EBIN) $<
 
 $(EBIN)/%.beam: $(EGEN)/%.erl $(HEADER_FILES)
-	$(ERLC) -W -bbeam $(ERL_FLAGS) $(ERL_COMPILE_FLAGS) -o$(EBIN) $< 
+	$(V_ERLC) -W -bbeam $(ERL_FLAGS) $(ERL_COMPILE_FLAGS) -o$(EBIN) $<
 
 # ----------------------------------------------------
 # Release Target
 # ---------------------------------------------------- 
-ifeq ($(INSIDE_ERLSRC), true)
 include $(ERL_TOP)/make/otp_release_targets.mk
 release_spec: opt 
-	$(INSTALL_DIR) $(RELSYSDIR)/src
-	$(INSTALL_DATA) $(HRL_FILES) $(ERL_FILES) $(RELSYSDIR)/src
-	$(INSTALL_DIR) $(RELSYSDIR)/src/gen
-	$(INSTALL_DATA) $(GEN_HRL) $(GEN_FILES) $(RELSYSDIR)/src/gen
-	$(INSTALL_DIR) $(RELSYSDIR)/include
-	$(INSTALL_DATA) $(EXT_HRL) $(RELSYSDIR)/include
-	$(INSTALL_DIR) $(RELSYSDIR)/ebin
-	$(INSTALL_DATA) $(TARGET_FILES) $(RELSYSDIR)/ebin
-	$(INSTALL_DATA) $(APP_TARGET) $(APPUP_TARGET) $(RELSYSDIR)/ebin
+	$(INSTALL_DIR) "$(RELSYSDIR)/src"
+	$(INSTALL_DATA) $(HRL_FILES) $(ERL_FILES) "$(RELSYSDIR)/src"
+	$(INSTALL_DIR) "$(RELSYSDIR)/src/gen"
+	$(INSTALL_DATA) $(GEN_HRL) $(GEN_FILES) "$(RELSYSDIR)/src/gen"
+	$(INSTALL_DIR) "$(RELSYSDIR)/include"
+	$(INSTALL_DATA) $(EXT_HRL) "$(RELSYSDIR)/include"
+	$(INSTALL_DIR) "$(RELSYSDIR)/ebin"
+	$(INSTALL_DATA) $(TARGET_FILES) "$(RELSYSDIR)/ebin"
+	$(INSTALL_DATA) $(APP_TARGET) $(APPUP_TARGET) "$(RELSYSDIR)/ebin"
 #	$(INSTALL_DATA) ../$(ARCHIVE) $(RELEASE_PATH)/lib
 
 release_docs_spec:
-endif

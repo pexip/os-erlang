@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %% 
-%% Copyright Ericsson AB 1999-2009. All Rights Reserved.
+%% Copyright Ericsson AB 1999-2012. All Rights Reserved.
 %% 
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -35,10 +35,11 @@
 -record(k_int, {anno=[],val}).
 -record(k_float, {anno=[],val}).
 -record(k_atom, {anno=[],val}).
--record(k_string, {anno=[],val}).
 -record(k_nil, {anno=[]}).
 
 -record(k_tuple, {anno=[],es}).
+-record(k_map, {anno=[],var,op,es}).
+-record(k_map_pair, {anno=[],key,val}).
 -record(k_cons, {anno=[],hd,tl}).
 -record(k_binary, {anno=[],segs}).
 -record(k_bin_seg, {anno=[],size,unit,type,flags,seg,next}).

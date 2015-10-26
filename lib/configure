@@ -273,7 +273,6 @@ PACKAGE_BUGREPORT=
 
 ac_subdirs_all="$ac_subdirs_all snmp/."
 ac_subdirs_all="$ac_subdirs_all common_test/."
-ac_subdirs_all="$ac_subdirs_all diameter/."
 ac_subdirs_all="$ac_subdirs_all erl_interface/."
 ac_subdirs_all="$ac_subdirs_all gs/."
 ac_subdirs_all="$ac_subdirs_all megaco/."
@@ -1274,9 +1273,6 @@ if test $bootstrap_only = no; then
     test ! -f common_test/configure ||
 
 subdirs="$subdirs common_test/."
-    test ! -f diameter/configure ||
-
-subdirs="$subdirs diameter/."
     test ! -f erl_interface/configure ||
 
 subdirs="$subdirs erl_interface/."

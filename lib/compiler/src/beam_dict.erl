@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %% 
-%% Copyright Ericsson AB 1998-2011. All Rights Reserved.
+%% Copyright Ericsson AB 1998-2014. All Rights Reserved.
 %% 
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -22,20 +22,32 @@
 
 -export([new/0,opcode/2,highest_opcode/1,
 	 atom/2,local/4,export/4,import/4,
-	 string/2,lambda/5,literal/2,
+	 string/2,lambda/3,literal/2,line/2,fname/2,
 	 atom_table/1,local_table/1,export_table/1,import_table/1,
-	 string_table/1,lambda_table/1,literal_table/1]).
+	 string_table/1,lambda_table/1,literal_table/1,
+	 line_table/1]).
 
 -type label() :: non_neg_integer().
 
+-type index() :: non_neg_integer().
+
+-type atom_tab()   :: gb_trees:tree(atom(), index()).
+-type import_tab() :: gb_trees:tree(mfa(), index()).
+-type fname_tab()  :: gb_trees:tree(Name :: term(), index()).
+-type line_tab()   :: gb_trees:tree({Fname :: index(), Line :: term()}, index()).
+-type literal_tab() :: dict:dict(Literal :: term(), index()).
+
 -record(asm,
-	{atoms = gb_trees:empty()   :: gb_tree(),      	%{Atom,Index}
+	{atoms = gb_trees:empty()   :: atom_tab(),
 	 exports = []		    :: [{label(), arity(), label()}],
 	 locals = []		    :: [{label(), arity(), label()}],
-	 imports = gb_trees:empty() :: gb_tree(),      	%{{M,F,A},Index}
+	 imports = gb_trees:empty() :: import_tab(),
 	 strings = <<>>		    :: binary(),	%String pool
 	 lambdas = [],				%[{...}]
-	 literals = dict:new()	    :: dict(),	%Format: {Literal,Number}
+	 literals = dict:new()	    :: literal_tab(),
+	 fnames = gb_trees:empty()  :: fname_tab(),
+	 lines = gb_trees:empty()   :: line_tab(),
+	 num_lines = 0		    :: non_neg_integer(), %Number of line instructions
 	 next_import = 0	    :: non_neg_integer(),
 	 string_offset = 0	    :: non_neg_integer(),
 	 next_literal = 0	    :: non_neg_integer(),
@@ -129,13 +141,18 @@ string(Str, Dict) when is_list(Str) ->
 	    {NextOffset-Offset,Dict}
     end.
 
-%% Returns the index for a funentry (adding it to the table if necessary).
-%%    lambda(Lbl, Index, Uniq, NumFree, Dict) -> {Index,Dict'}
--spec lambda(label(), non_neg_integer(), integer(), non_neg_integer(), bdict()) ->
+%% Returns the index for a fun entry.
+%%    lambda(Lbl, NumFree, Dict) -> {Index,Dict'}
+-spec lambda(label(), non_neg_integer(), bdict()) ->
         {non_neg_integer(), bdict()}.
 
-lambda(Lbl, Index, OldUniq, NumFree, #asm{lambdas=Lambdas0}=Dict) ->
+lambda(Lbl, NumFree, #asm{lambdas=Lambdas0}=Dict) ->
     OldIndex = length(Lambdas0),
+    %% Set Index the same as OldIndex.
+    Index = OldIndex,
+    %% Initialize OldUniq to 0. It will be set to an unique value
+    %% based on the MD5 checksum of the BEAM code for the module.
+    OldUniq = 0,
     Lambdas = [{Lbl,{OldIndex,Lbl,Index,NumFree,OldUniq}}|Lambdas0],
     {OldIndex,Dict#asm{lambdas=Lambdas}}.
 
@@ -150,6 +167,36 @@ literal(Lit, #asm{literals=Tab0,next_literal=NextIndex}=Dict) ->
 	error ->
 	    Tab = dict:store(Lit, NextIndex, Tab0),
 	    {NextIndex,Dict#asm{literals=Tab,next_literal=NextIndex+1}}
+    end.
+
+%% Returns the index for a line instruction (adding information
+%% to the location information table).
+-spec line(list(), bdict()) -> {non_neg_integer(), bdict()}.
+
+line([], #asm{num_lines=N}=Dict) ->
+    %% No location available. Return the special pre-defined
+    %% index 0.
+    {0,Dict#asm{num_lines=N+1}};
+line([{location,Name,Line}], #asm{lines=Lines0,num_lines=N}=Dict0) ->
+    {FnameIndex,Dict1} = fname(Name, Dict0),
+    case gb_trees:lookup({FnameIndex,Line}, Lines0) of
+	{value,Index} ->
+	    {Index,Dict1#asm{num_lines=N+1}};
+	none ->
+	    Index = gb_trees:size(Lines0) + 1,
+	    Lines = gb_trees:insert({FnameIndex,Line}, Index, Lines0),
+	    Dict = Dict1#asm{lines=Lines,num_lines=N+1},
+	    {Index,Dict}
+    end.
+
+fname(Name, #asm{fnames=Fnames0}=Dict) ->
+    case gb_trees:lookup(Name, Fnames0) of
+	{value,Index} ->
+	    {Index,Dict};
+	none ->
+	    Index = gb_trees:size(Fnames0),
+	    Fnames = gb_trees:insert(Name, Index, Fnames0),
+	    {Index,Dict#asm{fnames=Fnames}}
     end.
 
 %% Returns the atom table.
@@ -218,6 +265,21 @@ literal_table(#asm{literals=Tab,next_literal=NumLiterals}) ->
 
 my_term_to_binary(Term) ->
     term_to_binary(Term, [{minor_version,1}]).
+
+%% Return the line table.
+-spec line_table(bdict()) ->
+    {non_neg_integer(),				%Number of line instructions.
+     non_neg_integer(),[string()],
+     non_neg_integer(),[{non_neg_integer(),non_neg_integer()}]}.
+
+line_table(#asm{fnames=Fnames0,lines=Lines0,num_lines=NumLineInstrs}) ->
+    NumFnames = gb_trees:size(Fnames0),
+    Fnames1 = lists:keysort(2, gb_trees:to_list(Fnames0)),
+    Fnames = [Name || {Name,_} <- Fnames1],
+    NumLines = gb_trees:size(Lines0),
+    Lines1 = lists:keysort(2, gb_trees:to_list(Lines0)),
+    Lines = [L || {L,_} <- Lines1],
+    {NumLineInstrs,NumFnames,Fnames,NumLines,Lines}.
 
 %% Search for binary string Str in the binary string pool Pool.
 %%    old_string(Str, Pool) -> none | Index

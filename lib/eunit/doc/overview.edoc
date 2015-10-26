@@ -6,9 +6,9 @@
 @title EUnit - a Lightweight Unit Testing Framework for Erlang
 
 @author Richard Carlsson <carlsson.richard@gmail.com>
-@author Mickaël Rémond <mickael.remond@process-one.net> 
+@author MickaÃ«l RÃ©mond <mickael.remond@process-one.net>
         [http://www.process-one.net/]
-@copyright 2004-2007 Mickaël Rémond, Richard Carlsson
+@copyright 2004-2007 MickaÃ«l RÃ©mond, Richard Carlsson
 @version {@version}, {@date} {@time}
 
 @doc EUnit is a unit testing framework for Erlang. It is very powerful
@@ -723,8 +723,12 @@ A <em>simple test object</em> is one of the following:
 ```fun some_function/0'''
 ```fun some_module:some_function/0'''
   </li>
-  <li>A pair of atoms `{ModuleName, FunctionName}', referring to the
-      function `ModuleName:FunctionName/0'</li>
+  <li>A tuple `{test, ModuleName, FunctionName}', where `ModuleName' and
+      `FunctionName' are atoms, referring to the function
+      `ModuleName:FunctionName/0'</li>
+  <li>(Obsolete) A pair of atoms `{ModuleName, FunctionName}', equivalent to
+      `{test, ModuleName, FunctionName}' if nothing else matches first. This
+      might be removed in a future version.</li>
   <li>A pair `{LineNumber, SimpleTest}', where `LineNumber' is a
       nonnegative integer and `SimpleTest' is another simple test
       object. `LineNumber' should indicate the source line of the test.

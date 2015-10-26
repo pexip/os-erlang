@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %% 
-%% Copyright Ericsson AB 1997-2010. All Rights Reserved.
+%% Copyright Ericsson AB 1997-2012. All Rights Reserved.
 %% 
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -18,9 +18,16 @@
 %%
 %%
 -module(mod_get).
+
 -export([do/1]).
+
 -include("httpd.hrl").
 -include("httpd_internal.hrl").
+-include("inets_internal.hrl").
+
+-define(VMODULE,"GET").
+
+
 %% do
 
 do(Info) ->
@@ -84,15 +91,16 @@ send_response(_Socket, _SocketType, Path, Info)->
 	    file:close(FileDescriptor),
 	    {proceed,[{response,{already_sent,200,
 				 FileInfo#file_info.size}},
-		      {mime_type,MimeType}|Info#mod.data]};
+		      {mime_type,MimeType} | Info#mod.data]};
 	{error, Reason} ->
+	    ?hdrt("send_response -> failed open file", 
+		  [{path, Path}, {reason, Reason}]), 
 	    Status = httpd_file:handle_error(Reason, "open", Info, Path),
-	    {proceed,
-	     [{status, Status}| Info#mod.data]}
+	    {proceed, [{status, Status} | Info#mod.data]}
     end.
 
 %% send
-
+	       
 send(#mod{socket = Socket, socket_type = SocketType} = Info,
      StatusCode, Headers, FileDescriptor) ->
     ?DEBUG("send -> send header",[]),

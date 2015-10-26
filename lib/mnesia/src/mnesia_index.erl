@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %% 
-%% Copyright Ericsson AB 1996-2011. All Rights Reserved.
+%% Copyright Ericsson AB 1996-2014. All Rights Reserved.
 %% 
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -52,7 +52,11 @@
 
 val(Var) ->
     case ?catch_val(Var) of
-	{'EXIT', _ReASoN_} -> mnesia_lib:other_val(Var, _ReASoN_); 
+	{'EXIT', _ReASoN_} ->
+            case mnesia_lib:other_val(Var) of
+                error -> mnesia_lib:pr_other(Var, _ReASoN_);
+                Val -> Val
+            end;
 	_VaLuE_ -> _VaLuE_ 
     end.
 
@@ -120,9 +124,9 @@ del_object_bag(Tab, Key, Obj, Pos, Ixt, undefined) ->
     IxKey = element(Pos, Obj),
     Old = [X || X <-  mnesia_lib:db_get(Tab, Key), element(Pos, X) =:= IxKey],
     del_object_bag(Tab, Key, Obj, Pos, Ixt, Old);
-%% If Tab type is bag we need remove index identifier if Tab 
-%% contains less than 2 elements. 
-del_object_bag(_Tab, Key, Obj, Pos, Ixt, Old) when length(Old) < 2 ->
+%% If Tab type is bag we need remove index identifier if the object being
+%% deleted was the last one
+del_object_bag(_Tab, Key, Obj, Pos, Ixt, Old) when Old =:= [Obj] ->
     del_ixes(Ixt, [Obj], Pos, Key);
 del_object_bag(_Tab, _Key, _Obj, _Pos, _Ixt, _Old) -> ok.
 
@@ -229,7 +233,7 @@ del_transient(Tab, Storage) ->
     PosList = val({Tab, index}),
     del_transient(Tab, PosList, Storage).
 
-del_transient(_, [], _) -> done;
+del_transient(_, [], _) -> ok;
 del_transient(Tab, [Pos | Tail], Storage) ->
     delete_transient_index(Tab, Pos, Storage),
     del_transient(Tab, Tail, Storage).
@@ -237,7 +241,7 @@ del_transient(Tab, [Pos | Tail], Storage) ->
 delete_transient_index(Tab, Pos, disc_only_copies) ->
     Tag = {Tab, index, Pos},
     mnesia_monitor:unsafe_close_dets(Tag),
-    file:delete(tab2filename(Tab, Pos)),
+    _ = file:delete(tab2filename(Tab, Pos)),
     del_index_info(Tab, Pos), %% Uses val(..)
     mnesia_lib:unset({Tab, {index, Pos}});
 
@@ -255,7 +259,7 @@ init_disc_index(_Tab, []) ->
 init_disc_index(Tab, [Pos | Tail]) when is_integer(Pos) ->
     Fn = tab2filename(Tab, Pos),
     IxTag = {Tab, index, Pos},
-    file:delete(Fn),
+    _ = file:delete(Fn),
     Args = [{file, Fn}, {keypos, 1}, {type, bag}],
     mnesia_monitor:open_dets(IxTag, Args),
     Storage = disc_only_copies,
@@ -301,7 +305,13 @@ make_ram_index(Tab, [Pos | Tail]) ->
 
 add_ram_index(Tab, Pos) when is_integer(Pos) ->
     verbose("Creating index for ~w ~n", [Tab]),
-    Index = mnesia_monitor:mktab(mnesia_index, [bag, public]),
+    SetOrBag = val({Tab, setorbag}),
+    IndexType = case SetOrBag of
+        set -> duplicate_bag;
+        ordered_set -> duplicate_bag;
+        bag -> bag
+    end,
+    Index = mnesia_monitor:mktab(mnesia_index, [IndexType, public]),
     Insert = fun(Rec, _Acc) ->
 		     true = ?ets_insert(Index, {element(Pos, Rec), element(2, Rec)})
 	     end,
@@ -309,7 +319,7 @@ add_ram_index(Tab, Pos) when is_integer(Pos) ->
     true = ets:foldl(Insert, true, Tab),
     mnesia_lib:db_fixtable(ram_copies, Tab, false),
     mnesia_lib:set({Tab, {index, Pos}}, Index),
-    add_index_info(Tab, val({Tab, setorbag}), {Pos, {ram, Index}});
+    add_index_info(Tab, SetOrBag, {Pos, {ram, Index}});
 add_ram_index(_Tab, snmp) ->
     ok.
 

@@ -1,7 +1,7 @@
 /*
  * %CopyrightBegin%
  * 
- * Copyright Ericsson AB 2006-2009. All Rights Reserved.
+ * Copyright Ericsson AB 2006-2013. All Rights Reserved.
  * 
  * The contents of this file are subject to the Erlang Public License,
  * Version 1.1, (the "License"); you may not use this file except in
@@ -90,7 +90,7 @@
 #  if defined(ERTS_USE_POLL)
 #    undef ERTS_POLL_USE_POLL
 #    define ERTS_POLL_USE_POLL 1
-#  elif !defined(__WIN32__)
+#  elif !defined(__WIN32__) && !defined(__OSE__)
 #    undef ERTS_POLL_USE_SELECT
 #    define ERTS_POLL_USE_SELECT 1
 #  endif
@@ -99,12 +99,30 @@
 typedef Uint32 ErtsPollEvents;
 #undef ERTS_POLL_EV_E2N
 
-#if defined(__WIN32__)		/* --- win32 ------------------------------- */
+#if defined(__WIN32__) || defined(__OSE__)	/* --- win32 or ose -------- */
 
 #define ERTS_POLL_EV_IN   1
 #define ERTS_POLL_EV_OUT  2
 #define ERTS_POLL_EV_ERR  4
 #define ERTS_POLL_EV_NVAL 8
+
+#ifdef __OSE__
+
+typedef struct ErtsPollOseMsgList_ {
+  struct ErtsPollOseMsgList_ *next;
+  union SIGNAL *data;
+} ErtsPollOseMsgList;
+
+struct erts_sys_fd_type {
+    SIGSELECT signo;
+    ErlDrvOseEventId id;
+    ErtsPollOseMsgList *msgs;
+    ErlDrvOseEventId (*resolve_signal)(union SIGNAL *sig);
+    ethr_mutex mtx;
+    void *extra;
+};
+
+#endif
 
 #elif ERTS_POLL_USE_EPOLL	/* --- epoll ------------------------------- */
 
@@ -216,16 +234,20 @@ typedef struct {
 #endif
 } ErtsPollInfo;
 
+#ifdef ERTS_POLL_NEED_ASYNC_INTERRUPT_SUPPORT
+void		ERTS_POLL_EXPORT(erts_poll_async_sig_interrupt)(ErtsPollSet);
+#endif
 void		ERTS_POLL_EXPORT(erts_poll_interrupt)(ErtsPollSet,
 						      int);
 void		ERTS_POLL_EXPORT(erts_poll_interrupt_timed)(ErtsPollSet,
 							    int,
-							    long);
+							    erts_short_time_t);
 ErtsPollEvents	ERTS_POLL_EXPORT(erts_poll_control)(ErtsPollSet,
 						    ErtsSysFdType,
 						    ErtsPollEvents,
 						    int on,
-						    int* wake_poller);
+						    int* wake_poller
+						    );
 void		ERTS_POLL_EXPORT(erts_poll_controlv)(ErtsPollSet,
 						     ErtsPollControlEntry [],
 						     int on);
@@ -242,5 +264,7 @@ void		ERTS_POLL_EXPORT(erts_poll_init)(void);
 void		ERTS_POLL_EXPORT(erts_poll_get_selected_events)(ErtsPollSet,
 								ErtsPollEvents [],
 								int);
+
+int		ERTS_POLL_EXPORT(erts_poll_get_table_len)(int);
 
 #endif /* #ifndef ERL_POLL_H__ */

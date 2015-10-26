@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 1997-2011. All Rights Reserved.
+%% Copyright Ericsson AB 1997-2013. All Rights Reserved.
 %%
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -21,6 +21,7 @@
 -module(mnesia_SUITE).
 -author('hakan@erix.ericsson.se').
 -compile([export_all]).
+-include_lib("common_test/include/ct.hrl").
 -include("mnesia_test_lib.hrl").
 
 init_per_testcase(Func, Conf) ->
@@ -50,7 +51,7 @@ suite() -> [{ct_hooks,[{ts_install_cth,[{nodenames,2}]}]}].
 %% and do not involve the normal test machinery.
 
 all() -> 
-    [{group, light}, {group, medium}, {group, heavy},
+    [app, appup, {group, light}, {group, medium}, {group, heavy},
      clean_up_suite].
 
 groups() -> 
@@ -105,7 +106,6 @@ groups() ->
      {otp_r4b, [],
       [{mnesia_config_test, access_module},
        {mnesia_config_test, dump_log_load_regulation},
-       {mnesia_config_test, embedded_mnemosyne},
        {mnesia_config_test, ignore_fallback_at_startup},
        {mnesia_config_test, max_wait_for_decision},
        {mnesia_consistency_test, consistency_after_restore},
@@ -143,6 +143,18 @@ end_per_suite(Config) ->
 silly() ->
     mnesia_install_test:silly().
     
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+%% Test structure of the mnesia application resource file
+app(Config) when is_list(Config) ->
+    ok = ?t:app_test(mnesia).
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+%% Test that all required versions have appup directives
+appup(Config) when is_list(Config) ->
+    ok = ?t:appup_test(mnesia).
+
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
 clean_up_suite(doc) -> ["Not a test case only kills mnesia and nodes, that where" 

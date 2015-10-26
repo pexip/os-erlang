@@ -1,7 +1,7 @@
 #
 # %CopyrightBegin%
 #
-# Copyright Ericsson AB 1997-2011. All Rights Reserved.
+# Copyright Ericsson AB 1997-2012. All Rights Reserved.
 #
 # The contents of this file are subject to the Erlang Public License,
 # Version 1.1, (the "License"); you may not use this file except in
@@ -73,7 +73,8 @@ MODULES =  \
 	orber_firewall_ipv6_in_SUITE \
 	orber_firewall_ipv4_out_SUITE \
 	orber_firewall_ipv6_out_SUITE \
-	orber_nat_SUITE
+	orber_nat_SUITE \
+	ip_v4v6_interop_SUITE
 
 GEN_MOD_ORBER = \
 	oe_orber_test \
@@ -176,6 +177,7 @@ clean:
 	rm -f idl_output/*
 	rm -f $(TARGET_FILES) 
 	rm -f errs core *~
+	rm IDL-GENERATED
 
 
 docs:
@@ -184,31 +186,17 @@ docs:
 # Special Targets
 # ----------------------------------------------------
 
-#
-# Each IDL file produces many target files so no pattern
-# rule can be used.
-#
-TGT_ORBER = \
-	$(GEN_HRL_ORBER:%=$(IDLOUTDIR)/%) \
-	$(GEN_MOD_ORBER:%=$(IDLOUTDIR)/%.erl)
-TGT_IIOP = \
-	$(GEN_HRL_IIOP:%=$(IDLOUTDIR)/%) \
-	$(GEN_MOD_IIOP:%=$(IDLOUTDIR)/%.erl)
-
-TGT_TEST_SERVER = \
-	$(GEN_HRL_TEST_SERVER:%=$(IDLOUTDIR)/%) \
-	$(GEN_MOD_TEST_SERVER:%=$(IDLOUTDIR)/%.erl)
-
-$(TGT_ORBER): orber_test.idl
+IDL-GENERATED: orber_test.idl iiop_test.idl orber_test_server.idl
 	erlc $(ERL_IDL_FLAGS) -o$(IDLOUTDIR) orber_test.idl
-
-$(TGT_IIOP): iiop_test.idl
 	erlc $(ERL_IDL_FLAGS) -o$(IDLOUTDIR) \
 		+'{preproc_flags,"-I../COSS/CosNaming"}' iiop_test.idl
-
-$(TGT_TEST_SERVER): orber_test_server.idl
 	erlc $(ERL_IDL_FLAGS) -o$(IDLOUTDIR) \
 	+'{cfgfile,"orber_test_server.cfg"}' orber_test_server.idl
+	>IDL-GENERATED
+
+$(GEN_FILES): IDL-GENERATED
+
+$(TARGET_FILES): IDL-GENERATED
 
 # ----------------------------------------------------
 # Release Targets
@@ -222,12 +210,12 @@ release_spec:
 release_docs_spec:
 
 release_tests_spec: tests
-	$(INSTALL_DIR) $(RELSYSDIR)
+	$(INSTALL_DIR) "$(RELSYSDIR)"
 	$(INSTALL_DATA) $(IDL_FILES)  $(TEST_SPEC_FILE) $(COVER_FILE) \
-		$(ERL_FILES) $(RELSYSDIR)
-	$(INSTALL_DATA) $(SUITE_TARGET_FILES) $(RELSYSDIR)
-	chmod -R u+w $(RELSYSDIR)
-	$(INSTALL_DIR) $(RELSYSDIR)/$(IDLOUTDIR)
+		$(ERL_FILES) "$(RELSYSDIR)"
+	$(INSTALL_DATA) $(SUITE_TARGET_FILES) "$(RELSYSDIR)"
+	chmod -R u+w "$(RELSYSDIR)"
+	$(INSTALL_DIR) "$(RELSYSDIR)/$(IDLOUTDIR)"
 	$(INSTALL_DATA) $(GEN_TARGET_FILES) $(GEN_FILES) \
-		$(RELSYSDIR)/$(IDLOUTDIR)
+		"$(RELSYSDIR)/$(IDLOUTDIR)"
 

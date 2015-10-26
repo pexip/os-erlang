@@ -1,7 +1,7 @@
 /*
  * %CopyrightBegin%
  *
- * Copyright Ericsson AB 2004-2010. All Rights Reserved.
+ * Copyright Ericsson AB 2004-2013. All Rights Reserved.
  *
  * The contents of this file are subject to the Erlang Public License,
  * Version 1.1, (the "License"); you may not use this file except in
@@ -31,14 +31,16 @@
 #endif
 
 #include <stdlib.h>
+#include "ethread_inline.h"
 #include "erl_errno.h"
-
-#undef ETHR_HAVE_OPTIMIZED_ATOMIC_OPS
-#undef ETHR_HAVE_OPTIMIZED_SPINLOCK
-#undef ETHR_HAVE_OPTIMIZED_RWSPINLOCK
 
 #if defined(DEBUG)
 #  define ETHR_DEBUG
+#endif
+
+#if defined(__PPC__) || defined (__POWERPC)
+/* OSE compiler should be fixed! */
+#define __ppc__
 #endif
 
 #if defined(ETHR_DEBUG)
@@ -50,25 +52,17 @@
 #  endif
 #endif
 
-#undef ETHR_INLINE
-#if defined(__GNUC__)
-#  define ETHR_INLINE __inline__
-#elif defined(__WIN32__)
-#  define ETHR_INLINE __forceinline
-#endif
 #if defined(ETHR_DEBUG) || !defined(ETHR_INLINE) || ETHR_XCHK \
     || (defined(__GNUC__) && defined(ERTS_MIXED_CYGWIN_VC))
 #  undef ETHR_INLINE
 #  define ETHR_INLINE 
+#  undef ETHR_FORCE_INLINE
+#  define ETHR_FORCE_INLINE
 #  undef ETHR_TRY_INLINE_FUNCS
 #endif
 
-#if !defined(ETHR_DISABLE_NATIVE_IMPLS) && (defined(PURIFY)||defined(VALGRIND))
-#  define ETHR_DISABLE_NATIVE_IMPLS
-#endif
-
 /* Assume 64-byte cache line size */
-#define ETHR_CACHE_LINE_SIZE ((ethr_uint_t) 64)
+#define ETHR_CACHE_LINE_SIZE ASSUMED_CACHE_LINE_SIZE
 #define ETHR_CACHE_LINE_MASK (ETHR_CACHE_LINE_SIZE - 1)
 
 #define ETHR_CACHE_LINE_ALIGN_SIZE(SZ) \
@@ -195,9 +189,32 @@ typedef DWORD ethr_tsd_key;
 #undef ETHR_HAVE_ETHR_SIG_FUNCS
 
 #define ETHR_USE_OWN_RWMTX_IMPL__
-#define ETHR_USE_OWN_MTX_IMPL__
 
 #define ETHR_YIELD() (Sleep(0), 0)
+
+#elif defined(ETHR_OSE_THREADS)
+
+#include "ose.h"
+#undef NIL
+
+#if defined(ETHR_HAVE_PTHREAD_H)
+#include <pthread.h>
+#endif
+
+typedef struct {
+  PROCESS id;
+  unsigned int tsd_key_index;
+  void *res;
+} ethr_tid;
+
+typedef OSPPDKEY ethr_tsd_key;
+
+#undef ETHR_HAVE_ETHR_SIG_FUNCS
+
+/* Out own RW mutexes are probably faster, but use OSEs mutexes */
+#define ETHR_USE_OWN_RWMTX_IMPL__
+
+#define ETHR_HAVE_THREAD_NAMES
 
 #else /* No supported thread lib found */
 
@@ -251,13 +268,77 @@ typedef ethr_sint64_t ethr_sint_t;
 typedef ethr_uint64_t ethr_uint_t;
 #endif
 
-/* __builtin_expect() is needed by both native atomics code 
- * and the fallback code */
-#if !defined(__GNUC__) || (__GNUC__ < 2) || (__GNUC__ == 2 && __GNUC_MINOR__ < 96)
+#if defined(ETHR_SIZEOF___INT128_T) && ETHR_SIZEOF___INT128_T == 16
+#define ETHR_HAVE_INT128_T
+typedef __int128_t ethr_sint128_t;
+typedef __uint128_t ethr_uint128_t;
+#endif
+
+#define ETHR_FATAL_ERROR__(ERR) \
+  ethr_fatal_error__(__FILE__, __LINE__, __func__, (ERR))
+
+ETHR_PROTO_NORETURN__ ethr_fatal_error__(const char *file,
+					 int line,
+					 const char *func,
+					 int err);
+
+#if !ETHR_AT_LEAST_GCC_VSN__(2, 96, 0)
 #define __builtin_expect(X, Y) (X)
 #endif
 
-/* For CPU-optimised atomics, spinlocks, and rwlocks. */
+#if ETHR_AT_LEAST_GCC_VSN__(3, 1, 1)
+#  define ETHR_CHOOSE_EXPR __builtin_choose_expr
+#else
+#  define ETHR_CHOOSE_EXPR(B, E1, E2) ((B) ? (E1) : (E2))
+#endif
+
+#if ((defined(__GNUC__) && (defined(__i386__) || defined(__x86_64__))) \
+     || (defined(_MSC_VER) && (defined(_M_IX86) || defined(_M_AMD64))))
+#  define ETHR_X86_RUNTIME_CONF__
+
+#  define ETHR_X86_RUNTIME_CONF_HAVE_DW_CMPXCHG__ \
+  (__builtin_expect(ethr_runtime__.conf.have_dw_cmpxchg != 0, 1))
+#  define ETHR_X86_RUNTIME_CONF_HAVE_NO_DW_CMPXCHG__ \
+  (__builtin_expect(ethr_runtime__.conf.have_dw_cmpxchg == 0, 0))
+#  define ETHR_X86_RUNTIME_CONF_HAVE_SSE2__ \
+  (__builtin_expect(ethr_runtime__.conf.have_sse2 != 0, 1))
+#  define ETHR_X86_RUNTIME_CONF_HAVE_NO_SSE2__ \
+  (__builtin_expect(ethr_runtime__.conf.have_sse2 == 0, 0))
+#endif
+
+#if (defined(__GNUC__) \
+     && !defined(ETHR_PPC_HAVE_LWSYNC) \
+     && !defined(ETHR_PPC_HAVE_NO_LWSYNC) \
+     && (defined(__powerpc__) || defined(__ppc__) || defined(__powerpc64__)))
+#  define ETHR_PPC_RUNTIME_CONF__
+
+#  define ETHR_PPC_RUNTIME_CONF_HAVE_LWSYNC__ \
+  (__builtin_expect(ethr_runtime__.conf.have_lwsync != 0, 1))  
+#  define ETHR_PPC_RUNTIME_CONF_HAVE_NO_LWSYNC__ \
+  (__builtin_expect(ethr_runtime__.conf.have_lwsync == 0, 0))
+#endif
+
+typedef struct {
+#if defined(ETHR_X86_RUNTIME_CONF__)
+    int have_dw_cmpxchg;
+    int have_sse2;
+#endif
+#if defined(ETHR_PPC_RUNTIME_CONF__)
+    int have_lwsync;
+#endif
+    int dummy;
+} ethr_runtime_conf_t;
+
+
+typedef union {
+    ethr_runtime_conf_t conf;
+    char pad__[ETHR_CACHE_LINE_ALIGN_SIZE(sizeof(ethr_runtime_conf_t))+ETHR_CACHE_LINE_SIZE];
+} ethr_runtime_t;
+
+
+extern ethr_runtime_t ethr_runtime__;
+
+/* For native CPU-optimised atomics, spinlocks, and rwlocks. */
 #if !defined(ETHR_DISABLE_NATIVE_IMPLS)
 #  if defined(__GNUC__)
 #    if defined(ETHR_PREFER_GCC_NATIVE_IMPLS)
@@ -265,7 +346,7 @@ typedef ethr_uint64_t ethr_uint_t;
 #    elif defined(ETHR_PREFER_LIBATOMIC_OPS_NATIVE_IMPLS)
 #      include "libatomic_ops/ethread.h"
 #    endif
-#    ifndef ETHR_HAVE_NATIVE_ATOMICS
+#    if !defined(ETHR_HAVE_NATIVE_ATOMIC32) && !defined(ETHR_HAVE_NATIVE_ATOMIC64)
 #      if ETHR_SIZEOF_PTR == 4
 #        if defined(__i386__)
 #          include "i386/ethread.h"
@@ -293,10 +374,25 @@ typedef ethr_uint64_t ethr_uint_t;
 #  endif
 #endif /* !ETHR_DISABLE_NATIVE_IMPLS */
 
-#if defined(__GNUC__)
-#  ifndef ETHR_COMPILER_BARRIER
-#    define ETHR_COMPILER_BARRIER __asm__ __volatile__("" : : : "memory")
-#  endif
+#if !defined(ETHR_HAVE_NATIVE_ATOMIC32) && !defined(ETHR_HAVE_NATIVE_ATOMIC64) && !defined(ETHR_DISABLE_NATIVE_IMPLS) && defined(ETHR_SMP_REQUIRE_NATIVE_IMPLS)
+#error "No native ethread implementation found. If you want to use fallbacks you have to disable native ethread support with configure."
+#endif
+
+#include "ethr_atomics.h" /* The atomics API */
+
+#if defined (ETHR_OSE_THREADS)
+static ETHR_INLINE void
+ose_yield(void)
+{
+    if (get_ptype(current_process()) == OS_PRI_PROC) {
+        set_pri(get_pri(current_process()));
+    } else {
+        delay(1);
+    }
+}
+#endif
+
+#if defined(__GNUC__) && !defined(ETHR_OSE_THREADS)
 #  ifndef ETHR_SPIN_BODY
 #    if defined(__i386__) || defined(__x86_64__)
 #      define ETHR_SPIN_BODY __asm__ __volatile__("rep;nop" : : : "memory")
@@ -309,54 +405,23 @@ typedef ethr_uint64_t ethr_uint_t;
 #    endif
 #  endif
 #elif defined(ETHR_WIN32_THREADS)
-#  ifndef ETHR_COMPILER_BARRIER
-#    include <intrin.h>
-#    pragma intrinsic(_ReadWriteBarrier)
-#    define ETHR_COMPILER_BARRIER _ReadWriteBarrier()
-#  endif
 #  ifndef ETHR_SPIN_BODY
 #    define ETHR_SPIN_BODY do {YieldProcessor();ETHR_COMPILER_BARRIER;} while(0)
 #  endif
+#elif defined(ETHR_OSE_THREADS)
+#  ifndef ETHR_SPIN_BODY
+#    define ETHR_SPIN_BODY ose_yield()
+#  else
+#    error "OSE should use ose_yield()"
+#  endif
 #endif
 
+#ifndef ETHR_OSE_THREADS
 #define ETHR_YIELD_AFTER_BUSY_LOOPS 50
-
-#ifndef ETHR_HAVE_NATIVE_ATOMICS
-/*
- * ETHR_*MEMORY_BARRIER orders between locked and atomic accesses only,
- * i.e. when our lock based atomic fallback is used, a noop is sufficient.
- */
-#define ETHR_MEMORY_BARRIER do { } while (0)
-#define ETHR_WRITE_MEMORY_BARRIER do { } while (0)
-#define ETHR_READ_MEMORY_BARRIER do { } while (0)
-#define ETHR_READ_DEPEND_MEMORY_BARRIER do { } while (0)
+#else
+#define ETHR_YIELD_AFTER_BUSY_LOOPS 0
 #endif
 
-#ifndef ETHR_WRITE_MEMORY_BARRIER
-#  define ETHR_WRITE_MEMORY_BARRIER ETHR_MEMORY_BARRIER
-#  define ETHR_WRITE_MEMORY_BARRIER_IS_FULL
-#endif
-#ifndef ETHR_READ_MEMORY_BARRIER
-#  define ETHR_READ_MEMORY_BARRIER ETHR_MEMORY_BARRIER
-#  define ETHR_READ_MEMORY_BARRIER_IS_FULL
-#endif
-#ifndef ETHR_READ_DEPEND_MEMORY_BARRIER
-#  define ETHR_READ_DEPEND_MEMORY_BARRIER ETHR_COMPILER_BARRIER
-#  define ETHR_READ_DEPEND_MEMORY_BARRIER_IS_COMPILER_BARRIER
-#endif
-
-#define ETHR_FATAL_ERROR__(ERR) \
-  ethr_fatal_error__(__FILE__, __LINE__, __func__, (ERR))
-
-ETHR_PROTO_NORETURN__ ethr_fatal_error__(const char *file,
-					 int line,
-					 const char *func,
-					 int err);
-
-void ethr_compiler_barrier_fallback(void);
-#ifndef ETHR_COMPILER_BARRIER
-#  define ETHR_COMPILER_BARRIER ethr_compiler_barrier_fallback()
-#endif
 
 #ifndef ETHR_SPIN_BODY
 #  define ETHR_SPIN_BODY ETHR_COMPILER_BARRIER
@@ -379,12 +444,23 @@ void ethr_compiler_barrier_fallback(void);
 #    else
 #      define ETHR_YIELD() (pthread_yield(), 0)
 #    endif
+#  elif defined(ETHR_OSE_THREADS)
+#    define ETHR_YIELD() (ose_yield(), 0)
 #  else
 #    define ETHR_YIELD() (ethr_compiler_barrier(), 0)
 #  endif
 #endif
 
-#include "ethr_optimized_fallbacks.h"
+#if defined(VALGRIND) || defined(ETHR_OSE_THREADS)
+/* mutex as fallback for spinlock for VALGRIND and OSE.
+   OSE cannot use spinlocks as processes working on the
+   same execution unit have a tendency to deadlock.
+ */
+#  undef ETHR_HAVE_NATIVE_SPINLOCKS
+#  undef ETHR_HAVE_NATIVE_RWSPINLOCKS
+#else
+#  include "ethr_optimized_fallbacks.h"
+#endif
 
 typedef struct {
     void *(*thread_create_prepare_func)(void);
@@ -425,9 +501,19 @@ typedef struct {
 typedef struct {
     int detached;			/* boolean (default false) */
     int suggested_stack_size;		/* kilo words (default sys dependent) */
+#ifdef ETHR_OSE_THREADS
+    char *name;
+    U32 coreNo;
+#endif
 } ethr_thr_opts;
 
+#if defined(ETHR_OSE_THREADS)
+/* Default ethr name is big as we want to be able to sprint stuff in there */
+#define ETHR_THR_OPTS_DEFAULT_INITER \
+   {0, -1, "ethread", 0}
+#else
 #define ETHR_THR_OPTS_DEFAULT_INITER {0, -1}
+#endif
 
 
 #if !defined(ETHR_TRY_INLINE_FUNCS) || defined(ETHR_AUX_IMPL__)
@@ -445,7 +531,7 @@ void ethr_thr_exit(void *);
 ethr_tid ethr_self(void);
 int ethr_equal_tids(ethr_tid, ethr_tid);
 
-int ethr_tsd_key_create(ethr_tsd_key *);
+int ethr_tsd_key_create(ethr_tsd_key *,char *);
 int ethr_tsd_key_delete(ethr_tsd_key);
 int ethr_tsd_set(ethr_tsd_key, void *);
 void *ethr_tsd_get(ethr_tsd_key);
@@ -460,8 +546,6 @@ void ethr_compiler_barrier(void);
 
 #if defined(ETHR_HAVE_NATIVE_SPINLOCKS)
 typedef ethr_native_spinlock_t ethr_spinlock_t;
-#elif defined(ETHR_HAVE_OPTIMIZED_SPINLOCKS)
-typedef ethr_opt_spinlock_t ethr_spinlock_t;
 #elif defined(__WIN32__)
 typedef CRITICAL_SECTION ethr_spinlock_t;
 #else
@@ -483,8 +567,6 @@ ETHR_INLINE_FUNC_NAME_(ethr_spinlock_init)(ethr_spinlock_t *lock)
 #ifdef ETHR_HAVE_NATIVE_SPINLOCKS
     ethr_native_spinlock_init(lock);
     return 0;
-#elif defined(ETHR_HAVE_OPTIMIZED_SPINLOCKS)
-    return ethr_opt_spinlock_init((ethr_opt_spinlock_t *) lock);
 #elif defined(__WIN32__)
     if (!InitializeCriticalSectionAndSpinCount((CRITICAL_SECTION *) lock, INT_MAX))
 	return ethr_win_get_errno__();
@@ -498,9 +580,7 @@ static ETHR_INLINE int
 ETHR_INLINE_FUNC_NAME_(ethr_spinlock_destroy)(ethr_spinlock_t *lock)
 {
 #ifdef ETHR_HAVE_NATIVE_SPINLOCKS
-    return 0;
-#elif defined(ETHR_HAVE_OPTIMIZED_SPINLOCKS)
-    return ethr_opt_spinlock_destroy((ethr_opt_spinlock_t *) lock);
+    return ethr_native_spinlock_destroy(lock);
 #elif defined(__WIN32__)
     DeleteCriticalSection((CRITICAL_SECTION *) lock);
     return 0;
@@ -514,10 +594,6 @@ ETHR_INLINE_FUNC_NAME_(ethr_spin_unlock)(ethr_spinlock_t *lock)
 {
 #ifdef ETHR_HAVE_NATIVE_SPINLOCKS
     ethr_native_spin_unlock(lock);
-#elif defined(ETHR_HAVE_OPTIMIZED_SPINLOCKS)
-    int err = ethr_opt_spin_unlock((ethr_opt_spinlock_t *) lock);
-    if (err)
-	ETHR_FATAL_ERROR__(err);
 #elif defined(__WIN32__)
     LeaveCriticalSection((CRITICAL_SECTION *) lock);
 #else
@@ -532,10 +608,6 @@ ETHR_INLINE_FUNC_NAME_(ethr_spin_lock)(ethr_spinlock_t *lock)
 {
 #ifdef ETHR_HAVE_NATIVE_SPINLOCKS
     ethr_native_spin_lock(lock);
-#elif defined(ETHR_HAVE_OPTIMIZED_SPINLOCKS)
-    int err = ethr_opt_spin_lock((ethr_opt_spinlock_t *) lock);
-    if (err)
-	ETHR_FATAL_ERROR__(err);
 #elif defined(__WIN32__)
     EnterCriticalSection((CRITICAL_SECTION *) lock);
 #else
@@ -547,14 +619,14 @@ ETHR_INLINE_FUNC_NAME_(ethr_spin_lock)(ethr_spinlock_t *lock)
 
 #endif /* ETHR_TRY_INLINE_FUNCS */
 
-#include "ethr_atomics.h"
-
 typedef struct ethr_ts_event_ ethr_ts_event; /* Needed by ethr_mutex.h */
 
 #if defined(ETHR_WIN32_THREADS)
 #  include "win/ethr_event.h"
-#else
+#elif defined(ETHR_PTHREADS)
 #  include "pthread/ethr_event.h"
+#elif defined(ETHR_OSE_THREADS)
+#  include "ose/ethr_event.h"
 #endif
 
 int ethr_set_main_thr_status(int, int);
@@ -644,6 +716,37 @@ ETHR_INLINE_FUNC_NAME_(ethr_leave_ts_event)(ethr_ts_event *tsep)
 
 #endif
 
+#elif  defined (ETHR_OSE_THREADS)
+
+#if defined(ETHR_TRY_INLINE_FUNCS) || defined(ETHREAD_IMPL__)
+
+extern ethr_tsd_key ethr_ts_event_key__;
+
+static ETHR_INLINE ethr_ts_event *
+ETHR_INLINE_FUNC_NAME_(ethr_get_ts_event)(void)
+{
+    ethr_ts_event *tsep = *(ethr_ts_event**)ose_get_ppdata(ethr_ts_event_key__);
+    if (!tsep) {
+	int res = ethr_get_tmp_ts_event__(&tsep);
+	if (res != 0)
+	    ETHR_FATAL_ERROR__(res);
+	ETHR_ASSERT(tsep);
+    }
+    return tsep;
+}
+
+static ETHR_INLINE void
+ETHR_INLINE_FUNC_NAME_(ethr_leave_ts_event)(ethr_ts_event *tsep)
+{
+    if (tsep->iflgs & ETHR_TS_EV_TMP) {
+	int res = ethr_free_ts_event__(tsep);
+	if (res != 0)
+	    ETHR_FATAL_ERROR__(res);
+    }
+}
+
+#endif
+
 #endif
 
 #include "ethr_mutex.h" /* Need atomic declarations and tse */
@@ -680,7 +783,7 @@ static ETHR_INLINE int
 ETHR_INLINE_FUNC_NAME_(ethr_rwlock_destroy)(ethr_rwlock_t *lock)
 {
 #ifdef ETHR_HAVE_NATIVE_RWSPINLOCKS
-    return 0;
+    return ethr_native_rwlock_destroy(lock);
 #else
     return ethr_rwmutex_destroy((ethr_rwmutex *) lock);
 #endif

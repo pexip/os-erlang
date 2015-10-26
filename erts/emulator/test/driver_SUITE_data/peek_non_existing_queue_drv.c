@@ -28,7 +28,7 @@
  */
 
 #ifndef UNIX
-#if !defined(__WIN32__) && !defined(VXWORKS)
+#if !defined(__WIN32__)
 #define UNIX 1
 #endif
 #endif
@@ -66,7 +66,8 @@ typedef struct {
 
 static ErlDrvData start(ErlDrvPort, char *);
 static void stop(ErlDrvData);
-static int control(ErlDrvData, unsigned int, char *, int, char **, int);
+static ErlDrvSSizeT control(ErlDrvData, unsigned int,
+			    char *, ErlDrvSizeT, char **, ErlDrvSizeT);
 static void ready_async(ErlDrvData, ErlDrvThreadData);
 static void async_test(void *);
 static void async_wait(void *);
@@ -121,10 +122,10 @@ static void stop(ErlDrvData drv_data)
     driver_free(drv_data);
 }
 
-static int control(ErlDrvData drv_data,
-		   unsigned int command,
-		   char *buf, int len,
-		   char **rbuf, int rlen)
+static ErlDrvSSizeT control(ErlDrvData drv_data,
+			    unsigned int command,
+			    char *buf, ErlDrvSizeT len,
+			    char **rbuf, ErlDrvSizeT rlen)
 {
     PeekNonXQDrvData *dp = (PeekNonXQDrvData *) drv_data;
     unsigned int key = 0;
@@ -158,7 +159,7 @@ static int control(ErlDrvData drv_data,
     }
 
  done: {
-	int res_len = strlen(res_str);
+	ErlDrvSSizeT res_len = strlen(res_str);
 	if (res_len > rlen) {
 	    char *abuf = driver_alloc(sizeof(char)*res_len);
 	    if (!abuf)
@@ -176,15 +177,16 @@ static void ready_async(ErlDrvData drv_data, ErlDrvThreadData thread_data)
 {
     PeekNonXQDrvData *dp = (PeekNonXQDrvData *) drv_data;
     if (dp->cmd == PEEK_NONXQ_WAIT) {
+	ErlDrvTermData port_id = driver_mk_port(dp->port);
 	ErlDrvTermData spec[] = {
-	    ERL_DRV_PORT, driver_mk_port(dp->port),
+	    ERL_DRV_PORT, port_id,
 	    ERL_DRV_ATOM, driver_mk_atom("test_successful"),
 	    ERL_DRV_TUPLE, 2
 	};
-	driver_send_term(dp->port,
-			 dp->caller,
-			 spec,
-			 sizeof(spec) / sizeof(spec[0]));
+	erl_drv_send_term(port_id,
+			  dp->caller,
+			  spec,
+			  sizeof(spec) / sizeof(spec[0]));
     }
     if (thread_data)
 	driver_free(thread_data);

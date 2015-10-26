@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %% 
-%% Copyright Ericsson AB 1996-2009. All Rights Reserved.
+%% Copyright Ericsson AB 1996-2013. All Rights Reserved.
 %% 
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -117,8 +117,9 @@ server1(Iport, Oport, Shell) ->
     {Curr,Shell1} =
 	case init:get_argument(remsh) of
 	    {ok,[[Node]]} ->
-		RShell = {list_to_atom(Node),shell,start,[]},
-		RGr = group:start(self(), RShell),
+		ANode = list_to_atom(Node),
+		RShell = {ANode,shell,start,[]},
+		RGr = group:start(self(), RShell, rem_sh_opts(ANode)),
 		{RGr,RShell};
 	    E when E =:= error ; E =:= {ok,[[]]} ->
 		{group:start(self(), Shell),Shell}
@@ -128,11 +129,14 @@ server1(Iport, Oport, Shell) ->
     Gr = gr_add_cur(Gr1, Curr, Shell1),
     %% Print some information.
     io_request({put_chars, unicode,
-		flatten(io_lib:format("~s\n",
+		flatten(io_lib:format("~ts\n",
 				      [erlang:system_info(system_version)]))},
 	       Iport, Oport),
     %% Enter the server loop.
     server_loop(Iport, Oport, Curr, User, Gr).
+
+rem_sh_opts(Node) ->
+    [{expand_fun,fun(B)-> rpc:call(Node,edlin_expand,expand,[B]) end}].
 
 %% start_user()
 %%  Start a group leader process and register it as 'user', unless,
@@ -414,7 +418,7 @@ list_commands(Iport, Oport) ->
 		  true -> 
 		      [];
 		  false ->
-		      [{put_chars,unicode,"  q        - quit erlang\n"}]
+		      [{put_chars, unicode,"  q                 - quit erlang\n"}]
 	      end,
     io_requests([{put_chars, unicode,"  c [nn]            - connect to job\n"},
 		 {put_chars, unicode,"  i [nn]            - interrupt job\n"},
@@ -484,21 +488,19 @@ set_unicode_state(Iport, Bool) ->
 
 %% io_request(Request, InPort, OutPort)
 %% io_requests(Requests, InPort, OutPort)
+%% Note: InPort is unused.
 
-io_request({put_chars, unicode,Cs}, _Iport, Oport) ->
-    Oport ! {self(),{command,[?OP_PUTC|unicode:characters_to_binary(Cs,utf8)]}};
-io_request({move_rel,N}, _Iport, Oport) ->
-    Oport ! {self(),{command,[?OP_MOVE|put_int16(N, [])]}};
-io_request({insert_chars,unicode,Cs}, _Iport, Oport) ->
-    Oport ! {self(),{command,[?OP_INSC|unicode:characters_to_binary(Cs,utf8)]}};
-io_request({delete_chars,N}, _Iport, Oport) ->
-    Oport ! {self(),{command,[?OP_DELC|put_int16(N, [])]}};
-io_request(beep, _Iport, Oport) ->
-    Oport ! {self(),{command,[?OP_BEEP]}};
-io_request({requests,Rs}, Iport, Oport) ->
-    io_requests(Rs, Iport, Oport);
-io_request(_R, _Iport, _Oport) ->
-    ok.
+io_request(Request, Iport, Oport) ->
+    try io_command(Request) of
+        Command ->
+            Oport ! {self(),Command},
+            ok
+    catch
+        {requests,Rs} ->
+            io_requests(Rs, Iport, Oport);
+        _ ->
+            ok
+    end.
 
 io_requests([R|Rs], Iport, Oport) ->
     io_request(R, Iport, Oport),
@@ -508,6 +510,19 @@ io_requests([], _Iport, _Oport) ->
 
 put_int16(N, Tail) ->
     [(N bsr 8)band 255,N band 255|Tail].
+
+io_command({put_chars, unicode,Cs}) ->
+    {command,[?OP_PUTC|unicode:characters_to_binary(Cs,utf8)]};
+io_command({move_rel,N}) ->
+    {command,[?OP_MOVE|put_int16(N, [])]};
+io_command({insert_chars,unicode,Cs}) ->
+    {command,[?OP_INSC|unicode:characters_to_binary(Cs,utf8)]};
+io_command({delete_chars,N}) ->
+    {command,[?OP_DELC|put_int16(N, [])]};
+io_command(beep) ->
+    {command,[?OP_BEEP]};
+io_command(Else) ->
+    throw(Else).
 
 %% gr_new()
 %% gr_get_num(Group, Index)

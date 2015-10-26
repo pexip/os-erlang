@@ -2,7 +2,7 @@
 
 # %CopyrightBegin%
 # 
-# Copyright Ericsson AB 2001-2009. All Rights Reserved.
+# Copyright Ericsson AB 2001-2013. All Rights Reserved.
 # 
 # The contents of this file are subject to the Erlang Public License,
 # Version 1.1, (the "License"); you may not use this file except in
@@ -19,17 +19,8 @@
 
 # Flag description:
 # 
-# +optimize
-# For ber_bin this means "optimize" (whatever that is),
-# but for per_bin it means that a stage in the encode
-# is done in the asn1 driver.
-#
-# +driver
-# For ber_bin this means that part of the decode is done
-# in the asn1 driver.
-#
 # +asn1config
-# This is only used by the ber_bin, and means that 
+# This is only used by the ber, and means that
 # some partial decode functions will be created 
 # (as described by the asn1config file).
 # 
@@ -37,439 +28,151 @@
 # This means that the ASN.1 runtime library will be inlined.
 #
 
-ASN1_CT_OPTS += +noobj
+ASN1_CT_OPTS += +noobj +legacy_erlang_types
 ifeq ($(MEGACO_INLINE_ASN1_RT),true)
 # We need atleast version 1.4.6 of the ANS.1 application
 ASN1_CT_OPTS += +inline
 endif
 
-BER_V1_FLAGS             = $(ASN1_CT_OPTS)
-BER_BIN_V1_FLAGS         = $(ASN1_CT_OPTS) +asn1config +optimize
-BER_BIN_DRV_V1_FLAGS     = $(ASN1_CT_OPTS) +asn1config +optimize +driver
-BER_V2_FLAGS             = $(ASN1_CT_OPTS)
-BER_BIN_V2_FLAGS         = $(ASN1_CT_OPTS) +asn1config +optimize
-BER_BIN_DRV_V2_FLAGS     = $(ASN1_CT_OPTS) +asn1config +optimize +driver
-BER_PREV3A_FLAGS         = $(ASN1_CT_OPTS)
-BER_BIN_PREV3A_FLAGS     = $(ASN1_CT_OPTS) +asn1config +optimize
-BER_BIN_DRV_PREV3A_FLAGS = $(ASN1_CT_OPTS) +asn1config +optimize +driver
-BER_PREV3B_FLAGS         = $(ASN1_CT_OPTS)
-BER_BIN_PREV3B_FLAGS     = $(ASN1_CT_OPTS) +asn1config +optimize
-BER_BIN_DRV_PREV3B_FLAGS = $(ASN1_CT_OPTS) +asn1config +optimize +driver
-BER_PREV3C_FLAGS         = $(ASN1_CT_OPTS)
-BER_BIN_PREV3C_FLAGS     = $(ASN1_CT_OPTS) +asn1config +optimize
-BER_BIN_DRV_PREV3C_FLAGS = $(ASN1_CT_OPTS) +asn1config +optimize +driver
-BER_V3_FLAGS             = $(ASN1_CT_OPTS)
-BER_BIN_V3_FLAGS         = $(ASN1_CT_OPTS) +asn1config +optimize
-BER_BIN_DRV_V3_FLAGS     = $(ASN1_CT_OPTS) +asn1config +optimize +driver
+BER_V1_FLAGS             = $(ASN1_CT_OPTS) +asn1config
+BER_V2_FLAGS             = $(ASN1_CT_OPTS) +asn1config
+BER_PREV3A_FLAGS         = $(ASN1_CT_OPTS) +asn1config
+BER_PREV3B_FLAGS         = $(ASN1_CT_OPTS) +asn1config
+BER_PREV3C_FLAGS         = $(ASN1_CT_OPTS) +asn1config
+BER_V3_FLAGS             = $(ASN1_CT_OPTS) +asn1config
 PER_V1_FLAGS             = $(ASN1_CT_OPTS)
-PER_BIN_V1_FLAGS         = $(ASN1_CT_OPTS)
-PER_BIN_DRV_V1_FLAGS     = $(ASN1_CT_OPTS) +optimize
 PER_V2_FLAGS             = $(ASN1_CT_OPTS)
-PER_BIN_V2_FLAGS         = $(ASN1_CT_OPTS)
-PER_BIN_DRV_V2_FLAGS     = $(ASN1_CT_OPTS) +optimize
 PER_PREV3A_FLAGS         = $(ASN1_CT_OPTS)
-PER_BIN_PREV3A_FLAGS     = $(ASN1_CT_OPTS)
-PER_BIN_DRV_PREV3A_FLAGS = $(ASN1_CT_OPTS) +optimize
 PER_PREV3B_FLAGS         = $(ASN1_CT_OPTS)
-PER_BIN_PREV3B_FLAGS     = $(ASN1_CT_OPTS)
-PER_BIN_DRV_PREV3B_FLAGS = $(ASN1_CT_OPTS) +optimize
 PER_PREV3C_FLAGS         = $(ASN1_CT_OPTS)
-PER_BIN_PREV3C_FLAGS     = $(ASN1_CT_OPTS)
-PER_BIN_DRV_PREV3C_FLAGS = $(ASN1_CT_OPTS) +optimize
 PER_V3_FLAGS             = $(ASN1_CT_OPTS)
-PER_BIN_V3_FLAGS         = $(ASN1_CT_OPTS)
-PER_BIN_DRV_V3_FLAGS     = $(ASN1_CT_OPTS) +optimize
 
 
 # --- Version 1 ---
 
-$(BER_ASN1_V1_SPEC).erl $(BER_ASN1_V1_SPEC).hrl: \
+$(BER_ASN1_V1_SPEC).erl: \
 	$(BER_ASN1_V1_SPEC).set.asn \
 	$(ASN1_V1_SPEC).asn
-	@echo "$(BER_ASN1_V1_SPEC):"
-	$(ERLC) -bber $(BER_V1_FLAGS) $(BER_ASN1_V1_SPEC).set.asn
+	$(V_colon)@echo "$(BER_ASN1_V1_SPEC):"
+	$(asn_verbose)$(ERLC) -bber $(BER_V1_FLAGS) $(BER_ASN1_V1_SPEC).set.asn
 
 $(EBIN)/$(BER_ASN1_V1_SPEC).$(EMULATOR): \
-	$(BER_ASN1_V1_SPEC).erl \
-	$(BER_ASN1_V1_SPEC).hrl
+	$(BER_ASN1_V1_SPEC).erl
 
-$(BER_BIN_ASN1_V1_SPEC).erl $(BER_BIN_ASN1_V1_SPEC).hrl: \
-	$(BER_BIN_ASN1_V1_SPEC).set.asn \
-	$(BER_BIN_ASN1_V1_SPEC).asn1config \
-	$(ASN1_V1_SPEC).asn
-	@echo "$(BER_BIN_ASN1_V1_SPEC):"
-	$(ERLC) -bber_bin $(BER_BIN_V1_FLAGS) $(BER_BIN_ASN1_V1_SPEC).set.asn
-
-$(EBIN)/$(BER_BIN_ASN1_V1_SPEC).$(EMULATOR): \
-	$(BER_BIN_ASN1_V1_SPEC).erl \
-	$(BER_BIN_ASN1_V1_SPEC).hrl
-
-$(BER_BIN_DRV_ASN1_V1_SPEC).erl $(BER_BIN_DRV_ASN1_V1_SPEC).hrl: \
-	$(BER_BIN_DRV_ASN1_V1_SPEC).set.asn \
-	$(BER_BIN_DRV_ASN1_V1_SPEC).asn1config \
-	$(ASN1_V1_SPEC).asn
-	@echo "$(BER_BIN_DRV_ASN1_V1_SPEC):"
-	$(ERLC) -bber_bin $(BER_BIN_DRV_V1_FLAGS) $(BER_BIN_DRV_ASN1_V1_SPEC).set.asn
-
-$(EBIN)/$(BER_BIN_DRV_ASN1_V1_SPEC).$(EMULATOR): \
-	$(BER_BIN_DRV_ASN1_V1_SPEC).erl \
-	$(BER_BIN_DRV_ASN1_V1_SPEC).hrl
-
-$(PER_ASN1_V1_SPEC).erl $(PER_ASN1_V1_SPEC).hrl: \
+$(PER_ASN1_V1_SPEC).erl: \
 	$(PER_ASN1_V1_SPEC).set.asn \
 	$(ASN1_V1_SPEC).asn
-	@echo "$(PER_ASN1_V1_SPEC):"
-	$(ERLC) -bper $(PER_V1_FLAGS) $(PER_ASN1_V1_SPEC).set.asn
+	$(V_colon)@echo "$(PER_ASN1_V1_SPEC):"
+	$(asn_verbose)$(ERLC) -bper $(PER_V1_FLAGS) $(PER_ASN1_V1_SPEC).set.asn
 
 $(EBIN)/$(PER_ASN1_V1_SPEC).$(EMULATOR): \
-	$(PER_ASN1_V1_SPEC).erl \
-	$(PER_ASN1_V1_SPEC).hrl
-
-$(PER_BIN_ASN1_V1_SPEC).erl $(PER_BIN_ASN1_V1_SPEC).hrl: \
-	$(PER_BIN_ASN1_V1_SPEC).set.asn \
-	$(ASN1_V1_SPEC).asn
-	@echo "$(PER_BIN_ASN1_V1_SPEC):"
-	$(ERLC) -bper_bin $(PER_BIN_V1_FLAGS) $(PER_BIN_ASN1_V1_SPEC).set.asn
-
-$(EBIN)/$(PER_BIN_ASN1_V1_SPEC).$(EMULATOR): \
-	$(PER_BIN_ASN1_V1_SPEC).erl \
-	$(PER_BIN_ASN1_V1_SPEC).hrl
-
-$(PER_BIN_DRV_ASN1_V1_SPEC).erl $(PER_BIN_DRV_ASN1_V1_SPEC).hrl: \
-	$(PER_BIN_DRV_ASN1_V1_SPEC).set.asn \
-	$(ASN1_V1_SPEC).asn
-	@echo "$(PER_BIN_DRV_ASN1_V1_SPEC):"
-	$(ERLC) -bper_bin $(PER_BIN_DRV_V1_FLAGS) $(PER_BIN_DRV_ASN1_V1_SPEC).set.asn
-
-$(EBIN)/$(PER_BIN_DRV_ASN1_V1_SPEC).$(EMULATOR): \
-	$(PER_BIN_DRV_ASN1_V1_SPEC).erl \
-	$(PER_BIN_DRV_ASN1_V1_SPEC).hrl
+	$(PER_ASN1_V1_SPEC).erl
 
 
 # --- Version 2 ---
 
-$(BER_ASN1_V2_SPEC).erl $(BER_ASN1_V2_SPEC).hrl: \
+$(BER_ASN1_V2_SPEC).erl: \
 	$(BER_ASN1_V2_SPEC).set.asn \
 	$(ASN1_V2_SPEC).asn
-	@echo "$(BER_ASN1_V2_SPEC):"
-	$(ERLC) -bber $(BER_V2_FLAGS) $(BER_ASN1_V2_SPEC).set.asn
+	$(V_colon)@echo "$(BER_ASN1_V2_SPEC):"
+	$(asn_verbose)$(ERLC) -bber $(BER_V2_FLAGS) $(BER_ASN1_V2_SPEC).set.asn
 
 $(EBIN)/$(BER_ASN1_V2_SPEC).$(EMULATOR): \
-	$(BER_ASN1_V2_SPEC).erl \
-	$(BER_ASN1_V2_SPEC).hrl
+	$(BER_ASN1_V2_SPEC).erl
 
-$(BER_BIN_ASN1_V2_SPEC).erl $(BER_BIN_ASN1_V2_SPEC).hrl: \
-	$(BER_BIN_ASN1_V2_SPEC).set.asn \
-	$(BER_BIN_ASN1_V2_SPEC).asn1config \
-	$(ASN1_V2_SPEC).asn
-	@echo "$(BER_BIN_ASN1_V2_SPEC):"
-	$(ERLC) -bber_bin $(BER_BIN_V2_FLAGS) $(BER_BIN_ASN1_V2_SPEC).set.asn
-
-$(EBIN)/$(BER_BIN_ASN1_V2_SPEC).$(EMULATOR): \
-	$(BER_BIN_ASN1_V2_SPEC).erl \
-	$(BER_BIN_ASN1_V2_SPEC).hrl
-
-$(BER_BIN_DRV_ASN1_V2_SPEC).erl $(BER_BIN_DRV_ASN1_V2_SPEC).hrl: \
-	$(BER_BIN_DRV_ASN1_V2_SPEC).set.asn \
-	$(BER_BIN_DRV_ASN1_V2_SPEC).asn1config \
-	$(ASN1_V2_SPEC).asn
-	@echo "$(BER_BIN_DRV_ASN1_V2_SPEC):"
-	$(ERLC) -bber_bin $(BER_BIN_DRV_V2_FLAGS) $(BER_BIN_DRV_ASN1_V2_SPEC).set.asn
-
-$(EBIN)/$(BER_BIN_DRV_ASN1_V2_SPEC).$(EMULATOR): \
-	$(BER_BIN_DRV_ASN1_V2_SPEC).erl \
-	$(BER_BIN_DRV_ASN1_V2_SPEC).hrl
-
-$(PER_ASN1_V2_SPEC).erl $(PER_ASN1_V2_SPEC).hrl: \
+$(PER_ASN1_V2_SPEC).erl: \
 	$(PER_ASN1_V2_SPEC).set.asn \
 	$(ASN1_V2_SPEC).asn
-	@echo "$(PER_ASN1_V2_SPEC):"
-	$(ERLC) -bper $(PER_V2_FLAGS) $(PER_ASN1_V2_SPEC).set.asn
+	$(V_colon)@echo "$(PER_ASN1_V2_SPEC):"
+	$(asn_verbose)$(ERLC) -bper $(PER_V2_FLAGS) $(PER_ASN1_V2_SPEC).set.asn
 
 $(EBIN)/$(PER_ASN1_V2_SPEC).$(EMULATOR): \
-	$(PER_ASN1_V2_SPEC).erl \
-	$(PER_ASN1_V2_SPEC).hrl
-
-$(PER_BIN_ASN1_V2_SPEC).erl $(PER_BIN_ASN1_V2_SPEC).hrl: \
-	$(PER_BIN_ASN1_V2_SPEC).set.asn \
-	$(ASN1_V2_SPEC).asn
-	@echo "$(PER_BIN_ASN1_V2_SPEC):"
-	$(ERLC) -bper_bin $(PER_BIN_V2_FLAGS) $(PER_BIN_ASN1_V2_SPEC).set.asn
-
-$(EBIN)/$(PER_BIN_ASN1_V2_SPEC).$(EMULATOR): \
-	$(PER_BIN_ASN1_V2_SPEC).erl \
-	$(PER_BIN_ASN1_V2_SPEC).hrl
-
-$(PER_BIN_DRV_ASN1_V2_SPEC).erl $(PER_BIN_DRV_ASN1_V2_SPEC).hrl: \
-	$(PER_BIN_DRV_ASN1_V2_SPEC).set.asn \
-	$(ASN1_V2_SPEC).asn
-	@echo "$(PER_BIN_DRV_ASN1_V2_SPEC):"
-	$(ERLC) -bper_bin $(PER_BIN_DRV_V2_FLAGS) $(PER_BIN_DRV_ASN1_V2_SPEC).set.asn
-
-$(EBIN)/$(PER_BIN_DRV_ASN1_V2_SPEC).$(EMULATOR): \
-	$(PER_BIN_DRV_ASN1_V2_SPEC).erl \
-	$(PER_BIN_DRV_ASN1_V2_SPEC).hrl
-
+	$(PER_ASN1_V2_SPEC).erl
 
 # --- Version 3 ---
 
 # -- (prev3a) --
 
-$(BER_ASN1_PREV3A_SPEC).erl $(BER_ASN1_PREV3A_SPEC).hrl: \
+$(BER_ASN1_PREV3A_SPEC).erl: \
 	$(BER_ASN1_PREV3A_SPEC).set.asn \
 	$(ASN1_PREV3A_SPEC).asn
-	@echo "$(BER_ASN1_PREV3A_SPEC):"
-	$(ERLC) -bber $(BER_PREV3A_FLAGS) $(BER_ASN1_PREV3A_SPEC).set.asn
+	$(V_colon)@echo "$(BER_ASN1_PREV3A_SPEC):"
+	$(asn_verbose)$(ERLC) -bber $(BER_PREV3A_FLAGS) $(BER_ASN1_PREV3A_SPEC).set.asn
 
 $(EBIN)/$(BER_ASN1_PREV3A_SPEC).$(EMULATOR): \
-	$(BER_ASN1_PREV3A_SPEC).erl \
-	$(BER_ASN1_PREV3A_SPEC).hrl
+	$(BER_ASN1_PREV3A_SPEC).erl
 
-$(BER_BIN_ASN1_PREV3A_SPEC).erl $(BER_BIN_ASN1_PREV3A_SPEC).hrl: \
-	$(BER_BIN_ASN1_PREV3A_SPEC).set.asn \
-	$(BER_BIN_ASN1_PREV3A_SPEC).asn1config \
-	$(ASN1_PREV3A_SPEC).asn
-	@echo "$(BER_BIN_ASN1_PREV3A_SPEC):"
-	$(ERLC) -bber_bin $(BER_BIN_PREV3A_FLAGS) $(BER_BIN_ASN1_PREV3A_SPEC).set.asn
-
-$(EBIN)/$(BER_BIN_ASN1_PREV3A_SPEC).$(EMULATOR): \
-	$(BER_BIN_ASN1_PREV3A_SPEC).erl \
-	$(BER_BIN_ASN1_PREV3A_SPEC).hrl
-
-$(BER_BIN_DRV_ASN1_PREV3A_SPEC).erl $(BER_BIN_DRV_ASN1_PREV3A_SPEC).hrl: \
-	$(BER_BIN_DRV_ASN1_PREV3A_SPEC).set.asn \
-	$(BER_BIN_DRV_ASN1_PREV3A_SPEC).asn1config \
-	$(ASN1_PREV3A_SPEC).asn
-	@echo "$(BER_BIN_DRV_ASN1_PREV3A_SPEC):"
-	$(ERLC) -bber_bin $(BER_BIN_DRV_PREV3A_FLAGS) $(BER_BIN_DRV_ASN1_PREV3A_SPEC).set.asn
-
-$(EBIN)/$(BER_BIN_DRV_ASN1_PREV3A_SPEC).$(EMULATOR): \
-	$(BER_BIN_DRV_ASN1_PREV3A_SPEC).erl \
-	$(BER_BIN_DRV_ASN1_PREV3A_SPEC).hrl
-
-$(PER_ASN1_PREV3A_SPEC).erl $(PER_ASN1_PREV3A_SPEC).hrl: \
+$(PER_ASN1_PREV3A_SPEC).erl: \
 	$(PER_ASN1_PREV3A_SPEC).set.asn \
 	$(ASN1_PREV3A_SPEC).asn
-	@echo "$(PER_ASN1_PREV3A_SPEC):"
-	$(ERLC) -bper $(PER_PREV3A_FLAGS) $(PER_ASN1_PREV3A_SPEC).set.asn
+	$(V_colon)@echo "$(PER_ASN1_PREV3A_SPEC):"
+	$(asn_verbose)$(ERLC) -bper $(PER_PREV3A_FLAGS) $(PER_ASN1_PREV3A_SPEC).set.asn
 
 $(EBIN)/$(PER_ASN1_PREV3A_SPEC).$(EMULATOR): \
-	$(PER_ASN1_PREV3A_SPEC).erl \
-	$(PER_ASN1_PREV3A_SPEC).hrl
+	$(PER_ASN1_PREV3A_SPEC).erl
 
-$(PER_BIN_ASN1_PREV3A_SPEC).erl $(PER_BIN_ASN1_PREV3A_SPEC).hrl: \
-	$(PER_BIN_ASN1_PREV3A_SPEC).set.asn \
-	$(ASN1_PREV3A_SPEC).asn
-	@echo "$(PER_BIN_ASN1_PREV3A_SPEC):"
-	$(ERLC) -bper_bin $(PER_BIN_PREV3A_FLAGS) $(PER_BIN_ASN1_PREV3A_SPEC).set.asn
-
-$(EBIN)/$(PER_BIN_ASN1_PREV3A_SPEC).$(EMULATOR): \
-	$(PER_BIN_ASN1_PREV3A_SPEC).erl \
-	$(PER_BIN_ASN1_PREV3A_SPEC).hrl
-
-$(PER_BIN_DRV_ASN1_PREV3A_SPEC).erl $(PER_BIN_DRV_ASN1_PREV3A_SPEC).hrl: \
-	$(PER_BIN_DRV_ASN1_PREV3A_SPEC).set.asn \
-	$(ASN1_PREV3A_SPEC).asn
-	@echo "$(PER_BIN_DRV_ASN1_PREV3A_SPEC):"
-	$(ERLC) -bper_bin $(PER_BIN_DRV_PREV3A_FLAGS) $(PER_BIN_DRV_ASN1_PREV3A_SPEC).set.asn
-
-$(EBIN)/$(PER_BIN_DRV_ASN1_PREV3A_SPEC).$(EMULATOR): \
-	$(PER_BIN_DRV_ASN1_PREV3A_SPEC).erl \
-	$(PER_BIN_DRV_ASN1_PREV3A_SPEC).hrl
 
 # -- (prev3b) --
 
-$(BER_ASN1_PREV3B_SPEC).erl $(BER_ASN1_PREV3B_SPEC).hrl: \
+$(BER_ASN1_PREV3B_SPEC).erl: \
 	$(BER_ASN1_PREV3B_SPEC).set.asn \
 	$(ASN1_PREV3B_SPEC).asn
-	@echo "$(BER_ASN1_PREV3B_SPEC):"
-	$(ERLC) -bber $(BER_PREV3B_FLAGS) $(BER_ASN1_PREV3B_SPEC).set.asn
+	$(V_colon)@echo "$(BER_ASN1_PREV3B_SPEC):"
+	$(asn_verbose)$(ERLC) -bber $(BER_PREV3B_FLAGS) $(BER_ASN1_PREV3B_SPEC).set.asn
 
 $(EBIN)/$(BER_ASN1_PREV3B_SPEC).$(EMULATOR): \
-	$(BER_ASN1_PREV3B_SPEC).erl \
-	$(BER_ASN1_PREV3B_SPEC).hrl
+	$(BER_ASN1_PREV3B_SPEC).erl
 
-$(BER_BIN_ASN1_PREV3B_SPEC).erl $(BER_BIN_ASN1_PREV3B_SPEC).hrl: \
-	$(BER_BIN_ASN1_PREV3B_SPEC).set.asn \
-	$(BER_BIN_ASN1_PREV3B_SPEC).asn1config \
-	$(ASN1_PREV3B_SPEC).asn
-	@echo "$(BER_BIN_ASN1_PREV3B_SPEC):"
-	$(ERLC) -bber_bin $(BER_BIN_PREV3B_FLAGS) $(BER_BIN_ASN1_PREV3B_SPEC).set.asn
-
-$(EBIN)/$(BER_BIN_ASN1_PREV3B_SPEC).$(EMULATOR): \
-	$(BER_BIN_ASN1_PREV3B_SPEC).erl \
-	$(BER_BIN_ASN1_PREV3B_SPEC).hrl
-
-$(BER_BIN_DRV_ASN1_PREV3B_SPEC).erl $(BER_BIN_DRV_ASN1_PREV3B_SPEC).hrl: \
-	$(BER_BIN_DRV_ASN1_PREV3B_SPEC).set.asn \
-	$(BER_BIN_DRV_ASN1_PREV3B_SPEC).asn1config \
-	$(ASN1_PREV3B_SPEC).asn
-	@echo "$(BER_BIN_DRV_ASN1_PREV3B_SPEC):"
-	$(ERLC) -bber_bin $(BER_BIN_DRV_PREV3B_FLAGS) $(BER_BIN_DRV_ASN1_PREV3B_SPEC).set.asn
-
-$(EBIN)/$(BER_BIN_DRV_ASN1_PREV3B_SPEC).$(EMULATOR): \
-	$(BER_BIN_DRV_ASN1_PREV3B_SPEC).erl \
-	$(BER_BIN_DRV_ASN1_PREV3B_SPEC).hrl
-
-$(PER_ASN1_PREV3B_SPEC).erl $(PER_ASN1_PREV3B_SPEC).hrl: \
+$(PER_ASN1_PREV3B_SPEC).erl: \
 	$(PER_ASN1_PREV3B_SPEC).set.asn \
 	$(ASN1_PREV3B_SPEC).asn
-	@echo "$(PER_ASN1_PREV3B_SPEC):"
-	$(ERLC) -bper $(PER_PREV3B_FLAGS) $(PER_ASN1_PREV3B_SPEC).set.asn
+	$(V_colon)@echo "$(PER_ASN1_PREV3B_SPEC):"
+	$(asn_verbose)$(ERLC) -bper $(PER_PREV3B_FLAGS) $(PER_ASN1_PREV3B_SPEC).set.asn
 
 $(EBIN)/$(PER_ASN1_PREV3B_SPEC).$(EMULATOR): \
-	$(PER_ASN1_PREV3B_SPEC).erl \
-	$(PER_ASN1_PREV3B_SPEC).hrl
-
-$(PER_BIN_ASN1_PREV3B_SPEC).erl $(PER_BIN_ASN1_PREV3B_SPEC).hrl: \
-	$(PER_BIN_ASN1_PREV3B_SPEC).set.asn \
-	$(ASN1_PREV3B_SPEC).asn
-	@echo "$(PER_BIN_ASN1_PREV3B_SPEC):"
-	$(ERLC) -bper_bin $(PER_BIN_PREV3B_FLAGS) $(PER_BIN_ASN1_PREV3B_SPEC).set.asn
-
-$(EBIN)/$(PER_BIN_ASN1_PREV3B_SPEC).$(EMULATOR): \
-	$(PER_BIN_ASN1_PREV3B_SPEC).erl \
-	$(PER_BIN_ASN1_PREV3B_SPEC).hrl
-
-$(PER_BIN_DRV_ASN1_PREV3B_SPEC).erl $(PER_BIN_DRV_ASN1_PREV3B_SPEC).hrl: \
-	$(PER_BIN_DRV_ASN1_PREV3B_SPEC).set.asn \
-	$(ASN1_PREV3B_SPEC).asn
-	@echo "$(PER_BIN_DRV_ASN1_PREV3B_SPEC):"
-	$(ERLC) -bper_bin $(PER_BIN_DRV_PREV3B_FLAGS) $(PER_BIN_DRV_ASN1_PREV3B_SPEC).set.asn
-
-$(EBIN)/$(PER_BIN_DRV_ASN1_PREV3B_SPEC).$(EMULATOR): \
-	$(PER_BIN_DRV_ASN1_PREV3B_SPEC).erl \
-	$(PER_BIN_DRV_ASN1_PREV3B_SPEC).hrl
+	$(PER_ASN1_PREV3B_SPEC).erl
 
 
 # -- (prev3c) --
 
-$(BER_ASN1_PREV3C_SPEC).erl $(BER_ASN1_PREV3C_SPEC).hrl: \
+$(BER_ASN1_PREV3C_SPEC).erl: \
 	$(BER_ASN1_PREV3C_SPEC).set.asn \
 	$(ASN1_PREV3C_SPEC).asn
-	@echo "$(BER_ASN1_PREV3C_SPEC):"
-	$(ERLC) -bber $(BER_PREV3C_FLAGS) $(BER_ASN1_PREV3C_SPEC).set.asn
+	$(V_colon)@echo "$(BER_ASN1_PREV3C_SPEC):"
+	$(asn_verbose)$(ERLC) -bber $(BER_PREV3C_FLAGS) $(BER_ASN1_PREV3C_SPEC).set.asn
 
 $(EBIN)/$(BER_ASN1_PREV3C_SPEC).$(EMULATOR): \
-	$(BER_ASN1_PREV3C_SPEC).erl \
-	$(BER_ASN1_PREV3C_SPEC).hrl
+	$(BER_ASN1_PREV3C_SPEC).erl
 
-$(BER_BIN_ASN1_PREV3C_SPEC).erl $(BER_BIN_ASN1_PREV3C_SPEC).hrl: \
-	$(BER_BIN_ASN1_PREV3C_SPEC).set.asn \
-	$(BER_BIN_ASN1_PREV3C_SPEC).asn1config \
-	$(ASN1_PREV3C_SPEC).asn
-	@echo "$(BER_BIN_ASN1_PREV3C_SPEC):"
-	$(ERLC) -bber_bin $(BER_BIN_PREV3C_FLAGS) $(BER_BIN_ASN1_PREV3C_SPEC).set.asn
-
-$(EBIN)/$(BER_BIN_ASN1_PREV3C_SPEC).$(EMULATOR): \
-	$(BER_BIN_ASN1_PREV3C_SPEC).erl \
-	$(BER_BIN_ASN1_PREV3C_SPEC).hrl
-
-$(BER_BIN_DRV_ASN1_PREV3C_SPEC).erl $(BER_BIN_DRV_ASN1_PREV3C_SPEC).hrl: \
-	$(BER_BIN_DRV_ASN1_PREV3C_SPEC).set.asn \
-	$(BER_BIN_DRV_ASN1_PREV3C_SPEC).asn1config \
-	$(ASN1_PREV3C_SPEC).asn
-	@echo "$(BER_BIN_DRV_ASN1_PREV3C_SPEC):"
-	$(ERLC) -bber_bin $(BER_BIN_DRV_PREV3C_FLAGS) $(BER_BIN_DRV_ASN1_PREV3C_SPEC).set.asn
-
-$(EBIN)/$(BER_BIN_DRV_ASN1_PREV3C_SPEC).$(EMULATOR): \
-	$(BER_BIN_DRV_ASN1_PREV3C_SPEC).erl \
-	$(BER_BIN_DRV_ASN1_PREV3C_SPEC).hrl
-
-$(PER_ASN1_PREV3C_SPEC).erl $(PER_ASN1_PREV3C_SPEC).hrl: \
+$(PER_ASN1_PREV3C_SPEC).erl: \
 	$(PER_ASN1_PREV3C_SPEC).set.asn \
 	$(ASN1_PREV3C_SPEC).asn
-	@echo "$(PER_ASN1_PREV3C_SPEC):"
-	$(ERLC) -bper $(PER_PREV3C_FLAGS) $(PER_ASN1_PREV3C_SPEC).set.asn
+	$(V_colon)@echo "$(PER_ASN1_PREV3C_SPEC):"
+	$(asn_verbose)$(ERLC) -bper $(PER_PREV3C_FLAGS) $(PER_ASN1_PREV3C_SPEC).set.asn
 
 $(EBIN)/$(PER_ASN1_PREV3C_SPEC).$(EMULATOR): \
-	$(PER_ASN1_PREV3C_SPEC).erl \
-	$(PER_ASN1_PREV3C_SPEC).hrl
-
-$(PER_BIN_ASN1_PREV3C_SPEC).erl $(PER_BIN_ASN1_PREV3C_SPEC).hrl: \
-	$(PER_BIN_ASN1_PREV3C_SPEC).set.asn \
-	$(ASN1_PREV3C_SPEC).asn
-	@echo "$(PER_BIN_ASN1_PREV3C_SPEC):"
-	$(ERLC) -bper_bin $(PER_BIN_PREV3C_FLAGS) $(PER_BIN_ASN1_PREV3C_SPEC).set.asn
-
-$(EBIN)/$(PER_BIN_ASN1_PREV3C_SPEC).$(EMULATOR): \
-	$(PER_BIN_ASN1_PREV3C_SPEC).erl \
-	$(PER_BIN_ASN1_PREV3C_SPEC).hrl
-
-$(PER_BIN_DRV_ASN1_PREV3C_SPEC).erl $(PER_BIN_DRV_ASN1_PREV3C_SPEC).hrl: \
-	$(PER_BIN_DRV_ASN1_PREV3C_SPEC).set.asn \
-	$(ASN1_PREV3C_SPEC).asn
-	@echo "$(PER_BIN_DRV_ASN1_PREV3C_SPEC):"
-	$(ERLC) -bper_bin $(PER_BIN_DRV_PREV3C_FLAGS) $(PER_BIN_DRV_ASN1_PREV3C_SPEC).set.asn
-
-$(EBIN)/$(PER_BIN_DRV_ASN1_PREV3C_SPEC).$(EMULATOR): \
-	$(PER_BIN_DRV_ASN1_PREV3C_SPEC).erl \
-	$(PER_BIN_DRV_ASN1_PREV3C_SPEC).hrl
+	$(PER_ASN1_PREV3C_SPEC).erl
 
 
 # -- (v3) --
 
-$(BER_ASN1_V3_SPEC).erl $(BER_ASN1_V3_SPEC).hrl: \
+$(BER_ASN1_V3_SPEC).erl: \
 	$(BER_ASN1_V3_SPEC).set.asn \
 	$(ASN1_V3_SPEC).asn
-	@echo "$(BER_ASN1_V3_SPEC):"
-	$(ERLC) -bber $(BER_V3_FLAGS) $(BER_ASN1_V3_SPEC).set.asn
+	$(V_colon)@echo "$(BER_ASN1_V3_SPEC):"
+	$(asn_verbose)$(ERLC) -bber $(BER_V3_FLAGS) $(BER_ASN1_V3_SPEC).set.asn
 
 $(EBIN)/$(BER_ASN1_V3_SPEC).$(EMULATOR): \
-	$(BER_ASN1_V3_SPEC).erl \
-	$(BER_ASN1_V3_SPEC).hrl
+	$(BER_ASN1_V3_SPEC).erl
 
-$(BER_BIN_ASN1_V3_SPEC).erl $(BER_BIN_ASN1_V3_SPEC).hrl: \
-	$(BER_BIN_ASN1_V3_SPEC).set.asn \
-	$(BER_BIN_ASN1_V3_SPEC).asn1config \
-	$(ASN1_V3_SPEC).asn
-	@echo "$(BER_BIN_ASN1_V3_SPEC):"
-	$(ERLC) -bber_bin $(BER_BIN_V3_FLAGS) $(BER_BIN_ASN1_V3_SPEC).set.asn
-
-$(EBIN)/$(BER_BIN_ASN1_V3_SPEC).$(EMULATOR): \
-	$(BER_BIN_ASN1_V3_SPEC).erl \
-	$(BER_BIN_ASN1_V3_SPEC).hrl
-
-$(BER_BIN_DRV_ASN1_V3_SPEC).erl $(BER_BIN_DRV_ASN1_V3_SPEC).hrl: \
-	$(BER_BIN_DRV_ASN1_V3_SPEC).set.asn \
-	$(BER_BIN_DRV_ASN1_V3_SPEC).asn1config \
-	$(ASN1_V3_SPEC).asn
-	@echo "$(BER_BIN_DRV_ASN1_V3_SPEC):"
-	$(ERLC) -bber_bin $(BER_BIN_DRV_V3_FLAGS) $(BER_BIN_DRV_ASN1_V3_SPEC).set.asn
-
-$(EBIN)/$(BER_BIN_DRV_ASN1_V3_SPEC).$(EMULATOR): \
-	$(BER_BIN_DRV_ASN1_V3_SPEC).erl \
-	$(BER_BIN_DRV_ASN1_V3_SPEC).hrl
-
-$(PER_ASN1_V3_SPEC).erl $(PER_ASN1_V3_SPEC).hrl: \
+$(PER_ASN1_V3_SPEC).erl: \
 	$(PER_ASN1_V3_SPEC).set.asn \
 	$(ASN1_V3_SPEC).asn
-	@echo "$(PER_ASN1_V3_SPEC):"
-	$(ERLC) -bper $(PER_V3_FLAGS) $(PER_ASN1_V3_SPEC).set.asn
+	$(V_colon)@echo "$(PER_ASN1_V3_SPEC):"
+	$(asn_verbose)$(ERLC) -bper $(PER_V3_FLAGS) $(PER_ASN1_V3_SPEC).set.asn
 
 $(EBIN)/$(PER_ASN1_V3_SPEC).$(EMULATOR): \
-	$(PER_ASN1_V3_SPEC).erl \
-	$(PER_ASN1_V3_SPEC).hrl
-
-$(PER_BIN_ASN1_V3_SPEC).erl $(PER_BIN_ASN1_V3_SPEC).hrl: \
-	$(PER_BIN_ASN1_V3_SPEC).set.asn \
-	$(ASN1_V3_SPEC).asn
-	@echo "$(PER_BIN_ASN1_V3_SPEC):"
-	$(ERLC) -bper_bin $(PER_BIN_V3_FLAGS) $(PER_BIN_ASN1_V3_SPEC).set.asn
-
-$(EBIN)/$(PER_BIN_ASN1_V3_SPEC).$(EMULATOR): \
-	$(PER_BIN_ASN1_V3_SPEC).erl \
-	$(PER_BIN_ASN1_V3_SPEC).hrl
-
-$(PER_BIN_DRV_ASN1_V3_SPEC).erl $(PER_BIN_DRV_ASN1_V3_SPEC).hrl: \
-	$(PER_BIN_DRV_ASN1_V3_SPEC).set.asn \
-	$(ASN1_V3_SPEC).asn
-	@echo "$(PER_BIN_DRV_ASN1_V3_SPEC):"
-	$(ERLC) -bper_bin $(PER_BIN_DRV_V3_FLAGS) $(PER_BIN_DRV_ASN1_V3_SPEC).set.asn
-
-$(EBIN)/$(PER_BIN_DRV_ASN1_V3_SPEC).$(EMULATOR): \
-	$(PER_BIN_DRV_ASN1_V3_SPEC).erl \
-	$(PER_BIN_DRV_ASN1_V3_SPEC).hrl
+	$(PER_ASN1_V3_SPEC).erl
 
 
 # -------------
@@ -477,13 +180,7 @@ $(EBIN)/$(PER_BIN_DRV_ASN1_V3_SPEC).$(EMULATOR): \
 $(EBIN)/megaco_ber_encoder.$(EMULATOR): megaco_ber_encoder.erl \
         $(MEGACO_ENGINEDIR)/megaco_message_internal.hrl
 
-$(EBIN)/megaco_ber_bin_encoder.$(EMULATOR): megaco_ber_bin_encoder.erl \
-        $(MEGACO_ENGINEDIR)/megaco_message_internal.hrl
-
 $(EBIN)/megaco_per_encoder.$(EMULATOR): megaco_per_encoder.erl \
-        $(MEGACO_ENGINEDIR)/megaco_message_internal.hrl
-
-$(EBIN)/megaco_per_bin_encoder.$(EMULATOR): megaco_per_bin_encoder.erl \
         $(MEGACO_ENGINEDIR)/megaco_message_internal.hrl
 
 $(EBIN)/megaco_binary_encoder_lib.$(EMULATOR): megaco_binary_encoder_lib.erl \

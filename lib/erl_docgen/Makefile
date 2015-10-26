@@ -1,7 +1,7 @@
 #
 # %CopyrightBegin%
 # 
-# Copyright Ericsson AB 1996-2010. All Rights Reserved.
+# Copyright Ericsson AB 1996-2011. All Rights Reserved.
 # 
 # The contents of this file are subject to the Erlang Public License,
 # Version 1.1, (the "License"); you may not use this file except in
@@ -23,8 +23,7 @@ include $(ERL_TOP)/make/$(TARGET)/otp.mk
 # Macros
 #
 
-SUB_DIRECTORIES = src priv 
-#doc/src
+SUB_DIRECTORIES = src priv doc/src
 
 include vsn.mk
 VSN = $(ERL_DOCGEN_VSN)

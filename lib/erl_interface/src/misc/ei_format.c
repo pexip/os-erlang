@@ -1,7 +1,7 @@
 /*
  * %CopyrightBegin%
  * 
- * Copyright Ericsson AB 2001-2011. All Rights Reserved.
+ * Copyright Ericsson AB 2001-2013. All Rights Reserved.
  * 
  * The contents of this file are subject to the Erlang Public License,
  * Version 1.1, (the "License"); you may not use this file except in
@@ -139,8 +139,8 @@ static int patom(const char** fmt, ei_x_buff* x)
     --(*fmt);
     len = *fmt - start;
     /* FIXME why truncate atom name and not fail?! */
-    if (len > MAXATOMLEN)
-	len = MAXATOMLEN;
+    if (len >= MAXATOMLEN)
+	len = MAXATOMLEN-1;
     return ei_x_encode_atom_len(x, start, len);
 }
 
@@ -149,7 +149,7 @@ static int pdigit(const char** fmt, ei_x_buff* x)
 {
     const char* start = *fmt;
     char c;
-    int len, dotp=0;
+    int dotp=0;
     double d;
     long l;
 
@@ -166,7 +166,6 @@ static int pdigit(const char** fmt, ei_x_buff* x)
 	    break;
     } 
     --(*fmt);
-    len = *fmt - start;
     if (dotp) {
 	sscanf(start, "%lf", &d);
 	return ei_x_encode_double(x, d);

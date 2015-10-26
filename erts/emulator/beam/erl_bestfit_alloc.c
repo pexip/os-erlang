@@ -1,7 +1,7 @@
 /*
  * %CopyrightBegin%
  * 
- * Copyright Ericsson AB 2003-2011. All Rights Reserved.
+ * Copyright Ericsson AB 2003-2013. All Rights Reserved.
  * 
  * The contents of this file are subject to the Erlang Public License,
  * Version 1.1, (the "License"); you may not use this file except in
@@ -73,8 +73,7 @@
 #define SET_RED(N)		(((RBTree_t *) (N))->flags |= RED_FLG)
 #define SET_BLACK(N)		(((RBTree_t *) (N))->flags &= ~RED_FLG)
 
-#undef ASSERT
-#define ASSERT ASSERT_EXPR
+#define BF_BLK_SZ(B)            MBC_FBLK_SZ(&(B)->hdr)
 
 #if 1
 #define RBT_ASSERT	ASSERT
@@ -87,21 +86,21 @@
 static RBTree_t * check_tree(RBTree_t, int, Uint);
 #endif
 
-static void tree_delete(Allctr_t *allctr, Block_t *del, Uint32 flags);
+static void tree_delete(Allctr_t *allctr, Block_t *del);
 
 /* Prototypes of callback functions */
 
 /* "address order best fit" specific callback functions */
 static Block_t *	aobf_get_free_block	(Allctr_t *, Uint,
-						 Block_t *, Uint, Uint32);
-static void		aobf_link_free_block	(Allctr_t *, Block_t *, Uint32);
+						 Block_t *, Uint);
+static void		aobf_link_free_block	(Allctr_t *, Block_t *);
 #define			aobf_unlink_free_block	tree_delete
 
 /* "best fit" specific callback functions */
 static Block_t *	bf_get_free_block	(Allctr_t *, Uint,
-						 Block_t *, Uint, Uint32);
-static void		bf_link_free_block	(Allctr_t *, Block_t *, Uint32);
-static ERTS_INLINE void	bf_unlink_free_block	(Allctr_t *, Block_t *, Uint32);
+						 Block_t *, Uint);
+static void		bf_link_free_block	(Allctr_t *, Block_t *);
+static ERTS_INLINE void	bf_unlink_free_block	(Allctr_t *, Block_t *);
 
 
 static Eterm		info_options		(Allctr_t *, char *, int *,
@@ -161,14 +160,18 @@ erts_bfalc_start(BFAllctr_t *bfallctr,
 		 BFAllctrInit_t *bfinit,
 		 AllctrInit_t *init)
 {
-    BFAllctr_t nulled_state = {{0}};
-    /* {{0}} is used instead of {0}, in order to avoid (an incorrect) gcc
-       warning. gcc warns if {0} is used as initializer of a struct when
-       the first member is a struct (not if, for example, the third member
-       is a struct). */
+    struct {
+	int dummy;
+	BFAllctr_t allctr;
+    } zero = {0};
+    /* The struct with a dummy element first is used in order to avoid (an
+       incorrect) gcc warning. gcc warns if {0} is used as initializer of
+       a struct when the first member is a struct (not if, for example,
+       the third member is a struct). */
+
     Allctr_t *allctr = (Allctr_t *) bfallctr;
 
-    sys_memcpy((void *) bfallctr, (void *) &nulled_state, sizeof(BFAllctr_t));
+    sys_memcpy((void *) bfallctr, (void *) &zero.allctr, sizeof(BFAllctr_t));
 
     bfallctr->address_order		= bfinit->ao;
 
@@ -202,6 +205,9 @@ erts_bfalc_start(BFAllctr_t *bfallctr,
     allctr->get_next_mbc_size		= NULL;
     allctr->creating_mbc		= NULL;
     allctr->destroying_mbc		= NULL;
+    allctr->add_mbc                     = NULL;
+    allctr->remove_mbc		        = NULL;
+    allctr->largest_fblk_in_mbc         = NULL;
     allctr->init_atoms			= init_atoms;
 
 #ifdef ERTS_ALLOC_UTIL_HARD_DEBUG
@@ -402,13 +408,11 @@ tree_insert_fixup(RBTree_t **root, RBTree_t *blk)
  * callback function in the address order case.
  */
 static void
-tree_delete(Allctr_t *allctr, Block_t *del, Uint32 flags)
+tree_delete(Allctr_t *allctr, Block_t *del)
 {
     BFAllctr_t *bfallctr = (BFAllctr_t *) allctr;
     Uint spliced_is_black;
-    RBTree_t **root = ((flags & ERTS_ALCU_FLG_SBMBC)
-		       ? &bfallctr->sbmbc_root
-		       : &bfallctr->mbc_root);
+    RBTree_t **root = &bfallctr->mbc_root;
     RBTree_t *x, *y, *z = (RBTree_t *) del;
     RBTree_t null_x; /* null_x is used to get the fixup started when we
 			splice out a node without children. */
@@ -581,14 +585,12 @@ tree_delete(Allctr_t *allctr, Block_t *del, Uint32 flags)
 \*                                                                           */
 
 static void
-aobf_link_free_block(Allctr_t *allctr, Block_t *block, Uint32 flags)
+aobf_link_free_block(Allctr_t *allctr, Block_t *block)
 {
     BFAllctr_t *bfallctr = (BFAllctr_t *) allctr;
-    RBTree_t **root = ((flags & ERTS_ALCU_FLG_SBMBC)
-		       ? &bfallctr->sbmbc_root
-		       : &bfallctr->mbc_root);
+    RBTree_t **root = &bfallctr->mbc_root;
     RBTree_t *blk = (RBTree_t *) block;
-    Uint blk_sz = BLK_SZ(blk);
+    Uint blk_sz = BF_BLK_SZ(blk);
 
     
 
@@ -606,7 +608,7 @@ aobf_link_free_block(Allctr_t *allctr, Block_t *block, Uint32 flags)
 	while (1) {
 	    Uint size;
 
-	    size = BLK_SZ(x);
+	    size = BF_BLK_SZ(x);
 
 	    if (blk_sz < size || (blk_sz == size && blk < x)) {
 		if (!x->left) {
@@ -642,21 +644,18 @@ aobf_link_free_block(Allctr_t *allctr, Block_t *block, Uint32 flags)
 
 #if 0 /* tree_delete() is directly used instead */
 static void
-aobf_unlink_free_block(Allctr_t *allctr, Block_t *block, Uint32 flags)
+aobf_unlink_free_block(Allctr_t *allctr, Block_t *block)
 {
-    tree_delete(allctr, block, flags);
+    tree_delete(allctr, block);
 }
 #endif
 
 static Block_t *
 aobf_get_free_block(Allctr_t *allctr, Uint size,
-		    Block_t *cand_blk, Uint cand_size,
-		    Uint32 flags)
+		    Block_t *cand_blk, Uint cand_size)
 {
     BFAllctr_t *bfallctr = (BFAllctr_t *) allctr;
-    RBTree_t **root = ((flags & ERTS_ALCU_FLG_SBMBC)
-		       ? &bfallctr->sbmbc_root
-		       : &bfallctr->mbc_root);
+    RBTree_t **root = &bfallctr->mbc_root;
     RBTree_t *x = *root;
     RBTree_t *blk = NULL;
     Uint blk_sz;
@@ -664,7 +663,7 @@ aobf_get_free_block(Allctr_t *allctr, Uint size,
     ASSERT(!cand_blk || cand_size >= size);
 
     while (x) {
-	blk_sz = BLK_SZ(x);
+	blk_sz = BF_BLK_SZ(x);
 	if (blk_sz < size) {
 	    x = x->right;
 	}
@@ -682,14 +681,14 @@ aobf_get_free_block(Allctr_t *allctr, Uint size,
 #endif
 
     if (cand_blk) {
-	blk_sz = BLK_SZ(blk);
+	blk_sz = BF_BLK_SZ(blk);
 	if (cand_size < blk_sz)
 	    return NULL; /* cand_blk was better */
 	if (cand_size == blk_sz && ((void *) cand_blk) < ((void *) blk))
 	    return NULL; /* cand_blk was better */
     }
 
-    aobf_unlink_free_block(allctr, (Block_t *) blk, flags);
+    aobf_unlink_free_block(allctr, (Block_t *) blk);
 
     return (Block_t *) blk;
 }
@@ -700,14 +699,12 @@ aobf_get_free_block(Allctr_t *allctr, Uint size,
 \*                                                                           */
 
 static void
-bf_link_free_block(Allctr_t *allctr, Block_t *block, Uint32 flags)
+bf_link_free_block(Allctr_t *allctr, Block_t *block)
 {
     BFAllctr_t *bfallctr = (BFAllctr_t *) allctr;
-    RBTree_t **root = ((flags & ERTS_ALCU_FLG_SBMBC)
-		       ? &bfallctr->sbmbc_root
-		       : &bfallctr->mbc_root);
+    RBTree_t **root = &bfallctr->mbc_root;
     RBTree_t *blk = (RBTree_t *) block;
-    Uint blk_sz = BLK_SZ(blk);
+    Uint blk_sz = BF_BLK_SZ(blk);
 
     SET_TREE_NODE(blk);
 
@@ -726,7 +723,7 @@ bf_link_free_block(Allctr_t *allctr, Block_t *block, Uint32 flags)
 	while (1) {
 	    Uint size;
 
-	    size = BLK_SZ(x);
+	    size = BF_BLK_SZ(x);
 
 	    if (blk_sz == size) {
 
@@ -774,12 +771,10 @@ bf_link_free_block(Allctr_t *allctr, Block_t *block, Uint32 flags)
 }
 
 static ERTS_INLINE void
-bf_unlink_free_block(Allctr_t *allctr, Block_t *block, Uint32 flags)
+bf_unlink_free_block(Allctr_t *allctr, Block_t *block)
 {
     BFAllctr_t *bfallctr = (BFAllctr_t *) allctr;
-    RBTree_t **root = ((flags & ERTS_ALCU_FLG_SBMBC)
-		       ? &bfallctr->sbmbc_root
-		       : &bfallctr->mbc_root);
+    RBTree_t **root = &bfallctr->mbc_root;
     RBTree_t *x = (RBTree_t *) block;
 
     if (IS_LIST_ELEM(x)) {
@@ -792,7 +787,7 @@ bf_unlink_free_block(Allctr_t *allctr, Block_t *block, Uint32 flags)
     else if (LIST_NEXT(x)) {
 	/* Replace tree node by next element in list... */
 
-	ASSERT(BLK_SZ(LIST_NEXT(x)) == BLK_SZ(x));
+	ASSERT(BF_BLK_SZ(LIST_NEXT(x)) == BF_BLK_SZ(x));
 	ASSERT(IS_TREE_NODE(x));
 	ASSERT(IS_LIST_ELEM(LIST_NEXT(x)));
 
@@ -807,7 +802,7 @@ bf_unlink_free_block(Allctr_t *allctr, Block_t *block, Uint32 flags)
     }
     else {
 	/* Remove from tree */
-	tree_delete(allctr, block, flags);
+	tree_delete(allctr, block);
     }
 
     DESTROY_LIST_ELEM(x);
@@ -816,13 +811,10 @@ bf_unlink_free_block(Allctr_t *allctr, Block_t *block, Uint32 flags)
 
 static Block_t *
 bf_get_free_block(Allctr_t *allctr, Uint size,
-		  Block_t *cand_blk, Uint cand_size,
-		  Uint32 flags)
+		  Block_t *cand_blk, Uint cand_size)
 {
     BFAllctr_t *bfallctr = (BFAllctr_t *) allctr;
-    RBTree_t **root = ((flags & ERTS_ALCU_FLG_SBMBC)
-		       ? &bfallctr->sbmbc_root
-		       : &bfallctr->mbc_root);
+    RBTree_t **root = &bfallctr->mbc_root;
     RBTree_t *x = *root;
     RBTree_t *blk = NULL;
     Uint blk_sz;
@@ -830,7 +822,7 @@ bf_get_free_block(Allctr_t *allctr, Uint size,
     ASSERT(!cand_blk || cand_size >= size);
 
     while (x) {
-	blk_sz = BLK_SZ(x);
+	blk_sz = BF_BLK_SZ(x);
 	if (blk_sz < size) {
 	    x = x->right;
 	}
@@ -851,18 +843,18 @@ bf_get_free_block(Allctr_t *allctr, Uint size,
 #ifdef HARD_DEBUG
     {
 	RBTree_t *ct_blk = check_tree(root, 0, size);
-	ASSERT(BLK_SZ(ct_blk) == BLK_SZ(blk));
+	ASSERT(BF_BLK_SZ(ct_blk) == BF_BLK_SZ(blk));
     }
 #endif
 
-    if (cand_blk && cand_size <= BLK_SZ(blk))
+    if (cand_blk && cand_size <= BF_BLK_SZ(blk))
 	return NULL; /* cand_blk was better */
 
     /* Use next block if it exist in order to avoid replacing
        the tree node */
     blk = LIST_NEXT(blk) ? LIST_NEXT(blk) : blk;
 
-    bf_unlink_free_block(allctr, (Block_t *) blk, flags);
+    bf_unlink_free_block(allctr, (Block_t *) blk);
     return (Block_t *) blk;
 }
 
@@ -967,20 +959,22 @@ info_options(Allctr_t *allctr,
  * to erts_bfalc_test()                                                      *
 \*                                                                           */
 
-unsigned long
-erts_bfalc_test(unsigned long op, unsigned long a1, unsigned long a2)
+UWord
+erts_bfalc_test(UWord op, UWord a1, UWord a2)
 {
     switch (op) {
-    case 0x200:	return (unsigned long) ((BFAllctr_t *) a1)->address_order;
-    case 0x201:	return (unsigned long) ((BFAllctr_t *) a1)->mbc_root;
-    case 0x202:	return (unsigned long) ((RBTree_t *) a1)->parent;
-    case 0x203:	return (unsigned long) ((RBTree_t *) a1)->left;
-    case 0x204:	return (unsigned long) ((RBTree_t *) a1)->right;
-    case 0x205:	return (unsigned long) ((RBTreeList_t *) a1)->next;
-    case 0x206:	return (unsigned long) IS_BLACK((RBTree_t *) a1);
-    case 0x207:	return (unsigned long) IS_TREE_NODE((RBTree_t *) a1);
-    case 0x208:	return (unsigned long) 0; /* IS_AOFF */
-    default:	ASSERT(0); return ~((unsigned long) 0);
+    case 0x200:	return (UWord) ((BFAllctr_t *) a1)->address_order; /* IS_AOBF */
+    case 0x201:	return (UWord) ((BFAllctr_t *) a1)->mbc_root;
+    case 0x202:	return (UWord) ((RBTree_t *) a1)->parent;
+    case 0x203:	return (UWord) ((RBTree_t *) a1)->left;
+    case 0x204:	return (UWord) ((RBTree_t *) a1)->right;
+    case 0x205:	return (UWord) LIST_NEXT(a1);
+    case 0x206:	return (UWord) IS_BLACK((RBTree_t *) a1);
+    case 0x207:	return (UWord) IS_TREE_NODE((RBTree_t *) a1);
+    case 0x208:	return (UWord) 1; /* IS_BF_ALGO */
+    case 0x20a: return (UWord) !((BFAllctr_t *) a1)->address_order; /* IS_BF */
+    case 0x20b:	return (UWord) LIST_PREV(a1);
+    default:	ASSERT(0); return ~((UWord) 0);
     }
 }
 
@@ -1089,36 +1083,36 @@ check_tree(RBTree_t *root, int ao, Uint size)
 	if (x->left) {
 	    ASSERT(x->left->parent == x);
 	    if (ao) {
-		ASSERT(BLK_SZ(x->left) < BLK_SZ(x)
-		       || (BLK_SZ(x->left) == BLK_SZ(x) && x->left < x));
+		ASSERT(BF_BLK_SZ(x->left) < BF_BLK_SZ(x)
+		       || (BF_BLK_SZ(x->left) == BF_BLK_SZ(x) && x->left < x));
 	    }
 	    else {
 		ASSERT(IS_TREE_NODE(x->left));
-		ASSERT(BLK_SZ(x->left) < BLK_SZ(x));
+		ASSERT(BF_BLK_SZ(x->left) < BF_BLK_SZ(x));
 	    }
 	}
 
 	if (x->right) {
 	    ASSERT(x->right->parent == x);
 	    if (ao) {
-		ASSERT(BLK_SZ(x->right) > BLK_SZ(x)
-		       || (BLK_SZ(x->right) == BLK_SZ(x) && x->right > x));
+		ASSERT(BF_BLK_SZ(x->right) > BF_BLK_SZ(x)
+		       || (BF_BLK_SZ(x->right) == BF_BLK_SZ(x) && x->right > x));
 	    }
 	    else {
 		ASSERT(IS_TREE_NODE(x->right));
-		ASSERT(BLK_SZ(x->right) > BLK_SZ(x));
+		ASSERT(BF_BLK_SZ(x->right) > BF_BLK_SZ(x));
 	    }
 	}
 
-	if (size && BLK_SZ(x) >= size) {
+	if (size && BF_BLK_SZ(x) >= size) {
 	    if (ao) {
 		if (!res
-		    || BLK_SZ(x) < BLK_SZ(res)
-		    || (BLK_SZ(x) == BLK_SZ(res) && x < res))
+		    || BF_BLK_SZ(x) < BF_BLK_SZ(res)
+		    || (BF_BLK_SZ(x) == BF_BLK_SZ(res) && x < res))
 		    res = x;
 	    }
 	    else {
-		if (!res || BLK_SZ(x) < BLK_SZ(res))
+		if (!res || BF_BLK_SZ(x) < BF_BLK_SZ(res))
 		    res = x;
 	    }
 	}
@@ -1164,7 +1158,7 @@ print_tree_aux(RBTree_t *x, int indent)
 	}
 	fprintf(stderr, "%s: sz=%lu addr=0x%lx\r\n",
 		IS_BLACK(x) ? "BLACK" : "RED",
-		BLK_SZ(x),
+		BF_BLK_SZ(x),
 		(Uint) x);
 	print_tree_aux(x->left,  indent + INDENT_STEP);
     }

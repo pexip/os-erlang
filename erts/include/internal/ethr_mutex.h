@@ -1,7 +1,7 @@
 /*
  * %CopyrightBegin%
  *
- * Copyright Ericsson AB 2010. All Rights Reserved.
+ * Copyright Ericsson AB 2010-2011. All Rights Reserved.
  *
  * The contents of this file are subject to the Erlang Public License,
  * Version 1.1, (the "License"); you may not use this file except in
@@ -22,6 +22,23 @@
  * Author: Rickard Green
  */
 
+/*
+ * IMPORTANT note about ethr_cond_signal() and ethr_cond_broadcast()
+ *
+ * POSIX allow a call to `pthread_cond_signal' or `pthread_cond_broadcast'
+ * even though the associated mutex/mutexes isn't/aren't locked by the
+ * caller. We do not allow that by default in order to avoid a performance
+ * penalty on some platforms.
+ *
+ * Mutexes and condition variables can, however, be initialized as POSIX
+ * compliant. When initialized as such ethr_cond_signal(), and
+ * ethr_cond_broadcast() are allowed to be called even though the associated
+ * mutexes aren't locked. This will, however, incur a performance penalty on
+ * some platforms.
+ *
+ * POSIX compliant mutexes and condition variables *need* to be used together.
+ */
+
 #ifndef ETHR_MUTEX_H__
 #define ETHR_MUTEX_H__
 
@@ -40,6 +57,14 @@
 #endif
 #endif
 
+/* #define ETHR_DBG_WIN_MTX_WITH_PTHREADS */
+#ifdef ETHR_DBG_WIN_MTX_WITH_PTHREADS
+typedef pthread_mutex_t CRITICAL_SECTION;
+int TryEnterCriticalSection(CRITICAL_SECTION *);
+void EnterCriticalSection(CRITICAL_SECTION *);
+void LeaveCriticalSection(CRITICAL_SECTION *);
+#endif
+
 #ifdef ETHR_MTX_HARD_DEBUG
 #  ifdef __GNUC__
 #    warning ETHR_MTX_HARD_DEBUG
@@ -52,6 +77,10 @@
 #  if !defined(ETHR_MTX_HARD_DEBUG_WSQ) && defined(ETHR_MTX_HARD_DEBUG_Q)
 #    define ETHR_MTX_HARD_DEBUG_WSQ
 #  endif
+#endif
+
+#ifndef ETHR_INLINE_MTX_FUNC_NAME_
+#  define ETHR_INLINE_MTX_FUNC_NAME_(X) X
 #endif
 
 #if defined(ETHR_USE_OWN_RWMTX_IMPL__) || defined(ETHR_USE_OWN_MTX_IMPL__)
@@ -68,7 +97,7 @@
 #if 0
 #  define ETHR_MTX_Q_LOCK_SPINLOCK__
 #  define ETHR_MTX_QLOCK_TYPE__ ethr_spinlock_t
-#elif defined(ETHR_PTHREADS)
+#elif defined(ETHR_PTHREADS) || defined(ETHR_OSE_THREADS)
 #  define ETHR_MTX_Q_LOCK_PTHREAD_MUTEX__
 #  define ETHR_MTX_QLOCK_TYPE__ pthread_mutex_t
 #elif defined(ETHR_WIN32_THREADS)
@@ -136,12 +165,18 @@ struct ethr_mutex_base_ {
 typedef struct {
     int main_spincount;
     int aux_spincount;
+    int posix_compliant;
 } ethr_mutex_opt;
+
+#define ETHR_MUTEX_OPT_DEFAULT_INITER {-1, -1, 0}
 
 typedef struct {
     int main_spincount;
     int aux_spincount;
+    int posix_compliant;
 } ethr_cond_opt;
+
+#define ETHR_COND_OPT_DEFAULT_INITER {-1, -1, 0}
 
 #ifdef ETHR_USE_OWN_MTX_IMPL__
 
@@ -175,7 +210,7 @@ struct ethr_cond_ {
 #endif
 };
 
-#else /* pthread */
+#elif (defined(ETHR_PTHREADS) || defined(ETHR_OSE_THREADS)) && !defined(ETHR_DBG_WIN_MTX_WITH_PTHREADS)
 
 typedef struct ethr_mutex_ ethr_mutex;
 struct ethr_mutex_ {
@@ -193,7 +228,36 @@ struct ethr_cond_ {
 #endif
 };
 
-#endif /* pthread */
+#elif defined(ETHR_WIN32_THREADS) || defined(ETHR_DBG_WIN_MTX_WITH_PTHREADS)
+#  define ETHR_WIN_MUTEX__
+
+typedef struct ethr_mutex_ ethr_mutex;
+struct ethr_mutex_ {
+    int posix_compliant;
+    CRITICAL_SECTION cs;
+    ethr_ts_event *wakeups;
+    ethr_atomic32_t have_wakeups; /* only when posix compliant */
+    ethr_atomic32_t locked;       /* only when posix compliant */
+    ethr_spinlock_t lock;         /* only when posix compliant */
+#if ETHR_XCHK
+    int initialized;
+#endif
+};
+
+typedef struct ethr_cond_ ethr_cond;
+struct ethr_cond_ {
+    int posix_compliant;
+    CRITICAL_SECTION cs;
+    ethr_ts_event *waiters;
+    int spincount;
+#if ETHR_XCHK
+    int initialized;
+#endif
+};
+
+#else
+#  error "no mutex implementation"
+#endif
 
 int ethr_mutex_init_opt(ethr_mutex *, ethr_mutex_opt *);
 int ethr_mutex_init(ethr_mutex *);
@@ -290,7 +354,7 @@ void ethr_rwmutex_rwunlock(ethr_rwmutex *);
 
 #ifdef ETHR_MTX_HARD_DEBUG
 #define ETHR_MTX_HARD_ASSERT(A) \
-  ((void) ((A) ? 1 : ethr_assert_failed(__FILE__, __LINE__, #A)))
+  ((void) ((A) ? 1 : ethr_assert_failed(__FILE__, __LINE__, __func__,#A)))
 #else
 #define ETHR_MTX_HARD_ASSERT(A) ((void) 1)
 #endif
@@ -505,7 +569,7 @@ void ethr_mutex_lock_wait__(ethr_mutex *, ethr_sint32_t);
 void ethr_mutex_unlock_wake__(ethr_mutex *, ethr_sint32_t);
 
 static ETHR_INLINE int
-ETHR_INLINE_FUNC_NAME_(ethr_mutex_trylock)(ethr_mutex *mtx)
+ETHR_INLINE_MTX_FUNC_NAME_(ethr_mutex_trylock)(ethr_mutex *mtx)
 {
     ethr_sint32_t act;
     int res;
@@ -529,7 +593,7 @@ ETHR_INLINE_FUNC_NAME_(ethr_mutex_trylock)(ethr_mutex *mtx)
 }
 
 static ETHR_INLINE void
-ETHR_INLINE_FUNC_NAME_(ethr_mutex_lock)(ethr_mutex *mtx)
+ETHR_INLINE_MTX_FUNC_NAME_(ethr_mutex_lock)(ethr_mutex *mtx)
 {
     ethr_sint32_t act;
     ETHR_MTX_HARD_DEBUG_FENCE_CHK(mtx);
@@ -549,7 +613,7 @@ ETHR_INLINE_FUNC_NAME_(ethr_mutex_lock)(ethr_mutex *mtx)
 }
 
 static ETHR_INLINE void
-ETHR_INLINE_FUNC_NAME_(ethr_mutex_unlock)(ethr_mutex *mtx)
+ETHR_INLINE_MTX_FUNC_NAME_(ethr_mutex_unlock)(ethr_mutex *mtx)
 {
     ethr_sint32_t act;
     ETHR_COMPILER_BARRIER;
@@ -569,12 +633,12 @@ ETHR_INLINE_FUNC_NAME_(ethr_mutex_unlock)(ethr_mutex *mtx)
 
 #endif /* ETHR_TRY_INLINE_FUNCS */
 
-#else /* pthread_mutex */
+#elif (defined(ETHR_PTHREADS) || defined(ETHR_OSE_THREADS)) && !defined(ETHR_DBG_WIN_MTX_WITH_PTHREADS)
 
 #if defined(ETHR_TRY_INLINE_FUNCS) || defined(ETHR_MUTEX_IMPL__)
 
 static ETHR_INLINE int
-ETHR_INLINE_FUNC_NAME_(ethr_mutex_trylock)(ethr_mutex *mtx)
+ETHR_INLINE_MTX_FUNC_NAME_(ethr_mutex_trylock)(ethr_mutex *mtx)
 {
     int res;
     res = pthread_mutex_trylock(&mtx->pt_mtx);
@@ -584,7 +648,7 @@ ETHR_INLINE_FUNC_NAME_(ethr_mutex_trylock)(ethr_mutex *mtx)
 }
 
 static ETHR_INLINE void
-ETHR_INLINE_FUNC_NAME_(ethr_mutex_lock)(ethr_mutex *mtx)
+ETHR_INLINE_MTX_FUNC_NAME_(ethr_mutex_lock)(ethr_mutex *mtx)
 {
     int res = pthread_mutex_lock(&mtx->pt_mtx);
     if (res != 0)
@@ -592,7 +656,7 @@ ETHR_INLINE_FUNC_NAME_(ethr_mutex_lock)(ethr_mutex *mtx)
 }
 
 static ETHR_INLINE void
-ETHR_INLINE_FUNC_NAME_(ethr_mutex_unlock)(ethr_mutex *mtx)
+ETHR_INLINE_MTX_FUNC_NAME_(ethr_mutex_unlock)(ethr_mutex *mtx)
 {
     int res = pthread_mutex_unlock(&mtx->pt_mtx);
     if (res != 0)
@@ -601,7 +665,54 @@ ETHR_INLINE_FUNC_NAME_(ethr_mutex_unlock)(ethr_mutex *mtx)
 
 #endif /* ETHR_TRY_INLINE_FUNCS */
 
-#endif /* pthread_mutex */
+#elif defined(ETHR_WIN32_THREADS) || defined(ETHR_DBG_WIN_MTX_WITH_PTHREADS)
+
+#if defined(ETHR_TRY_INLINE_FUNCS) || defined(ETHR_MUTEX_IMPL__)
+
+static ETHR_INLINE int
+ETHR_INLINE_MTX_FUNC_NAME_(ethr_mutex_trylock)(ethr_mutex *mtx)
+{
+    if (!TryEnterCriticalSection(&mtx->cs))
+	return EBUSY;
+    if (mtx->posix_compliant)
+	ethr_atomic32_set(&mtx->locked, 1);
+    return 0;
+}
+
+static ETHR_INLINE void
+ETHR_INLINE_MTX_FUNC_NAME_(ethr_mutex_lock)(ethr_mutex *mtx)
+{
+    EnterCriticalSection(&mtx->cs);
+    if (mtx->posix_compliant)
+	ethr_atomic32_set(&mtx->locked, 1);
+}
+
+void ethr_mutex_cond_wakeup__(ethr_mutex *mtx);
+
+static ETHR_INLINE void
+ETHR_INLINE_MTX_FUNC_NAME_(ethr_mutex_unlock)(ethr_mutex *mtx)
+{
+    if (mtx->posix_compliant) {
+	ethr_atomic32_set_mb(&mtx->locked, 0);
+	if (ethr_atomic32_read_acqb(&mtx->have_wakeups))
+	    goto cond_wakeup;
+	else
+	    goto leave_cs;
+    }
+
+    if (mtx->wakeups) {
+    cond_wakeup:
+	ethr_mutex_cond_wakeup__(mtx);
+    }
+    else {
+    leave_cs:
+	LeaveCriticalSection(&mtx->cs);
+    }
+}
+
+#endif /* ETHR_TRY_INLINE_FUNCS */
+
+#endif
 
 #ifdef ETHR_USE_OWN_RWMTX_IMPL__
 
@@ -615,7 +726,7 @@ ETHR_INLINE_FUNC_NAME_(ethr_mutex_unlock)(ethr_mutex *mtx)
 #if defined(ETHR_TRY_INLINE_FUNCS) || defined(ETHR_MUTEX_IMPL__)
 
 static ETHR_INLINE int
-ETHR_INLINE_FUNC_NAME_(ethr_rwmutex_tryrlock)(ethr_rwmutex *rwmtx)
+ETHR_INLINE_MTX_FUNC_NAME_(ethr_rwmutex_tryrlock)(ethr_rwmutex *rwmtx)
 {
     int res = pthread_rwlock_tryrdlock(&rwmtx->pt_rwlock);
     if (res != 0 && res != EBUSY)
@@ -624,7 +735,7 @@ ETHR_INLINE_FUNC_NAME_(ethr_rwmutex_tryrlock)(ethr_rwmutex *rwmtx)
 }
 
 static ETHR_INLINE void
-ETHR_INLINE_FUNC_NAME_(ethr_rwmutex_rlock)(ethr_rwmutex *rwmtx)
+ETHR_INLINE_MTX_FUNC_NAME_(ethr_rwmutex_rlock)(ethr_rwmutex *rwmtx)
 {
     int res = pthread_rwlock_rdlock(&rwmtx->pt_rwlock);
     if (res != 0)
@@ -632,7 +743,7 @@ ETHR_INLINE_FUNC_NAME_(ethr_rwmutex_rlock)(ethr_rwmutex *rwmtx)
 }
 
 static ETHR_INLINE void
-ETHR_INLINE_FUNC_NAME_(ethr_rwmutex_runlock)(ethr_rwmutex *rwmtx)
+ETHR_INLINE_MTX_FUNC_NAME_(ethr_rwmutex_runlock)(ethr_rwmutex *rwmtx)
 {
     int res = pthread_rwlock_unlock(&rwmtx->pt_rwlock);
     if (res != 0)
@@ -640,7 +751,7 @@ ETHR_INLINE_FUNC_NAME_(ethr_rwmutex_runlock)(ethr_rwmutex *rwmtx)
 }
 
 static ETHR_INLINE int
-ETHR_INLINE_FUNC_NAME_(ethr_rwmutex_tryrwlock)(ethr_rwmutex *rwmtx)
+ETHR_INLINE_MTX_FUNC_NAME_(ethr_rwmutex_tryrwlock)(ethr_rwmutex *rwmtx)
 {
     int res = pthread_rwlock_trywrlock(&rwmtx->pt_rwlock);
     if (res != 0 && res != EBUSY)
@@ -649,7 +760,7 @@ ETHR_INLINE_FUNC_NAME_(ethr_rwmutex_tryrwlock)(ethr_rwmutex *rwmtx)
 }
 
 static ETHR_INLINE void
-ETHR_INLINE_FUNC_NAME_(ethr_rwmutex_rwlock)(ethr_rwmutex *rwmtx)
+ETHR_INLINE_MTX_FUNC_NAME_(ethr_rwmutex_rwlock)(ethr_rwmutex *rwmtx)
 {
     int res = pthread_rwlock_wrlock(&rwmtx->pt_rwlock);
     if (res != 0)
@@ -657,7 +768,7 @@ ETHR_INLINE_FUNC_NAME_(ethr_rwmutex_rwlock)(ethr_rwmutex *rwmtx)
 }
 
 static ETHR_INLINE void
-ETHR_INLINE_FUNC_NAME_(ethr_rwmutex_rwunlock)(ethr_rwmutex *rwmtx)
+ETHR_INLINE_MTX_FUNC_NAME_(ethr_rwmutex_rwunlock)(ethr_rwmutex *rwmtx)
 {
     int res = pthread_rwlock_unlock(&rwmtx->pt_rwlock);
     if (res != 0)

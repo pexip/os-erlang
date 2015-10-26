@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2005-2011. All Rights Reserved.
+%% Copyright Ericsson AB 2005-2012. All Rights Reserved.
 %%
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -34,7 +34,7 @@
 
 -export([all/0, suite/0,groups/0,init_per_suite/1, end_per_suite/1, 
 	 init_per_group/2,end_per_group/2, 
-	 init_per_testcase/2, fin_per_testcase/2]).
+	 init_per_testcase/2, end_per_testcase/2]).
 
 -export([erlang_display/1, integer/1, float/1, 
 	 string/1, character/1, snprintf/1, quote/1]).
@@ -247,7 +247,7 @@ init_per_testcase(Case, Config) ->
     Dog = ?t:timetrap(?DEFAULT_TIMEOUT),
     [{testcase, Case}, {watchdog, Dog} |Config].
 
-fin_per_testcase(_Case, Config) ->
+end_per_testcase(_Case, Config) ->
     Dog = ?config(watchdog, Config),
     ?t:timetrap_cancel(Dog),
     ok.
@@ -303,7 +303,7 @@ read_case_data(Port, TestCase) ->
 	      {Port, {data, {eol, [?PID_MARKER | PidStr]}}} ->
 		  ?line ?t:format("Port program pid: ~s~n", [PidStr]),
 		  ?line CaseProc = self(),
-		  ?line list_to_integer(PidStr), % Sanity check
+		  ?line _ = list_to_integer(PidStr), % Sanity check
 		  spawn_opt(fun () ->
 				    port_prog_killer(CaseProc, PidStr)
 			    end,

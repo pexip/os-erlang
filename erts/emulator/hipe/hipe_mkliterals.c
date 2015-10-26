@@ -1,9 +1,8 @@
 /*
  * %CopyrightBegin%
-
- *
- * Copyright Ericsson AB 2001-2011. All Rights Reserved.
- *
+ * 
+ * Copyright Ericsson AB 2001-2012. All Rights Reserved.
+ * 
  * The contents of this file are subject to the Erlang Public License,
  * Version 1.1, (the "License"); you may not use this file except in
  * compliance with the License. You should have received a copy of the
@@ -212,6 +211,11 @@ static const unsigned int CRCTABLE[256] = {
     0xB40BBE37, 0xC30C8EA1, 0x5A05DF1B, 0x2D02EF8D,
 };
 
+/* For hipe cross compiler. Hard code all values.
+   No calls by hipe compiler to query the running emulator.
+*/
+static int is_xcomp = 0;
+
 /*
  *  The algorithm for calculating the 32 bit CRC checksum is based upon
  *  documentation and algorithms provided by Dr. Ross N. Williams in the
@@ -243,7 +247,7 @@ crc_update_buf(unsigned int crc_value,
 }
 
 static unsigned int
-crc_update_int(unsigned int crc_value, const unsigned int *p)
+crc_update_int(unsigned int crc_value, const int *p)
 {
     return crc_update_buf(crc_value, p, sizeof *p);
 }
@@ -256,41 +260,8 @@ crc_update_int(unsigned int crc_value, const unsigned int *p)
  */
 static const struct literal {
     const char *name;
-    unsigned int value;
+    int value;
 } literals[] = {
-    /* Field offsets in a process struct */
-    { "P_HP", offsetof(struct process, htop) },
-    { "P_HP_LIMIT", offsetof(struct process, stop) },
-    { "P_OFF_HEAP_FIRST", offsetof(struct process, off_heap.first) },
-    { "P_MBUF", offsetof(struct process, mbuf) },
-    { "P_ID", offsetof(struct process, id) },
-    { "P_FLAGS", offsetof(struct process, flags) },
-    { "P_FVALUE", offsetof(struct process, fvalue) },
-    { "P_FREASON", offsetof(struct process, freason) },
-    { "P_FTRACE", offsetof(struct process, ftrace) },
-    { "P_FCALLS", offsetof(struct process, fcalls) },
-    { "P_BEAM_IP", offsetof(struct process, i) },
-    { "P_ARITY", offsetof(struct process, arity) },
-    { "P_ARG0", offsetof(struct process, def_arg_reg[0]) },
-    { "P_ARG1", offsetof(struct process, def_arg_reg[1]) },
-    { "P_ARG2", offsetof(struct process, def_arg_reg[2]) },
-    { "P_ARG3", offsetof(struct process, def_arg_reg[3]) },
-    { "P_ARG4", offsetof(struct process, def_arg_reg[4]) },
-    { "P_ARG5", offsetof(struct process, def_arg_reg[5]) },
-#ifdef HIPE
-    { "P_NSP", offsetof(struct process, hipe.nsp) },
-    { "P_NCALLEE", offsetof(struct process, hipe.ncallee) },
-    { "P_CLOSURE", offsetof(struct process, hipe.closure) },
-#if defined(__i386__) || defined(__x86_64__)
-    { "P_NSP_LIMIT", offsetof(struct process, hipe.nstack) },
-    { "P_CSP", offsetof(struct process, hipe.ncsp) },
-#elif defined(__sparc__) || defined(__powerpc__) || defined(__ppc__) || defined(__powerpc64__) || defined(__arm__)
-    { "P_NSP_LIMIT", offsetof(struct process, hipe.nstack) },
-    { "P_NRA", offsetof(struct process, hipe.nra) },
-#endif
-    { "P_NARITY", offsetof(struct process, hipe.narity) },
-#endif /* HIPE */
-
     /* process flags bits */
     {  "F_TIMO", F_TIMO },
 
@@ -298,7 +269,7 @@ static const struct literal {
     { "FREASON_TRAP", TRAP },
 
     /* special Erlang constants */
-    { "THE_NON_VALUE", THE_NON_VALUE },
+    { "THE_NON_VALUE", (int)THE_NON_VALUE },
 
     /* funs */
 #ifdef HIPE
@@ -368,8 +339,6 @@ static const struct literal {
     { "MS_SAVEOFFSET_SIZE", field_sizeof(struct erl_bin_match_struct, save_offset)},
 
     /* messages */
-    { "P_MSG_FIRST", offsetof(struct process, msg.first) },
-    { "P_MSG_SAVE", offsetof(struct process, msg.save) },
     { "MSG_NEXT", offsetof(struct erl_mesg, next) },
 
     /* ARM */
@@ -448,22 +417,20 @@ static const struct atom_literal {
  * These depend on configuration options such as heap architecture.
  * The compiler accesses these through hipe_bifs:get_rts_param/1.
  */
-static const struct rts_param {
+struct rts_param {
     unsigned int nr;
     const char *name;
     unsigned int is_defined;
-    unsigned int value;
-} rts_params[] = {
+    int value;
+};
+
+static const struct rts_param rts_params[] = {
     { 1, "P_OFF_HEAP_FUNS",
-#if !defined(HYBRID)
       1, offsetof(struct process, off_heap.first)
-#endif
     },
 
     { 4, "EFT_NEXT",
-#if !defined(HYBRID)
       1, offsetof(struct erl_fun_thing, next)
-#endif
     },
 
     /* These are always defined, but their values depend on the
@@ -484,7 +451,7 @@ static const struct rts_param {
 #endif
     },
     { 14, "P_FP_EXCEPTION",
-#if !defined(NO_FPE_SIGNALS)
+#if !defined(NO_FPE_SIGNALS) || defined(HIPE)
       1, offsetof(struct process, fp_exception)
 #endif
     },
@@ -497,11 +464,66 @@ static const struct rts_param {
       0
 #endif
     },
+    /* This flag is always defined, but its value is configuration-dependent. */
+    { 16, "ERTS_NO_FPE_SIGNALS",
+      1,
+#if defined(NO_FPE_SIGNALS)
+      1
+#else
+      0
+#endif
+    },
     /* This parameter is always defined, but its value depends on ERTS_SMP. */
     { 19, "MSG_MESSAGE",
       1, offsetof(struct erl_mesg, m[0])
     },
-    /* highest entry ever used == 21 */
+
+    /* Field offsets in a process struct */
+    { 22, "P_HP", 1, offsetof(struct process, htop) },
+    { 23, "P_HP_LIMIT", 1, offsetof(struct process, stop) },
+    { 24, "P_OFF_HEAP_FIRST", 1, offsetof(struct process, off_heap.first) },
+    { 25, "P_MBUF", 1, offsetof(struct process, mbuf) },
+    { 26, "P_ID", 1, offsetof(struct process, common.id) },
+    { 27, "P_FLAGS", 1, offsetof(struct process, flags) },
+    { 28, "P_FVALUE", 1, offsetof(struct process, fvalue) },
+    { 29, "P_FREASON", 1, offsetof(struct process, freason) },
+    { 30, "P_FTRACE", 1, offsetof(struct process, ftrace) },
+    { 31, "P_FCALLS", 1, offsetof(struct process, fcalls) },
+    { 32, "P_BEAM_IP", 1, offsetof(struct process, i) },
+    { 33, "P_ARITY", 1, offsetof(struct process, arity) },
+    { 34, "P_ARG0", 1, offsetof(struct process, def_arg_reg[0]) },
+    { 35, "P_ARG1", 1, offsetof(struct process, def_arg_reg[1]) },
+    { 36, "P_ARG2", 1, offsetof(struct process, def_arg_reg[2]) },
+    { 37, "P_ARG3", 1, offsetof(struct process, def_arg_reg[3]) },
+    { 38, "P_ARG4", 1, offsetof(struct process, def_arg_reg[4]) },
+    { 39, "P_ARG5", 1, offsetof(struct process, def_arg_reg[5]) },
+    { 40, "P_NSP", 1, offsetof(struct process, hipe.nsp) },
+    { 41, "P_NCALLEE", 1, offsetof(struct process, hipe.ncallee) },
+    { 42, "P_CLOSURE", 1, offsetof(struct process, hipe.closure) },
+    { 43, "P_NSP_LIMIT", 1, offsetof(struct process, hipe.nstack) },
+    { 44, "P_CSP",
+#if defined(__i386__) || defined(__x86_64__)
+	1, offsetof(struct process, hipe.ncsp)
+#endif
+    },
+    { 45, "P_NRA",
+#if defined(__sparc__) || defined(__powerpc__) || defined(__ppc__) || defined(__powerpc64__) || defined(__arm__)
+	1, offsetof(struct process, hipe.nra)
+#endif
+    },
+    { 46, "P_NARITY", 1, offsetof(struct process, hipe.narity) },
+    { 47, "P_FLOAT_RESULT",
+#ifdef NO_FPE_SIGNALS
+	1, offsetof(struct process, hipe.float_result)
+#endif
+    },
+    { 48, "P_BIF_CALLEE",
+#if defined(ERTS_ENABLE_LOCK_CHECK) && defined(ERTS_SMP)
+	1, offsetof(struct process, hipe.bif_callee)
+#endif
+    },
+    { 49, "P_MSG_FIRST", 1, offsetof(struct process, msg.first) },
+    { 50, "P_MSG_SAVE", 1, offsetof(struct process, msg.save) },
 };
 
 #define NR_PARAMS	ARRAY_SIZE(rts_params)
@@ -528,12 +550,12 @@ static void compute_crc(void)
 
 static void c_define_literal(FILE *fp, const struct literal *literal)
 {
-    fprintf(fp, "#define %s %u\n", literal->name, literal->value);
+    fprintf(fp, "#define %s %d\n", literal->name, literal->value);
 }
 
 static void e_define_literal(FILE *fp, const struct literal *literal)
 {
-    fprintf(fp, "-define(%s, %u).\n", literal->name, literal->value);
+    fprintf(fp, "-define(%s, %d).\n", literal->name, literal->value);
 }
 
 static void print_literals(FILE *fp, void (*print_literal)(FILE*, const struct literal*))
@@ -560,7 +582,7 @@ static void print_atom_literals(FILE *fp, void (*print_atom_literal)(FILE*, cons
 static void c_define_param(FILE *fp, const struct rts_param *param)
 {
     if (param->is_defined)
-	fprintf(fp, "#define %s %u\n", param->name, param->value);
+	fprintf(fp, "#define %s %d\n", param->name, param->value);
 }
 
 static void c_case_param(FILE *fp, const struct rts_param *param)
@@ -568,7 +590,7 @@ static void c_case_param(FILE *fp, const struct rts_param *param)
     fprintf(fp, " \\\n");
     fprintf(fp, "\tcase %u: ", param->nr);
     if (param->is_defined)
-	fprintf(fp, "value = %u", param->value);
+	fprintf(fp, "value = %d", param->value);
     else
 	fprintf(fp, "is_defined = 0");
     fprintf(fp, "; break;");
@@ -576,7 +598,15 @@ static void c_case_param(FILE *fp, const struct rts_param *param)
 
 static void e_define_param(FILE *fp, const struct rts_param *param)
 {
-    fprintf(fp, "-define(%s, hipe_bifs:get_rts_param(%u)).\n", param->name, param->nr);
+    if (is_xcomp) {
+	if (param->is_defined)
+	    fprintf(fp, "-define(%s, %d).\n", param->name, param->value);
+	else
+	    fprintf(fp, "-define(%s, []).\n", param->name);	
+    }
+    else {
+	fprintf(fp, "-define(%s, hipe_bifs:get_rts_param(%u)).\n", param->name, param->nr);
+    }    
 }
 
 static void print_params(FILE *fp, void (*print_param)(FILE*,const struct rts_param*))
@@ -613,19 +643,40 @@ static int do_e(FILE *fp, const char* this_exe)
     fprintf(fp, "\n");
     print_params(fp, e_define_param);
     fprintf(fp, "\n");
-    fprintf(fp, "-define(HIPE_SYSTEM_CRC, hipe_bifs:system_crc(%u)).\n", literals_crc);
+    if (is_xcomp) {
+	fprintf(fp, "-define(HIPE_SYSTEM_CRC, %u).\n", system_crc);
+    }
+    else {
+	fprintf(fp, "-define(HIPE_SYSTEM_CRC, hipe_bifs:system_crc(%u)).\n",
+		literals_crc);
+    }
     return 0;
 }
 
 int main(int argc, const char **argv)
 {
+    int i;
+    int (*do_func_ptr)(FILE *, const char*) = NULL;
+
     compute_crc();
-    if (argc == 2) {
-	if (strcmp(argv[1], "-c") == 0)
-	    return do_c(stdout, argv[0]);
-	if (strcmp(argv[1], "-e") == 0)
-	    return do_e(stdout, argv[0]);
+    for (i = 1; i < argc; i++) {
+	if      (strcmp(argv[i], "-c") == 0)
+	    do_func_ptr = &do_c;
+	else if (strcmp(argv[i], "-e") == 0)
+	    do_func_ptr = &do_e;
+	else if (strcmp(argv[i], "-x") == 0)
+	    is_xcomp = 1;
+	else
+	    goto error;
     }
-    fprintf(stderr, "usage: %s [-c | -e] > output-file\n", argv[0]);
+    if (do_func_ptr) {
+	return do_func_ptr(stdout, argv[0]);
+    }
+error:
+    fprintf(stderr, "usage: %s [-x] [-c | -e] > output-file\n"
+	    "\t-c\tC header file\n"
+	    "\t-e\tErlang header file\n"
+	    "\t-x\tCross compile. No dependencies to compiling emulator\n",	    
+	    argv[0]);
     return 1;
 }

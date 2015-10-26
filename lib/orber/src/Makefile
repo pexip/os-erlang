@@ -1,7 +1,7 @@
 #
 # %CopyrightBegin%
 # 
-# Copyright Ericsson AB 1997-2009. All Rights Reserved.
+# Copyright Ericsson AB 1997-2012. All Rights Reserved.
 # 
 # The contents of this file are subject to the Erlang Public License,
 # Version 1.1, (the "License"); you may not use this file except in
@@ -20,9 +20,6 @@
 include $(ERL_TOP)/make/target.mk
 
 include $(ERL_TOP)/make/$(TARGET)/otp.mk
-
-# To get hold of SYSTEM_VSN (e.g. R9C).
-#include $(ERL_TOP)/erts/vsn.mk
 
 # ----------------------------------------------------
 # Application version
@@ -197,11 +194,9 @@ ERL_IDL_FLAGS += -pa $(ERL_TOP)/lib/orber/ebin
 ERL_COMPILE_FLAGS += $(ERL_IDL_FLAGS) \
 	-I$(ERL_TOP)/lib/orber/include \
 	+'{parse_transform,sys_pre_attributes}' \
-	+'{attribute,insert,app_vsn,"orber_$(ORBER_VSN)"}' \
-	-D'ORBVSN="$(ORBER_VSN)"'
+	+'{attribute,insert,app_vsn,"orber_$(ORBER_VSN)"}'
 
-ASN_FLAGS = -bber_bin +der +compact_bit_string +optimize \
-	+nowarn_unused_record
+ASN_FLAGS = -bber +der +compact_bit_string +nowarn_unused_record
 
 # ----------------------------------------------------
 # Targets
@@ -212,14 +207,14 @@ debug:
 opt: $(TARGET_FILES) $(APP_TARGET) $(APPUP_TARGET)
 
 clean:
-	rm -f $(TARGET_FILES) $(GEN_FILES) $(APP_TARGET) $(APPUP_TARGET)
+	rm -f $(TARGET_FILES) $(GEN_FILES) $(APP_TARGET) $(APPUP_TARGET) IDL-GENERATED
 	rm -f errs core *~
 
 $(APP_TARGET): $(APP_SRC) ../vsn.mk
-	sed -e 's;%VSN%;$(ORBER_VSN);' $< > $@
+	$(vsn_verbose)sed -e 's;%VSN%;$(ORBER_VSN);' $< > $@
 
 $(APPUP_TARGET): $(APPUP_SRC) ../vsn.mk
-	sed -e 's;%VSN%;$(ORBER_VSN);' $< > $@
+	$(vsn_verbose)sed -e 's;%VSN%;$(ORBER_VSN);' $< > $@
 
 docs:
 
@@ -227,19 +222,18 @@ docs:
 # Special Build Targets
 # ----------------------------------------------------
 
-$(GEN_ERL_FILES1) $(GEN_HRL_FILES1): $(ERL_TOP)/lib/ic/include/erlang.idl
-	erlc $(ERL_IDL_FLAGS) $(ERL_TOP)/lib/ic/include/erlang.idl
+IDL-GENERATED:  $(ERL_TOP)/lib/ic/include/erlang.idl CORBA.idl OrberIFR.idl
+	$(gen_verbose)erlc $(ERL_IDL_FLAGS) $(ERL_TOP)/lib/ic/include/erlang.idl
+	$(V_at)erlc $(ERL_IDL_FLAGS) CORBA.idl
+	$(V_at)erlc $(ERL_IDL_FLAGS) +'{this,"Orber::IFR"}' OrberIFR.idl
+	$(V_at)>IDL-GENERATED
 
-$(GEN_ERL_FILES2) $(GEN_HRL_FILES2): CORBA.idl
-	erlc $(ERL_IDL_FLAGS) CORBA.idl
-
-$(GEN_ERL_FILES3) $(GEN_HRL_FILES3): OrberIFR.idl
-	erlc $(ERL_IDL_FLAGS) +'{this,"Orber::IFR"}' \
-	OrberIFR.idl
+$(GEN_ERL_FILES): IDL-GENERATED
+$(TARGET_FILES): IDL-GENERATED
 
 $(GEN_ASN_ERL) $(GEN_ASN_HRL): OrberCSIv2.asn1 OrberCSIv2.set.asn
-	erlc $(ERL_COMPILE_FLAGS) $(ASN_FLAGS) +'{inline,"OrberCSIv2"}' OrberCSIv2.set.asn
-	rm -f $(GEN_ASN_ERL:%.erl=%.beam)
+	$(asn_verbose)erlc $(ERL_COMPILE_FLAGS) $(ASN_FLAGS) +'{inline,"OrberCSIv2"}' OrberCSIv2.set.asn
+	$(V_at)rm -f $(GEN_ASN_ERL:%.erl=%.beam)
 
 #	erlc $(ERL_COMPILE_FLAGS) $(ASN_FLAGS) OrberCSIv2.asn1 ;\
 #	erlc $(GEN_ASN_ERL) 
@@ -255,12 +249,12 @@ include $(ERL_TOP)/make/otp_release_targets.mk
 
 
 release_spec: opt
-	$(INSTALL_DIR) $(RELSYSDIR)/ebin
-	$(INSTALL_DATA) $(TARGET_FILES) $(APP_TARGET) $(APPUP_TARGET) $(RELSYSDIR)/ebin
-	$(INSTALL_DIR) $(RELSYSDIR)/src
-	$(INSTALL_DATA) $(ERL_FILES) $(YRL_FILE) $(GEN_HRL_FILES_LOC) $(INTERNAL_HRL_FILES) $(RELSYSDIR)/src
-	$(INSTALL_DIR) $(RELSYSDIR)/include
-	$(INSTALL_DATA) $(EXTERNAL_HRL_FILES) $(GEN_HRL_FILES_EXT) $(RELSYSDIR)/include
+	$(INSTALL_DIR) "$(RELSYSDIR)/ebin"
+	$(INSTALL_DATA) $(TARGET_FILES) $(APP_TARGET) $(APPUP_TARGET) "$(RELSYSDIR)/ebin"
+	$(INSTALL_DIR) "$(RELSYSDIR)/src"
+	$(INSTALL_DATA) $(ERL_FILES) $(YRL_FILE) $(GEN_HRL_FILES_LOC) $(INTERNAL_HRL_FILES) "$(RELSYSDIR)/src"
+	$(INSTALL_DIR) "$(RELSYSDIR)/include"
+	$(INSTALL_DATA) $(EXTERNAL_HRL_FILES) $(GEN_HRL_FILES_EXT) "$(RELSYSDIR)/include"
 
 
 release_docs_spec:

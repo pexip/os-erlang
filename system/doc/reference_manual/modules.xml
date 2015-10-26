@@ -1,10 +1,10 @@
-<?xml version="1.0" encoding="latin1" ?>
+<?xml version="1.0" encoding="utf-8" ?>
 <!DOCTYPE chapter SYSTEM "chapter.dtd">
 
 <chapter>
   <header>
     <copyright>
-      <year>2003</year><year>2010</year>
+      <year>2003</year><year>2014</year>
       <holder>Ericsson AB. All Rights Reserved.</holder>
     </copyright>
     <legalnotice>
@@ -53,10 +53,10 @@ fact(0) ->           %  |
     <pre>
 -Tag(Value).</pre>
     <p><c>Tag</c> must be an atom, while <c>Value</c> must be a literal
-      term. As a convenience in user-defined attributes, the literal term
-      <c>Value</c> the syntax <c>Name/Arity</c>
-      (where <c>Name</c> is an atom and <c>Arity</c> a positive integer)
-      will be translated to <c>{Name,Arity}</c>.</p>
+      term. As a convenience in user-defined attributes, if the literal term
+      <c>Value</c> has the syntax <c>Name/Arity</c>
+      (where <c>Name</c> is an atom and <c>Arity</c> a positive integer),
+	  the term <c>Name/Arity</c> will be translated to <c>{Name,Arity}</c>.</p>
 
     <p>Any module attribute can be specified. The attributes are stored
       in the compiled code and can be retrieved by calling
@@ -114,6 +114,12 @@ fact(0) ->           %  |
           <p>If this attribute is not specified, the version defaults
             to the MD5 checksum of the module.</p>
         </item>
+        <tag><c>-on_load(Function).</c></tag>
+        <item>
+          <p>Names a function that should be run automatically when a
+            module a loaded. See <seealso marker="code_loading#on_load">
+            code loading</seealso> for more information.</p>
+        </item>
       </taglist>
     </section>
 
@@ -128,8 +134,21 @@ fact(0) ->           %  |
         standard behaviours <c>gen_server</c>, <c>gen_fsm</c>,
         <c>gen_event</c> or <c>supervisor</c>.</p>
       <p>The spelling <c>behavior</c> is also accepted.</p>
-      <p>Read more about behaviours and callback modules in OTP Design
-        Principles.</p>
+      <p>The callback functions of the module can be specified either
+        directly by the exported function <c>behaviour_info/1</c>:</p>
+        <pre>
+behaviour_info(callbacks) -> Callbacks.</pre>
+      <p>or by a <c>-callback</c> attribute for each callback
+        function:</p>
+      <pre>
+-callback Name(Arguments) -> Result.</pre>
+      <p>where <c>Arguments</c> is a list of zero or more arguments.
+       The <c>-callback</c> attribute is to be preferred since the
+       extra type information can be used by tools to produce
+       documentation or find discrepancies.</p>
+      <p>Read more about behaviours and callback modules in
+        <seealso marker="doc/design_principles:spec_proc#behaviours">
+        OTP Design Principles</seealso>.</p>
     </section>
 
     <section>
@@ -180,7 +199,7 @@ fact(0) ->           %  |
         <p>Read more in <seealso marker="typespec">Types and Function specifications</seealso>.
 	</p>
 	<p>
-	  The desciption is based on
+	  The description is based on
 	    <url href="http://www.erlang.org/eeps/eep-0008.html">EEP8 -
 	    Types and function specifications</url>
 	    which will not be further updated.

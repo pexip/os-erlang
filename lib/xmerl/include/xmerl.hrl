@@ -1,7 +1,7 @@
 %% 
 %% %CopyrightBegin%
 %% 
-%% Copyright Ericsson AB 2004-2009. All Rights Reserved.
+%% Copyright Ericsson AB 2004-2011. All Rights Reserved.
 %% 
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -61,10 +61,11 @@
 	 }).
 
 %% namespace node - i.e. a {Prefix, URI} pair
-%% TODO: these are not currently used?? /RC
 -record(xmlNsNode,{
-	  prefix,
-	  uri = []
+	  parents = [],	% [{atom(),integer()}]
+	  pos,		% integer()
+	  prefix,	% string()
+	  uri = []	% [] | atom()
 	 }).
 
 %% XML Element
@@ -103,9 +104,10 @@
 
 %% processing instruction
 -record(xmlPI,{
-	  name,	% atom()
-	  pos,	% integer()
-	  value	% IOlist()
+	  name,		% atom()
+	  parents = [],	% [{atom(),integer()}]
+	  pos,		% integer()
+	  value		% IOlist()
 	 }).
 
 -record(xmlDocument,{
@@ -154,6 +156,9 @@
 	  declarations = [],	   % [{Name, Attrs}]
 	  doctype_name,
 	  doctype_DTD = internal, % internal | DTDId
+	  comments = true,
+	  document = false,
+	  default_attrs = false,
 	  rules,
 	  keep_rules = false,	% delete (ets) tab if false
 	  namespace_conformant = false, % true | false

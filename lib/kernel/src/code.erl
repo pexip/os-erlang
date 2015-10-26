@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 1996-2011. All Rights Reserved.
+%% Copyright Ericsson AB 1996-2013. All Rights Reserved.
 %%
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -63,52 +63,13 @@
 	 which/1,
 	 where_is_file/1,
 	 where_is_file/2,
-	 set_primary_archive/3,
-	 clash/0]).
+	 set_primary_archive/4,
+	 clash/0,
+     get_mode/0]).
 
 -export_type([load_error_rsn/0, load_ret/0]).
 
 -include_lib("kernel/include/file.hrl").
-
-%% User interface.
-%%
-%% objfile_extension()		 -> ".beam"
-%% get_path()			 -> [Dir]
-%% set_path([Dir])		 -> true | {error, bad_directory | bad_path}
-%% add_path(Dir)		 -> true | {error, bad_directory}
-%% add_patha(Dir)		 -> true | {error, bad_directory}
-%% add_pathz(Dir)		 -> true | {error, bad_directory}
-%% add_paths([Dir])              -> ok
-%% add_pathsa([Dir])             -> ok
-%% add_pathsz([Dir])             -> ok
-%% del_path(Dir)		 -> boolean() | {error, bad_name}
-%% replace_path(Name, Dir)       -> true | {error, bad_directory | bad_name
-%%                                                 | {badarg,_}}
-%% load_file(Module)		 -> {module, Module} | {error, What :: atom()}
-%% load_abs(File)		 -> {module, Module} | {error, What :: atom()}
-%% load_abs(File, Module)	 -> {module, Module} | {error, What :: atom()}
-%% load_binary(Module, File, Bin)-> {module, Module} | {error, What :: atom()}
-%% ensure_loaded(Module)         -> {module, Module} | {error, What :: atom()}
-%% delete(Module)                -> boolean()
-%% purge(Module)                 -> boolean()  kills all procs running old code
-%% soft_purge(Module)            -> boolean()
-%% is_loaded(Module)	         -> {file, loaded_filename()} | false
-%% all_loaded()		         -> [{Module, loaded_filename()}]
-%% get_object_code(Module)       -> {Module, Bin, Filename} | error
-%% stop()                        -> no_return()
-%% root_dir()                    -> Dir
-%% compiler_dir()                -> Dir
-%% lib_dir()                     -> Dir
-%% lib_dir(Application)          -> Dir | {error, bad_name}
-%% priv_dir(Application)         -> Dir | {error, bad_name}
-%% stick_dir(Dir)                -> ok | error
-%% unstick_dir(Dir)              -> ok | error
-%% stick_mod(Module)             -> true
-%% unstick_mod(Module)           -> true
-%% is_sticky(Module)             -> boolean()
-%% which(Module)                 -> Filename | loaded_ret_atoms() | non_existing
-%% set_primary_archive((FileName, Bin, FileInfo) -> ok | {error, Reason}
-%% clash()                       -> ok         prints out number of clashes
 
 %%----------------------------------------------------------------------------
 %% Some types for basic exported functions of this module
@@ -124,6 +85,39 @@
                   | {'module', Module :: module()}.
 -type loaded_ret_atoms() :: 'cover_compiled' | 'preloaded'.
 -type loaded_filename() :: (Filename :: file:filename()) | loaded_ret_atoms().
+
+%%% BIFs
+
+-export([get_chunk/2, is_module_native/1, make_stub_module/3, module_md5/1]).
+
+-spec get_chunk(Bin, Chunk) ->
+                       binary() | undefined when
+      Bin :: binary(),
+      Chunk :: string().
+
+get_chunk(_, _) ->
+    erlang:nif_error(undef).
+
+-spec is_module_native(Module) -> true | false | undefined when
+      Module :: module().
+
+is_module_native(_) ->
+    erlang:nif_error(undef).
+
+-spec make_stub_module(Module, Beam, Info) -> Module when
+      Module :: module(),
+      Beam :: binary(),
+      Info :: {list(), list()}.
+
+make_stub_module(_, _, _) ->
+    erlang:nif_error(undef).
+
+-spec module_md5(binary()) -> binary() | undefined.
+
+module_md5(_) ->
+    erlang:nif_error(undef).
+
+%%% End of BIFs
 
 %%----------------------------------------------------------------------------
 %% User interface
@@ -300,6 +294,9 @@ replace_path(Name, Dir) when (is_atom(Name) orelse is_list(Name)),
 -spec rehash() -> 'ok'.
 rehash() -> call(rehash).
 
+-spec get_mode() -> 'embedded' | 'interactive'.
+get_mode() -> call(get_mode).
+
 %%-----------------------------------------------------------------
 
 call(Req) ->
@@ -324,15 +321,7 @@ start_link(Flags) ->
 %%-----------------------------------------------------------------
 
 do_start(Flags) ->
-    %% The following module_info/1 calls are here to ensure
-    %% that these modules are loaded prior to their use elsewhere in
-    %% the code_server.
-    %% Otherwise a deadlock may occur when the code_server is starting.
-    code_server = code_server:module_info(module),
-    packages = packages:module_info(module),
-    catch hipe_unified_loader:load_hipe_modules(),
-    Modules2 = [gb_sets, gb_trees, ets, os, binary, unicode, filename, lists],
-    lists:foreach(fun (M) -> M = M:module_info(module) end, Modules2),
+    load_code_server_prerequisites(),
 
     Mode = get_mode(Flags),
     case init:get_argument(root) of 
@@ -359,6 +348,24 @@ do_start(Flags) ->
 	    error_logger:error_msg("Can not start code server ~w ~n", [Other]),
 	    {error, crash}
     end.
+
+%% Make sure that all modules that the code_server process calls
+%% (directly or indirectly) are loaded. Otherwise the code_server
+%% process will deadlock.
+
+load_code_server_prerequisites() ->
+    %% Please keep the alphabetical order.
+    Needed = [binary,
+	      ets,
+	      filename,
+	      gb_sets,
+	      gb_trees,
+	      hipe_unified_loader,
+	      lists,
+	      os,
+	      unicode],
+    _ = [M = M:module_info(module) || M <- Needed],
+    ok.
 
 do_stick_dirs() ->
     do_s(compiler),
@@ -409,7 +416,7 @@ which(Module) when is_atom(Module) ->
     end.
 
 which2(Module) ->
-    Base = to_path(Module),
+    Base = atom_to_list(Module),
     File = filename:basename(Base) ++ objfile_extension(),
     Path = get_path(),
     which(File, filename:dirname(Base), Path).
@@ -470,13 +477,16 @@ where_is_file(Path, File) when is_list(Path), is_list(File) ->
 
 -spec set_primary_archive(ArchiveFile :: file:filename(),
 			  ArchiveBin :: binary(),
-			  FileInfo :: file:file_info())
+			  FileInfo :: file:file_info(),
+			  ParserFun :: fun())
 			 -> 'ok' | {'error', atom()}.
 
-set_primary_archive(ArchiveFile0, ArchiveBin, #file_info{} = FileInfo)
+set_primary_archive(ArchiveFile0, ArchiveBin, #file_info{} = FileInfo,
+		    ParserFun)
   when is_list(ArchiveFile0), is_binary(ArchiveBin) ->
     ArchiveFile = filename:absname(ArchiveFile0),
-    case call({set_primary_archive, ArchiveFile, ArchiveBin, FileInfo}) of
+    case call({set_primary_archive, ArchiveFile, ArchiveBin, FileInfo,
+	       ParserFun}) of
 	{ok, []} ->
 	    ok;
 	{ok, _Mode, Ebins} ->
@@ -505,7 +515,7 @@ search([{Dir, File} | Tail]) ->
 	false -> 
 	    search(Tail);
 	{Dir2, File} ->
-	    io:format("** ~s hides ~s~n",
+	    io:format("** ~ts hides ~ts~n",
 		      [filename:join(Dir, File),
 		       filename:join(Dir2, File)]),
 	    [clash | search(Tail)]
@@ -522,7 +532,7 @@ decorate([File|Tail], Dir) ->
     [{Dir, File} | decorate(Tail, Dir)].
 
 filter(_Ext, Dir, error) ->
-    io:format("** Bad path can't read ~s~n", [Dir]), [];
+    io:format("** Bad path can't read ~ts~n", [Dir]), [];
 filter(Ext, _, {ok,Files}) -> 
     filter2(Ext, length(Ext), Files).
 
@@ -539,9 +549,6 @@ has_ext(Ext, Extlen, File) ->
 	Ext -> true;
 	_ -> false
     end.
-
-to_path(X) ->
-    filename:join(packages:split(X)).
 
 -spec load_native_code_for_all_loaded() -> ok.
 load_native_code_for_all_loaded() ->

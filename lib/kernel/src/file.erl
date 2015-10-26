@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 1996-2011. All Rights Reserved.
+%% Copyright Ericsson AB 1996-2013. All Rights Reserved.
 %%
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -27,16 +27,18 @@
 -export([format_error/1]).
 %% File system and metadata.
 -export([get_cwd/0, get_cwd/1, set_cwd/1, delete/1, rename/2,
-	 make_dir/1, del_dir/1, list_dir/1,
-	 read_file_info/1, write_file_info/2,
+	 make_dir/1, del_dir/1, list_dir/1, list_dir_all/1,
+	 read_file_info/1, read_file_info/2,
+	 write_file_info/2, write_file_info/3,
 	 altname/1,
-	 read_link_info/1, read_link/1,
+	 read_link_info/1, read_link_info/2,
+	 read_link/1, read_link_all/1,
 	 make_link/2, make_symlink/2,
 	 read_file/1, write_file/2, write_file/3]).
 %% Specialized
 -export([ipread_s32bu_p32bu/3]).
 %% Generic file contents.
--export([open/2, close/1, advise/4,
+-export([open/2, close/1, advise/4, allocate/3,
 	 read/2, write/2, 
 	 pread/2, pread/3, pwrite/2, pwrite/3,
 	 read_line/1,
@@ -51,6 +53,9 @@
 
 -export([pid2name/1]).
 
+%% Sendfile functions
+-export([sendfile/2,sendfile/5]).
+
 %%% Obsolete exported functions
 
 -export([raw_read_file_info/1, raw_write_file_info/2]).
@@ -62,8 +67,8 @@
 -export([ipread_s32bu_p32bu_int/3]).
 
 %% Types that can be used from other modules -- alphabetically ordered.
--export_type([date_time/0, fd/0, file_info/0, filename/0, io_device/0,
-	      name/0, posix/0]).
+-export_type([date_time/0, fd/0, file_info/0, filename/0, filename_all/0,
+              io_device/0, name/0, name_all/0, posix/0]).
 
 %%% Includes and defines
 -include("file.hrl").
@@ -75,7 +80,8 @@
 -define(RAM_FILE, ram_file).           % Module
 
 %% data types
--type filename()  :: string() | binary().
+-type filename()  :: string().
+-type filename_all() :: string() | binary().
 -type file_info() :: #file_info{}.
 -type fd()        :: #file_descriptor{}.
 -type io_device() :: pid() | fd().
@@ -89,9 +95,11 @@
                       Delay :: non_neg_integer()}
 		   | 'delayed_write' | {'read_ahead', Size :: pos_integer()}
 		   | 'read_ahead' | 'compressed'
-		   | {'encoding', unicode:encoding()}.
+		   | {'encoding', unicode:encoding()}
+		   | sync.
 -type deep_list() :: [char() | atom() | deep_list()].
--type name()      :: string() | atom() | deep_list() | (RawFilename :: binary()).
+-type name()      :: string() | atom() | deep_list().
+-type name_all()  :: string() | atom() | deep_list() | (RawFilename :: binary()).
 -type posix()     :: 'eacces'  | 'eagain'  | 'ebadf'   | 'ebusy'  | 'edquot'
 		   | 'eexist'  | 'efault'  | 'efbig'   | 'eintr'  | 'einval'
 		   | 'eio'     | 'eisdir'  | 'eloop'   | 'emfile' | 'emlink'
@@ -103,6 +111,21 @@
 -type date_time() :: calendar:datetime().
 -type posix_file_advise() :: 'normal' | 'sequential' | 'random'
                            | 'no_reuse' | 'will_need' | 'dont_need'.
+-type sendfile_option() :: {chunk_size, non_neg_integer()}
+			 | {use_threads, boolean()}.
+-type file_info_option() :: {'time', 'local'} | {'time', 'universal'} 
+			  | {'time', 'posix'}.
+%%% BIFs
+
+-export([native_name_encoding/0]).
+
+-spec native_name_encoding() -> latin1 | utf8.
+
+native_name_encoding() ->
+    erlang:nif_error(undef).
+
+%%% End of BIFs
+
 
 %%%-----------------------------------------------------------------
 %%% General functions
@@ -121,7 +144,7 @@ format_error({Line, ?MODULE, {Reason, Stacktrace}}) ->
     io_lib:format("~w: evaluation failed with reason ~w and stacktrace ~w", 
                   [Line, Reason, Stacktrace]);
 format_error({Line, Mod, Reason}) ->
-    io_lib:format("~w: ~s", [Line, Mod:format_error(Reason)]);
+    io_lib:format("~w: ~ts", [Line, Mod:format_error(Reason)]);
 format_error(badarg) ->
     "bad argument";
 format_error(system_limit) ->
@@ -132,7 +155,7 @@ format_error(ErrorId) ->
     erl_posix_msg:message(ErrorId).
 
 -spec pid2name(Pid) -> {ok, Filename} | undefined when
-      Filename :: filename(),
+      Filename :: filename_all(),
       Pid :: pid().
 
 pid2name(Pid) when is_pid(Pid) ->
@@ -168,88 +191,135 @@ get_cwd(Drive) ->
     check_and_call(get_cwd, [file_name(Drive)]).
 
 -spec set_cwd(Dir) -> ok | {error, Reason} when
-      Dir :: name(),
-      Reason :: posix() | badarg.
+      Dir :: name() | EncodedBinary,
+      EncodedBinary :: binary(),
+      Reason :: posix() | badarg | no_translation.
 
 set_cwd(Dirname) -> 
     check_and_call(set_cwd, [file_name(Dirname)]).
 
 -spec delete(Filename) -> ok | {error, Reason} when
-      Filename :: name(),
+      Filename :: name_all(),
       Reason :: posix() | badarg.
 
 delete(Name) ->
     check_and_call(delete, [file_name(Name)]).
 
 -spec rename(Source, Destination) -> ok | {error, Reason} when
-      Source :: name(),
-      Destination :: name(),
+      Source :: name_all(),
+      Destination :: name_all(),
       Reason :: posix() | badarg.
 
 rename(From, To) ->
     check_and_call(rename, [file_name(From), file_name(To)]).
 
 -spec make_dir(Dir) -> ok | {error, Reason} when
-      Dir :: name(),
+      Dir :: name_all(),
       Reason :: posix() | badarg.
 
 make_dir(Name) ->
     check_and_call(make_dir, [file_name(Name)]).
 
 -spec del_dir(Dir) -> ok | {error, Reason} when
-      Dir :: name(),
+      Dir :: name_all(),
       Reason :: posix() | badarg.
 
 del_dir(Name) ->
     check_and_call(del_dir, [file_name(Name)]).
 
 -spec read_file_info(Filename) -> {ok, FileInfo} | {error, Reason} when
-      Filename :: name(),
+      Filename :: name_all(),
       FileInfo :: file_info(),
       Reason :: posix() | badarg.
 
 read_file_info(Name) ->
     check_and_call(read_file_info, [file_name(Name)]).
 
--spec altname(Name :: name()) -> any().
+-spec read_file_info(Filename, Opts) -> {ok, FileInfo} | {error, Reason} when
+      Filename :: name_all(),
+      Opts :: [file_info_option()],
+      FileInfo :: file_info(),
+      Reason :: posix() | badarg.
+
+read_file_info(Name, Opts) when is_list(Opts) ->
+    check_and_call(read_file_info, [file_name(Name), Opts]).
+
+-spec altname(Name :: name_all()) -> any().
 
 altname(Name) ->
     check_and_call(altname, [file_name(Name)]).
 
 -spec read_link_info(Name) -> {ok, FileInfo} | {error, Reason} when
-      Name :: name(),
+      Name :: name_all(),
       FileInfo :: file_info(),
       Reason :: posix() | badarg.
 
 read_link_info(Name) ->
     check_and_call(read_link_info, [file_name(Name)]).
 
+-spec read_link_info(Name, Opts) -> {ok, FileInfo} | {error, Reason} when
+      Name :: name_all(),
+      Opts :: [file_info_option()],
+      FileInfo :: file_info(),
+      Reason :: posix() | badarg.
+
+read_link_info(Name, Opts) when is_list(Opts) ->
+    check_and_call(read_link_info, [file_name(Name),Opts]).
+
+
 -spec read_link(Name) -> {ok, Filename} | {error, Reason} when
-      Name :: name(),
+      Name :: name_all(),
       Filename :: filename(),
       Reason :: posix() | badarg.
 
 read_link(Name) ->
     check_and_call(read_link, [file_name(Name)]).
 
+-spec read_link_all(Name) -> {ok, Filename} | {error, Reason} when
+      Name :: name_all(),
+      Filename :: filename_all(),
+      Reason :: posix() | badarg.
+
+read_link_all(Name) ->
+    check_and_call(read_link_all, [file_name(Name)]).
+
 -spec write_file_info(Filename, FileInfo) -> ok | {error, Reason} when
-      Filename :: name(),
+      Filename :: name_all(),
       FileInfo :: file_info(),
       Reason :: posix() | badarg.
 
 write_file_info(Name, Info = #file_info{}) ->
     check_and_call(write_file_info, [file_name(Name), Info]).
 
--spec list_dir(Dir) -> {ok, Filenames} | {error, Reason} when
-      Dir :: name(),
-      Filenames :: [filename()],
+-spec write_file_info(Filename, FileInfo, Opts) -> ok | {error, Reason} when
+      Filename :: name_all(),
+      Opts :: [file_info_option()],
+      FileInfo :: file_info(),
       Reason :: posix() | badarg.
+
+write_file_info(Name, Info = #file_info{}, Opts) when is_list(Opts) ->
+    check_and_call(write_file_info, [file_name(Name), Info, Opts]).
+
+-spec list_dir(Dir) -> {ok, Filenames} | {error, Reason} when
+      Dir :: name_all(),
+      Filenames :: [filename()],
+      Reason :: posix()
+              | badarg
+              | {no_translation, Filename :: unicode:latin1_binary()}.
 
 list_dir(Name) ->
     check_and_call(list_dir, [file_name(Name)]).
 
+-spec list_dir_all(Dir) -> {ok, Filenames} | {error, Reason} when
+      Dir :: name_all(),
+      Filenames :: [filename_all()],
+      Reason :: posix() | badarg.
+
+list_dir_all(Name) ->
+    check_and_call(list_dir_all, [file_name(Name)]).
+
 -spec read_file(Filename) -> {ok, Binary} | {error, Reason} when
-      Filename :: name(),
+      Filename :: name_all(),
       Binary :: binary(),
       Reason :: posix() | badarg | terminated | system_limit.
 
@@ -257,23 +327,23 @@ read_file(Name) ->
     check_and_call(read_file, [file_name(Name)]).
 
 -spec make_link(Existing, New) -> ok | {error, Reason} when
-      Existing :: name(),
-      New :: name(),
+      Existing :: name_all(),
+      New :: name_all(),
       Reason :: posix() | badarg.
 
 make_link(Old, New) ->
     check_and_call(make_link, [file_name(Old), file_name(New)]).
 
--spec make_symlink(Name1, Name2) -> ok | {error, Reason} when
-      Name1 :: name(),
-      Name2 :: name(),
+-spec make_symlink(Existing, New) -> ok | {error, Reason} when
+      Existing :: name_all(),
+      New :: name_all(),
       Reason :: posix() | badarg.
 
 make_symlink(Old, New) ->
     check_and_call(make_symlink, [file_name(Old), file_name(New)]).
 
 -spec write_file(Filename, Bytes) -> ok | {error, Reason} when
-      Filename :: name(),
+      Filename :: name_all(),
       Bytes :: iodata(),
       Reason :: posix() | badarg | terminated | system_limit.
 
@@ -285,7 +355,7 @@ write_file(Name, Bin) ->
 %% Meanwhile, it is implemented here, slightly less efficient.
 
 -spec write_file(Filename, Bytes, Modes) -> ok | {error, Reason} when
-      Filename :: name(),
+      Filename :: name_all(),
       Bytes :: iodata(),
       Modes :: [mode()],
       Reason :: posix() | badarg | terminated | system_limit.
@@ -301,7 +371,7 @@ write_file(Name, Bin, ModeList) when is_list(ModeList) ->
 			ok ->
 			    close(Handle);
 			E1 ->
-			    close(Handle),
+			    _ = close(Handle),
 			    E1
 		    end;
 		E2 ->
@@ -342,9 +412,10 @@ raw_write_file_info(Name, #file_info{} = Info) ->
 
 %% Contemporary mode specification - list of options
 
--spec open(Filename, Modes) -> {ok, IoDevice} | {error, Reason} when
-      Filename :: name(),
-      Modes :: [mode()],
+-spec open(File, Modes) -> {ok, IoDevice} | {error, Reason} when
+      File :: Filename | iodata(),
+      Filename :: name_all(),
+      Modes :: [mode() | ram],
       IoDevice :: io_device(),
       Reason :: posix() | badarg | system_limit.
 
@@ -404,8 +475,7 @@ open(Item, Mode) ->
       Reason :: posix() | badarg | terminated.
 
 close(File) when is_pid(File) ->
-    R = file_request(File, close),
-    case wait_file_reply(File, R) of
+    case file_request(File, close) of
 	{error, terminated} ->
 	    ok;
 	Other ->
@@ -427,18 +497,31 @@ close(_) ->
       Reason :: posix() | badarg.
 
 advise(File, Offset, Length, Advise) when is_pid(File) ->
-    R = file_request(File, {advise, Offset, Length, Advise}),
-    wait_file_reply(File, R);
+    file_request(File, {advise, Offset, Length, Advise});
 advise(#file_descriptor{module = Module} = Handle, Offset, Length, Advise) ->
     Module:advise(Handle, Offset, Length, Advise);
 advise(_, _, _, _) ->
     {error, badarg}.
 
+-spec allocate(File, Offset, Length) ->
+	'ok' | {'error', posix()} when
+      File :: io_device(),
+      Offset :: non_neg_integer(),
+      Length :: non_neg_integer().
+
+allocate(File, Offset, Length) when is_pid(File) ->
+    file_request(File, {allocate, Offset, Length});
+allocate(#file_descriptor{module = Module} = Handle, Offset, Length) ->
+    Module:allocate(Handle, Offset, Length).
+
 -spec read(IoDevice, Number) -> {ok, Data} | eof | {error, Reason} when
       IoDevice :: io_device() | atom(),
       Number :: non_neg_integer(),
       Data :: string() | binary(),
-      Reason :: posix() | badarg | terminated.
+      Reason :: posix()
+              | badarg
+              | terminated
+              | {no_translation, unicode, latin1}.
 
 read(File, Sz) when (is_pid(File) orelse is_atom(File)), is_integer(Sz), Sz >= 0 ->
     case io:request(File, {get_chars, '', Sz}) of
@@ -456,7 +539,10 @@ read(_, _) ->
 -spec read_line(IoDevice) -> {ok, Data} | eof | {error, Reason} when
       IoDevice :: io_device() | atom(),
       Data :: string() | binary(),
-      Reason :: posix() | badarg | terminated.
+      Reason :: posix()
+              | badarg
+              | terminated
+              | {no_translation, unicode, latin1}.
 
 read_line(File) when (is_pid(File) orelse is_atom(File)) ->
     case io:request(File, {get_line, ''}) of
@@ -507,8 +593,7 @@ pread_int(_, _, _) ->
       Reason :: posix() | badarg | terminated.
 
 pread(File, At, Sz) when is_pid(File), is_integer(Sz), Sz >= 0 ->
-    R = file_request(File, {pread, At, Sz}),
-    wait_file_reply(File, R);
+    file_request(File, {pread, At, Sz});
 pread(#file_descriptor{module = Module} = Handle, Offs, Sz) 
   when is_integer(Sz), Sz >= 0 ->
     Module:pread(Handle, Offs, Sz);
@@ -523,7 +608,7 @@ pread(_, _, _) ->
 write(File, Bytes) when (is_pid(File) orelse is_atom(File)) ->
     case make_binary(Bytes) of
 	Bin when is_binary(Bin) ->
-	    io:request(File, {put_chars,Bin});
+	    io:request(File, {put_chars,latin1,Bin});
 	Error ->
 	    Error
     end;
@@ -564,8 +649,7 @@ pwrite_int(_, _, _) ->
       Reason :: posix() | badarg | terminated.
 
 pwrite(File, At, Bytes) when is_pid(File) ->
-    R = file_request(File, {pwrite, At, Bytes}),
-    wait_file_reply(File, R);
+    file_request(File, {pwrite, At, Bytes});
 pwrite(#file_descriptor{module = Module} = Handle, Offs, Bytes) ->
     Module:pwrite(Handle, Offs, Bytes);
 pwrite(_, _, _) ->
@@ -576,8 +660,7 @@ pwrite(_, _, _) ->
       Reason :: posix() | badarg | terminated.
 
 datasync(File) when is_pid(File) ->
-    R = file_request(File, datasync),
-    wait_file_reply(File, R);
+    file_request(File, datasync);
 datasync(#file_descriptor{module = Module} = Handle) ->
     Module:datasync(Handle);
 datasync(_) ->
@@ -588,8 +671,7 @@ datasync(_) ->
       Reason :: posix() | badarg | terminated.
 
 sync(File) when is_pid(File) ->
-    R = file_request(File, sync),
-    wait_file_reply(File, R);
+    file_request(File, sync);
 sync(#file_descriptor{module = Module} = Handle) ->
     Module:sync(Handle);
 sync(_) ->
@@ -602,8 +684,7 @@ sync(_) ->
       Reason :: posix() | badarg | terminated.
 
 position(File, At) when is_pid(File) ->
-    R = file_request(File, {position,At}),
-    wait_file_reply(File, R);
+    file_request(File, {position,At});
 position(#file_descriptor{module = Module} = Handle, At) ->
     Module:position(Handle, At);
 position(_, _) ->
@@ -614,8 +695,7 @@ position(_, _) ->
       Reason :: posix() | badarg | terminated.
 
 truncate(File) when is_pid(File) ->
-    R = file_request(File, truncate),
-    wait_file_reply(File, R);
+    file_request(File, truncate);
 truncate(#file_descriptor{module = Module} = Handle) ->
     Module:truncate(Handle);
 truncate(_) ->
@@ -624,7 +704,7 @@ truncate(_) ->
 -spec copy(Source, Destination) -> {ok, BytesCopied} | {error, Reason} when
       Source :: io_device() | Filename | {Filename, Modes},
       Destination :: io_device() | Filename | {Filename, Modes},
-      Filename :: name(),
+      Filename :: name_all(),
       Modes :: [mode()],
       BytesCopied :: non_neg_integer(),
       Reason :: posix() | badarg | terminated.
@@ -636,7 +716,7 @@ copy(Source, Dest) ->
              {ok, BytesCopied} | {error, Reason} when
       Source :: io_device() | Filename | {Filename, Modes},
       Destination :: io_device() | Filename | {Filename, Modes},
-      Filename :: name(),
+      Filename :: name_all(),
       Modes :: [mode()],
       ByteCount :: non_neg_integer() | infinity,
       BytesCopied :: non_neg_integer(),
@@ -685,7 +765,7 @@ copy_int({SourceName, SourceOpts}, Dest, Length)
 	    case open(Source, [read | SourceOpts]) of
 		{ok, Handle} ->
 		    Result = copy_opened_int(Handle, Dest, Length, 0),
-		    close(Handle),
+		    _ = close(Handle),
 		    Result;
 		{error, _} = Error ->
 		    Error
@@ -701,9 +781,16 @@ copy_int(Source, {DestName, DestOpts}, Length)
 	Dest ->
 	    case open(Dest, [write | DestOpts]) of
 		{ok, Handle} ->
-		    Result = copy_opened_int(Source, Handle, Length, 0),
-		    close(Handle),
-		    Result;
+                    case copy_opened_int(Source, Handle, Length, 0) of
+                        {ok, _} = OK ->
+                            case close(Handle) of
+                                ok -> OK;
+                                Error -> Error
+                            end;
+                        Error ->
+                            _ = close(Handle),
+                            Error
+                    end;
 		{error, _} = Error ->
 		    Error
 	    end
@@ -863,7 +950,7 @@ ipread_s32bu_p32bu_2(File,
 %%% provide a higher-lever interface to files.
 
 -spec consult(Filename) -> {ok, Terms} | {error, Reason} when
-      Filename :: name(),
+      Filename :: name_all(),
       Terms :: [term()],
       Reason :: posix() | badarg | terminated | system_limit
               | {Line :: integer(), Mod :: module(), Term :: term()}.
@@ -872,7 +959,7 @@ consult(File) ->
     case open(File, [read]) of
 	{ok, Fd} ->
 	    R = consult_stream(Fd),
-	    close(Fd),
+	    _ = close(Fd),
 	    R;
 	Error ->
 	    Error
@@ -880,10 +967,10 @@ consult(File) ->
 
 -spec path_consult(Path, Filename) -> {ok, Terms, FullName} | {error, Reason} when
       Path :: [Dir],
-      Dir :: name(),
-      Filename :: name(),
+      Dir :: name_all(),
+      Filename :: name_all(),
       Terms :: [term()],
-      FullName :: filename(),
+      FullName :: filename_all(),
       Reason :: posix() | badarg | terminated | system_limit
               | {Line :: integer(), Mod :: module(), Term :: term()}.
 
@@ -892,10 +979,10 @@ path_consult(Path, File) ->
 	{ok, Fd, Full} ->
 	    case consult_stream(Fd) of
 		{ok, List} ->
-		    close(Fd),
+		    _ = close(Fd),
 		    {ok, List, Full};
 		E1 ->
-		    close(Fd),
+		    _ = close(Fd),
 		    E1
 	    end;
 	E2 ->
@@ -903,7 +990,7 @@ path_consult(Path, File) ->
     end.
 
 -spec eval(Filename) -> ok | {error, Reason} when
-      Filename :: name(),
+      Filename :: name_all(),
       Reason :: posix() | badarg | terminated | system_limit
               | {Line :: integer(), Mod :: module(), Term :: term()}.
 
@@ -911,7 +998,7 @@ eval(File) ->
     eval(File, erl_eval:new_bindings()).
 
 -spec eval(Filename, Bindings) -> ok | {error, Reason} when
-      Filename :: name(),
+      Filename :: name_all(),
       Bindings :: erl_eval:binding_struct(),
       Reason :: posix() | badarg | terminated | system_limit
               | {Line :: integer(), Mod :: module(), Term :: term()}.
@@ -920,16 +1007,16 @@ eval(File, Bs) ->
     case open(File, [read]) of
 	{ok, Fd} ->
 	    R = eval_stream(Fd, ignore, Bs),
-	    close(Fd),
+	    _ = close(Fd),
 	    R;
 	Error ->
 	    Error
     end.
 
 -spec path_eval(Path, Filename) -> {ok, FullName} | {error, Reason} when
-      Path :: [Dir :: name()],
-      Filename :: name(),
-      FullName :: filename(),
+      Path :: [Dir :: name_all()],
+      Filename :: name_all(),
+      FullName :: filename_all(),
       Reason :: posix() | badarg | terminated | system_limit
               | {Line :: integer(), Mod :: module(), Term :: term()}.
 
@@ -938,10 +1025,10 @@ path_eval(Path, File) ->
 
 -spec path_eval(Path, Filename, Bindings) ->
              {ok, FullName} | {error, Reason} when
-      Path :: [Dir :: name()],
-      Filename :: name(),
+      Path :: [Dir :: name_all()],
+      Filename :: name_all(),
       Bindings :: erl_eval:binding_struct(),
-      FullName :: filename(),
+      FullName :: filename_all(),
       Reason :: posix() | badarg | terminated | system_limit
               | {Line :: integer(), Mod :: module(), Term :: term()}.
 
@@ -950,10 +1037,10 @@ path_eval(Path, File, Bs) ->
 	{ok, Fd, Full} ->
 	    case eval_stream(Fd, ignore, Bs) of
 		ok ->
-		    close(Fd),
+		    _ = close(Fd),
 		    {ok, Full};
 		E1 ->
-		    close(Fd),
+		    _ = close(Fd),
 		    E1
 	    end;
 	E2 ->
@@ -961,7 +1048,7 @@ path_eval(Path, File, Bs) ->
     end.
 
 -spec script(Filename) -> {ok, Value} | {error, Reason} when
-      Filename :: name(),
+      Filename :: name_all(),
       Value :: term(),
       Reason :: posix() | badarg | terminated | system_limit
               | {Line :: integer(), Mod :: module(), Term :: term()}.
@@ -970,7 +1057,7 @@ script(File) ->
     script(File, erl_eval:new_bindings()).
 
 -spec script(Filename, Bindings) -> {ok, Value} | {error, Reason} when
-      Filename :: name(),
+      Filename :: name_all(),
       Bindings :: erl_eval:binding_struct(),
       Value :: term(),
       Reason :: posix() | badarg | terminated | system_limit
@@ -980,7 +1067,7 @@ script(File, Bs) ->
     case open(File, [read]) of
 	{ok, Fd} ->
 	    R = eval_stream(Fd, return, Bs),
-	    close(Fd),
+	    _ = close(Fd),
 	    R;
 	Error ->
 	    Error
@@ -988,10 +1075,10 @@ script(File, Bs) ->
 
 -spec path_script(Path, Filename) ->
              {ok, Value, FullName} | {error, Reason} when
-      Path :: [Dir :: name()],
-      Filename :: name(),
+      Path :: [Dir :: name_all()],
+      Filename :: name_all(),
       Value :: term(),
-      FullName :: filename(),
+      FullName :: filename_all(),
       Reason :: posix() | badarg | terminated | system_limit
               | {Line :: integer(), Mod :: module(), Term :: term()}.
 
@@ -1000,11 +1087,11 @@ path_script(Path, File) ->
 
 -spec path_script(Path, Filename, Bindings) ->
           {ok, Value, FullName} | {error, Reason} when
-      Path :: [Dir :: name()],
-      Filename :: name(),
+      Path :: [Dir :: name_all()],
+      Filename :: name_all(),
       Bindings :: erl_eval:binding_struct(),
       Value :: term(),
-      FullName :: filename(),
+      FullName :: filename_all(),
       Reason :: posix() | badarg | terminated | system_limit
               | {Line :: integer(), Mod :: module(), Term :: term()}.
 
@@ -1013,10 +1100,10 @@ path_script(Path, File, Bs) ->
 	{ok,Fd,Full} ->
 	    case eval_stream(Fd, return, Bs) of
 		{ok,R} ->
-		    close(Fd),
+		    _ = close(Fd),
 		    {ok, R, Full};
 		E1 ->
-		    close(Fd),
+		    _ = close(Fd),
 		    E1
 	    end;
 	E2 ->
@@ -1033,11 +1120,11 @@ path_script(Path, File, Bs) ->
 
 -spec path_open(Path, Filename, Modes) ->
              {ok, IoDevice, FullName} | {error, Reason} when
-      Path :: [Dir :: name()],
-      Filename :: name(),
+      Path :: [Dir :: name_all()],
+      Filename :: name_all(),
       Modes :: [mode()],
       IoDevice :: io_device(),
-      FullName :: filename(),
+      FullName :: filename_all(),
       Reason :: posix() | badarg | system_limit.
 
 path_open(PathList, Name, Mode) ->
@@ -1059,7 +1146,7 @@ path_open(PathList, Name, Mode) ->
     end.
 
 -spec change_mode(Filename, Mode) -> ok | {error, Reason} when
-      Filename :: name(),
+      Filename :: name_all(),
       Mode :: integer(),
       Reason :: posix() | badarg.
 
@@ -1068,7 +1155,7 @@ change_mode(Name, Mode)
     write_file_info(Name, #file_info{mode=Mode}).
 
 -spec change_owner(Filename, Uid) -> ok | {error, Reason} when
-      Filename :: name(),
+      Filename :: name_all(),
       Uid :: integer(),
       Reason :: posix() | badarg.
 
@@ -1077,7 +1164,7 @@ change_owner(Name, OwnerId)
     write_file_info(Name, #file_info{uid=OwnerId}).
 
 -spec change_owner(Filename, Uid, Gid) -> ok | {error, Reason} when
-      Filename :: name(),
+      Filename :: name_all(),
       Uid :: integer(),
       Gid :: integer(),
       Reason :: posix() | badarg.
@@ -1087,7 +1174,7 @@ change_owner(Name, OwnerId, GroupId)
     write_file_info(Name, #file_info{uid=OwnerId, gid=GroupId}).
 
 -spec change_group(Filename, Gid) -> ok | {error, Reason} when
-      Filename :: name(),
+      Filename :: name_all(),
       Gid :: integer(),
       Reason :: posix() | badarg.
 
@@ -1096,28 +1183,168 @@ change_group(Name, GroupId)
     write_file_info(Name, #file_info{gid=GroupId}).
 
 -spec change_time(Filename, Mtime) -> ok | {error, Reason} when
-      Filename :: name(),
+      Filename :: name_all(),
       Mtime :: date_time(),
       Reason :: posix() | badarg.
 
-change_time(Name, Time) 
-  when is_tuple(Time) ->
+change_time(Name, {{Y, M, D}, {H, Min, Sec}}=Time)
+  when is_integer(Y), is_integer(M), is_integer(D),
+       is_integer(H), is_integer(Min), is_integer(Sec)->
     write_file_info(Name, #file_info{mtime=Time}).
 
 -spec change_time(Filename, Atime, Mtime) -> ok | {error, Reason} when
-      Filename :: name(),
+      Filename :: name_all(),
       Atime :: date_time(),
       Mtime :: date_time(),
       Reason :: posix() | badarg.
 
-change_time(Name, Atime, Mtime) 
-  when is_tuple(Atime), is_tuple(Mtime) ->
+change_time(Name, {{AY, AM, AD}, {AH, AMin, ASec}}=Atime,
+         {{MY, MM, MD}, {MH, MMin, MSec}}=Mtime)
+  when is_integer(AY), is_integer(AM), is_integer(AD),
+       is_integer(AH), is_integer(AMin), is_integer(ASec),
+       is_integer(MY), is_integer(MM), is_integer(MD),
+       is_integer(MH), is_integer(MMin), is_integer(MSec)->
     write_file_info(Name, #file_info{atime=Atime, mtime=Mtime}).
+
+%%
+%% Send data using sendfile
+%%
+
+-define(MAX_CHUNK_SIZE, (1 bsl 20)*20). %% 20 MB, has to fit in primary memory
+
+-spec sendfile(RawFile, Socket, Offset, Bytes, Opts) ->
+   {'ok', non_neg_integer()} | {'error', inet:posix() | 
+				closed | badarg | not_owner} when
+      RawFile :: fd(),
+      Socket :: inet:socket(),
+      Offset :: non_neg_integer(),
+      Bytes :: non_neg_integer(),
+      Opts :: [sendfile_option()].
+sendfile(File, _Sock, _Offet, _Bytes, _Opts) when is_pid(File) ->
+    {error, badarg};
+sendfile(File, Sock, Offset, Bytes, []) ->
+    sendfile(File, Sock, Offset, Bytes, ?MAX_CHUNK_SIZE, [], [], []);
+sendfile(File, Sock, Offset, Bytes, Opts) ->
+    ChunkSize0 = proplists:get_value(chunk_size, Opts, ?MAX_CHUNK_SIZE),
+    ChunkSize = if ChunkSize0 > ?MAX_CHUNK_SIZE ->
+			?MAX_CHUNK_SIZE;
+		   true -> ChunkSize0
+		end,
+    %% Support for headers, trailers and options has been removed because the
+    %% Darwin and BSD API for using it does not play nice with
+    %% non-blocking sockets. See unix_efile.c for more info.
+    sendfile(File, Sock, Offset, Bytes, ChunkSize, [], [], Opts).
+
+%% sendfile/2
+-spec sendfile(Filename, Socket) ->
+   {'ok', non_neg_integer()} | {'error', inet:posix() | 
+				closed | badarg | not_owner}
+      when Filename :: name_all(),
+	   Socket :: inet:socket().
+sendfile(Filename, Sock)  ->
+    case file:open(Filename, [read, raw, binary]) of
+	{error, Reason} ->
+	    {error, Reason};
+	{ok, Fd} ->
+	    Res = sendfile(Fd, Sock, 0, 0, []),
+	    _ = file:close(Fd),
+	    Res
+    end.
+
+%% Internal sendfile functions
+sendfile(#file_descriptor{ module = Mod } = Fd, Sock, Offset, Bytes,
+	 ChunkSize, Headers, Trailers, Opts)
+  when is_port(Sock) ->
+    case Mod:sendfile(Fd, Sock, Offset, Bytes, ChunkSize, Headers, Trailers,
+		      Opts) of
+	{error, enotsup} ->
+	    sendfile_fallback(Fd, Sock, Offset, Bytes, ChunkSize,
+			      Headers, Trailers);
+	Else ->
+	    Else
+    end;
+sendfile(_,_,_,_,_,_,_,_) ->
+    {error, badarg}.
+
+%%%
+%% Sendfile Fallback
+%%%
+sendfile_fallback(File, Sock, Offset, Bytes, ChunkSize,
+		  Headers, Trailers)
+  when Headers == []; is_integer(Headers) ->
+    case sendfile_fallback(File, Sock, Offset, Bytes, ChunkSize) of
+	{ok, BytesSent} when is_list(Trailers),
+			     Trailers =/= [],
+			     is_integer(Headers) ->
+	    sendfile_send(Sock, Trailers, BytesSent+Headers);
+	{ok, BytesSent} when is_list(Trailers), Trailers =/= [] ->
+	    sendfile_send(Sock, Trailers, BytesSent);
+	{ok, BytesSent} when is_integer(Headers) ->
+	    {ok, BytesSent + Headers};
+	Else ->
+	    Else
+    end;
+sendfile_fallback(File, Sock, Offset, Bytes, ChunkSize, Headers, Trailers) ->
+    case sendfile_send(Sock, Headers, 0) of
+	{ok, BytesSent} ->
+	    sendfile_fallback(File, Sock, Offset, Bytes, ChunkSize, BytesSent,
+			      Trailers);
+	Else ->
+	    Else
+    end.
+
+
+sendfile_fallback(File, Sock, Offset, Bytes, ChunkSize) ->
+    {ok, CurrPos} = file:position(File, {cur, 0}),
+    {ok, _NewPos} = file:position(File, {bof, Offset}),
+    Res = sendfile_fallback_int(File, Sock, Bytes, ChunkSize, 0),
+    _ = file:position(File, {bof, CurrPos}),
+    Res.
+
+
+sendfile_fallback_int(File, Sock, Bytes, ChunkSize, BytesSent)
+  when Bytes > BytesSent; Bytes == 0 ->
+    Size = if Bytes == 0 ->
+		   ChunkSize;
+	       (Bytes - BytesSent) < ChunkSize ->
+		   Bytes - BytesSent;
+	      true ->
+		   ChunkSize
+	   end,
+    case file:read(File, Size) of
+	{ok, Data} ->
+	    case sendfile_send(Sock, Data, BytesSent) of
+		{ok,NewBytesSent} ->
+		    sendfile_fallback_int(
+		      File, Sock, Bytes, ChunkSize,
+		      NewBytesSent);
+		Error ->
+		    Error
+	    end;
+	eof ->
+	    {ok, BytesSent};
+	Error ->
+	    Error
+    end;
+sendfile_fallback_int(_File, _Sock, BytesSent, _ChunkSize, BytesSent) ->
+    {ok, BytesSent}.
+
+sendfile_send(Sock, Data, Old) ->
+    Len = iolist_size(Data),
+    case gen_tcp:send(Sock, Data) of
+	ok ->
+	    {ok, Len+Old};
+	Else ->
+	    Else
+    end.
+
+
 
 %%%-----------------------------------------------------------------
 %%% Helpers
 
 consult_stream(Fd) ->
+    _ = epp:set_encoding(Fd),
     consult_stream(Fd, 1, []).
 
 consult_stream(Fd, Line, Acc) ->
@@ -1131,6 +1358,7 @@ consult_stream(Fd, Line, Acc) ->
     end.
 
 eval_stream(Fd, Handling, Bs) ->
+    _ = epp:set_encoding(Fd),
     eval_stream(Fd, Handling, 1, undefined, [], Bs).
 
 eval_stream(Fd, H, Line, Last, E, Bs) ->
@@ -1163,7 +1391,7 @@ path_open_first([Path|Rest], Name, Mode, LastError) ->
 	{error, _} = Error ->
 	    Error;
 	FilePath ->
-	    FileName = filename:join(FilePath, Name),
+	    FileName = fname_join(FilePath, Name),
 	    case open(FileName, Mode) of
 		{ok, Fd} ->
 		    {ok, Fd, FileName};
@@ -1175,6 +1403,11 @@ path_open_first([Path|Rest], Name, Mode, LastError) ->
     end;
 path_open_first([], _Name, _Mode, LastError) ->
     {error, LastError}.
+
+fname_join(".", Name) ->
+    Name;
+fname_join(Dir, Name) ->
+    filename:join(Dir, Name).
 
 %%%-----------------------------------------------------------------
 %%% Utility functions.
@@ -1233,7 +1466,11 @@ mode_list(_) ->
 %% Functions for communicating with the file server
 
 call(Command, Args) when is_list(Args) ->
-    gen_server:call(?FILE_SERVER, list_to_tuple([Command | Args]), infinity).
+    X = erlang:dt_spread_tag(true),
+    Y = gen_server:call(?FILE_SERVER, list_to_tuple([Command | Args]), 
+			infinity),
+    erlang:dt_restore_tag(X),
+    Y.
 
 check_and_call(Command, Args) when is_list(Args) ->
     case check_args(Args) of
@@ -1251,25 +1488,19 @@ check_args([]) ->
     ok.
 
 %%-----------------------------------------------------------------
-%% Functions for communicating with a file io server.
+%% Function for communicating with a file io server.
 %% The messages sent have the following formats:
 %%
 %%	{file_request,From,ReplyAs,Request}
 %%	{file_reply,ReplyAs,Reply}
 
 file_request(Io, Request) ->
-    R = erlang:monitor(process, Io),
-    Io ! {file_request,self(),Io,Request},
-    R.
-
-wait_file_reply(From, Ref) ->
+    Ref = erlang:monitor(process, Io),
+    Io ! {file_request,self(),Ref,Request},
     receive
-	{file_reply,From,Reply} ->
-	    erlang:demonitor(Ref),
-	    receive {'DOWN', Ref, _, _, _} -> ok after 0 -> ok end,
-	    %% receive {'EXIT', From, _} -> ok after 0 -> ok end,
+	{file_reply,Ref,Reply} ->
+	    erlang:demonitor(Ref, [flush]),
 	    Reply;
 	{'DOWN', Ref, _, _, _} ->
-	    %% receive {'EXIT', From, _} -> ok after 0 -> ok end,
 	    {error, terminated}
     end.

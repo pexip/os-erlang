@@ -1,7 +1,7 @@
 /*
  * %CopyrightBegin%
  *
- * Copyright Ericsson AB 2004-2010. All Rights Reserved.
+ * Copyright Ericsson AB 2004-2012. All Rights Reserved.
  *
  * The contents of this file are subject to the Erlang Public License,
  * Version 1.1, (the "License"); you may not use this file except in
@@ -202,6 +202,12 @@ public class echo_server {
 		final OtpErlangAtom o = new OtpErlangAtom(s.stringValue()
 			.substring(3));
 		return o;
+	    } else if (atomValue.equals("codepointBug")
+		    && i instanceof OtpErlangString) {
+		final OtpErlangString s = (OtpErlangString) i;
+		final String ss = s.stringValue().substring(3, 6);
+		final int[] cps = OtpErlangString.stringToCodePoints(ss);
+		return s;
 	    } else if (atomValue.equals("utf8")) {
 		if (i instanceof OtpErlangString) {
 		    final OtpErlangString s = (OtpErlangString) i;

@@ -2,7 +2,7 @@ dnl Process this file with autoconf to produce a configure script.
 
 dnl %CopyrightBegin%
 dnl
-dnl Copyright Ericsson AB 1998-2010. All Rights Reserved.
+dnl Copyright Ericsson AB 1998-2014. All Rights Reserved.
 dnl
 dnl The contents of this file are subject to the Erlang Public License,
 dnl Version 1.1, (the "License"); you may not use this file except in
@@ -180,25 +180,36 @@ AC_PROG_LN_S
 AC_PROG_RANLIB
 
 #
-# Get erts version and otp release from erts/vsn.mk
+# Get erts version from erts/vsn.mk
 #
 AC_MSG_CHECKING([ERTS version])
 [ERTS_VSN=`sed -n "s/^VSN[	 ]*=[	 ]*\(.*\)/\1/p" < $ERL_TOP/erts/vsn.mk`]
 AC_MSG_RESULT([$ERTS_VSN])
 AC_SUBST(ERTS_VSN)
 
+#
+# Get OTP release and OTP version from $ERL_TOP/OTP_VERSION
+#
 AC_MSG_CHECKING([OTP release])
-[OTP_REL=`sed -n "s/^SYSTEM_VSN[	 ]*=[	 ]*\(.*\)/\1/p" < $ERL_TOP/erts/vsn.mk`]
+[OTP_REL=`cat $ERL_TOP/OTP_VERSION | sed "s|\([0-9]*\).*|\1|"`]
 AC_MSG_RESULT([$OTP_REL])
 AC_SUBST(OTP_REL)
+
+AC_MSG_CHECKING([OTP version])
+[OTP_VSN=`cat $ERL_TOP/OTP_VERSION`]
+AC_MSG_RESULT([$OTP_VSN])
+AC_SUBST(OTP_VSN)
 
 AC_ARG_ENABLE(threads,
 AS_HELP_STRING([--enable-threads], [enable async thread support])
 AS_HELP_STRING([--disable-threads], [disable async thread support]))
 
+AC_ARG_ENABLE(dirty-schedulers,
+AS_HELP_STRING([--enable-dirty-schedulers], [enable dirty scheduler support]))
+
 AC_ARG_ENABLE(halfword-emulator,
 AS_HELP_STRING([--enable-halfword-emulator],
-               [enable halfword emulator (only for 64bit builds)]))
+               [enable halfword emulator (only for 64bit builds). Note: Halfword emulator is marked as deprecated and scheduled for removal in future major release.]))
 
 AC_ARG_ENABLE(smp-support,
 AS_HELP_STRING([--enable-smp-support], [enable smp support])
@@ -225,6 +236,14 @@ AC_ARG_ENABLE(native-libs,
 AS_HELP_STRING([--enable-native-libs],
                [compile Erlang libraries to native code]))
 
+AC_ARG_WITH(dynamic-trace,
+AS_HELP_STRING([--with-dynamic-trace={dtrace|systemtap}],
+	       [specify use of dynamic trace framework, dtrace or systemtap])
+AS_HELP_STRING([--without-dynamic-trace], 
+               [don't enable any dynamic tracing (default)]))
+AC_ARG_ENABLE(vm-probes,
+AS_HELP_STRING([--enable-vm-probes],
+               [add dynamic trace probes to the Beam VM (only possible if --with-dynamic-trace is enabled, and then default)]))
 AC_ARG_WITH(javac,
 AS_HELP_STRING([--with-javac=JAVAC], [specify Java compiler to use])
 AS_HELP_STRING([--with-javac], [use a Java compiler if found (default)])
@@ -247,8 +266,9 @@ AC_ARG_ENABLE(dynamic-ssl-lib,
 AS_HELP_STRING([--disable-dynamic-ssl-lib],
                [disable using dynamic openssl libraries]))
 
-AC_ARG_ENABLE(shared-zlib,
-AS_HELP_STRING([--enable-shared-zlib], [enable using shared zlib library]))
+AC_ARG_ENABLE(builtin-zlib,
+AS_HELP_STRING([--enable-builtin-zlib],
+               [force use of our own built-in zlib]))
 
 dnl This functionality has been lost along the way... :(
 dnl It could perhaps be nice to reintroduce some day; therefore,
@@ -306,10 +326,6 @@ AS_HELP_STRING([--enable-m32-build],
   esac
 ],enable_m32_build=no)
 
-AC_ARG_ENABLE(ethread-pre-pentium4-compatibility,
-	      AS_HELP_STRING([--enable-ethread-pre-pentium4-compatibility],
-			     [enable compatibility with x86 processors before pentium 4 (back to 486) in the ethread library]))
-
 AC_ARG_WITH(libatomic_ops,
 	    AS_HELP_STRING([--with-libatomic_ops=PATH],
 			   [specify and prefer usage of libatomic_ops in the ethread library]))
@@ -350,6 +366,27 @@ elif test X"$TMPSYS" '=' X"Darwin-i386"; then
 	export LDFLAGS
 fi
 
+m4_define(DEFAULT_SANITIZERS, [address,undefined])
+AC_ARG_ENABLE(sanitizers,
+    AS_HELP_STRING(
+        [--enable-sanitizers@<:@=comma-separated list of sanitizers@:>@],
+	    [Default=DEFAULT_SANITIZERS]))
+
+AC_ARG_ENABLE([silent-rules], [dnl
+AS_HELP_STRING(
+  [--enable-silent-rules],
+  [less verbose build output (undo: "make V=1")])
+AS_HELP_STRING(
+  [--disable-silent-rules],
+  [verbose build output (undo: "make V=0")])dnl
+])
+
+DEFAULT_VERBOSITY=0
+if test X${enable_silent_rules} = Xno; then
+  DEFAULT_VERBOSITY=1
+fi
+AC_SUBST(DEFAULT_VERBOSITY)
+
 if test X${enable_m64_build} = Xyes; then
 	enable_hipe=no
 	CFLAGS="-m64 $CFLAGS"
@@ -365,25 +402,47 @@ if test X${enable_m32_build} = Xyes; then
 	export LDFLAGS
 fi
 
+NATIVE_LIBS_ENABLED=
+if test X${enable_native_libs} = Xyes -a X${enable_hipe} != Xno; then
+  NATIVE_LIBS_ENABLED=yes
+fi
+AC_SUBST(NATIVE_LIBS_ENABLED)
+
+
+rm -f $ERL_TOP/lib/SKIP-APPLICATIONS
+for app in `cd lib && ls -d *`; do
+    var=`eval echo \\$with_$app`
+    if test X${var} == Xno; then
+       echo "$app" >> $ERL_TOP/lib/SKIP-APPLICATIONS
+     fi
+done
+
 export ERL_TOP
 AC_CONFIG_SUBDIRS(lib erts)
 
-AC_CONFIG_FILES([Makefile])
+AC_CONFIG_FILES([Makefile make/output.mk])
 AC_CONFIG_FILES([make/emd2exml], [chmod +x make/emd2exml])
 
 AC_OUTPUT
 
 pattern="lib/*/SKIP"
 files=`echo $pattern`
-if test "$files" != "$pattern"; then
+if test "$files" != "$pattern" || test -f $ERL_TOP/lib/SKIP-APPLICATIONS; then
   echo '*********************************************************************'
   echo '**********************  APPLICATIONS DISABLED  **********************'
   echo '*********************************************************************'
   echo
-  for skipfile in $files; do
-    app=`dirname $skipfile`; app=`basename $app`
-    printf "%-15s: " $app; cat $skipfile
-  done
+  if test "$files" != "$pattern"; then
+    for skipfile in $files; do
+      app=`dirname $skipfile`; app=`basename $app`
+      printf "%-15s: " $app; cat $skipfile
+    done
+  fi
+  if test -f $ERL_TOP/lib/SKIP-APPLICATIONS; then
+    for skipapp in `cat $ERL_TOP/lib/SKIP-APPLICATIONS`; do
+      printf "%-15s: User gave --without-%s option\n" $skipapp $skipapp
+    done
+  fi
   echo
   echo '*********************************************************************'
 fi
@@ -394,6 +453,7 @@ if test "$files" != "$pattern" || test -f erts/CONF_INFO; then
   echo '**********************  APPLICATIONS INFORMATION  *******************'
   echo '*********************************************************************'
   echo
+  test "$files" != "$pattern" || files=""
   test ! -f erts/CONF_INFO || files="$files erts/CONF_INFO"
   for infofile in $files; do
     app=`dirname $infofile`; app=`basename $app`

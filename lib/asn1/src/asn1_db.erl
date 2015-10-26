@@ -1,167 +1,183 @@
 %%
 %% %CopyrightBegin%
-%% 
-%% Copyright Ericsson AB 1997-2009. All Rights Reserved.
-%% 
+%%
+%% Copyright Ericsson AB 1997-2013. All Rights Reserved.
+%%
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
 %% compliance with the License. You should have received a copy of the
 %% Erlang Public License along with this software. If not, it can be
 %% retrieved online at http://www.erlang.org/.
-%% 
+%%
 %% Software distributed under the License is distributed on an "AS IS"
 %% basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See
 %% the License for the specific language governing rights and limitations
 %% under the License.
-%% 
+%%
 %% %CopyrightEnd%
 %%
 %%
 -module(asn1_db).
-%-compile(export_all).
--export([dbnew/1,dbsave/2,dbload/1,dbput/3,dbget/2,dbget_all/1]).
--export([dbget_all_mod/1,dbstop/0,dbclear/0,dberase_module/1,dbstart/1,stop_server/1]).
-%% internal exports
--export([dbloop0/1,dbloop/2]).
 
-%% Db stuff
-dbstart(Includes) ->    
-    start_server(asn1db, asn1_db, dbloop0, [Includes]).
+-export([dbstart/1,dbnew/2,dbload/1,dbload/3,dbsave/2,dbput/3,dbget/2]).
+-export([dbstop/0]).
 
-dbloop0(Includes) ->
-    dbloop(Includes, ets:new(asn1, [set,named_table])).
-	
-opentab(Tab,Mod,[]) ->
-    opentab(Tab,Mod,["."]);
-opentab(Tab,Mod,Includes) ->
-    Base = lists:concat([Mod,".asn1db"]),
-    opentab2(Tab,Base,Mod,Includes,ok).
+-record(state, {parent, monitor, includes, table}).
 
-opentab2(_Tab,_Base,_Mod,[],Error) ->
-    Error;
-opentab2(Tab,Base,Mod,[Ih|It],_Error) ->
-    File = filename:join(Ih,Base),
-    case ets:file2tab(File) of
-	{ok,Modtab} ->
-	    ets:insert(Tab,{Mod, Modtab}),
-	    {ok,Modtab};
-	NewErr -> 
-	    opentab2(Tab,Base,Mod,It,NewErr)
+%% Interface
+dbstart(Includes0) ->
+    Includes = case Includes0 of
+		   [] -> ["."];
+		   [_|_] -> Includes0
+	       end,
+    Parent = self(),
+    undefined = get(?MODULE),			%Assertion.
+    put(?MODULE, spawn_link(fun() -> init(Parent, Includes) end)),
+    ok.
+
+dbload(Module, Erule, Mtime) ->
+    req({load, Module, Erule, Mtime}).
+
+dbload(Module) ->
+    req({load, Module, any, {{0,0,0},{0,0,0}}}).
+
+dbnew(Module, Erule)       -> req({new, Module, Erule}).
+dbsave(OutFile, Module)    -> cast({save, OutFile, Module}).
+dbput(Module, K, V)        -> cast({set, Module, K, V}).
+dbget(Module, K)           -> req({get, Module, K}).
+dbstop()                   -> Resp = req(stop), erase(?MODULE), Resp.
+
+%% Internal functions
+-define(MAGIC_KEY, '__version_and_erule__').
+
+req(Request) ->
+    DbPid = get(?MODULE),
+    Ref = erlang:monitor(process,DbPid),
+    get(?MODULE) ! {{Ref, self()}, Request},
+    receive 
+	{{Ref,?MODULE}, Reply} ->
+	    erlang:demonitor(Ref,[flush]),
+	    Reply; 
+	{'DOWN',Ref,_,_,Info} -> 
+	    exit({db_error,Info}) 
     end.
 
+cast(Request) ->
+    get(?MODULE) ! Request,
+    ok.
 
-dbloop(Includes, Tab) ->
+reply({Ref,From}, Response) ->
+    From ! {{Ref,?MODULE}, Response},
+    ok.
+
+init(Parent, Includes) ->
+    MRef = erlang:monitor(process, Parent),
+    loop(#state{parent = Parent, monitor = MRef, includes = Includes,
+                table = ets:new(?MODULE, [])}).
+
+loop(#state{parent = Parent, monitor = MRef, table = Table,
+            includes = Includes} = State) ->
     receive
-	{From,{set, Mod, K2, V}} ->
-	    [{_,Modtab}] = ets:lookup(Tab,Mod),
-	    ets:insert(Modtab,{K2, V}),
-	    From ! {asn1db, ok},
-	    dbloop(Includes, Tab);
-	{From, {get, Mod, K2}} ->
-	    Result = case ets:lookup(Tab,Mod) of
-			 [] -> 
-			     opentab(Tab,Mod,Includes);
-			 [{_,Modtab}] -> {ok,Modtab}
-		     end,
-	    case Result of
-		{ok,Newtab} ->
-		    From ! {asn1db, lookup(Newtab, K2)};
-		_Error ->
-		    From ! {asn1db, undefined}
+        {set, Mod, K2, V} ->
+            [{_, Modtab}] = ets:lookup(Table, Mod),
+            ets:insert(Modtab, {K2, V}),
+            loop(State);
+        {From, {get, Mod, K2}} ->
+	    %% XXX If there is no information for Mod, get_table/3
+	    %% will attempt to load information from an .asn1db
+	    %% file, without comparing its timestamp against the
+	    %% source file. This is known to happen when check_*
+	    %% functions for DER are generated, but it could possibly
+	    %% happen in other circumstances. Ideally, this issue should
+	    %% be rectified in some way, perhaps by ensuring that
+	    %% the module has been loaded (using dbload/4) prior
+	    %% to calling dbget/2.
+            case get_table(Table, Mod, Includes) of
+                {ok,Tab} -> reply(From, lookup(Tab, K2));
+                error -> reply(From, undefined)
+            end,
+            loop(State);
+        {save, OutFile, Mod} ->
+            [{_,Mtab}] = ets:lookup(Table, Mod),
+            ok = ets:tab2file(Mtab, OutFile),
+            loop(State);
+        {From, {new, Mod, Erule}} ->
+            [] = ets:lookup(Table, Mod),	%Assertion.
+            ModTableId = ets:new(list_to_atom(lists:concat(["asn1_",Mod])), []),
+            ets:insert(Table, {Mod, ModTableId}),
+	    ets:insert(ModTableId, {?MAGIC_KEY, info(Erule)}),
+            reply(From, ok),
+            loop(State);
+	{From, {load, Mod, Erule, Mtime}} ->
+	    case ets:member(Table, Mod) of
+		true ->
+		    reply(From, ok);
+		false ->
+		    case load_table(Mod, Erule, Mtime, Includes) of
+			{ok, ModTableId} ->
+			    ets:insert(Table, {Mod, ModTableId}),
+			    reply(From, ok);
+			error ->
+			    reply(From, error)
+		    end
 	    end,
-	    dbloop(Includes, Tab);
-	{From, {all_mod, Mod}} ->
-	    [{_,Modtab}] = ets:lookup(Tab,Mod),
-	    From ! {asn1db, ets:tab2list(Modtab)},
-	    dbloop(Includes, Tab);
-	{From, {delete_mod, Mod}} ->
-	    [{_,Modtab}] = ets:lookup(Tab,Mod),
-	    ets:delete(Modtab),
-	    ets:delete(Tab,Mod),
-	    From ! {asn1db, ok},
-	    dbloop(Includes, Tab);
-	{From, {save, OutFile,Mod}} ->
-	    [{_,Mtab}] = ets:lookup(Tab,Mod),
-	    From ! {asn1db, ets:tab2file(Mtab,OutFile)},
-	    dbloop(Includes,Tab);
-	{From, {load, Mod}} ->
-	    Result = case ets:lookup(Tab,Mod) of
-			 [] -> 
-			     opentab(Tab,Mod,Includes);
-			 [{_,Modtab}] -> {ok,Modtab}
-		     end,
-	    From ! {asn1db,Result},
-	    dbloop(Includes,Tab);
-	{From, {new, Mod}} ->
-	    case ets:lookup(Tab,Mod) of
-		[{_,Modtab}] -> 
-		    ets:delete(Modtab);
-		_  ->
-		    true
-	    end,
-	    Tabname = list_to_atom(lists:concat(["asn1_",Mod])),
-	    ets:new(Tabname, [set,named_table]),
-	    ets:insert(Tab,{Mod,Tabname}),
-	    From ! {asn1db, ok},
-	    dbloop(Includes,Tab);
-	{From, stop} ->
-		    From ! {asn1db, ok};  %% nothing to store
-	{From, clear} ->
-	    ModTabList = [Mt||{_,Mt} <- ets:tab2list(Tab)],
-	    lists:foreach(fun(T) -> ets:delete(T) end,ModTabList),
-	    ets:delete(Tab),
-	    From ! {asn1db, cleared},
-	    dbloop(Includes, ets:new(asn1, [set]));
-	{From,{new_includes,[NewIncludes]}} ->
-	    From ! {asn1db,done},
-	    dbloop(NewIncludes,Tab)
+	    loop(State);
+        {From, stop} ->
+            reply(From, stopped); %% Nothing to store
+        {'DOWN', MRef, process, Parent, Reason} ->
+            exit(Reason)
     end.
 
-
-%%all(Tab, K) ->
-%%    pickup(K, ets:match(Tab, {{K, '$1'}, '$2'})).
-%%pickup(K, []) -> [];
-%%pickup(K, [[V1,V2] |T]) ->
-%%    [{{K,V1},V2} | pickup(K, T)].
+get_table(Table, Mod, Includes) ->
+    case ets:lookup(Table, Mod) of
+	[{Mod,Tab}] ->
+	    {ok,Tab};
+	[] ->
+	    load_table(Mod, any, {{0,0,0},{0,0,0}}, Includes)
+    end.
 
 lookup(Tab, K) ->
     case ets:lookup(Tab, K) of
-	[] -> undefined;
-	[{K,V}] -> V
+        []      -> undefined;
+        [{K,V}] -> V
     end.
 
+info(Erule) ->
+    {asn1ct:vsn(),Erule}.
 
-dbnew(Module) -> req({new,Module}).
-dbsave(OutFile,Module) -> req({save,OutFile,Module}).
-dbload(Module) -> req({load,Module}).
-    
-dbput(Module,K,V) -> req({set, Module, K, V}).
-dbget(Module,K) ->   req({get, Module, K}).
-dbget_all(K) ->   req({get_all, K}).
-dbget_all_mod(Mod) -> req({all_mod,Mod}).
-dbstop() ->       stop_server(asn1db).
-dbclear() ->      req(clear).
-dberase_module({module,M})->  
-    req({delete_mod, M}).
-
-req(R) ->
-    asn1db ! {self(), R},
-    receive {asn1db, Reply} -> Reply end.
-
-stop_server(Name) ->
-    stop_server(Name, whereis(Name)).
-stop_server(_, undefined) -> stopped;
-stop_server(Name, _Pid) ->
-    Name  ! {self(), stop},
-    receive {Name, _} -> stopped end.
-
-
-start_server(Name,Mod,Fun,Args) ->	
-    case whereis(Name) of
-	undefined ->
-	    register(Name, spawn(Mod,Fun, Args));
-	_Pid ->
-	    req({new_includes,Args})
+load_table(Mod, Erule, Mtime, Includes) ->
+    Base = lists:concat([Mod, ".asn1db"]),
+    case path_find(Includes, Mtime, Base) of
+	error ->
+	    error;
+	{ok,ModTab} when Erule =:= any ->
+	    {ok,ModTab};
+	{ok,ModTab} ->
+	    Vsn = asn1ct:vsn(),
+	    case ets:lookup(ModTab, ?MAGIC_KEY) of
+		[{_,{Vsn,Erule}}] ->
+		    %% Correct version and encoding rule.
+		    {ok,ModTab};
+		_ ->
+		    %% Missing key or wrong version/encoding rule.
+		    ets:delete(ModTab),
+		    error
+	    end
     end.
 
-
+path_find([H|T], Mtime, Base) ->
+    File = filename:join(H, Base),
+    case filelib:last_modified(File) of
+	0 ->
+	    path_find(T, Mtime, Base);
+	DbMtime when DbMtime >= Mtime ->
+	    case ets:file2tab(File) of
+		{ok,_}=Ret ->
+		    Ret;
+		_ ->
+		    path_find(T, Mtime, Base)
+	    end;
+	_ ->
+	    path_find(T, Mtime, Base)
+    end;
+path_find([], _, _) -> error.

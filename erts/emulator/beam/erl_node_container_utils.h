@@ -1,7 +1,7 @@
 /*
  * %CopyrightBegin%
  *
- * Copyright Ericsson AB 2001-2011. All Rights Reserved.
+ * Copyright Ericsson AB 2001-2013. All Rights Reserved.
  *
  * The contents of this file are subject to the Erlang Public License,
  * Version 1.1, (the "License"); you may not use this file except in
@@ -20,7 +20,7 @@
 #ifndef ERL_NODE_CONTAINER_UTILS_H__
 #define ERL_NODE_CONTAINER_UTILS_H__
 
-#include "erl_term.h"
+#include "erl_ptab.h"
 
 /*
  * Note regarding node containers:
@@ -28,9 +28,6 @@
  * The term "node container" is used as a group name (internally in
  * the emulator) for the Erlang data types that contain a reference
  * to a node, i.e. pids, ports, and references.
- *
- * Observe! The layouts of the node container data types have been
- * changed in R9. 
  *
  * Node containers are divided into internal and external node containers.
  * An internal node container refer to the current incarnation of the
@@ -51,13 +48,6 @@
  * internal pid, and internal port are immediate data types and internal
  * reference is a boxed data type. An internal node container have an
  * implicit reference to the 'erts_this_node' element in the node table.
- *
- * Due to the R9 changes in layouts of node containers there are room to
- * store more data than previously. Today (R9) this extra space is unused,
- * but it is planned to be used in the future. For example only 18 bits
- * are used for data in a pid but there is room for 28 bits of data (on a
- * 32-bit machine). Some preparations have been made in the emulator for
- * usage of this extra space.
  *
  * OBSERVE! Pids doesn't use fixed size 'serial' and 'number' fields any
  * more. Previously the 15 bit 'number' field of a pid was used as index
@@ -104,8 +94,6 @@
 #define internal_dist_entry(x)		(erts_this_node->dist_entry)
 #define external_dist_entry(x)		(external_node((x))->dist_entry)
 
-extern int erts_use_r9_pids_ports;
-
 /*
  * For this node (and previous incarnations of this node), 0 is used as
  * channel no. For other nodes, the atom index of the atom corresponding
@@ -118,7 +106,7 @@ extern int erts_use_r9_pids_ports;
 #define dist_entry_channel_no(x)				\
   ((x) == erts_this_dist_entry					\
    ? ((Uint) 0)							\
-   : (ASSERT_EXPR(is_atom((x)->sysname)),			\
+   : (ASSERT(is_atom((x)->sysname)),			        \
       (Uint) atom_val((x)->sysname)))
 #define internal_channel_no(x) ((Uint) ERST_INTERNAL_CHANNEL_NO)
 #define external_channel_no(x) \
@@ -128,8 +116,20 @@ extern int erts_use_r9_pids_ports;
  * Pids                                                                    *
 \*                                                                         */
 
-#define internal_pid_index(x)		(internal_pid_data((x))	\
-					 & erts_process_tab_index_mask)
+extern ErtsPTab erts_proc;
+
+#define make_internal_pid(D)		erts_ptab_make_id(&erts_proc, \
+							  (D), \
+							  _TAG_IMMED1_PID)
+
+#define internal_pid_index(PID)		(ASSERT(is_internal_pid((PID))), \
+					 erts_ptab_id2pix(&erts_proc, (PID)))
+
+#define internal_pid_data(PID)		(ASSERT(is_internal_pid((PID))), \
+					 erts_ptab_id2data(&erts_proc, (PID)))
+
+#define internal_pid_number(x)		_GET_PID_NUM(internal_pid_data((x)))
+#define internal_pid_serial(x)		_GET_PID_SER(internal_pid_data((x)))
 
 #define internal_pid_node_name(x)	(internal_pid_node((x))->sysname)
 #define external_pid_node_name(x)	(external_pid_node((x))->sysname)
@@ -169,34 +169,37 @@ extern int erts_use_r9_pids_ports;
 					 || is_external_pid((x)))
 #define is_not_pid(x)			(!is_pid(x))
 
-#define ERTS_MAX_R9_PROCESSES		(1 << ERTS_R9_PROC_BITS)
-
 /*
  * Maximum number of processes. We want the number to fit in a SMALL on
  * 32-bit CPU.
  */
 
-#define ERTS_MAX_PROCESSES ((1L << 27)-1)
-#if (ERTS_MAX_PROCESSES > MAX_SMALL)
-# error "The maximum number of processes must fit in a SMALL."
-#endif
-
+#define ERTS_MAX_PROCESSES		(ERTS_PTAB_MAX_SIZE-1)
 #define ERTS_MAX_PID_DATA		((1 << _PID_DATA_SIZE) - 1)
 #define ERTS_MAX_PID_NUMBER		((1 << _PID_NUM_SIZE) - 1)
 #define ERTS_MAX_PID_SERIAL		((1 << _PID_SER_SIZE) - 1)
-#define ERTS_MAX_PID_R9_SERIAL		((1 << _PID_R9_SER_SIZE) - 1)
 
-#define ERTS_R9_PROC_BITS		(_PID_R9_SER_SIZE + _PID_NUM_SIZE)
 #define ERTS_PROC_BITS			(_PID_SER_SIZE + _PID_NUM_SIZE)
 
-#define ERTS_INVALID_PID		make_internal_pid(ERTS_MAX_PID_DATA)
+#define ERTS_INVALID_PID		ERTS_PTAB_INVALID_ID(_TAG_IMMED1_PID)
 
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *\
  * Ports                                                                   *
 \*                                                                         */
 
-#define internal_port_index(x)		(internal_port_data((x))	\
-					 & erts_port_tab_index_mask)
+extern ErtsPTab erts_port;
+
+#define make_internal_port(D)		erts_ptab_make_id(&erts_port, \
+							  (D), \
+							  _TAG_IMMED1_PORT)
+
+#define internal_port_index(PRT)	(ASSERT(is_internal_port((PRT))), \
+					 erts_ptab_id2pix(&erts_port, (PRT)))
+
+#define internal_port_data(PRT)		(ASSERT(is_internal_port((PRT))), \
+					 erts_ptab_id2data(&erts_port, (PRT)))
+
+#define internal_port_number(x) _GET_PORT_NUM(internal_port_data((x)))
 
 #define internal_port_node_name(x)	(internal_port_node((x))->sysname)
 #define external_port_node_name(x)	(external_port_node((x))->sysname)
@@ -235,18 +238,18 @@ extern int erts_use_r9_pids_ports;
 #define is_not_port(x)			(!is_port(x))
 
 /* Highest port-ID part in a term of type Port 
-   Not necessarily the same as the variable erts_max_ports
+   Not necessarily the same as current maximum port table size
    which defines the maximum number of simultaneous Ports
    in the Erlang node. ERTS_MAX_PORTS is a hard upper limit.
 */
-#define ERTS_MAX_R9_PORTS		(1 << ERTS_R9_PORTS_BITS)
-#define ERTS_MAX_PORTS			(1 << ERTS_PORTS_BITS)
-
+#define ERTS_MAX_PORTS			(ERTS_PTAB_MAX_SIZE-1)
 #define ERTS_MAX_PORT_DATA		((1 << _PORT_DATA_SIZE) - 1)
 #define ERTS_MAX_PORT_NUMBER		((1 << _PORT_NUM_SIZE) - 1)
 
-#define ERTS_R9_PORTS_BITS		(_PORT_R9_NUM_SIZE)
 #define ERTS_PORTS_BITS			(_PORT_NUM_SIZE)
+
+#define ERTS_INVALID_PORT		ERTS_PTAB_INVALID_ID(_TAG_IMMED1_PORT)
+
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *\
  * Refs                                                                    *
 \*                                                                         */

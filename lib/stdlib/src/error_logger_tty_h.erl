@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %% 
-%% Copyright Ericsson AB 1996-2009. All Rights Reserved.
+%% Copyright Ericsson AB 1996-2013. All Rights Reserved.
 %% 
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -34,10 +34,12 @@
 	 handle_event/2, handle_call/2, handle_info/2,
 	 terminate/2, code_change/3]).
 
+-export([write_event/2]).
+
 %% This one is used when we takeover from the simple error_logger.
 init({[], {error_logger, Buf}}) ->
     User = set_group_leader(),
-    write_events(Buf),
+    write_events(Buf,io),
     {ok, {User, error_logger}};
 %% This one is used if someone took over from us, and now wants to
 %% go back.
@@ -52,7 +54,7 @@ init([]) ->
 handle_event({_Type, GL, _Msg}, State) when node(GL) =/= node() ->
     {ok, State};
 handle_event(Event, State) ->
-    write_event(tag_event(Event)),
+    ok = write_event(tag_event(Event),io),
     {ok, State}.
 
 handle_info({'EXIT', User, _Reason}, {User, PrevHandler}) ->
@@ -64,10 +66,10 @@ handle_info({'EXIT', User, _Reason}, {User, PrevHandler}) ->
 	     PrevHandler, go_back}
     end;
 handle_info({emulator, GL, Chars}, State) when node(GL) == node() ->
-    write_event(tag_event({emulator, GL, Chars})),
+    ok = write_event(tag_event({emulator, GL, Chars}),io),
     {ok, State};
 handle_info({emulator, noproc, Chars}, State) ->
-    write_event(tag_event({emulator, noproc, Chars})),
+    ok = write_event(tag_event({emulator, noproc, Chars}),io),
     {ok, State};
 handle_info(_, State) ->
     {ok, State}.
@@ -95,91 +97,88 @@ set_group_leader() ->
     end.
 
 tag_event(Event) ->    
-    {erlang:localtime(), Event}.
+    {erlang:universaltime(), Event}.
 
-write_events(Events) -> write_events1(lists:reverse(Events)).
+%% IOMOd is always 'io'
+write_events(Events,IOMod) -> write_events1(lists:reverse(Events),IOMod).
 
-write_events1([Event|Es]) ->
-    write_event(Event),
-    write_events1(Es);
-write_events1([]) ->
+write_events1([Event|Es],IOMod) ->
+    ok = write_event(Event,IOMod),
+    write_events1(Es,IOMod);
+write_events1([],_IOMod) ->
     ok.
 
-write_event({Time, {error, _GL, {Pid, Format, Args}}}) ->
+write_event({Time, {error, _GL, {Pid, Format, Args}}},IOMod) ->
     T = write_time(maybe_utc(Time)),
     case catch io_lib:format(add_node(Format,Pid), Args) of
 	S when is_list(S) ->
-	    format(T ++ S);
+	    format(IOMod, T ++ S);
 	_ ->
 	    F = add_node("ERROR: ~p - ~p~n", Pid),
-	    format(T ++ F, [Format,Args])
+	    format(IOMod, T ++ F, [Format,Args])
     end;
-write_event({Time, {emulator, _GL, Chars}}) ->
+write_event({Time, {emulator, _GL, Chars}},IOMod) ->
     T = write_time(maybe_utc(Time)),
     case catch io_lib:format(Chars, []) of
 	S when is_list(S) ->
-	    format(T ++ S);
+	    format(IOMod, T ++ S);
 	_ ->
-	    format(T ++ "ERROR: ~p ~n", [Chars])
+	    format(IOMod, T ++ "ERROR: ~p ~n", [Chars])
     end;
-write_event({Time, {info, _GL, {Pid, Info, _}}}) ->
+write_event({Time, {info, _GL, {Pid, Info, _}}},IOMod) ->
     T = write_time(maybe_utc(Time)),
-    format(T ++ add_node("~p~n",Pid),[Info]);
-write_event({Time, {error_report, _GL, {Pid, std_error, Rep}}}) ->
+    format(IOMod, T ++ add_node("~p~n",Pid),[Info]);
+write_event({Time, {error_report, _GL, {Pid, std_error, Rep}}},IOMod) ->
     T = write_time(maybe_utc(Time)),
     S = format_report(Rep),
-    format(T ++ S ++ add_node("", Pid));
-write_event({Time, {info_report, _GL, {Pid, std_info, Rep}}}) ->
+    format(IOMod, T ++ S ++ add_node("", Pid));
+write_event({Time, {info_report, _GL, {Pid, std_info, Rep}}},IOMod) ->
     T = write_time(maybe_utc(Time), "INFO REPORT"),
     S = format_report(Rep),
-    format(T ++ S ++ add_node("", Pid));
-write_event({Time, {info_msg, _GL, {Pid, Format, Args}}}) ->
+    format(IOMod, T ++ S ++ add_node("", Pid));
+write_event({Time, {info_msg, _GL, {Pid, Format, Args}}},IOMod) ->
     T = write_time(maybe_utc(Time), "INFO REPORT"),
     case catch io_lib:format(add_node(Format,Pid), Args) of
 	S when is_list(S) ->
-	    format(T ++ S);
+	    format(IOMod, T ++ S);
 	_ ->
 	    F = add_node("ERROR: ~p - ~p~n", Pid),
-	    format(T ++ F, [Format,Args])
+	    format(IOMod, T ++ F, [Format,Args])
     end;
-write_event({Time, {warning_report, _GL, {Pid, std_warning, Rep}}}) ->
+write_event({Time, {warning_report, _GL, {Pid, std_warning, Rep}}},IOMod) ->
     T = write_time(maybe_utc(Time), "WARNING REPORT"),
     S = format_report(Rep),
-    format(T ++ S ++ add_node("", Pid));
-write_event({Time, {warning_msg, _GL, {Pid, Format, Args}}}) ->
+    format(IOMod, T ++ S ++ add_node("", Pid));
+write_event({Time, {warning_msg, _GL, {Pid, Format, Args}}},IOMod) ->
     T = write_time(maybe_utc(Time), "WARNING REPORT"),
     case catch io_lib:format(add_node(Format,Pid), Args) of
 	S when is_list(S) ->
-	    format(T ++ S);
+	    format(IOMod, T ++ S);
 	_ ->
 	    F = add_node("ERROR: ~p - ~p~n", Pid),
-	    format(T ++ F, [Format,Args])
+	    format(IOMod, T ++ F, [Format,Args])
     end;
-write_event({_Time, _Error}) ->
+write_event({_Time, _Error},_IOMod) ->
     ok.
 
 maybe_utc(Time) ->
     UTC = case application:get_env(sasl, utc_log) of
-              {ok, Val} ->
-                  Val;
+              {ok, Val} -> Val;
               undefined ->
                   %% Backwards compatible:
                   case application:get_env(stdlib, utc_log) of
-                      {ok, Val} ->
-                          Val;
-                      undefined ->
-                          false
+                      {ok, Val} -> Val;
+                      undefined -> false
                   end
           end,
-    if
-        UTC =:= true ->
-            {utc, calendar:local_time_to_universal_time(Time)};
-        true -> 
-            Time
-    end.
+    maybe_utc(Time, UTC).
 
-format(String)       -> io:format(user, String, []).
-format(String, Args) -> io:format(user, String, Args).
+maybe_utc(Time, true) -> {utc, Time};
+maybe_utc(Time, _) -> {local, calendar:universal_time_to_local_time(Time)}.
+
+format(IOMod, String)       -> format(IOMod, String, []).
+format(io_lib, String, Args) -> io_lib:format(String, Args);
+format(io, String, Args) -> io:format(user, String, Args).
 
 format_report(Rep) when is_list(Rep) ->
     case string_p(Rep) of
@@ -231,7 +230,7 @@ write_time(Time) -> write_time(Time, "ERROR REPORT").
 write_time({utc,{{Y,Mo,D},{H,Mi,S}}},Type) ->
     io_lib:format("~n=~s==== ~p-~s-~p::~s:~s:~s UTC ===~n",
 		  [Type,D,month(Mo),Y,t(H),t(Mi),t(S)]);
-write_time({{Y,Mo,D},{H,Mi,S}},Type) ->
+write_time({local, {{Y,Mo,D},{H,Mi,S}}},Type) ->
     io_lib:format("~n=~s==== ~p-~s-~p::~s:~s:~s ===~n",
 		  [Type,D,month(Mo),Y,t(H),t(Mi),t(S)]).
 

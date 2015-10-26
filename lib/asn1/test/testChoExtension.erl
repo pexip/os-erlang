@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 1997-2010. All Rights Reserved.
+%% Copyright Ericsson AB 1997-2013. All Rights Reserved.
 %%
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -19,58 +19,33 @@
 %%
 -module(testChoExtension).
 
--export([compile/3]).
 -export([extension/1]).
 
 -include_lib("test_server/include/test_server.hrl").
 
 
-compile(Config,Rules,Options) ->
-
-    ?line DataDir = ?config(data_dir,Config),
-    ?line OutDir = ?config(priv_dir,Config),
-    ?line true = code:add_patha(?config(priv_dir,Config)),
-    ?line ok = asn1ct:compile(DataDir ++ "ChoExtension",[Rules,{outdir,OutDir}] ++ Options).
-
-
-
 extension(_Rules) ->
-
-    ?line {ok,Bytes1} = asn1_wrapper:encode('ChoExtension','ChoExt1',{'ChoExt1',{bool,true}}),
-    ?line {ok,{bool,true}} = 
-	asn1_wrapper:decode('ChoExtension','ChoExt1',lists:flatten(Bytes1)),
-
-    ?line {ok,Bytes2} = asn1_wrapper:encode('ChoExtension','ChoExt1',{'ChoExt1',{int,33}}),
-    ?line {ok,{int,33}} = 
-	asn1_wrapper:decode('ChoExtension','ChoExt1',lists:flatten(Bytes2)),
+    roundtrip('ChoExt1', {bool,true}),
+    roundtrip('ChoExt1', {int,33}),
 
     %% A trick to encode with another compatible CHOICE type to test reception
     %% extension alternative
 
-    ?line {ok,Bytes2x} = asn1_wrapper:encode('ChoExtension','ChoExt1x',{str,"abc"}),
-    ?line {ok,Val2x} = 
-	asn1_wrapper:decode('ChoExtension','ChoExt1',lists:flatten(Bytes2x)),
-    io:format("Choice extension alternative = ~p~n",[Val2x]),
+    roundtrip('ChoExt1x', {str,<<"abc">>}),
 
-    ?line {ok,Bytes3} = asn1_wrapper:encode('ChoExtension','ChoExt2',{'ChoExt2',{bool,true}}),
-    ?line {ok,{bool,true}} =
-	asn1_wrapper:decode('ChoExtension','ChoExt2',lists:flatten(Bytes3)),
+    roundtrip('ChoExt2', {bool,true}),
+    roundtrip('ChoExt2', {int,33}),
+    roundtrip('ChoExt3', {bool,true}),
+    roundtrip('ChoExt3', {int,33}),
+    roundtrip('ChoExt4', {str,<<"abc">>}),
 
-    ?line {ok,Bytes4} = asn1_wrapper:encode('ChoExtension','ChoExt2',{'ChoExt2',{int,33}}),
-    ?line {ok,{int,33}} = 
-	asn1_wrapper:decode('ChoExtension','ChoExt2',lists:flatten(Bytes4)),
-
-    ?line {ok,Bytes5} = asn1_wrapper:encode('ChoExtension','ChoExt3',{'ChoExt3',{bool,true}}),
-    ?line {ok,{bool,true}} = 
-	asn1_wrapper:decode('ChoExtension','ChoExt3',lists:flatten(Bytes5)),
-
-    ?line {ok,Bytes6} = asn1_wrapper:encode('ChoExtension','ChoExt3',{'ChoExt3',{int,33}}),
-    ?line {ok,{int,33}} = 
-	asn1_wrapper:decode('ChoExtension','ChoExt3',lists:flatten(Bytes6)),
-
-    Val7 = {str,"abc"},
-    ?line {ok,Bytes7} = asn1_wrapper:encode('ChoExtension','ChoExt4',Val7),
-    ?line {ok,Val7} = asn1_wrapper:decode('ChoExtension','ChoExt4',lists:flatten(Bytes7)),
-
+    roundtrip('ChoEmptyRoot', {bool,false}),
+    roundtrip('ChoEmptyRoot', {bool,true}),
+    roundtrip('ChoEmptyRoot', {int,0}),
+    roundtrip('ChoEmptyRoot', {int,7}),
 
     ok.
+
+
+roundtrip(Type, Value) ->
+    asn1_test_lib:roundtrip('ChoExtension', Type, Value).

@@ -1,10 +1,10 @@
-<?xml version="1.0" encoding="latin1" ?>
+<?xml version="1.0" encoding="utf-8" ?>
 <!DOCTYPE chapter SYSTEM "chapter.dtd">
 
 <chapter>
   <header>
     <copyright>
-      <year>2004</year><year>2011</year>
+      <year>2004</year><year>2013</year>
       <holder>Ericsson AB. All Rights Reserved.</holder>
     </copyright>
     <legalnotice>
@@ -29,6 +29,531 @@
     <file>notes.xml</file>
   </header>
   <p>This document describes the changes made to the Tools application.</p>
+
+<section><title>Tools 2.7</title>
+
+    <section><title>Improvements and New Features</title>
+      <list>
+        <item>
+          <p>
+	    Add log2 histogram to lcnt for lock wait time</p>
+          <p>
+	    Own Id: OTP-12059</p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>Tools 2.6.15</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+          <p>
+	    Removed <c>erlang:bitstr_to_list/1</c> and
+	    <c>erlang:list_to_bitstr/1</c>. They were added by
+	    mistake, and have always raised an <c>undefined</c>
+	    exception when called.</p>
+          <p>
+	    Own Id: OTP-11942</p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>Tools 2.6.14</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+          <p>
+	    Removed the support for the query keyword from emacs mode
+	    (Thanks to Paul Oliver)</p>
+          <p>
+	    Own Id: OTP-11568</p>
+        </item>
+        <item>
+          <p>
+	    Emacs mode improvements (Thanks to Steve Vinoski)</p>
+          <p>
+	    Own Id: OTP-11601</p>
+        </item>
+        <item>
+          <p>
+	    Application upgrade (appup) files are corrected for the
+	    following applications: </p>
+          <p>
+	    <c>asn1, common_test, compiler, crypto, debugger,
+	    dialyzer, edoc, eldap, erl_docgen, et, eunit, gs, hipe,
+	    inets, observer, odbc, os_mon, otp_mibs, parsetools,
+	    percept, public_key, reltool, runtime_tools, ssh,
+	    syntax_tools, test_server, tools, typer, webtool, wx,
+	    xmerl</c></p>
+          <p>
+	    A new test utility for testing appup files is added to
+	    test_server. This is now used by most applications in
+	    OTP.</p>
+          <p>
+	    (Thanks to Tobias Schlager)</p>
+          <p>
+	    Own Id: OTP-11744</p>
+        </item>
+        <item>
+          <p>
+	    The emacs erlang mode now match erlang keywords more
+	    carefully (Thanks to Steve Vinoski)</p>
+          <p>
+	    Own Id: OTP-11786</p>
+        </item>
+        <item>
+          <p>
+	    The emacs erlang-mode now auto loads for more file types
+	    (Thanks to Phil Hagelberg)</p>
+          <p>
+	    Own Id: OTP-11788</p>
+        </item>
+      </list>
+    </section>
+
+
+    <section><title>Improvements and New Features</title>
+      <list>
+        <item>
+          <p>
+	    <c>cover</c> can run on itself. Also, support for reading
+	    BEAM files produced by ancient OTP versions before R9C
+	    has been removed.</p>
+          <p>
+	    Own Id: OTP-11692</p>
+        </item>
+        <item>
+          <p>
+	    Support maps in cover</p>
+          <p>
+	    Own Id: OTP-11764</p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>Tools 2.6.13</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+          <p>
+	    Erlang-specific compilation error regexp is added in
+	    erlang-eunit.el. This defvar was earlier in erlang.el,
+	    but was erroneously removed in R15B02, while still used
+	    by erlang-eunit.el.</p>
+          <p>
+	    Own Id: OTP-11417 Aux Id: seq12447 </p>
+        </item>
+        <item>
+          <p>
+	    Take compiler options from beam in cover:compile_beam.
+	    Thanks to Péter Gömöri.</p>
+          <p>
+	    Own Id: OTP-11439</p>
+        </item>
+        <item>
+          <p>
+	    Silence warnings (Thanks to Anthony Ramine)</p>
+          <p>
+	    Own Id: OTP-11517</p>
+        </item>
+      </list>
+    </section>
+
+
+    <section><title>Improvements and New Features</title>
+      <list>
+        <item>
+          <p>
+	    Add iodata, nonempty_string to built-in type highlighting
+	    for emacs. Thanks to Paul Oliver.</p>
+          <p>
+	    Own Id: OTP-11394</p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>Tools 2.6.12</title>
+
+    <section><title>Improvements and New Features</title>
+      <list>
+        <item>
+          <p>
+	    Remove trailing spaces in Emacs templates. Thanks to
+	    Roberto Aloi.</p>
+          <p>
+	    Own Id: OTP-11198</p>
+        </item>
+        <item>
+          <p>
+	    Fixed the Emacs erlang-mode to accommodate the coding
+	    style where lists written across several lines have each
+	    line starting with a comma. Thanks to Magnus Henoch.</p>
+          <p>
+	    Own Id: OTP-11242</p>
+        </item>
+        <item>
+          <p>
+	    Make the Emacs Erlang mode TRAMP-aware when compiling.
+	    Thanks to Tomas Abrahamsson.</p>
+          <p>
+	    Own Id: OTP-11270</p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>Tools 2.6.11</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+          <p>
+	    When cover:stop(Node) was called on a non-existing node,
+	    a process waiting for cover data from the node would hang
+	    forever. This has been corrected.</p>
+          <p>
+	    Own Id: OTP-10979</p>
+        </item>
+      </list>
+    </section>
+
+
+    <section><title>Improvements and New Features</title>
+      <list>
+        <item>
+          <p>
+	    Make cover smarter about finding source from beam.</p>
+          <p>
+	    In particular, search using the source path in
+	    module_info if the current heuristic fails.</p>
+          <p>
+	    Own Id: OTP-10902</p>
+        </item>
+        <item>
+          <p>
+	    Remove Flymake dependency in erlang-pkg.el. Thanks to
+	    Magnus Henoch.</p>
+          <p>
+	    Own Id: OTP-10930</p>
+        </item>
+        <item>
+          <p>
+	    Erlang-mode: Add autoload cookies for file extension
+	    associations. Thanks to Magnus Henoch.</p>
+          <p>
+	    Own Id: OTP-10999</p>
+        </item>
+        <item>
+	    <p> Postscript files no longer needed for the generation
+	    of PDF files have been removed. </p>
+          <p>
+	    Own Id: OTP-11016</p>
+        </item>
+        <item>
+          <p>
+	    Fix a race condition when there're several applications
+	    in apps directory. Thanks to Manuel Rubio.</p>
+          <p>
+	    Own Id: OTP-11028</p>
+        </item>
+        <item>
+          <p>
+	    New option for eprof, 'set_on_spawn'. This option was
+	    previously always on and is also the default.</p>
+          <p>
+	    Own Id: OTP-11144</p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>Tools 2.6.10</title>
+
+    <section><title>Improvements and New Features</title>
+      <list>
+        <item>
+          <p>
+	    Fix a bug in cover when used with no_auto_import. Thanks
+	    to José Valim.</p>
+          <p>
+	    Own Id: OTP-10778</p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>Tools 2.6.9</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+          <p>
+	    Add missing modules in app-file</p>
+          <p>
+	    Own Id: OTP-10439</p>
+        </item>
+        <item>
+          <p>
+	    Make erlang-mode more compatible with package.el (Thanks
+	    to Gleb Peregud)</p>
+          <p>
+	    Own Id: OTP-10465</p>
+        </item>
+        <item>
+          <p>
+	    Fix various typos (thanks to Tuncer Ayaz)</p>
+          <p>
+	    Own Id: OTP-10611</p>
+        </item>
+        <item>
+          <p>
+	    Add separate face for exported functions (Thanks to
+	    Thomas Järvstrand)</p>
+          <p>
+	    Own Id: OTP-10637</p>
+        </item>
+        <item>
+          <p>
+	    The BIF highlighting in the emacs mode has been updated
+	    to correspond with the correct BIFs.</p>
+          <p>
+	    Own Id: OTP-10774</p>
+        </item>
+      </list>
+    </section>
+
+
+    <section><title>Improvements and New Features</title>
+      <list>
+        <item>
+	    <p> Support for Unicode has been implemented. </p>
+          <p>
+	    Own Id: OTP-10302</p>
+        </item>
+        <item>
+          <p>
+	    A new function, cover:flush(Nodes), is added which will
+	    fetch data from remote nodes without stopping cover on
+	    those nodes. This is used by test_server and common_test
+	    when it is safe to assume that the node will be
+	    terminated after the test anyway. The purpose is to avoid
+	    processes crashing when re-loading the original beam if
+	    the processes is still running old code.</p>
+          <p>
+	    Remote nodes will now continue to count code coverage if
+	    the connection to the main node is broken. Earlier, a
+	    broken connection would cause the cover_server on the
+	    remote node to die and thus any still cover compiled
+	    modules would cause process crash when trying to insert
+	    cover data in ets tables that used to exist on the
+	    cover_server. The new functionality also involves
+	    synchronization with the main node if the nodes are
+	    reconnected.</p>
+          <p>
+	    *** POTENTIAL INCOMPATIBILITY ***</p>
+          <p>
+	    Own Id: OTP-10523 Aux Id: OTP-10427 </p>
+        </item>
+        <item>
+	    <p>Where necessary a comment stating encoding has been
+	    added to Erlang files. The comment is meant to be removed
+	    in Erlang/OTP R17B when UTF-8 becomes the default
+	    encoding. </p>
+          <p>
+	    Own Id: OTP-10630</p>
+        </item>
+        <item>
+          <p>
+	    Fix syntax highlighting of $\' in Emacs mode. Thanks to
+	    Magnus Henoch.</p>
+          <p>
+	    Own Id: OTP-10766</p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>Tools 2.6.8</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+          <p>
+	    The last tuple fun call has been removed from fprof.</p>
+          <p>
+	    Own Id: OTP-10091 Aux Id: seq12067 </p>
+        </item>
+        <item>
+          <p>
+	    Fix indentation of record fields in Emacs (Thanks to
+	    Tomas Abrahamsson)</p>
+          <p>
+	    Own Id: OTP-10120</p>
+        </item>
+        <item>
+          <p>
+	    Documentation fixes (Thanks to Ricardo Catalinas Jiménez
+	    )</p>
+          <p>
+	    Own Id: OTP-10121</p>
+        </item>
+        <item>
+          <p>
+	    Remove Erlang-specific compilation error regexp in
+	    erlang.el</p>
+          <p>
+	    Own Id: OTP-10168</p>
+        </item>
+        <item>
+          <p>
+	    Fix highlighting of atoms ending with a dollar sign</p>
+          <p>
+	    Like this: 'atom$'. In that example, the last single
+	    quote should be recognised as ending the atom. This needs
+	    a font-lock workaround similar to the one for strings.
+	    Thanks to Magnus Henoch</p>
+          <p>
+	    Own Id: OTP-10178</p>
+        </item>
+        <item>
+	    <p> Xref now accepts filenames with character codes
+	    greater than 126. (Thanks to Emile Joubert for reporting
+	    the issue.) </p>
+          <p>
+	    Own Id: OTP-10192</p>
+        </item>
+        <item>
+          <p>
+	    Add test_indentation target to lib/tools/emacs/Makefile</p>
+          <p>
+	    Automatically indent test.erl.orig, save to test.erl, and
+	    compare to test.erl.intended. Thanks to Magnus Henoch.</p>
+          <p>
+	    Own Id: OTP-10226</p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>Tools 2.6.7</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+          <p>
+	    Makefiles in erts, hipe and tools have been corrected to
+	    enable parallel make, i.e MAKEFLAGS=-jX where X is the
+	    parallelity number. As a result of this dependencies were
+	    corrected since that is what is needed for parallel make
+	    to work.</p>
+          <p>
+	    Own Id: OTP-9857 Aux Id: OTP-9451 </p>
+        </item>
+        <item>
+	    <p>Minor suppressions and fixes of compilation
+	    warnings</p>
+          <p>
+	    Own Id: OTP-10016</p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>Tools 2.6.6.6</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+	    <p>Update system profiling principles to reflect eprof
+	    performance improvements.</p>
+          <p>
+	    Own Id: OTP-9656</p>
+        </item>
+        <item>
+          <p>
+	    [cover] fix leftover {'DOWN', ..} msg in callers queue</p>
+          <p>
+	    After stopping cover with cover:stop() there could still
+	    be a {'DOWN',...} leftover message in the calling
+	    process's message queue. This unexpected leftover could
+	    be eliminated if erlang:demonitor/2 with option flush
+	    would be used in certain points</p>
+          <p>
+	    Own Id: OTP-9694</p>
+        </item>
+        <item>
+          <p>
+	    Add deps as erlang-flymake include directory.</p>
+          <p>
+	    Update erlang-flymake to recognize the "deps" folder as
+	    an include directory. This makes erlang-flymake
+	    compatible with the rebar dependency management tool's
+	    default folder structure, which puts included
+	    dependencies in "deps".(Thanks to Kevin Albrecht)</p>
+          <p>
+	    Own Id: OTP-9791</p>
+        </item>
+      </list>
+    </section>
+
+
+    <section><title>Improvements and New Features</title>
+      <list>
+        <item>
+	    <p>Variables are now now allowed in '<c>fun M:F/A</c>' as
+	    suggested by Richard O'Keefe in EEP-23.</p>
+	    <p>The representation of '<c>fun M:F/A</c>' in the
+	    abstract format has been changed in an incompatible way.
+	    Tools that directly read or manipulate the abstract
+	    format (such as parse transforms) may need to be updated.
+	    The compiler can handle both the new and the old format
+	    (i.e. extracting the abstract format from a pre-R15 BEAM
+	    file and compiling it using compile:forms/1,2 will work).
+	    The <c>syntax_tools</c> application can also handle both
+	    formats.</p>
+          <p>
+	    *** POTENTIAL INCOMPATIBILITY ***</p>
+          <p>
+	    Own Id: OTP-9643</p>
+        </item>
+        <item>
+          <p>
+	    Tuple funs (a two-element tuple with a module name and a
+	    function) are now officially deprecated and will be
+	    removed in R16. Use '<c>fun M:F/A</c>' instead. To make
+	    you aware that your system uses tuple funs, the very
+	    first time a tuple fun is applied, a warning will be sent
+	    to the error logger.</p>
+          <p>
+	    Own Id: OTP-9649</p>
+        </item>
+        <item>
+          <p>
+	    Eliminate use of deprecated regexp module</p>
+          <p>
+	    Own Id: OTP-9810</p>
+        </item>
+      </list>
+    </section>
+
+</section>
 
 <section><title>Tools 2.6.6.5</title>
 

@@ -1,10 +1,10 @@
-<?xml version="1.0" encoding="latin1" ?>
+<?xml version="1.0" encoding="utf-8" ?>
 <!DOCTYPE chapter SYSTEM "chapter.dtd">
 
 <chapter>
   <header>
     <copyright>
-      <year>2001</year><year>2010</year>
+      <year>2001</year><year>2013</year>
       <holder>Ericsson AB. All Rights Reserved.</holder>
     </copyright>
     <legalnotice>
@@ -31,20 +31,6 @@
 
   <p>Here we list a few modules and BIFs to watch out for, and not only
   from a performance point of view.</p>
-
-  <section>
-     <title>The regexp module</title>
-
-     <p>The regular expression functions in the
-        <seealso marker="stdlib:regexp">regexp</seealso>
-	module are written in Erlang, not in C, and were
-	meant for occasional use on small amounts of data,
-	for instance for validation of configuration files
-	when starting an application.</p>
-
-      <p>Use the <seealso marker="stdlib:re">re</seealso> module
-      (introduced in R13A) instead, especially in time-critical code.</p>
-  </section>
 
   <section>
      <title>The timer module</title>

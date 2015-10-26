@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2007-2011. All Rights Reserved.
+%% Copyright Ericsson AB 2007-2013. All Rights Reserved.
 %%
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -27,7 +27,8 @@
 -include("inet_sctp.hrl").
 
 -export([open/0,open/1,open/2,close/1]).
--export([listen/2,connect/4,connect/5,connect_init/4,connect_init/5]).
+-export([listen/2,peeloff/2]).
+-export([connect/4,connect/5,connect_init/4,connect_init/5]).
 -export([eof/2,abort/2]).
 -export([send/3,send/4,recv/1,recv/2]).
 -export([error_string/1]).
@@ -35,14 +36,17 @@
 
 -type assoc_id() :: term().
 -type option() ::
-        {active, true | false | once} |
+        {active, true | false | once | -32768..32767} |
         {buffer, non_neg_integer()} |
         {dontroute, boolean()} |
+        {high_msgq_watermark, pos_integer()} |
         {linger, {boolean(), non_neg_integer()}} |
+        {low_msgq_watermark, pos_integer()} |
         {mode, list | binary} | list | binary |
         {priority, non_neg_integer()} |
         {recbuf, non_neg_integer()} |
         {reuseaddr, boolean()} |
+	{ipv6_v6only, boolean()} |
         {sctp_adaptation_layer, #sctp_setadaptation{}} |
         {sctp_associnfo, #sctp_assocparams{}} |
         {sctp_autoclose, non_neg_integer()} |
@@ -66,11 +70,14 @@
         active |
         buffer |
         dontroute |
+        high_msgq_watermark |
         linger |
+        low_msgq_watermark |
         mode |
         priority |
         recbuf |
         reuseaddr |
+	ipv6_v6only |
         sctp_adaptation_layer |
         sctp_associnfo |
         sctp_autoclose |
@@ -109,9 +116,11 @@ open() ->
                    | {ifaddr,IP}
                    | inet:address_family()
                    | {port,Port}
+		   | {type,SockType}
                    | option(),
               IP :: inet:ip_address() | any | loopback,
               Port :: inet:port_number(),
+	      SockType :: seqpacket | stream,
               Socket :: sctp_socket().
 
 open(Opts) when is_list(Opts) ->
@@ -134,9 +143,11 @@ open(X) ->
                    | {ifaddr,IP}
                    | inet:address_family()
                    | {port,Port}
+		   | {type,SockType}
                    | option(),
       IP :: inet:ip_address() | any | loopback,
       Port :: inet:port_number(),
+      SockType :: seqpacket | stream,
       Socket :: sctp_socket().
 
 open(Port, Opts) when is_integer(Port), is_list(Opts) ->
@@ -161,16 +172,37 @@ close(S) ->
 -spec listen(Socket, IsServer) -> ok | {error, Reason} when
       Socket :: sctp_socket(),
       IsServer :: boolean(),
+      Reason :: term();
+	    (Socket, Backlog) -> ok | {error, Reason} when
+      Socket :: sctp_socket(),
+      Backlog :: integer(),
       Reason :: term().
 
-listen(S, Flag) when is_port(S), is_boolean(Flag) ->
+listen(S, Backlog)
+  when is_port(S), is_boolean(Backlog);
+       is_port(S), is_integer(Backlog) ->
     case inet_db:lookup_socket(S) of
 	{ok,Mod} ->
-	    Mod:listen(S, Flag);
+	    Mod:listen(S, Backlog);
 	Error -> Error
     end;
 listen(S, Flag) ->
     erlang:error(badarg, [S,Flag]).
+
+-spec peeloff(Socket, Assoc) -> {ok, NewSocket} | {error, Reason} when
+      Socket :: sctp_socket(),
+      Assoc :: #sctp_assoc_change{} | assoc_id(),
+      NewSocket :: sctp_socket(),
+      Reason :: term().
+
+peeloff(S, #sctp_assoc_change{assoc_id=AssocId}) when is_port(S) ->
+    peeloff(S, AssocId);
+peeloff(S, AssocId) when is_port(S), is_integer(AssocId) ->
+    case inet_db:lookup_socket(S) of
+	{ok,Mod} ->
+	    Mod:peeloff(S, AssocId);
+	Error -> Error
+    end.
 
 -spec connect(Socket, Addr, Port, Opts) -> {ok, Assoc} | {error, inet:posix()} when
       Socket :: sctp_socket(),
@@ -242,7 +274,7 @@ do_connect(S, Addr, Port, Opts, Timeout, ConnWait) when is_port(S), is_list(Opts
 				    Mod:connect(S, IP, Port, Opts, ConnectTimer);
 				Error -> Error
 			    after
-				inet:stop_timer(Timer)
+				_ = inet:stop_timer(Timer)
 			    end
 		    catch
 			error:badarg ->
@@ -288,7 +320,7 @@ eof_or_abort(S, AssocId, Action) ->
 -spec send(Socket, SndRcvInfo, Data) -> ok | {error, Reason} when
       Socket :: sctp_socket(),
       SndRcvInfo :: #sctp_sndrcvinfo{},
-      Data :: binary | iolist(),
+      Data :: binary() | iolist(),
       Reason :: term().
 
 %% Full-featured send. Rarely needed.
@@ -305,7 +337,7 @@ send(S, SRI, Data) ->
       Socket :: sctp_socket(),
       Assoc :: #sctp_assoc_change{} | assoc_id(),
       Stream :: integer(),
-      Data :: binary | iolist(),
+      Data :: binary() | iolist(),
       Reason :: term().
 
 send(S, #sctp_assoc_change{assoc_id=AssocId}, Stream, Data)
@@ -391,7 +423,11 @@ error_string(9) ->
 error_string(10) ->
     "Cookie Received While Shutting Down";
 error_string(11) ->
+    "Restart of an Association with New Addresses";
+error_string(12) ->
     "User Initiated Abort";
+error_string(13) ->
+    "Protocol Violation";
 %% For more info on principal SCTP error codes: phone +44 7981131933
 error_string(N) when is_integer(N) ->
     unknown_error;
@@ -399,9 +435,10 @@ error_string(X) ->
     erlang:error(badarg, [X]).
 
 
--spec controlling_process(Socket, Pid) -> ok when
+-spec controlling_process(Socket, Pid) -> ok | {error, Reason} when
       Socket :: sctp_socket(),
-      Pid :: pid().
+      Pid :: pid(),
+      Reason :: closed | not_owner | inet:posix().
 
 controlling_process(S, Pid) when is_port(S), is_pid(Pid) ->
     inet:udp_controlling_process(S, Pid);

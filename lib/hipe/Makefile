@@ -1,7 +1,7 @@
 #
 # %CopyrightBegin%
 #
-# Copyright Ericsson AB 2001-2010. All Rights Reserved.
+# Copyright Ericsson AB 2001-2012. All Rights Reserved.
 #
 # The contents of this file are subject to the Erlang Public License,
 # Version 1.1, (the "License"); you may not use this file except in
@@ -22,7 +22,7 @@ include $(ERL_TOP)/make/target.mk
 include $(ERL_TOP)/make/$(TARGET)/otp.mk
 
 ifdef HIPE_ENABLED
-HIPE_SUBDIRS = regalloc sparc ppc x86 amd64 arm opt tools
+HIPE_SUBDIRS = regalloc sparc ppc x86 amd64 arm opt tools llvm
 else
 HIPE_SUBDIRS =
 endif
@@ -37,7 +37,12 @@ else
 SUB_DIRECTORIES = $(ALWAYS_SUBDIRS)
 endif
 
+
 include native.mk
+
+ifndef EBIN
+EBIN = ../ebin
+endif
 
 #
 # Default Subdir Targets
@@ -52,12 +57,20 @@ edocs:
 	fi
 
 all-subdirs:
-	-for dir in $(SUB_DIRECTORIES); do \
-		(cd $$dir; $(MAKE) $(MAKETARGET) EBIN=../ebin; cd ..); \
+	$(V_at)for dir in $(SUB_DIRECTORIES); do \
+		(cd $$dir; $(MAKE) $(MAKETARGET) EBIN=$(EBIN); cd ..); \
 	done
 
+# distclean and realclean should clean the bootstrap files
+all-subdirs-x:
+	$(V_at)for dir in $(SUB_DIRECTORIES); do \
+		(cd $$dir; $(MAKE) $(MAKETARGET) EBIN=../boot_ebin; cd ..); \
+	done
+
+clean:
+	$(V_at)$(MAKE) MAKETARGET="clean" all-subdirs all-subdirs-x
 distclean:
-	$(MAKE) MAKETARGET="distclean" all-subdirs
+	$(V_at)$(MAKE) MAKETARGET="distclean" all-subdirs all-subdirs-x
 realclean:
-	$(MAKE) MAKETARGET="realclean" all-subdirs
+	$(V_at)$(MAKE) MAKETARGET="realclean" all-subdirs all-subdirs-x
 

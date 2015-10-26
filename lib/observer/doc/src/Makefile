@@ -34,8 +34,11 @@ RELSYSDIR = $(RELEASE_PATH)/lib/$(APPLICATION)-$(VSN)
 # Target Specs
 # ----------------------------------------------------
 XML_APPLICATION_FILES = ref_man.xml
+XML_REF1_FILES = \
+	cdv.xml
 XML_REF3_FILES = \
 	crashdump.xml \
+	observer.xml \
 	etop.xml \
 	ttb.xml
 XML_REF6_FILES = observer_app.xml
@@ -48,6 +51,7 @@ XML_PART_FILES = \
 XML_CHAPTER_FILES = \
 	crashdump_ug.xml \
 	etop_ug.xml \
+	observer_ug.xml \
 	ttb_ug.xml \
 	notes.xml \
 	notes_history.xml
@@ -57,19 +61,14 @@ BOOK_FILES = book.xml
 
 XML_FILES = \
 	$(BOOK_FILES) $(XML_CHAPTER_FILES) \
-	$(XML_PART_FILES) $(XML_REF3_FILES) \
+	$(XML_PART_FILES) $(XML_REF1_FILES) $(XML_REF3_FILES) \
 	$(XML_APPLICATION_FILES) $(XML_REF6_FILES)
 
-ONLY_HTML_FILE = \
-	crashdump_help.html
+ONLY_HTML_FILE =
 
 GIF_FILES = \
 	et_processes.gif \
 	et_modsprocs.gif \
-	etop_main.gif \
-	etop_5.gif \
-	etop_lines.gif \
-	etop_opt.gif \
 	note.gif
 
 # ----------------------------------------------------
@@ -79,6 +78,7 @@ HTML_FILES = $(XML_APPLICATION_FILES:%.xml=$(HTMLDIR)/%.html) \
 
 INFO_FILE = ../../info
 
+MAN1_FILES = $(XML_REF1_FILES:%.xml=$(MAN1DIR)/%.1)
 MAN3_FILES = $(XML_REF3_FILES:%.xml=$(MAN3DIR)/%.3)
 MAN6_FILES = $(XML_REF6_FILES:%_app.xml=$(MAN6DIR)/%.6)
 
@@ -108,6 +108,7 @@ html: gifs $(HTML_REF_MAN_FILE) $(ONLY_HTML_FILE:%=$(HTMLDIR)/%)
 
 clean clean_docs:
 	rm -rf $(HTMLDIR)/*
+	rm -f $(MAN1DIR)/*
 	rm -f $(MAN3DIR)/*
 	rm -f $(MAN6DIR)/*
 	rm -f $(TOP_PDF_FILE) $(TOP_PDF_FILE:%.pdf=%.fo)
@@ -117,7 +118,7 @@ clean clean_docs:
 $(HTMLDIR)/$(ONLY_HTML_FILE):
 	$(INSTALL_DATA) $(ONLY_HTML_FILE) $@
 
-man: $(MAN3_FILES) $(MAN6_FILES)
+man: $(MAN1_FILES) $(MAN3_FILES) $(MAN6_FILES)
 
 gifs: $(GIF_FILES:%=$(HTMLDIR)/%)
 
@@ -131,16 +132,18 @@ include $(ERL_TOP)/make/otp_release_targets.mk
 
 
 release_docs_spec: docs
-	$(INSTALL_DIR) $(RELSYSDIR)/doc/pdf
-	$(INSTALL_DATA) $(TOP_PDF_FILE) $(RELSYSDIR)/doc/pdf
-	$(INSTALL_DIR) $(RELSYSDIR)/doc/html
+	$(INSTALL_DIR) "$(RELSYSDIR)/doc/pdf"
+	$(INSTALL_DATA) $(TOP_PDF_FILE) "$(RELSYSDIR)/doc/pdf"
+	$(INSTALL_DIR) "$(RELSYSDIR)/doc/html"
 	$(INSTALL_DATA) $(HTMLDIR)/* \
-		$(RELSYSDIR)/doc/html
-	$(INSTALL_DATA) $(INFO_FILE) $(RELSYSDIR)
-	$(INSTALL_DIR) $(RELEASE_PATH)/man/man3
-	$(INSTALL_DATA) $(MAN3DIR)/* $(RELEASE_PATH)/man/man3
-	$(INSTALL_DIR) $(RELEASE_PATH)/man/man6
-	$(INSTALL_DATA) $(MAN6_FILES) $(RELEASE_PATH)/man/man6
+		"$(RELSYSDIR)/doc/html"
+	$(INSTALL_DATA) $(INFO_FILE) "$(RELSYSDIR)"
+	$(INSTALL_DIR) "$(RELEASE_PATH)/man/man1"
+	$(INSTALL_DATA) $(MAN1DIR)/* "$(RELEASE_PATH)/man/man1"
+	$(INSTALL_DIR) "$(RELEASE_PATH)/man/man3"
+	$(INSTALL_DATA) $(MAN3DIR)/* "$(RELEASE_PATH)/man/man3"
+	$(INSTALL_DIR) "$(RELEASE_PATH)/man/man6"
+	$(INSTALL_DATA) $(MAN6_FILES) "$(RELEASE_PATH)/man/man6"
 
 
 release_spec:

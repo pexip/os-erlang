@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2008-2011. All Rights Reserved.
+%% Copyright Ericsson AB 2008-2014. All Rights Reserved.
 %%
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -23,7 +23,8 @@
 
 -include("public_key.hrl").
 
--export([decode_cert/1, transform/2, supportedPublicKeyAlgorithms/1]).
+-export([decode_cert/1, transform/2, supportedPublicKeyAlgorithms/1,
+	 supportedCurvesTypes/1, namedCurves/1]).
 
 %%====================================================================
 %% Internal application API
@@ -57,6 +58,24 @@ transform(#'OTPTBSCertificate'{}= TBS, decode) ->
 transform(#'AttributeTypeAndValue'{type=Id,value=Value0} = ATAV, Func) ->
     {ok, Value} =
         case attribute_type(Id) of
+	    'X520countryName'when Func == decode ->
+		%% Workaround that some certificates break the ASN-1 spec
+		%% and encode countryname as utf8
+		case 'OTP-PUB-KEY':Func('OTP-X520countryname', Value0) of
+		    {ok, {utf8String, Utf8Value}} ->
+			{ok, unicode:characters_to_list(Utf8Value)};
+		    {ok, {printableString, ASCCI}} ->
+			{ok, ASCCI}
+		end;
+	    'EmailAddress' when Func == decode ->
+		%% Workaround that some certificates break the ASN-1 spec
+		%% and encode emailAddress as utf8
+		case 'OTP-PUB-KEY':Func('OTP-emailAddress', Value0) of
+		    {ok, {utf8String, Utf8Value}} ->
+			{ok, unicode:characters_to_list(Utf8Value)};
+		    {ok, {ia5String, Ia5Value}} ->
+			{ok, Ia5Value}
+		end;
             Type when is_atom(Type) -> 'OTP-PUB-KEY':Func(Type, Value0);
             _UnknownType            -> {ok, Value0}
         end,
@@ -80,7 +99,7 @@ transform(Other,_) ->
     Other.
 
 %%--------------------------------------------------------------------
--spec supportedPublicKeyAlgorithms(Oid::tuple()) -> asn1_type().
+-spec supportedPublicKeyAlgorithms(Oid::tuple()) -> public_key:asn1_type().
 %%
 %% Description: Returns the public key type for an algorithm
 %% identifier tuple as found in SubjectPublicKeyInfo.
@@ -92,6 +111,105 @@ supportedPublicKeyAlgorithms(?'dhpublicnumber') -> 'DHPublicKey';
 supportedPublicKeyAlgorithms(?'id-keyExchangeAlgorithm') -> 'KEA-PublicKey';
 supportedPublicKeyAlgorithms(?'id-ecPublicKey') -> 'ECPoint'.
 
+supportedCurvesTypes(?'characteristic-two-field') -> characteristic_two_field;
+supportedCurvesTypes(?'prime-field') -> prime_field.
+
+namedCurves(?'sect571r1') -> sect571r1;
+namedCurves(?'sect571k1') -> sect571k1;
+namedCurves(?'sect409r1') -> sect409r1;
+namedCurves(?'sect409k1') -> sect409k1;
+namedCurves(?'secp521r1') -> secp521r1;
+namedCurves(?'secp384r1') -> secp384r1;
+namedCurves(?'secp224r1') -> secp224r1;
+namedCurves(?'secp224k1') -> secp224k1;
+namedCurves(?'secp192k1') -> secp192k1;
+namedCurves(?'secp160r2') -> secp160r2;
+namedCurves(?'secp128r2') -> secp128r2;
+namedCurves(?'secp128r1') -> secp128r1;
+namedCurves(?'sect233r1') -> sect233r1;
+namedCurves(?'sect233k1') -> sect233k1;
+namedCurves(?'sect193r2') -> sect193r2;
+namedCurves(?'sect193r1') -> sect193r1;
+namedCurves(?'sect131r2') -> sect131r2;
+namedCurves(?'sect131r1') -> sect131r1;
+namedCurves(?'sect283r1') -> sect283r1;
+namedCurves(?'sect283k1') -> sect283k1;
+namedCurves(?'sect163r2') -> sect163r2;
+namedCurves(?'secp256k1') -> secp256k1;
+namedCurves(?'secp160k1') -> secp160k1;
+namedCurves(?'secp160r1') -> secp160r1;
+namedCurves(?'secp112r2') -> secp112r2;
+namedCurves(?'secp112r1') -> secp112r1;
+namedCurves(?'sect113r2') -> sect113r2;
+namedCurves(?'sect113r1') -> sect113r1;
+namedCurves(?'sect239k1') -> sect239k1;
+namedCurves(?'sect163r1') -> sect163r1;
+namedCurves(?'sect163k1') -> sect163k1;
+namedCurves(?'secp256r1') -> secp256r1;
+namedCurves(?'secp192r1') -> secp192r1;
+namedCurves(?'brainpoolP160r1') -> brainpoolP160r1;
+namedCurves(?'brainpoolP160t1') -> brainpoolP160t1;
+namedCurves(?'brainpoolP192r1') -> brainpoolP192r1;
+namedCurves(?'brainpoolP192t1') -> brainpoolP192t1;
+namedCurves(?'brainpoolP224r1') -> brainpoolP224r1;
+namedCurves(?'brainpoolP224t1') -> brainpoolP224t1;
+namedCurves(?'brainpoolP256r1') -> brainpoolP256r1;
+namedCurves(?'brainpoolP256t1') -> brainpoolP256t1;
+namedCurves(?'brainpoolP320r1') -> brainpoolP320r1;
+namedCurves(?'brainpoolP320t1') -> brainpoolP320t1;
+namedCurves(?'brainpoolP384r1') -> brainpoolP384r1;
+namedCurves(?'brainpoolP384t1') -> brainpoolP384t1;
+namedCurves(?'brainpoolP512r1') -> brainpoolP512r1;
+namedCurves(?'brainpoolP512t1') -> brainpoolP512t1;
+
+namedCurves(sect571r1) -> ?'sect571r1';
+namedCurves(sect571k1) -> ?'sect571k1';
+namedCurves(sect409r1) -> ?'sect409r1';
+namedCurves(sect409k1) -> ?'sect409k1';
+namedCurves(secp521r1) -> ?'secp521r1';
+namedCurves(secp384r1) -> ?'secp384r1';
+namedCurves(secp224r1) -> ?'secp224r1';
+namedCurves(secp224k1) -> ?'secp224k1';
+namedCurves(secp192k1) -> ?'secp192k1';
+namedCurves(secp160r2) -> ?'secp160r2';
+namedCurves(secp128r2) -> ?'secp128r2';
+namedCurves(secp128r1) -> ?'secp128r1';
+namedCurves(sect233r1) -> ?'sect233r1';
+namedCurves(sect233k1) -> ?'sect233k1';
+namedCurves(sect193r2) -> ?'sect193r2';
+namedCurves(sect193r1) -> ?'sect193r1';
+namedCurves(sect131r2) -> ?'sect131r2';
+namedCurves(sect131r1) -> ?'sect131r1';
+namedCurves(sect283r1) -> ?'sect283r1';
+namedCurves(sect283k1) -> ?'sect283k1';
+namedCurves(sect163r2) -> ?'sect163r2';
+namedCurves(secp256k1) -> ?'secp256k1';
+namedCurves(secp160k1) -> ?'secp160k1';
+namedCurves(secp160r1) -> ?'secp160r1';
+namedCurves(secp112r2) -> ?'secp112r2';
+namedCurves(secp112r1) -> ?'secp112r1';
+namedCurves(sect113r2) -> ?'sect113r2';
+namedCurves(sect113r1) -> ?'sect113r1';
+namedCurves(sect239k1) -> ?'sect239k1';
+namedCurves(sect163r1) -> ?'sect163r1';
+namedCurves(sect163k1) -> ?'sect163k1';
+namedCurves(secp256r1) -> ?'secp256r1';
+namedCurves(secp192r1) -> ?'secp192r1';
+namedCurves(brainpoolP160r1) -> ?'brainpoolP160r1';
+namedCurves(brainpoolP160t1) -> ?'brainpoolP160t1';
+namedCurves(brainpoolP192r1) -> ?'brainpoolP192r1';
+namedCurves(brainpoolP192t1) -> ?'brainpoolP192t1';
+namedCurves(brainpoolP224r1) -> ?'brainpoolP224r1';
+namedCurves(brainpoolP224t1) -> ?'brainpoolP224t1';
+namedCurves(brainpoolP256r1) -> ?'brainpoolP256r1';
+namedCurves(brainpoolP256t1) -> ?'brainpoolP256t1';
+namedCurves(brainpoolP320r1) -> ?'brainpoolP320r1';
+namedCurves(brainpoolP320t1) -> ?'brainpoolP320t1';
+namedCurves(brainpoolP384r1) -> ?'brainpoolP384r1';
+namedCurves(brainpoolP384t1) -> ?'brainpoolP384t1';
+namedCurves(brainpoolP512r1) -> ?'brainpoolP512r1';
+namedCurves(brainpoolP512t1) -> ?'brainpoolP512t1'.
+
 %%--------------------------------------------------------------------
 %%% Internal functions
 %%--------------------------------------------------------------------
@@ -102,15 +220,25 @@ decode_supportedPublicKey(#'OTPSubjectPublicKeyInfo'{algorithm= PA =
 						  #'PublicKeyAlgorithm'{algorithm=Algo},
 						  subjectPublicKey = {0,SPK0}}) ->
     Type = supportedPublicKeyAlgorithms(Algo),
-    {ok, SPK} = 'OTP-PUB-KEY':decode(Type, SPK0),
+    SPK = case Type of
+              'ECPoint' -> #'ECPoint'{point = SPK0};
+              _ -> {ok, SPK1} = 'OTP-PUB-KEY':decode(Type, SPK0),
+                   SPK1
+          end,
     #'OTPSubjectPublicKeyInfo'{subjectPublicKey = SPK, algorithm=PA}.
 
 encode_supportedPublicKey(#'OTPSubjectPublicKeyInfo'{algorithm= PA =
 						     #'PublicKeyAlgorithm'{algorithm=Algo},
 						     subjectPublicKey = SPK0}) ->
     Type = supportedPublicKeyAlgorithms(Algo),
-    {ok, SPK} = 'OTP-PUB-KEY':encode(Type, SPK0),
-    #'OTPSubjectPublicKeyInfo'{subjectPublicKey = {0,list_to_binary(SPK)}, algorithm=PA}.
+    SPK = case Type of
+              'ECPoint' ->
+                  SPK0#'ECPoint'.point;
+              _ ->
+                  {ok, SPK1} = 'OTP-PUB-KEY':encode(Type, SPK0),
+                  SPK1
+          end,
+    #'OTPSubjectPublicKeyInfo'{subjectPublicKey = {0,SPK}, algorithm=PA}.
 
 %%% Extensions
 
@@ -152,7 +280,7 @@ decode_extensions(Exts) ->
 		      case extension_id(Id) of
 			  undefined -> Ext;
 			  Type ->
-			      {ok, Value} = 'OTP-PUB-KEY':decode(Type, list_to_binary(Value0)),
+			      {ok, Value} = 'OTP-PUB-KEY':decode(Type, iolist_to_binary(Value0)),
 			      Ext#'Extension'{extnValue=transform(Value,decode)}
 		      end
 	      end, Exts).
@@ -167,7 +295,7 @@ encode_extensions(Exts) ->
 			  Type ->
 			      Value1 = transform(Value0,encode),
 			      {ok, Value} = 'OTP-PUB-KEY':encode(Type, Value1),
-			      Ext#'Extension'{extnValue=list_to_binary(Value)}
+			      Ext#'Extension'{extnValue=Value}
 		      end
 	      end, Exts).
 

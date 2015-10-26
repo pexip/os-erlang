@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %% 
-%% Copyright Ericsson AB 2005-2009. All Rights Reserved.
+%% Copyright Ericsson AB 2005-2012. All Rights Reserved.
 %% 
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -215,8 +215,6 @@
 	 start/0
 	]).
 
--export([behaviour_info/1]).
-
 %% Application local functions
 -export([
 	 start_standalone/1,
@@ -227,12 +225,49 @@
 	]).
 
 
-behaviour_info(callbacks) ->
-    [{prepare, 6}, {open, 6}, {read, 1}, {write, 2}, {abort, 3}];
-behaviour_info(_) ->
-    undefined.
+-type peer() :: {PeerType :: inet | inet6,
+		 PeerHost :: inet:ip_address(),
+		 PeerPort :: port()}.
+
+-type access() :: read | write.
+
+-type options() :: [{Key :: string(), Value :: string()}].
+
+-type error_code() :: undef | enoent | eacces | enospc |
+		      badop | eexist | baduser | badopt |
+		      integer().
+
+-callback prepare(Peer :: peer(),
+		  Access :: access(),
+		  Filename :: file:name(),
+		  Mode :: string(),
+		  SuggestedOptions :: options(),
+		  InitialState :: [] | [{root_dir, string()}]) ->
+    {ok, AcceptedOptions :: options(), NewState :: term()} |
+    {error, {Code :: error_code(), string()}}.
+
+-callback open(Peer :: peer(),
+	       Access :: access(),
+	       Filename :: file:name(),
+	       Mode :: string(),
+	       SuggestedOptions :: options(),
+	       State :: [] | [{root_dir, string()}] | term()) ->
+    {ok, AcceptedOptions :: options(), NewState :: term()} |
+    {error, {Code :: error_code(), string()}}.
+
+-callback read(State :: term()) -> {more, binary(), NewState :: term()} |
+				   {last, binary(), integer()} |
+				   {error, {Code :: error_code(), string()}}.
+
+-callback write(binary(), State :: term()) ->
+    {more, NewState :: term()} |
+    {last, FileSize :: integer()} |
+    {error, {Code :: error_code(), string()}}.
+
+-callback abort(Code :: error_code(), string(), State :: term()) -> 'ok'.
 
 -include("tftp.hrl").
+
 
 %%-------------------------------------------------------------------
 %% read_file(RemoteFilename, LocalFilename, Options) ->

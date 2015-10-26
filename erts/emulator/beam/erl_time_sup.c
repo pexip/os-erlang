@@ -1,7 +1,7 @@
 /*
  * %CopyrightBegin%
  *
- * Copyright Ericsson AB 1999-2010. All Rights Reserved.
+ * Copyright Ericsson AB 1999-2012. All Rights Reserved.
  *
  * The contents of this file are subject to the Erlang Public License,
  * Version 1.1, (the "License"); you may not use this file except in
@@ -91,6 +91,41 @@ static SysTimeval then; /* Used in get_now */
 static SysTimeval last_emu_time; /* Used in erts_get_emu_time() */
 SysTimeval erts_first_emu_time; /* Used in erts_get_emu_time() */
 
+union {
+    erts_smp_atomic_t time;
+    char align[ERTS_CACHE_LINE_SIZE];
+} approx erts_align_attribute(ERTS_CACHE_LINE_SIZE);
+
+static void
+init_approx_time(void)
+{
+    erts_smp_atomic_init_nob(&approx.time, 0);
+}
+
+static ERTS_INLINE erts_approx_time_t
+get_approx_time(void)
+{
+    return (erts_approx_time_t) erts_smp_atomic_read_nob(&approx.time);
+}
+
+static ERTS_INLINE void
+update_approx_time(SysTimeval *tv)
+{
+    erts_approx_time_t new_secs = (erts_approx_time_t) tv->tv_sec;
+    erts_approx_time_t old_secs = get_approx_time();
+    if (old_secs != new_secs)
+	erts_smp_atomic_set_nob(&approx.time, new_secs);
+}
+
+/*
+ * erts_get_approx_time() returns an *approximate* time
+ * in seconds. NOTE that this time may jump backwards!!!
+ */
+erts_approx_time_t
+erts_get_approx_time(void)
+{
+    return get_approx_time();
+}
 
 #ifdef HAVE_GETHRTIME
 
@@ -351,7 +386,7 @@ static int clock_resolution;
 /*
 ** The clock resolution should really be the resolution of the 
 ** time function in use, which on most platforms 
-** is 1. On VxWorks the resolution shold be 
+** is 1. On VxWorks the resolution should be
 ** the number of ticks per second (or 1, which would work nicely to).
 **
 ** Setting lower resolutions is mostly interesting when timers are used
@@ -371,7 +406,7 @@ static void init_erts_deliver_time(const SysTimeval *inittv)
 static void do_erts_deliver_time(const SysTimeval *current)
 {
     SysTimeval cur_time;
-    long elapsed;
+    erts_time_t elapsed;
     
     /* calculate and deliver appropriate number of ticks */
     cur_time = *current;
@@ -385,7 +420,10 @@ static void do_erts_deliver_time(const SysTimeval *current)
        this by simply pretend as if the time stood still. :) */
 
     if (elapsed > 0) {
-	erts_do_time_add(elapsed);
+
+	ASSERT(elapsed < ((erts_time_t) ERTS_SHORT_TIME_T_MAX));
+
+	erts_do_time_add((erts_short_time_t) elapsed);
 	last_delivered = cur_time;
     }
 }
@@ -394,6 +432,8 @@ int
 erts_init_time_sup(void)
 {
     erts_smp_mtx_init(&erts_timeofday_mtx, "timeofday");
+
+    init_approx_time();
 
     last_emu_time.tv_sec = 0;
     last_emu_time.tv_usec = 0;
@@ -414,18 +454,18 @@ erts_init_time_sup(void)
     gtv = inittv;
     then.tv_sec = then.tv_usec = 0;
 
-    erts_get_emu_time(&erts_first_emu_time);
+    erts_deliver_time();
 
     return CLOCK_RESOLUTION;
 }    
 /* info functions */
 
 void 
-elapsed_time_both(unsigned long *ms_user, unsigned long *ms_sys, 
-		  unsigned long *ms_user_diff, unsigned long *ms_sys_diff)
+elapsed_time_both(UWord *ms_user, UWord *ms_sys, 
+		  UWord *ms_user_diff, UWord *ms_sys_diff)
 {
-    unsigned long prev_total_user, prev_total_sys;
-    unsigned long total_user, total_sys;
+    UWord prev_total_user, prev_total_sys;
+    UWord total_user, total_sys;
     SysTimes now;
 
     sys_times(&now);
@@ -456,9 +496,9 @@ elapsed_time_both(unsigned long *ms_user, unsigned long *ms_sys,
 /* wall clock routines */
 
 void 
-wall_clock_elapsed_time_both(unsigned long *ms_total, unsigned long *ms_diff)
+wall_clock_elapsed_time_both(UWord *ms_total, UWord *ms_diff)
 {
-    unsigned long prev_total;
+    UWord prev_total;
     SysTimeval tv;
 
     erts_smp_mtx_lock(&erts_timeofday_mtx);
@@ -491,7 +531,7 @@ get_time(int *hour, int *minute, int *second)
     
     the_clock = time((time_t *)0);
 #ifdef HAVE_LOCALTIME_R
-    localtime_r(&the_clock, (tm = &tmbuf));
+    tm = localtime_r(&the_clock, &tmbuf);
 #else
     tm = localtime(&the_clock);
 #endif
@@ -513,7 +553,7 @@ get_date(int *year, int *month, int *day)
 
     the_clock = time((time_t *)0);
 #ifdef HAVE_LOCALTIME_R
-    localtime_r(&the_clock, (tm = &tmbuf));
+    tm = localtime_r(&the_clock, &tmbuf);
 #else
     tm = localtime(&the_clock);
 #endif
@@ -583,7 +623,44 @@ static const int mdays[14] = {0, 31, 28, 31, 30, 31, 30,
                             (((y) % 100) != 0)) || \
                            (((y) % 400) == 0))
 
-#define  BASEYEAR       1970
+/* This is the earliest year we are sure to be able to handle
+   on all platforms w/o problems */
+#define  BASEYEAR       1902 
+
+/* A more "clever" mktime
+ * return  1, if successful
+ * return -1, if not successful
+ */
+
+static int erl_mktime(time_t *c, struct tm *tm) {
+    time_t clock;
+
+    clock = mktime(tm);
+
+    if (clock != -1) {
+	*c = clock;
+	return 1;
+    }
+
+    /* in rare occasions mktime returns -1
+     * when a correct value has been entered
+     *
+     * decrease seconds with one second
+     * if the result is -2, epochs should be -1
+     */
+
+    tm->tm_sec = tm->tm_sec - 1;
+    clock = mktime(tm);
+    tm->tm_sec = tm->tm_sec + 1;
+
+    *c = -1;
+
+    if (clock == -2) {
+	return 1;
+    }
+
+    return -1;
+}
 
 /*
  * gregday
@@ -592,10 +669,10 @@ static const int mdays[14] = {0, 31, 28, 31, 30, 31, 30,
  * greater of equal to 1600 , and month [1-12] and day [1-31] 
  * are within range. Otherwise it returns -1.
  */
-static int long gregday(int year, int month, int day)
+static time_t gregday(int year, int month, int day)
 {
-  int long ndays = 0;
-  int gyear, pyear, m;
+  Sint ndays = 0;
+  Sint gyear, pyear, m;
   
   /* number of days in previous years */
   gyear = year - 1600;
@@ -610,10 +687,77 @@ static int long gregday(int year, int month, int day)
   if (is_leap_year(year) && (month > 2))
     ndays++;
   ndays += day - 1;
-  return ndays - 135140;        /* 135140 = Jan 1, 1970 */
+  return (time_t) (ndays - 135140);        /* 135140 = Jan 1, 1970 */
 }
 
+#define SECONDS_PER_MINUTE  (60)
+#define SECONDS_PER_HOUR    (60 * SECONDS_PER_MINUTE)
+#define SECONDS_PER_DAY     (24 * SECONDS_PER_HOUR)
 
+int seconds_to_univ(Sint64 time, Sint *year, Sint *month, Sint *day, 
+	Sint *hour, Sint *minute, Sint *second) {
+
+    Sint y,mi;
+    Sint days = time / SECONDS_PER_DAY;
+    Sint secs = time % SECONDS_PER_DAY;
+    Sint tmp;
+
+    if (secs < 0) {
+	days--;
+	secs += SECONDS_PER_DAY;
+    }
+    
+    tmp     = secs % SECONDS_PER_HOUR;
+
+    *hour   = secs / SECONDS_PER_HOUR;
+    *minute = tmp  / SECONDS_PER_MINUTE;
+    *second = tmp  % SECONDS_PER_MINUTE;
+
+    days   += 719468;
+    y       = (10000*((Sint64)days) + 14780) / 3652425; 
+    tmp     = days - (365 * y + y/4 - y/100 + y/400);
+
+    if (tmp < 0) {
+	y--;
+	tmp = days - (365*y + y/4 - y/100 + y/400);
+    }
+    mi = (100 * tmp + 52)/3060;
+    *month = (mi + 2) % 12 + 1;
+    *year  = y + (mi + 2) / 12;
+    *day   = tmp - (mi * 306 + 5)/10 + 1;
+
+    return 1;
+}
+
+int univ_to_seconds(Sint year, Sint month, Sint day, Sint hour, Sint minute, Sint second, Sint64 *time) {
+    Sint days;
+
+    if (!(IN_RANGE(1600, year, INT_MAX - 1) &&
+          IN_RANGE(1, month, 12) &&
+          IN_RANGE(1, day, (mdays[month] + 
+                             (month == 2 
+                              && (year % 4 == 0) 
+                              && (year % 100 != 0 || year % 400 == 0)))) &&
+          IN_RANGE(0, hour, 23) &&
+          IN_RANGE(0, minute, 59) &&
+          IN_RANGE(0, second, 59))) {
+      return 0;
+    }
+ 
+    days   = gregday(year, month, day);
+    *time  = SECONDS_PER_DAY;
+    *time *= days;             /* don't try overflow it, it hurts */
+    *time += SECONDS_PER_HOUR * hour;
+    *time += SECONDS_PER_MINUTE * minute;
+    *time += second;
+
+    return 1;
+}
+
+#if defined(HAVE_TIME2POSIX) && defined(HAVE_DECL_TIME2POSIX) && \
+    !HAVE_DECL_TIME2POSIX
+extern time_t time2posix(time_t);
+#endif
 
 int 
 local_to_univ(Sint *year, Sint *month, Sint *day, 
@@ -644,15 +788,18 @@ local_to_univ(Sint *year, Sint *month, Sint *day,
     t.tm_min = *minute;
     t.tm_sec = *second;
     t.tm_isdst = isdst;
-    the_clock = mktime(&t);
-    if (the_clock == -1) {
+
+    /* the nature of mktime makes this a bit interesting,
+     * up to four mktime calls could happen here
+     */
+
+    if (erl_mktime(&the_clock, &t) < 0) {
 	if (isdst) {
 	    /* If this is a timezone without DST and the OS (correctly)
 	       refuses to give us a DST time, we simulate the Linux/Solaris
 	       behaviour of giving the same data as if is_dst was not set. */
 	    t.tm_isdst = 0;
-	    the_clock = mktime(&t);
-	    if (the_clock == -1) {
+	    if (erl_mktime(&the_clock, &t) < 0) {
 		/* Failed anyway, something else is bad - will be a badarg */
 		return 0;
 	    }
@@ -661,11 +808,19 @@ local_to_univ(Sint *year, Sint *month, Sint *day,
 	    return 0;
 	}
     }
+
+#ifdef HAVE_TIME2POSIX
+    the_clock = time2posix(the_clock);
+#endif
+
 #ifdef HAVE_GMTIME_R
-    gmtime_r(&the_clock, (tm = &tmbuf));
+    tm = gmtime_r(&the_clock, &tmbuf);
 #else
     tm = gmtime(&the_clock);
 #endif
+    if (!tm) {
+      return 0;
+    }
     *year = tm->tm_year + 1900;
     *month = tm->tm_mon +1;
     *day = tm->tm_mday;
@@ -719,17 +874,20 @@ univ_to_local(Sint *year, Sint *month, Sint *day,
 #endif
 
 #ifdef HAVE_LOCALTIME_R
-    localtime_r(&the_clock, (tm = &tmbuf));
+    tm = localtime_r(&the_clock, &tmbuf);
 #else
     tm = localtime(&the_clock);
 #endif
-    *year = tm->tm_year + 1900;
-    *month = tm->tm_mon +1;
-    *day = tm->tm_mday;
-    *hour = tm->tm_hour;
-    *minute = tm->tm_min;
-    *second = tm->tm_sec;
-    return 1;
+    if (tm) {
+	*year   = tm->tm_year + 1900;
+	*month  = tm->tm_mon +1;
+	*day    = tm->tm_mday;
+	*hour   = tm->tm_hour;
+	*minute = tm->tm_min;
+	*second = tm->tm_sec;
+	return 1;
+    }
+    return 0;
 }
 
 
@@ -762,6 +920,8 @@ get_now(Uint* megasec, Uint* sec, Uint* microsec)
     *megasec = (Uint) (now.tv_sec / 1000000);
     *sec = (Uint) (now.tv_sec % 1000000);
     *microsec = (Uint) (now.tv_usec);
+
+    update_approx_time(&now);
 }
 
 void
@@ -774,6 +934,8 @@ get_sys_now(Uint* megasec, Uint* sec, Uint* microsec)
     *megasec = (Uint) (now.tv_sec / 1000000);
     *sec = (Uint) (now.tv_sec % 1000000);
     *microsec = (Uint) (now.tv_usec);
+
+    update_approx_time(&now);
 }
 
 
@@ -790,6 +952,8 @@ void erts_deliver_time(void) {
     do_erts_deliver_time(&now);
     
     erts_smp_mtx_unlock(&erts_timeofday_mtx);
+
+    update_approx_time(&now);
 }
 
 /* get *real* time (not ticks) remaining until next timeout - if there
@@ -798,13 +962,14 @@ void erts_deliver_time(void) {
 
 void erts_time_remaining(SysTimeval *rem_time)
 {
-    int ticks;
+    erts_time_t ticks;
     SysTimeval cur_time;
-    long elapsed;
+    erts_time_t elapsed;
 
     /* erts_next_time() returns no of ticks to next timeout or -1 if none */
 
-    if ((ticks = erts_next_time()) == -1) {
+    ticks = (erts_time_t) erts_next_time();
+    if (ticks == (erts_time_t) -1) {
 	/* timer queue empty */
 	/* this will cause at most 100000000 ticks */
 	rem_time->tv_sec = 100000;
@@ -837,9 +1002,10 @@ void erts_get_timeval(SysTimeval *tv)
     erts_smp_mtx_lock(&erts_timeofday_mtx);
     get_tolerant_timeofday(tv);
     erts_smp_mtx_unlock(&erts_timeofday_mtx);
+    update_approx_time(tv);
 }
 
-long
+erts_time_t
 erts_get_time(void)
 {
     SysTimeval sys_tv;
@@ -849,7 +1015,9 @@ erts_get_time(void)
     get_tolerant_timeofday(&sys_tv);
     
     erts_smp_mtx_unlock(&erts_timeofday_mtx);
-    
+
+    update_approx_time(&sys_tv);
+
     return sys_tv.tv_sec;
 }
 
@@ -865,38 +1033,3 @@ void erts_get_now_cpu(Uint* megasec, Uint* sec, Uint* microsec) {
   *sec = (Uint)(tp.tv_sec % 1000000);
 }
 #endif
-
-
-/*
- * erts_get_emu_time() is similar to get_now(). You will
- * always get different times from erts_get_emu_time(), but they
- * may equal a time from get_now().
- *
- * erts_get_emu_time() is only used internally in the emulator in
- * order to order emulator internal events.
- */
-
-void
-erts_get_emu_time(SysTimeval *this_emu_time_p)
-{
-    erts_smp_mtx_lock(&erts_timeofday_mtx);
-    
-    get_tolerant_timeofday(this_emu_time_p);
-
-    /* Make sure time is later than last */
-    if (last_emu_time.tv_sec > this_emu_time_p->tv_sec ||
-	(last_emu_time.tv_sec == this_emu_time_p->tv_sec
-	 && last_emu_time.tv_usec >= this_emu_time_p->tv_usec)) {
-	*this_emu_time_p = last_emu_time;
-	this_emu_time_p->tv_usec++;
-    }
-    /* Check for carry from above + general reasonability */
-    if (this_emu_time_p->tv_usec >= 1000000) {
-	this_emu_time_p->tv_usec = 0;
-	this_emu_time_p->tv_sec++;
-    }
-
-    last_emu_time = *this_emu_time_p;
-    
-    erts_smp_mtx_unlock(&erts_timeofday_mtx);
-}

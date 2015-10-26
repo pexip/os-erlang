@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2004-2010. All Rights Reserved.
+%% Copyright Ericsson AB 2004-2012. All Rights Reserved.
 %%
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -18,28 +18,16 @@
 %%
 %%
 -module(testSelectionTypes).
-
--export([compile/3]).
 -export([test/0]).
 
 -include_lib("test_server/include/test_server.hrl").
 
-
-compile(Config,Rule,Options) ->
-    ?line DataDir = ?config(data_dir,Config),
-    ?line OutDir = ?config(priv_dir,Config),
-    ?line true = code:add_patha(?config(priv_dir,Config)),
-    ?line ok = asn1ct:compile(DataDir ++ "SelectionType",
-			      [Rule,{outdir,OutDir}]++Options).
-
 test() ->
     Val = ["PrintableString","PrintableString","PrintableString"],
-    ?line {ok,Bin}=asn1_wrapper:encode('SelectionType','MendeleyevTable',Val),          
-    ?line {ok,Val} = asn1_wrapper:decode('SelectionType','MendeleyevTable',Bin),
+    ["Es"] = Val2 = ['SelectionType':einsteinium()],
+    roundtrip('MendeleyevTable', Val),
+    roundtrip('MendeleyevTable', Val2),
+    ok.
 
-    ?line Val2 = ['SelectionType':einsteinium()],
-    ?line ["Es"] = Val2,
-    
-    ?line {ok,Bin2}=asn1_wrapper:encode('SelectionType','MendeleyevTable',Val2),          
-    ?line {ok,Val2} = asn1_wrapper:decode('SelectionType','MendeleyevTable',Bin2).
-
+roundtrip(T, V) ->
+    asn1_test_lib:roundtrip('SelectionType', T, V).

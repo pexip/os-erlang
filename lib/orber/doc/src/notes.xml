@@ -1,10 +1,10 @@
-<?xml version="1.0" encoding="latin1" ?>
+<?xml version="1.0" encoding="utf-8" ?>
 <!DOCTYPE chapter SYSTEM "chapter.dtd">
 
 <chapter>
   <header>
     <copyright>
-      <year>1997</year><year>2011</year>
+      <year>1997</year><year>2013</year>
       <holder>Ericsson AB. All Rights Reserved.</holder>
     </copyright>
     <legalnotice>
@@ -32,7 +32,188 @@
     <file>notes.xml</file>
   </header>
 
-  <section><title>Orber 3.6.22</title>
+
+  <section><title>Orber 3.7</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+	    <p> The following functions have been corrected so they
+	    work properly with IPv6 addresses. </p> <list>
+	    <item><c>corba:resolve_initial_references_remote/2/3</c></item>
+	    <item><c>corba:list_initial_references_remote/1/2</c></item>
+	    <item><c>corba:string_to_object/1/2</c></item> </list>
+          <p>
+	    Own Id: OTP-12016</p>
+        </item>
+        <item>
+	    <p> A couple of macros were malformed, missing commas:
+	    PROFILEBODY_1_1_TYPEDEF and PROFILEBODY_1_2_TYPEDEF.
+	    Thanks to Vlad Dumitrescu. </p>
+          <p>
+	    Own Id: OTP-12062</p>
+        </item>
+      </list>
+    </section>
+
+
+    <section><title>Improvements and New Features</title>
+      <list>
+        <item>
+	    <p> It is now possible to add listen interfaces for IPv6
+	    when orber is default configured for IPv4 and the other
+	    way around. For more information, consult the User's
+	    Guide and the orber module Reference Manual. </p>
+          <p>
+	    Own Id: OTP-12007</p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>Orber 3.6.27</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+          <p>
+	    Some local implementations of removing the last element
+	    from a list are replaced by <c>lists:droplast/1</c>. Note
+	    that this requires at least <c>stdlib-2.0</c>, which is
+	    the stdlib version delivered in OTP 17.0. (Thanks to Hans
+	    Svensson)</p>
+          <p>
+	    Own Id: OTP-11678</p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>Orber 3.6.26.1</title>
+
+    <section><title>Improvements and New Features</title>
+      <list>
+        <item>
+	    <p> Postscript files no longer needed for the generation
+	    of PDF files have been removed. </p>
+          <p>
+	    Own Id: OTP-11016</p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>Orber 3.6.26</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+          <p>
+	    Fix bug in corbaloc/corbaname over ssl.</p>
+          <p>
+	    Own Id: OTP-10675</p>
+        </item>
+      </list>
+    </section>
+
+  </section>
+
+  <section><title>Orber 3.6.25</title>
+
+    <section><title>Improvements and New Features</title>
+      <list>
+        <item>
+	    <p> Some examples overflowing the width of PDF pages have
+	    been corrected. </p>
+          <p>
+	    Own Id: OTP-10665</p>
+        </item>
+      </list>
+    </section>
+
+    <section><title>Known Bugs and Problems</title>
+      <list>
+        <item>
+	    <p>
+          <p>
+	    </p></p>
+          <p>
+	    Own Id: OTP-10675 Aux Id: seq12154 </p>
+        </item>
+      </list>
+    </section>
+</section>
+
+<section><title>Orber 3.6.24</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+          <p>
+	    Fix number of arguments in orber dbg printout</p>
+          <p>
+	    Own Id: OTP-9887</p>
+        </item>
+        <item>
+	    <p> The descriptions of <c>ssl_server_options</c> and
+	    <c>ssl_client_options</c> are corrected.<br/> Seq. Id:
+	    seq12018 </p>
+          <p>
+	    Own Id: OTP-9966 Aux Id: OTP-9773 </p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>Orber 3.6.23</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+	    <p> Remove usage of ssl:seed/1 in orber test cases. </p>
+          <p>
+	    Own Id: OTP-9728</p>
+        </item>
+      </list>
+    </section>
+
+
+    <section><title>Improvements and New Features</title>
+      <list>
+        <item>
+	    <p>Erlang/OTP can now be built using parallel make if you
+	    limit the number of jobs, for instance using '<c>make
+	    -j6</c>' or '<c>make -j10</c>'. '<c>make -j</c>' does not
+	    work at the moment because of some missing
+	    dependencies.</p>
+          <p>
+	    Own Id: OTP-9451</p>
+        </item>
+        <item>
+	    <p> The SSL option handling has been changed. There are
+	    now two new orber options <c>ssl_server_options</c> and
+	    <c>ssl_client_options</c> which takes a list of options
+	    to the socket. </p> <p> The old options are now
+	    deprecated and removed from the documentation but they
+	    can still be used for backward compatibility as long as
+	    the two new options not are used. </p> <p> If
+	    <c>ssl_server_options</c> and <c>ssl_client_options</c>
+	    contain an TCP option that <c>orber</c> needs to set to a
+	    specific value it will be skipped and a warning will be
+	    written to the error_log. </p>
+          <p>
+	    Own Id: OTP-9773 Aux Id: seq11932 </p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>Orber 3.6.22</title>
 
     <section><title>Fixed Bugs and Malfunctions</title>
       <list>

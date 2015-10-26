@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2008-2011. All Rights Reserved.
+%% Copyright Ericsson AB 2008-2013. All Rights Reserved.
 %%
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -26,112 +26,94 @@
 
 -define(TIMEOUT, 600000).
 
-%% Test server callback functions
 %%--------------------------------------------------------------------
-%% Function: init_per_suite(Config) -> Config
-%% Config - [tuple()]
-%%   A list of key/value pairs, holding the test case configuration.
-%% Description: Initialization before the whole suite
-%%
-%% Note: This function is free to add any key/value pairs to the Config
-%% variable, but should NOT alter/remove any existing entries.
+%% Common Test interface functions -----------------------------------
 %%--------------------------------------------------------------------
+suite() -> [{ct_hooks,[ts_install_cth]}].
+
+all() -> 
+    [
+     {group, 'tlsv1.2'},
+     {group, 'tlsv1.1'},
+     {group, 'tlsv1'},
+     {group, 'sslv3'}
+    ].
+
+groups() ->
+    [
+     {'tlsv1.2', [], payload_tests()},
+     {'tlsv1.1', [], payload_tests()},
+     {'tlsv1', [], payload_tests()},
+     {'sslv3', [], payload_tests()}
+    ].
+
+payload_tests() ->
+    [server_echos_passive_small,
+     server_echos_active_once_small,
+     server_echos_active_small,
+     client_echos_passive_small,
+     client_echos_active_once_small,
+     client_echos_active_small,
+     server_echos_passive_big,
+     server_echos_active_once_big,
+     server_echos_active_big,
+     client_echos_passive_big,
+     client_echos_active_once_big,
+     client_echos_active_big,
+     server_echos_passive_huge,
+     server_echos_active_once_huge,
+     server_echos_active_huge,
+     client_echos_passive_huge,
+     client_echos_active_once_huge,
+     client_echos_active_huge].
+
 init_per_suite(Config) ->
+    catch crypto:stop(),
     try crypto:start() of
 	ok ->
-	    application:start(public_key),
 	    ssl:start(),
 	    make_certs:all(?config(data_dir, Config), ?config(priv_dir, Config)),
 	    ssl_test_lib:cert_options(Config)
     catch _:_  ->
 	    {skip, "Crypto did not start"}
     end.
-%%--------------------------------------------------------------------
-%% Function: end_per_suite(Config) -> _
-%% Config - [tuple()]
-%%   A list of key/value pairs, holding the test case configuration.
-%% Description: Cleanup after the whole suite
-%%--------------------------------------------------------------------
+
 end_per_suite(_Config) ->
     ssl:stop(),
     application:stop(crypto).
 
-%%--------------------------------------------------------------------
-%% Function: init_per_testcase(TestCase, Config) -> Config
-%% Case - atom()
-%%   Name of the test case that is about to be run.
-%% Config - [tuple()]
-%%   A list of key/value pairs, holding the test case configuration.
-%%
-%% Description: Initialization before each test case
-%%
-%% Note: This function is free to add any key/value pairs to the Config
-%% variable, but should NOT alter/remove any existing entries.
-%% Description: Initialization before each test case
-%%--------------------------------------------------------------------
-init_per_testcase(_TestCase, Config0) ->
-    Config = lists:keydelete(watchdog, 1, Config0),
-    Dog = ssl_test_lib:timetrap(?TIMEOUT),
-    [{watchdog, Dog} | Config].
-
-%%--------------------------------------------------------------------
-%% Function: end_per_testcase(TestCase, Config) -> _
-%% Case - atom()
-%%   Name of the test case that is about to be run.
-%% Config - [tuple()]
-%%   A list of key/value pairs, holding the test case configuration.
-%% Description: Cleanup after each test case
-%%--------------------------------------------------------------------
-end_per_testcase(_TestCase, Config) ->
-    Dog = ?config(watchdog, Config),
-    case Dog of 
-	undefined ->
-	    ok;
+init_per_group(GroupName, Config) ->
+     case ssl_test_lib:is_tls_version(GroupName) of
+	true ->
+	    case ssl_test_lib:sufficient_crypto_support(GroupName) of
+		true ->
+		    ssl_test_lib:init_tls_version(GroupName),
+		    Config;
+		false ->
+		    {skip, "Missing crypto support"}
+	    end;
 	_ ->
-	    test_server:timetrap_cancel(Dog)
+	    ssl:start(),
+	    Config
     end.
-
-%%--------------------------------------------------------------------
-%% Function: all(Clause) -> TestCases
-%% Clause - atom() - suite | doc
-%% TestCases - [Case] 
-%% Case - atom()
-%%   Name of a test case.
-%% Description: Returns a list of all test cases in this test suite
-%%--------------------------------------------------------------------
-suite() -> [{ct_hooks,[ts_install_cth]}].
-
-all() -> 
-    [server_echos_passive_small,
-     server_echos_active_once_small,
-     server_echos_active_small, client_echos_passive_small,
-     client_echos_active_once_small,
-     client_echos_active_small, server_echos_passive_big,
-     server_echos_active_once_big, server_echos_active_big,
-     client_echos_passive_big, client_echos_active_once_big,
-     client_echos_active_big, server_echos_passive_huge,
-     server_echos_active_once_huge, server_echos_active_huge,
-     client_echos_passive_huge,
-     client_echos_active_once_huge, client_echos_active_huge].
-
-groups() -> 
-    [].
-
-init_per_group(_GroupName, Config) ->
-    Config.
 
 end_per_group(_GroupName, Config) ->
     Config.
 
+init_per_testcase(_TestCase, Config0) ->
+    Config = lists:keydelete(watchdog, 1, Config0),
+    Dog = ct:timetrap(?TIMEOUT),
+    [{watchdog, Dog} | Config].
 
-%% Test cases starts here.
+end_per_testcase(_TestCase, Config) ->
+    Config.
 %%--------------------------------------------------------------------
-server_echos_passive_small(doc) -> 
-    ["Client sends 1000 bytes in passive mode to server, that receives them, "
-     "sends them back, and closes."];
+%% Test Cases --------------------------------------------------------
+%%--------------------------------------------------------------------
 
-server_echos_passive_small(suite) -> 
-    [];
+server_echos_passive_small() ->
+    [{doc, "Client sends 1000 bytes in passive mode to server, that receives them, "
+     "sends them back, and closes."}].
 
 server_echos_passive_small(Config) when is_list(Config) -> 
     ClientOpts = ?config(client_opts, Config),
@@ -145,12 +127,9 @@ server_echos_passive_small(Config) when is_list(Config) ->
 
 %%--------------------------------------------------------------------
 
-server_echos_active_once_small(doc) -> 
-    ["Client sends 1000 bytes in active once mode to server, that receives "
-     " them, sends them back, and closes."];
-
-server_echos_active_once_small(suite) -> 
-    [];
+server_echos_active_once_small() ->
+    [{doc, "Client sends 1000 bytes in active once mode to server, that receives "
+     " them, sends them back, and closes."}].
 
 server_echos_active_once_small(Config) when is_list(Config) -> 
         ClientOpts = ?config(client_opts, Config),
@@ -164,12 +143,9 @@ server_echos_active_once_small(Config) when is_list(Config) ->
 
 %%--------------------------------------------------------------------
 
-server_echos_active_small(doc) -> 
-    ["Client sends 1000 bytes in active mode to server, that receives them, "
-     "sends them back, and closes."];
-
-server_echos_active_small(suite) -> 
-    [];
+server_echos_active_small() ->
+    [{doc, "Client sends 1000 bytes in active mode to server, that receives them, "
+     "sends them back, and closes."}].
 
 server_echos_active_small(Config) when is_list(Config) -> 
     ClientOpts = ?config(client_opts, Config),
@@ -182,12 +158,9 @@ server_echos_active_small(Config) when is_list(Config) ->
 			ClientNode, ServerNode, Hostname).
 
 %%--------------------------------------------------------------------
-client_echos_passive_small(doc) -> 
-    ["Server sends 1000 bytes in passive mode to client, that receives them, "
-     "sends them back, and closes."];
-
-client_echos_passive_small(suite) -> 
-    [];
+client_echos_passive_small() ->
+    [{doc, "Server sends 1000 bytes in passive mode to client, that receives them, "
+      "sends them back, and closes."}].
 
 client_echos_passive_small(Config) when is_list(Config) -> 
     ClientOpts = ?config(client_opts, Config),
@@ -200,12 +173,9 @@ client_echos_passive_small(Config) when is_list(Config) ->
 			 ServerNode, Hostname).
 
 %%--------------------------------------------------------------------
-client_echos_active_once_small(doc) -> 
+client_echos_active_once_small() ->
     ["Server sends 1000 bytes in active once mode to client, that receives "
-     "them, sends them back, and closes."];
-
-client_echos_active_once_small(suite) -> 
-    [];
+     "them, sends them back, and closes."].
 
 client_echos_active_once_small(Config) when is_list(Config) -> 
     ClientOpts = ?config(client_opts, Config),
@@ -218,15 +188,12 @@ client_echos_active_once_small(Config) when is_list(Config) ->
 			     ServerNode, Hostname).
    
 %%--------------------------------------------------------------------
-client_echos_active_small(doc) -> 
-    ["Server sends 1000 bytes in active mode to client, that receives them, "
-     "sends them back, and closes."];
-
-client_echos_active_small(suite) -> 
-    [];
+client_echos_active_small() ->
+    [{doc, "Server sends 1000 bytes in active mode to client, that receives them, "
+      "sends them back, and closes."}].
 
 client_echos_active_small(Config) when is_list(Config) -> 
-     ClientOpts = ?config(client_opts, Config),
+    ClientOpts = ?config(client_opts, Config),
     ServerOpts = ?config(server_opts, Config),
     {ClientNode, ServerNode, Hostname} = ssl_test_lib:run_where(Config),
 
@@ -237,12 +204,9 @@ client_echos_active_small(Config) when is_list(Config) ->
 
 
 %%--------------------------------------------------------------------
-server_echos_passive_big(doc) -> 
-    ["Client sends 50000 bytes to server in passive mode, that receives them, "
-     "sends them back, and closes."];
-
-server_echos_passive_big(suite) -> 
-    [];
+server_echos_passive_big() ->
+    [{doc, "Client sends 50000 bytes to server in passive mode, that receives them, "
+     "sends them back, and closes."}].
 
 server_echos_passive_big(Config) when is_list(Config) -> 
     ClientOpts = ?config(client_opts, Config),
@@ -256,15 +220,12 @@ server_echos_passive_big(Config) when is_list(Config) ->
 
 %%--------------------------------------------------------------------
 
-server_echos_active_once_big(doc) -> 
-    ["Client sends 50000 bytes to server in active once mode, that receives "
-     "them, sends them back, and closes."];
-
-server_echos_active_once_big(suite) -> 
-    [];
+server_echos_active_once_big() ->
+    [{doc,"Client sends 50000 bytes to server in active once mode, that receives "
+      "them, sends them back, and closes."}].
 
 server_echos_active_once_big(Config) when is_list(Config) -> 
-        ClientOpts = ?config(client_opts, Config),
+    ClientOpts = ?config(client_opts, Config),
     ServerOpts = ?config(server_opts, Config),
     {ClientNode, ServerNode, Hostname} = ssl_test_lib:run_where(Config),
 
@@ -275,12 +236,9 @@ server_echos_active_once_big(Config) when is_list(Config) ->
 
 %%--------------------------------------------------------------------
 
-server_echos_active_big(doc) -> 
-    ["Client sends 50000 bytes to server in active once mode, that receives "
-     " them, sends them back, and closes."];
-
-server_echos_active_big(suite) -> 
-    [];
+server_echos_active_big() ->
+    [{doc, "Client sends 50000 bytes to server in active once mode, that receives "
+      " them, sends them back, and closes."}].
 
 server_echos_active_big(Config) when is_list(Config) -> 
     ClientOpts = ?config(client_opts, Config),
@@ -293,12 +251,9 @@ server_echos_active_big(Config) when is_list(Config) ->
 			ServerNode, Hostname).
 
 %%--------------------------------------------------------------------
-client_echos_passive_big(doc) -> 
-    ["Server sends 50000 bytes to client in passive mode, that receives them, "
-     "sends them back, and closes."];
-
-client_echos_passive_big(suite) -> 
-    [];
+client_echos_passive_big() ->
+    [{doc, "Server sends 50000 bytes to client in passive mode, that receives them, "
+     "sends them back, and closes."}].
 
 client_echos_passive_big(Config) when is_list(Config) -> 
     ClientOpts = ?config(client_opts, Config),
@@ -311,12 +266,9 @@ client_echos_passive_big(Config) when is_list(Config) ->
 			 ServerNode, Hostname).
 
 %%--------------------------------------------------------------------
-client_echos_active_once_big(doc) -> 
-    ["Server sends 50000 bytes to client in active once mode, that receives"
-     " them, sends them back, and closes."];
-
-client_echos_active_once_big(suite) -> 
-    [];
+client_echos_active_once_big() ->
+    [{doc, "Server sends 50000 bytes to client in active once mode, that receives"
+      " them, sends them back, and closes."}].
 
 client_echos_active_once_big(Config) when is_list(Config) -> 
     ClientOpts = ?config(client_opts, Config),
@@ -329,12 +281,9 @@ client_echos_active_once_big(Config) when is_list(Config) ->
 			     ServerNode, Hostname).
    
 %%--------------------------------------------------------------------
-client_echos_active_big(doc) -> 
-    ["Server sends 50000 bytes to client in active mode, that receives them, "
-     "sends them back, and closes."];
-
-client_echos_active_big(suite) -> 
-    [];
+client_echos_active_big() ->
+    [{doc, "Server sends 50000 bytes to client in active mode, that receives them, "
+      "sends them back, and closes."}].
 
 client_echos_active_big(Config) when is_list(Config) -> 
      ClientOpts = ?config(client_opts, Config),
@@ -347,12 +296,9 @@ client_echos_active_big(Config) when is_list(Config) ->
 			ServerNode, Hostname).
 
 %%--------------------------------------------------------------------
-server_echos_passive_huge(doc) -> 
-    ["Client sends 500000 bytes to server in passive mode, that receives "
-     " them, sends them back, and closes."];
-
-server_echos_passive_huge(suite) -> 
-    [];
+server_echos_passive_huge() ->
+    [{doc, "Client sends 500000 bytes to server in passive mode, that receives "
+      " them, sends them back, and closes."}].
 
 server_echos_passive_huge(Config) when is_list(Config) -> 
     ClientOpts = ?config(client_opts, Config),
@@ -365,12 +311,9 @@ server_echos_passive_huge(Config) when is_list(Config) ->
 			 ServerNode, Hostname).
 
 %%--------------------------------------------------------------------
-server_echos_active_once_huge(doc) -> 
-    ["Client sends 500000 bytes to server in active once mode, that receives "
-     "them, sends them back, and closes."];
-
-server_echos_active_once_huge(suite) -> 
-    [];
+server_echos_active_once_huge() ->
+    [{doc, "Client sends 500000 bytes to server in active once mode, that receives "
+      "them, sends them back, and closes."}].
 
 server_echos_active_once_huge(Config) when is_list(Config) -> 
         ClientOpts = ?config(client_opts, Config),
@@ -383,12 +326,9 @@ server_echos_active_once_huge(Config) when is_list(Config) ->
 			     ServerNode, Hostname).
 
 %%--------------------------------------------------------------------
-server_echos_active_huge(doc) -> 
-    ["Client sends 500000 bytes to server in active mode, that receives them, "
-     "sends them back, and closes."];
-
-server_echos_active_huge(suite) -> 
-    [];
+server_echos_active_huge() ->
+    [{doc, "Client sends 500000 bytes to server in active mode, that receives them, "
+     "sends them back, and closes."}].
 
 server_echos_active_huge(Config) when is_list(Config) -> 
     ClientOpts = ?config(client_opts, Config),
@@ -401,12 +341,9 @@ server_echos_active_huge(Config) when is_list(Config) ->
 			ServerNode, Hostname).
 
 %%--------------------------------------------------------------------
-client_echos_passive_huge(doc) -> 
-    ["Server sends 500000 bytes to client in passive mode, that receives "
-     "them, sends them back, and closes."];
-
-client_echos_passive_huge(suite) -> 
-    [];
+client_echos_passive_huge() ->
+    [{doc, "Server sends 500000 bytes to client in passive mode, that receives "
+     "them, sends them back, and closes."}].
 
 client_echos_passive_huge(Config) when is_list(Config) -> 
     ClientOpts = ?config(client_opts, Config),
@@ -418,12 +355,9 @@ client_echos_passive_huge(Config) when is_list(Config) ->
 			 ServerNode, Hostname).
 
 %%--------------------------------------------------------------------
-client_echos_active_once_huge(doc) -> 
-    ["Server sends 500000 bytes to client in active once mode, that receives "
-     "them, sends them back, and closes."];
-
-client_echos_active_once_huge(suite) -> 
-    [];
+client_echos_active_once_huge() ->
+    [{doc, "Server sends 500000 bytes to client in active once mode, that receives "
+      "them, sends them back, and closes."}].
 
 client_echos_active_once_huge(Config) when is_list(Config) -> 
     ClientOpts = ?config(client_opts, Config),
@@ -435,12 +369,9 @@ client_echos_active_once_huge(Config) when is_list(Config) ->
 			     ServerNode, Hostname).
    
 %%--------------------------------------------------------------------
-client_echos_active_huge(doc) -> 
-    ["Server sends 500000 bytes to client in active mode, that receives them, "
-     "sends them back, and closes."];
-
-client_echos_active_huge(suite) -> 
-    [];
+client_echos_active_huge() ->
+    [{doc, "Server sends 500000 bytes to client in active mode, that receives them, "
+     "sends them back, and closes."}].
 
 client_echos_active_huge(Config) when is_list(Config) -> 
      ClientOpts = ?config(client_opts, Config),
@@ -451,6 +382,8 @@ client_echos_active_huge(Config) when is_list(Config) ->
     client_echos_active(Str, 500000, ClientOpts, ServerOpts, ClientNode,
 			ServerNode, Hostname).
  
+%%--------------------------------------------------------------------
+%% Internal functions ------------------------------------------------
 %%--------------------------------------------------------------------
 
 server_echos_passive(Data, Length, ClientOpts, ServerOpts, 
@@ -622,33 +555,33 @@ send(Socket, Data, Size, Repeate,F) ->
  
 sender(Socket, Data, Size) ->
     ok = send(Socket, Data, Size, 100, fun() -> do_recv(Socket, Data, Size, <<>>, false) end),
-    test_server:format("Sender recv: ~p~n", [ssl:getopts(Socket, [active])]),
+    ct:log("Sender recv: ~p~n", [ssl:getopts(Socket, [active])]),
     ok.
 
 sender_once(Socket, Data, Size) ->
     send(Socket, Data, Size, 100, 
 	 fun() -> do_active_once(Socket, Data, Size, <<>>, false) end),
-    test_server:format("Sender active once: ~p~n", 
+    ct:log("Sender active once: ~p~n",
 		       [ssl:getopts(Socket, [active])]),
     ok.
 
 sender_active(Socket, Data, Size) ->
     F = fun() -> do_active(Socket, Data, Size, <<>>, false) end,
     send(Socket, Data, Size, 100, F),
-    test_server:format("Sender active: ~p~n", [ssl:getopts(Socket, [active])]),
+    ct:log("Sender active: ~p~n", [ssl:getopts(Socket, [active])]),
     ok.
 
 echoer(Socket, Data, Size) ->
-    test_server:format("Echoer recv: ~p~n", [ssl:getopts(Socket, [active])]),
+    ct:log("Echoer recv: ~p~n", [ssl:getopts(Socket, [active])]),
     echo(fun() -> do_recv(Socket, Data, Size, <<>>, true) end, 100).
 
 echoer_once(Socket, Data, Size) ->
-    test_server:format("Echoer active once: ~p ~n",
+    ct:log("Echoer active once: ~p ~n",
 		       [ssl:getopts(Socket, [active])]),
     echo(fun() -> do_active_once(Socket, Data, Size, <<>>, true) end, 100).
 
 echoer_active(Socket, Data, Size) ->
-    test_server:format("Echoer active: ~p~n", [ssl:getopts(Socket, [active])]),
+    ct:log("Echoer active: ~p~n", [ssl:getopts(Socket, [active])]),
     echo(fun() -> do_active(Socket, Data, Size, <<>>, true) end, 100).
 
 echo(_Fun, 0) -> ok;

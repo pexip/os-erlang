@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %% 
-%% Copyright Ericsson AB 2005-2009. All Rights Reserved.
+%% Copyright Ericsson AB 2005-2011. All Rights Reserved.
 %% 
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -21,11 +21,13 @@
 -ifndef(inets_internal_hrl).
 -define(inets_internal_hrl, true).
 
+-define(STACK(), erlang:get_stacktrace()).
+
 %% Various trace macros
 
 -define(report(Severity, Label, Service, Content), 
-	inets:report_event(Severity, Label, Service, 
-			   [{module, ?MODULE}, {line, ?LINE} | Content])).
+	inets_trace:report_event(Severity, Label, Service, 
+				 [{module, ?MODULE}, {line, ?LINE} | Content])).
 -define(report_important(Label, Service, Content), 
 	?report(20, Label, Service, Content)).
 -define(report_verbose(Label, Service, Content),   

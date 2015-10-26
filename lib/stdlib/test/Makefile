@@ -20,9 +20,9 @@ MODULES= \
 	digraph_utils_SUITE \
 	dummy1_h \
 	dummy_h \
+	dummy_via \
 	edlin_expand_SUITE \
 	epp_SUITE \
-	erl_eval_helper \
 	erl_eval_SUITE \
 	erl_expand_records_SUITE \
 	erl_internal_SUITE \
@@ -65,11 +65,16 @@ MODULES= \
 	stdlib_SUITE \
 	string_SUITE \
 	supervisor_1 \
+	supervisor_2 \
+	supervisor_3 \
+	supervisor_deadlock \
 	naughty_child \
 	shell_SUITE \
 	supervisor_SUITE \
 	supervisor_bridge_SUITE \
 	sys_SUITE \
+	sys_sp1 \
+	sys_sp2 \
 	tar_SUITE \
 	timer_SUITE \
 	timer_simple_SUITE \
@@ -80,7 +85,8 @@ MODULES= \
 	zip_SUITE \
 	random_unicode_list \
 	random_iolist \
-	error_logger_forwarder
+	error_logger_forwarder \
+	maps_SUITE
 
 ERL_FILES= $(MODULES:%=%.erl)
 
@@ -132,10 +138,10 @@ include $(ERL_TOP)/make/otp_release_targets.mk
 release_spec: opt
 
 release_tests_spec: make_emakefile
-	$(INSTALL_DIR) $(RELSYSDIR)
+	$(INSTALL_DIR) "$(RELSYSDIR)"
 	$(INSTALL_DATA) stdlib.spec $(EMAKEFILE) \
-		$(ERL_FILES) $(COVERFILE) $(RELSYSDIR)
-	chmod -R u+w $(RELSYSDIR)
-	@tar cf - *_SUITE_data | (cd $(RELSYSDIR); tar xf -)
+		$(ERL_FILES) $(COVERFILE) "$(RELSYSDIR)"
+	chmod -R u+w "$(RELSYSDIR)"
+	@tar cf - *_SUITE_data | (cd "$(RELSYSDIR)"; tar xf -)
 
 release_docs_spec:

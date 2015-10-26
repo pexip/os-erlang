@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %% 
-%% Copyright Ericsson AB 1997-2011. All Rights Reserved.
+%% Copyright Ericsson AB 1997-2014. All Rights Reserved.
 %% 
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -47,8 +47,8 @@
 	 fd_change/1,
 	 steal_control/1,
 	 otp_6602/1,
-	 'driver_system_info_ver1.0'/1,
-	 'driver_system_info_ver1.1'/1,
+	 driver_system_info_base_ver/1,
+	 driver_system_info_prev_ver/1,
 	 driver_system_info_current_ver/1,
 	 driver_monitor/1,
 	
@@ -75,7 +75,11 @@
 	 smp_select/1,
 	 driver_select_use/1,
 	 thread_mseg_alloc_cache_clean/1,
-	 otp_9302/1]).
+	 otp_9302/1,
+	 thr_free_drv/1,
+	 async_blast/1,
+	 thr_msg_blast/1,
+	 consume_timeslice/1]).
 
 -export([bin_prefix/2]).
 
@@ -133,8 +137,8 @@ all() ->
     [outputv_errors, outputv_echo, queue_echo, {group, timer},
      driver_unloaded, io_ready_exit, use_fallback_pollset,
      bad_fd_in_pollset, driver_event, fd_change,
-     steal_control, otp_6602, 'driver_system_info_ver1.0',
-     'driver_system_info_ver1.1',
+     steal_control, otp_6602, driver_system_info_base_ver,
+     driver_system_info_prev_ver,
      driver_system_info_current_ver, driver_monitor,
      {group, ioq_exit}, zero_extended_marker_garb_drv,
      invalid_extended_marker_drv, larger_major_vsn_drv,
@@ -143,7 +147,11 @@ all() ->
      otp_6879, caller, many_events, missing_callbacks,
      smp_select, driver_select_use,
      thread_mseg_alloc_cache_clean,
-     otp_9302].
+     otp_9302,
+     thr_free_drv,
+     async_blast,
+     thr_msg_blast,
+     consume_timeslice].
 
 groups() -> 
     [{timer, [],
@@ -359,7 +367,7 @@ compare(Got, Expected) ->
 	    ?t:fail(got_bad_data)
     end.
 
-
+
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %% 		Driver timer test suites
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -507,7 +515,7 @@ try_change_timer(Port, Timeout) ->
 	    ?line test_server:fail("driver failed to timeout")
     end.
 
-
+
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %% 		Queue test suites
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -711,7 +719,7 @@ deq(Port, Size) ->
 read_head(Port, Size) ->
     erlang:port_control(Port, ?READ_HEAD, <<Size:32>>).
 
-
+
 driver_unloaded(doc) ->
     [];
 driver_unloaded(suite) ->
@@ -1054,10 +1062,9 @@ otp_6602(Config) when is_list(Config) ->
 				      %% Inet driver use port locking...
 				      {ok, S} = gen_udp:open(0),
 				      {ok, Fd} = inet:getfd(S),
-				      {ok, Port} = inet:port(S),
 				      %% Steal fd (lock checker used to
 				      %% trigger here).
-				      {ok, _S2} = gen_udp:open(Port,[{fd,Fd}]),
+				      {ok, _S2} = gen_udp:open(0,[{fd,Fd}]),
 				      Parent ! Done
 			      end),
     ?line receive Done -> ok end,
@@ -1077,21 +1084,29 @@ otp_6602(Config) when is_list(Config) ->
 	 ["async_thrs",
 	  "sched_thrs"])).
 
--define(EXPECTED_SYSTEM_INFO_NAMES, ?EXPECTED_SYSTEM_INFO_NAMES2).
+-define(EXPECTED_SYSTEM_INFO_NAMES3,
+	(?EXPECTED_SYSTEM_INFO_NAMES2 ++
+	 ["emu_nif_vsn"])).
 
-'driver_system_info_ver1.0'(doc) ->    
-    [];
-'driver_system_info_ver1.0'(suite) ->
-    [];
-'driver_system_info_ver1.0'(Config) when is_list(Config) ->
-    ?line driver_system_info_test(Config, sys_info_1_0_drv).
+-define(EXPECTED_SYSTEM_INFO_NAMES4,
+	(?EXPECTED_SYSTEM_INFO_NAMES3 ++
+	 ["dirty_sched"])).
 
-'driver_system_info_ver1.1'(doc) ->    
+-define(EXPECTED_SYSTEM_INFO_NAMES, ?EXPECTED_SYSTEM_INFO_NAMES4).
+
+'driver_system_info_base_ver'(doc) ->
     [];
-'driver_system_info_ver1.1'(suite) ->
+'driver_system_info_base_ver'(suite) ->
     [];
-'driver_system_info_ver1.1'(Config) when is_list(Config) ->
-    ?line driver_system_info_test(Config, sys_info_1_1_drv).
+'driver_system_info_base_ver'(Config) when is_list(Config) ->
+    ?line driver_system_info_test(Config, sys_info_base_drv).
+
+'driver_system_info_prev_ver'(doc) ->
+    [];
+'driver_system_info_prev_ver'(suite) ->
+    [];
+'driver_system_info_prev_ver'(Config) when is_list(Config) ->
+    ?line driver_system_info_test(Config, sys_info_prev_drv).
 
 driver_system_info_current_ver(doc) ->    
     [];
@@ -1125,13 +1140,17 @@ check_driver_system_info_result(Result) ->
 		drv_vsn_str2tup(erlang:system_info(driver_version))} of
 	      {DDVSN, DDVSN} ->
 		  ?line [] = Ns;
-	      {{1, 0}, _} ->
+	      %% {{1, 0}, _} ->
+	      %% 	  ?line ExpNs = lists:sort(?EXPECTED_SYSTEM_INFO_NAMES
+	      %% 				   -- ?EXPECTED_SYSTEM_INFO_NAMES1),
+	      %% 	  ?line ExpNs = lists:sort(Ns);
+	      %% {{1, 1}, _} ->
+	      %% 	  ?line ExpNs = lists:sort(?EXPECTED_SYSTEM_INFO_NAMES
+	      %% 				   -- ?EXPECTED_SYSTEM_INFO_NAMES2),
+	      %% 	  ?line ExpNs = lists:sort(Ns);
+	      {{3, 0}, _} ->
 		  ?line ExpNs = lists:sort(?EXPECTED_SYSTEM_INFO_NAMES
-					   -- ?EXPECTED_SYSTEM_INFO_NAMES1),
-		  ?line ExpNs = lists:sort(Ns);
-	      {{1, 1}, _} ->
-		  ?line ExpNs = lists:sort(?EXPECTED_SYSTEM_INFO_NAMES
-					   -- ?EXPECTED_SYSTEM_INFO_NAMES2),
+					   -- ?EXPECTED_SYSTEM_INFO_NAMES3),
 		  ?line ExpNs = lists:sort(Ns)
 	  end.
 
@@ -1178,6 +1197,14 @@ check_si_res(["async_thrs", Value]) ->
     ?line Value = integer_to_list(erlang:system_info(thread_pool_size));
 check_si_res(["sched_thrs", Value]) ->
     ?line Value = integer_to_list(erlang:system_info(schedulers));
+
+%% Data added in 3rd version of driver_system_info() (driver version 1.5)
+check_si_res(["emu_nif_vsn", _Value]) ->
+    true;
+
+%% Data added in 4th version of driver_system_info() (driver version 3.1)
+check_si_res(["dirty_sched", _Value]) ->
+    true;
 
 check_si_res(Unexpected) ->
     ?line ?t:fail({unexpected_result, Unexpected}).
@@ -1804,13 +1831,13 @@ thread_mseg_alloc_cache_clean(Config) when is_list(Config) ->
 	    ?line {skipped, "driver_alloc() using too large single block threshold"};
 	{_, _, 0} ->
 	    ?line {skipped, "driver_alloc() using too low single block threshold"};
-	{true, MsegAllocInfo, SBCT} ->
+	{true, _MsegAllocInfo, SBCT} ->
 	    ?line DrvName = 'thr_alloc_drv',
 	    ?line Path = ?config(data_dir, Config),
 	    ?line erl_ddll:start(),
 	    ?line ok = load_driver(Path, DrvName),   
 	    ?line Port = open_port({spawn, DrvName}, []),
-	    ?line CCI = mseg_alloc_cci(MsegAllocInfo),
+	    ?line CCI = 1000,
 	    ?line ?t:format("CCI = ~p~n", [CCI]),
 	    ?line CCC = mseg_alloc_ccc(),
 	    ?line ?t:format("CCC = ~p~n", [CCC]),
@@ -1831,7 +1858,7 @@ mseg_alloc_cci(MsegAllocInfo) ->
     ?line CCI.
 
 mseg_alloc_ccc() ->
-    mseg_alloc_ccc(erlang:system_info({allocator,mseg_alloc})).
+    mseg_alloc_ccc(mseg_inst_info(0)).
 
 mseg_alloc_ccc(MsegAllocInfo) ->
     ?line {value,{memkind, MKL}} = lists:keysearch(memkind,1,MsegAllocInfo),
@@ -1841,7 +1868,7 @@ mseg_alloc_ccc(MsegAllocInfo) ->
     ?line GigaCCC*1000000000 + CCC.
 
 mseg_alloc_cached_segments() ->
-    mseg_alloc_cached_segments(erlang:system_info({allocator,mseg_alloc})).
+    mseg_alloc_cached_segments(mseg_inst_info(0)).
 
 mseg_alloc_cached_segments(MsegAllocInfo) ->
     MemName = case is_halfword_vm() of
@@ -1858,6 +1885,13 @@ mseg_alloc_cached_segments(MsegAllocInfo) ->
     ?line {value,{cached_segments, CS}}
 	= lists:keysearch(cached_segments, 1, SL),
     ?line CS.
+
+mseg_inst_info(I) ->
+    {value, {instance, I, Value}}
+	= lists:keysearch(I,
+			  2,
+			  erlang:system_info({allocator,mseg_alloc})),
+    Value.
 
 is_halfword_vm() ->
     case {erlang:system_info({wordsize, internal}),
@@ -1902,21 +1936,480 @@ otp_9302(Config) when is_list(Config) ->
     ?line port_command(Port, ""),
     ?line {msg, block} = get_port_msg(Port, infinity),
     ?line {msg, job} = get_port_msg(Port, infinity),
-    ?line case erlang:system_info(thread_pool_size) of
-	      0 ->
-		  {msg, cancel} = get_port_msg(Port, infinity);
-	      _ ->
-		  ok
-	  end,
-    ?line {msg, job} = get_port_msg(Port, infinity),
+    ?line C = case erlang:system_info(thread_pool_size) of
+		  0 ->
+		      ?line {msg, cancel} = get_port_msg(Port, infinity),
+		      ?line {msg, job} = get_port_msg(Port, infinity),
+		      ?line false;
+		  _ ->
+		      case get_port_msg(Port, infinity) of
+			  {msg, cancel} -> %% Cancel always fail in Rel >= 15
+			      ?line {msg, job} = get_port_msg(Port, infinity),
+			      ?line false;
+			  {msg, job} ->
+			      ?line ok,
+			      ?line true
+		      end
+	      end,
     ?line {msg, end_of_jobs} = get_port_msg(Port, infinity),
     ?line no_msg = get_port_msg(Port, 2000),
     ?line port_close(Port),
+    ?line case C of
+	      true ->
+		  ?line {comment, "Async job cancelled"};
+	      false ->
+		  ?line {comment, "Async job not cancelled"}
+	  end.
+
+thr_free_drv(Config) when is_list(Config) ->
+    case erlang:system_info(threads) of
+	false ->
+	    {skipped, "No thread support"};
+	true ->
+	    thr_free_drv_do(Config)
+    end.
+
+thr_free_drv_do(Config) ->
+    ?line Path = ?config(data_dir, Config),
+    ?line erl_ddll:start(),
+    ?line ok = load_driver(Path, thr_free_drv),
+    ?line MemBefore = driver_alloc_size(),
+%    io:format("SID=~p", [erlang:system_info(scheduler_id)]),
+    ?line Port = open_port({spawn, thr_free_drv}, []),
+    ?line MemPeek = driver_alloc_size(),
+    ?line true = is_port(Port),
+    ?line ok = thr_free_drv_control(Port, 0),
+    ?line port_close(Port),
+    ?line MemAfter = driver_alloc_size(),
+    ?line io:format("MemPeek=~p~n", [MemPeek]),
+    ?line io:format("MemBefore=~p, MemAfter=~p~n", [MemBefore, MemAfter]),
+    ?line MemBefore = MemAfter,
+    ?line case MemPeek of
+	      undefined -> ok;
+	      _ ->
+		  ?line true = MemPeek > MemBefore
+	  end,
     ?line ok.
 
+thr_free_drv_control(Port, N) ->
+    case erlang:port_control(Port, 0, "") of
+	"done" ->
+	    ok;
+	"more" ->
+	    erlang:yield(),
+%	    io:format("N=~p, SID=~p", [N, erlang:system_info(scheduler_id)]),
+	    thr_free_drv_control(Port, N+1)
+    end.
+	    
+async_blast(Config) when is_list(Config) ->
+    ?line Path = ?config(data_dir, Config),
+    ?line erl_ddll:start(),
+    ?line ok = load_driver(Path, async_blast_drv),
+    ?line SchedOnln = erlang:system_info(schedulers_online),
+    ?line MemBefore = driver_alloc_size(),
+    ?line Start = os:timestamp(),
+    ?line Blast = fun () ->
+			  Port = open_port({spawn, async_blast_drv}, []),
+			  true = is_port(Port),
+			  port_command(Port, ""),
+			  receive
+			      {Port, done} ->
+				  ok
+			  end,
+			  port_close(Port)
+		  end,
+    ?line Ps = lists:map(fun (N) ->
+				 spawn_opt(Blast,
+					   [{scheduler,
+					     (N rem SchedOnln)+ 1},
+					    monitor])
+			 end,
+			 lists:seq(1, 100)),
+    ?line MemMid = driver_alloc_size(),
+    ?line lists:foreach(fun ({Pid, Mon}) ->
+				receive
+				    {'DOWN',Mon,process,Pid,_} -> ok
+				end
+			end, Ps),
+    ?line End = os:timestamp(),
+    ?line MemAfter = driver_alloc_size(),
+    ?line io:format("MemBefore=~p, MemMid=~p, MemAfter=~p~n",
+		    [MemBefore, MemMid, MemAfter]),
+    ?line AsyncBlastTime = timer:now_diff(End,Start)/1000000,
+    ?line io:format("AsyncBlastTime=~p~n", [AsyncBlastTime]),
+    ?line MemBefore = MemAfter,
+    ?line erlang:display({async_blast_time, AsyncBlastTime}),
+    ?line ok.
+
+thr_msg_blast_receiver(_Port, N, N) ->
+    ok;
+thr_msg_blast_receiver(Port, N, Max) ->
+    receive
+	{Port, hi} ->
+	    thr_msg_blast_receiver(Port, N+1, Max)
+    end.
+
+thr_msg_blast_receiver_proc(Port, Max, Parent, Done) ->
+    case port_control(Port, 0, "") of
+	"receiver" ->
+	    spawn(fun () ->
+			  thr_msg_blast_receiver_proc(Port, Max+1, Parent, Done)
+		  end),
+	    thr_msg_blast_receiver(Port, 0, Max);
+	"done" ->
+	    Parent ! Done
+    end.
+
+thr_msg_blast(Config) when is_list(Config) ->
+    case erlang:system_info(smp_support) of
+	false ->
+	    {skipped, "Non-SMP emulator; nothing to test..."};
+	true ->
+	    Path = ?config(data_dir, Config),
+	    erl_ddll:start(),
+	    ok = load_driver(Path, thr_msg_blast_drv),
+	    MemBefore = driver_alloc_size(),
+	    Start = os:timestamp(),
+	    Port = open_port({spawn, thr_msg_blast_drv}, []),
+	    true = is_port(Port),
+	    Done = make_ref(),
+	    Me = self(),
+	    spawn(fun () ->
+			  thr_msg_blast_receiver_proc(Port, 1, Me, Done)
+		  end),
+	    receive
+		Done -> ok
+	    end,
+	    ok = thr_msg_blast_receiver(Port, 0, 32*10000),
+	    port_close(Port),
+	    End = os:timestamp(),
+	    receive
+		Garbage ->
+		    ?t:fail({received_garbage, Port, Garbage})
+	    after 2000 ->
+		    ok
+	    end,
+	    MemAfter = driver_alloc_size(),
+	    io:format("MemBefore=~p, MemAfter=~p~n",
+		      [MemBefore, MemAfter]),
+	    ThrMsgBlastTime = timer:now_diff(End,Start)/1000000,
+	    io:format("ThrMsgBlastTime=~p~n", [ThrMsgBlastTime]),
+	    MemBefore = MemAfter,
+	    Res = {thr_msg_blast_time, ThrMsgBlastTime},
+	    erlang:display(Res),
+	    Res
+    end.
+
+-define(IN_RANGE(LoW_, VaLuE_, HiGh_),
+	case in_range(LoW_, VaLuE_, HiGh_) of
+	    true -> ok;
+	    false ->
+		case erlang:system_info(lock_checking) of
+		    true ->
+			?t:format("~p:~p: Ignore bad sched count due to "
+				  "lock checking~n",
+				  [?MODULE,?LINE]);
+		    false ->
+			?t:fail({unexpected_sched_counts, VaLuE_})
+		end
+	end).
+
+
+consume_timeslice(Config) when is_list(Config) ->
+    %%
+    %% Verify that erl_drv_consume_timeslice() works.
+    %%
+    %% The first four cases expect that the command signal is
+    %% delivered immediately, i.e., isn't scheduled. Since there
+    %% are no conflicts these signals should normally be delivered
+    %% immediately. However some builds and configurations may
+    %% schedule these ops anyway, in these cases we do not verify
+    %% scheduling counts.
+    %%
+    %% When signal is delivered immediately we must take into account
+    %% that process and port are "virtualy" scheduled out and in
+    %% in the trace generated.
+    %%
+    %% Port ! {_, {command, _}, and port_command() differs. The send
+    %% instruction needs to check if the caller is out of reductions
+    %% at the end of the instruction, since no erlang function call
+    %% is involved. Otherwise, a sequence of send instructions would
+    %% not be scheduled out even when out of reductions. port_commond()
+    %% doesn't do that since it will always (since R16A) be called via
+    %% the erlang wrappers in the erlang module.
+    %%
+    %% The last two cases tests scheduled operations. We create
+    %% a conflict by executing at the same time on different
+    %% schedulers. When only one scheduler we enable parallelism on
+    %% the port instead.
+    %%
+
+    Path = ?config(data_dir, Config),
+    erl_ddll:start(),
+    ok = load_driver(Path, consume_timeslice_drv),
+    Port = open_port({spawn, consume_timeslice_drv}, [{parallelism, false}]),
+
+    Parent = self(),
+    Go = make_ref(),
+
+    "enabled" = port_control(Port, $E, ""),
+    Proc1 = spawn_link(fun () ->
+			       receive Go -> ok end,
+			       Port ! {Parent, {command, ""}},
+			       Port ! {Parent, {command, ""}},
+			       Port ! {Parent, {command, ""}},
+			       Port ! {Parent, {command, ""}},
+			       Port ! {Parent, {command, ""}},
+			       Port ! {Parent, {command, ""}},
+			       Port ! {Parent, {command, ""}},
+			       Port ! {Parent, {command, ""}},
+			       Port ! {Parent, {command, ""}},
+			       Port ! {Parent, {command, ""}}
+		       end),
+    receive after 100 -> ok end,
+    count_pp_sched_start(),
+    Proc1 ! Go,
+    wait_command_msgs(Port, 10),
+    [{Port, Sprt1}, {Proc1, Sproc1}] = count_pp_sched_stop([Port, Proc1]),
+    ?IN_RANGE(10, Sprt1, 10),
+    ?IN_RANGE(5, Sproc1-10, 7),
+
+    "disabled" = port_control(Port, $D, ""),
+    Proc2 = spawn_link(fun () ->
+			       receive Go -> ok end,
+			       Port ! {Parent, {command, ""}},
+			       Port ! {Parent, {command, ""}},
+			       Port ! {Parent, {command, ""}},
+			       Port ! {Parent, {command, ""}},
+			       Port ! {Parent, {command, ""}},
+			       Port ! {Parent, {command, ""}},
+			       Port ! {Parent, {command, ""}},
+			       Port ! {Parent, {command, ""}},
+			       Port ! {Parent, {command, ""}},
+			       Port ! {Parent, {command, ""}}
+		       end),
+    receive after 100 -> ok end,
+    count_pp_sched_start(),
+    Proc2 ! Go,
+    wait_command_msgs(Port, 10),
+    [{Port, Sprt2}, {Proc2, Sproc2}] = count_pp_sched_stop([Port, Proc2]),
+    ?IN_RANGE(10, Sprt2, 10),
+    ?IN_RANGE(1, Sproc2-10, 2),
+
+    "enabled" = port_control(Port, $E, ""),
+    Proc3 = spawn_link(fun () ->
+			       receive Go -> ok end,
+			       port_command(Port, ""),
+			       port_command(Port, ""),
+			       port_command(Port, ""),
+			       port_command(Port, ""),
+			       port_command(Port, ""),
+			       port_command(Port, ""),
+			       port_command(Port, ""),
+			       port_command(Port, ""),
+			       port_command(Port, ""),
+			       port_command(Port, "")
+		       end),
+    count_pp_sched_start(),
+    Proc3 ! Go,
+    wait_command_msgs(Port, 10),
+    [{Port, Sprt3}, {Proc3, Sproc3}] = count_pp_sched_stop([Port, Proc3]),
+    ?IN_RANGE(10, Sprt3, 10),
+    ?IN_RANGE(5, Sproc3-10, 7),
+
+    "disabled" = port_control(Port, $D, ""),
+    Proc4 = spawn_link(fun () ->
+			       receive Go -> ok end,
+			       port_command(Port, ""),
+			       port_command(Port, ""),
+			       port_command(Port, ""),
+			       port_command(Port, ""),
+			       port_command(Port, ""),
+			       port_command(Port, ""),
+			       port_command(Port, ""),
+			       port_command(Port, ""),
+			       port_command(Port, ""),
+			       port_command(Port, "")
+		       end),
+    count_pp_sched_start(),
+    Proc4 ! Go,
+    wait_command_msgs(Port, 10),
+    [{Port, Sprt4}, {Proc4, Sproc4}] = count_pp_sched_stop([Port, Proc4]),
+    ?IN_RANGE(10, Sprt4, 10),
+    ?IN_RANGE(1, Sproc4-10, 2),
+
+    SOnl = erlang:system_info(schedulers_online),
+    %% If only one scheduler use port with parallelism set to true,
+    %% in order to trigger scheduling of command signals
+    Port2 = case SOnl of
+		1 ->
+		    Port ! {self(), close},
+		    receive {Port, closed} -> ok end,
+		    open_port({spawn, consume_timeslice_drv},
+			      [{parallelism, true}]);
+		_ ->
+		    process_flag(scheduler, 1),
+		    1 = erlang:system_info(scheduler_id),
+		    Port
+	    end,
+    count_pp_sched_start(),
+    "enabled" = port_control(Port2, $E, ""),
+    W5 = case SOnl of
+	     1 ->
+		 false;
+	     _ ->
+		 W1= spawn_opt(fun () ->
+				       2 = erlang:system_info(scheduler_id),
+				       "sleeped" = port_control(Port2, $S, "")
+			       end, [link,{scheduler,2}]),
+		 receive after 100 -> ok end,
+		 W1
+	 end,
+    Proc5 = spawn_opt(fun () ->
+			      receive Go -> ok end,
+			      1 = erlang:system_info(scheduler_id),
+			      Port2 ! {Parent, {command, ""}},
+			      Port2 ! {Parent, {command, ""}},
+			      Port2 ! {Parent, {command, ""}},
+			      Port2 ! {Parent, {command, ""}},
+			      Port2 ! {Parent, {command, ""}},
+			      Port2 ! {Parent, {command, ""}},
+			      Port2 ! {Parent, {command, ""}},
+			      Port2 ! {Parent, {command, ""}},
+			      Port2 ! {Parent, {command, ""}},
+			      Port2 ! {Parent, {command, ""}}
+		      end, [link,{scheduler,1}]),
+    receive after 100 -> ok end,
+    Proc5 ! Go,
+    wait_procs_exit([W5, Proc5]),
+    wait_command_msgs(Port2, 10),
+    [{Port2, Sprt5}, {Proc5, Sproc5}] = count_pp_sched_stop([Port2, Proc5]),
+    ?IN_RANGE(2, Sproc5, 3),
+    ?IN_RANGE(6, Sprt5, 20),
+		  
+    count_pp_sched_start(),
+    "disabled" = port_control(Port2, $D, ""),
+    W6 = case SOnl of
+	     1 ->
+		 false;
+	     _ ->
+		 W2= spawn_opt(fun () ->
+				       2 = erlang:system_info(scheduler_id),
+				       "sleeped" = port_control(Port2, $S, "")
+			       end, [link,{scheduler,2}]),
+		 receive after 100 -> ok end,
+		 W2
+	 end,
+    Proc6 = spawn_opt(fun () ->
+			      receive Go -> ok end,
+			      1 = erlang:system_info(scheduler_id),
+			      Port2 ! {Parent, {command, ""}},
+			      Port2 ! {Parent, {command, ""}},
+			      Port2 ! {Parent, {command, ""}},
+			      Port2 ! {Parent, {command, ""}},
+			      Port2 ! {Parent, {command, ""}},
+			      Port2 ! {Parent, {command, ""}},
+			      Port2 ! {Parent, {command, ""}},
+			      Port2 ! {Parent, {command, ""}},
+			      Port2 ! {Parent, {command, ""}},
+			      Port2 ! {Parent, {command, ""}}
+		      end, [link,{scheduler,1}]),
+    receive after 100 -> ok end,
+    Proc6 ! Go,
+    wait_procs_exit([W6, Proc6]),
+    wait_command_msgs(Port2, 10),
+    [{Port2, Sprt6}, {Proc6, Sproc6}] = count_pp_sched_stop([Port2, Proc6]),
+    ?IN_RANGE(2, Sproc6, 3),
+    ?IN_RANGE(2, Sprt6, 6),
+
+    process_flag(scheduler, 0),
+
+    Port2 ! {self(), close},
+    receive {Port2, closed} -> ok end,
+    ok.
+
+
+wait_command_msgs(_, 0) ->
+    ok;
+wait_command_msgs(Port, N) ->
+    receive
+	{Port, command} ->
+	    wait_command_msgs(Port, N-1)
+    end.
+
+in_range(Low, Val, High) when is_integer(Low),
+			      is_integer(Val),
+			      is_integer(High),
+			      Low =< Val,
+			      Val =< High ->
+    true;
+in_range(Low, Val, High) when is_integer(Low),
+			      is_integer(Val),
+			      is_integer(High) ->
+    false.
+
+count_pp_sched_start() ->
+    erlang:trace(all, true, [running_procs, running_ports, {tracer, self()}]),
+    ok.
+
+count_pp_sched_stop(Ps) ->
+    Td = erlang:trace_delivered(all),
+    erlang:trace(all, false, [running_procs, running_ports, {tracer, self()}]),
+    PNs = lists:map(fun (P) -> {P, 0} end, Ps),
+    receive {trace_delivered, all, Td} -> ok end,
+    Res = count_proc_sched(Ps, PNs),
+    ?t:format("Scheduling counts: ~p~n", [Res]),
+    erlang:display({scheduling_counts, Res}),
+    Res.
+
+do_inc_pn(_P, []) ->
+    throw(undefined);
+do_inc_pn(P, [{P,N}|PNs]) ->
+    [{P,N+1}|PNs];
+do_inc_pn(P, [PN|PNs]) ->
+    [PN|do_inc_pn(P, PNs)].
+
+inc_pn(P, PNs) ->
+    try
+	do_inc_pn(P, PNs)
+    catch
+	throw:undefined -> PNs
+    end.
+
+count_proc_sched(Ps, PNs) ->
+    receive
+	TT when element(1, TT) == trace, element(3, TT) == in ->
+%	    erlang:display(TT),
+	    count_proc_sched(Ps, inc_pn(element(2, TT), PNs));
+	TT when element(1, TT) == trace, element(3, TT) == out ->
+	    count_proc_sched(Ps, PNs)
+    after 0 ->
+	    PNs
+    end.
+    
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %% 		Utilities
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+%flush_msgs() ->
+%    receive
+%	M ->
+%	    erlang:display(M),
+%	    flush_msgs()
+%    after 0 ->
+%	    ok
+%    end.
+
+wait_procs_exit([]) ->
+    ok;
+wait_procs_exit([P|Ps]) when is_pid(P) ->
+    Mon = erlang:monitor(process, P),
+    receive
+	{'DOWN', Mon, process, P, _} ->
+	    wait_procs_exit(Ps)
+    end;
+wait_procs_exit([_|Ps]) ->
+    wait_procs_exit(Ps).
 
 get_port_msg(Port, Timeout) ->
     receive
@@ -2077,3 +2570,40 @@ start_node(Config) when is_list(Config) ->
 
 stop_node(Node) ->
     ?t:stop_node(Node).
+
+wait_deallocations() ->
+    try
+	erts_debug:set_internal_state(wait, deallocations)
+    catch error:undef ->
+	    erts_debug:set_internal_state(available_internal_state, true),
+	    wait_deallocations()
+    end.
+
+driver_alloc_size() ->
+    case erlang:system_info(smp_support) of
+	true ->
+	    ok;
+	false ->
+	    %% driver_alloc also used by elements in lock-free queues,
+	    %% give these some time to be deallocated...
+	    receive after 100 -> ok end
+    end,
+    wait_deallocations(),
+    case erlang:system_info({allocator_sizes, driver_alloc}) of
+	false ->
+	    undefined;
+	MemInfo ->
+	    CS = lists:foldl(
+		   fun ({instance, _, L}, Acc) ->
+			   {value,{_,MBCS}} = lists:keysearch(mbcs, 1, L),
+			   {value,{_,SBCS}} = lists:keysearch(sbcs, 1, L),
+			   [MBCS,SBCS | Acc]
+		   end,
+		   [],
+		   MemInfo),
+	    lists:foldl(
+	      fun(L, Sz0) ->
+		      {value,{_,Sz,_,_}} = lists:keysearch(blocks_size, 1, L),
+		      Sz0+Sz
+	      end, 0, CS)
+    end.

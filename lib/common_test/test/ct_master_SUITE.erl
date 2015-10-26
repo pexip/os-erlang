@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2010-2011. All Rights Reserved.
+%% Copyright Ericsson AB 2010-2013. All Rights Reserved.
 %%
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -81,7 +81,8 @@ end_per_testcase(TestCase, Config) ->
     
     ct_test_support:end_per_testcase(TestCase, Config).
 
-suite() -> [{ct_hooks,[ts_install_cth]}].
+suite() -> [{timetrap,{seconds,60}},
+	    {ct_hooks,[ts_install_cth]}].
 
 all() -> 
     [ct_master_test].
@@ -98,7 +99,7 @@ end_per_group(_GroupName, Config) ->
 %%--------------------------------------------------------------------
 %% TEST CASES
 %%--------------------------------------------------------------------
-ct_master_test(Config) when is_list(Config)->
+ct_master_test(Config) when is_list(Config) ->
     NodeNames = proplists:get_value(node_names, Config),
     DataDir = ?config(data_dir, Config),
     PrivDir = ?config(priv_dir, Config),
@@ -106,76 +107,81 @@ ct_master_test(Config) when is_list(Config)->
     FileName = filename:join(PrivDir, "ct_master_spec.spec"),
     Suites = [master_SUITE],
     TSFile = make_spec(DataDir, FileName, NodeNames, Suites, Config),
-    ERPid = ct_test_support:start_event_receiver(Config),
-    spawn(ct@ancalagon,
-	  fun() ->
-		  dbg:tracer(),dbg:p(all,c),
-		  dbg:tpl(erlang, spawn_link, 4,x),
-		  receive ok -> ok end
-	  end),
 
-    [{TSFile, ok}] = run_test(ct_master_test, FileName, Config),
+    ERPid = ct_test_support:start_event_receiver(Config),
+
+    [{[TSFile],ok}] = run_test(ct_master_test, FileName, Config),
 
     Events = ct_test_support:get_events(ERPid, Config),
 
-    ct_test_support:log_events(groups_suite_1, 
+    ct_test_support:log_events(ct_master_test, 
 			       reformat(Events, ?eh),
 			       PrivDir, []),
 
-    find_events(NodeNames, [{tc_start,{master_SUITE,init_per_suite}},
-			    {tc_start,{master_SUITE,first_testcase}},
-			    {tc_start,{master_SUITE,second_testcase}},
-			    {tc_start,{master_SUITE,third_testcase}},
-			    {tc_start,{master_SUITE,end_per_suite}}],
-	       Events),
-    
-    ok.
+    TestEvents = events_to_check(ct_master_test),
+    ok = find_events(NodeNames, TestEvents, Events, Config).
 
 %%%-----------------------------------------------------------------
 %%% HELP FUNCTIONS
 %%%-----------------------------------------------------------------
-make_spec(DataDir, FileName, NodeNames, Suites, Config)->
-    {ok, HostName} = inet:gethostname(),
+make_spec(DataDir, FileName, NodeNames, Suites, Config) ->
+    {ok,HostName} = inet:gethostname(),
 
-    N = lists:map(fun(NodeName)->
+    N = lists:map(fun(NodeName) ->
 	    {node, NodeName, list_to_atom(atom_to_list(NodeName)++"@"++HostName)}
 	end,
 	NodeNames),
 
-    C = lists:map(fun(NodeName)->
-	Rnd = random:uniform(2),
-	if Rnd == 1->
-	    {config, NodeName, filename:join(DataDir, "master/config.txt")};
-	true->
-	    {userconfig, NodeName, {ct_config_xml, filename:join(DataDir, "master/config.xml")}}
-        end
-	end,
-	NodeNames),
+    C = lists:map(
+	  fun(NodeName) ->
+		  Rnd = random:uniform(2),
+		  if Rnd == 1->
+			  {config,NodeName,filename:join(DataDir,
+							 "master/config.txt")};
+		     true ->
+			  {userconfig,NodeName,
+			   {ct_config_xml,filename:join(DataDir,
+							"master/config.xml")}}
+		  end
+	  end,
+	  NodeNames),
+    
+    CM = [{config,master,filename:join(DataDir,"master/config.txt")}],
 
-    NS = lists:map(fun(NodeName)->
-	     {init, NodeName, [
-				{node_start, [{startup_functions, []}, {monitor_master, true}]},
-				{eval, {erlang, nodes, []}}
-			      ]
-	     }
-	 end,
-	 NodeNames),
-
+    Env = [{"THIS_MUST_BE_SET","yes"},
+	   {"SO_MUST_THIS","value"}],
+    NS = lists:map(
+	   fun(NodeName) ->
+		   {init,NodeName,[
+				   {node_start,[{startup_functions,[]},
+						{monitor_master,true},
+						{boot_timeout,10},
+						{init_timeout,10},
+						{startup_timeout,10},
+						{env,Env}]},
+				   {eval,{erlang,nodes,[]}}]
+		   }
+	   end,
+	   NodeNames),
+    
     S = [{suites, NodeNames, filename:join(DataDir, "master"), Suites}],
-
+    
     PrivDir = ?config(priv_dir, Config),
-    LD = lists:map(fun(NodeName)->
-	     {logdir, NodeName, get_log_dir(os:type(),PrivDir, NodeName)}
-         end,
-	 NodeNames) ++ [{logdir, master, PrivDir}],
+
+    LD = lists:map(
+	   fun(NodeName) ->
+		   {logdir,NodeName,get_log_dir(os:type(),PrivDir, NodeName)}
+	   end,
+	   NodeNames) ++ [{logdir,master,PrivDir}],
+
     EvHArgs = [{cbm,ct_test_support},{trace_level,?config(trace_level,Config)}],
     EH = [{event_handler,master,[?eh],EvHArgs}],
-
+    
     Include = [{include,filename:join([DataDir,"master/include"])}],
+    
+    ct_test_support:write_testspec(N++Include++EH++C++CM++S++LD++NS, FileName).
 
-    ct_test_support:write_testspec(N++Include++EH++C++S++LD++NS, FileName).
-
-get_log_dir({win32,_}, _PrivDir, NodeName)->
+get_log_dir({win32,_}, _PrivDir, NodeName) ->
     case filelib:is_dir(?TEMP_DIR) of
 	false ->
 	    file:make_dir(?TEMP_DIR);
@@ -188,8 +194,14 @@ get_log_dir(_,PrivDir,NodeName) ->
     file:make_dir(LogDir),
     LogDir.
 
-run_test(_Name, FileName, Config)->
-    [{FileName, ok}] = ct_test_support:run(ct_master, run, [FileName], Config).
+run_test(_Name, FileName, Config) ->
+    %% run the test twice, using different html versions
+    [{[FileName],ok}] = ct_test_support:run({ct_master,run,[FileName]},
+					    [{ct_master,basic_html,[true]}],
+					    Config),
+    [{[FileName],ok}] = ct_test_support:run({ct_master,run,[FileName]},
+					    [{ct_master,basic_html,[false]}],
+					    Config).
 
 reformat(Events, EH) ->
     ct_test_support:reformat(Events, EH).
@@ -197,28 +209,26 @@ reformat(Events, EH) ->
 %%%-----------------------------------------------------------------
 %%% TEST EVENTS
 %%%-----------------------------------------------------------------
-find_events([], _CheckEvents, _) ->
-    ok;
-find_events([NodeName|NodeNames],CheckEvents,AllEvents) ->
-    find_events(NodeNames, CheckEvents,
-		remove_events(add_host(NodeName),CheckEvents, AllEvents, [])).
 
-remove_events(Node,[{Name,Data} | RestChecks],
-	      [{?eh,#event{ name = Name, node = Node, data = Data }}|RestEvs],
-	       Acc) ->
-    remove_events(Node, RestChecks, RestEvs, Acc);
-remove_events(Node, Checks, [Event|RestEvs], Acc) ->
-    remove_events(Node, Checks, RestEvs, [Event | Acc]);
-remove_events(_Node, [], [], Acc) ->
-    lists:reverse(Acc);
-remove_events(Node, Events, [], Acc) ->
-    test_server:format("Could not find events: ~p in ~p for node ~p",
-	   [Events, lists:reverse(Acc), Node]),
-    exit(event_not_found).
+find_events(NodeNames, TestEvents, Events, Config) ->
+    [begin
+	 Node = add_host(Node0),
+	 io:format("Searching for events for node: ~s", [Node]),
+	 ok = ct_test_support:verify_events(TestEvents, Events, Node, Config),
+	 io:nl()
+     end || Node0 <- NodeNames],
+    ok.
 
 add_host(NodeName) ->
     {ok, HostName} = inet:gethostname(),
     list_to_atom(atom_to_list(NodeName)++"@"++HostName).
     
-expected_events(_)->
-    [].
+events_to_check(_) ->
+    [{?eh,tc_start,{master_SUITE,first_testcase}},
+     {?eh,tc_done,{master_SUITE,first_testcase,ok}},
+     {?eh,tc_start,{master_SUITE,second_testcase}},
+     {?eh,tc_done,{master_SUITE,second_testcase,ok}},
+     {?eh,tc_start,{master_SUITE,third_testcase}},
+     {?eh,tc_done,{master_SUITE,third_testcase,ok}},
+     {?eh,tc_start,{master_SUITE,env_vars}},
+     {?eh,tc_done,{master_SUITE,env_vars,ok}}].

@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %% 
-%% Copyright Ericsson AB 2005-2011. All Rights Reserved.
+%% Copyright Ericsson AB 2005-2012. All Rights Reserved.
 %% 
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -358,7 +358,7 @@ scan_host(C0) ->
 %% 							  Hex3=<?HEX;
 %% 							  Hex4=<?HEX ->
 %% 	    {C1,lists:reverse(lists:append(IPv6address))};
-	{C1,Hostname,[A|_HostF]} -> 
+	{C1,Hostname,[_A|_HostF]} -> 
 	    {C1,lists:reverse(lists:append(Hostname))}
 %%	_ ->
 %%	    {error,no_host}

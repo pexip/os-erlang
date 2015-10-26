@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2004-2011. All Rights Reserved.
+%% Copyright Ericsson AB 2004-2013. All Rights Reserved.
 %%
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -162,17 +162,30 @@ httpd_config([Value| _] = Config) when is_tuple(Value) ->
 
 httpd_child_spec([Value| _] = Config, AcceptTimeout, Debug)  
   when is_tuple(Value)  ->
+    ?hdrt("httpd_child_spec - entry", [{accept_timeout, AcceptTimeout}, 
+				       {debug,          Debug}]),
     Address = proplists:get_value(bind_address, Config, any),
     Port    = proplists:get_value(port, Config, 80),
     httpd_child_spec(Config, AcceptTimeout, Debug, Address, Port);
 
-httpd_child_spec(ConfigFile, AcceptTimeout, Debug) ->
+%% In this case the AcceptTimeout and Debug will only have default values...
+httpd_child_spec(ConfigFile, AcceptTimeoutDef, DebugDef) ->
+    ?hdrt("httpd_child_spec - entry", [{config_file,        ConfigFile}, 
+				       {accept_timeout_def, AcceptTimeoutDef}, 
+				       {debug_def,          DebugDef}]),
     case httpd_conf:load(ConfigFile) of
 	{ok, ConfigList} ->
+	    ?hdrt("httpd_child_spec - loaded", [{config_list, ConfigList}]),
 	    case (catch httpd_conf:validate_properties(ConfigList)) of
 		{ok, Config} ->
+		    ?hdrt("httpd_child_spec - validated", [{config, Config}]),
 		    Address = proplists:get_value(bind_address, Config, any), 
 		    Port    = proplists:get_value(port, Config, 80),
+		    AcceptTimeout = 
+			proplists:get_value(accept_timeout, Config, 
+					    AcceptTimeoutDef),
+		    Debug   = 
+			proplists:get_value(debug, Config, DebugDef),
 		    httpd_child_spec([{file, ConfigFile} | Config], 
 				     AcceptTimeout, Debug, Address, Port);
 		Error ->
@@ -183,7 +196,8 @@ httpd_child_spec(ConfigFile, AcceptTimeout, Debug) ->
     end.
 
 httpd_child_spec(Config, AcceptTimeout, Debug, Addr, Port) ->
-    case Port == 0 orelse proplists:is_defined(fd, Config) of
+    Fd  = proplists:get_value(fd, Config, undefined),
+    case Port == 0 orelse Fd =/= undefined of
 	true ->
 	    httpd_child_spec_listen(Config, AcceptTimeout, Debug, Addr, Port);
 	false ->
@@ -229,21 +243,27 @@ error_msg(F, A) ->
     error_logger:error_msg(F ++ "~n", A).
 
 listen(Address, Port, Config)  ->
-    SocketType = proplists:get_value(socket_type, Config, ip_comm), 
-    case http_transport:start(SocketType) of
-	ok ->
-	    Fd = proplists:get_value(fd, Config), 
-	    case http_transport:listen(SocketType, Address, Port, Fd) of
-		{ok, ListenSocket} ->
-		    NewConfig = proplists:delete(port, Config),
-		    {ok, NewPort} = inet:port(ListenSocket),
-		    {NewPort, [{port, NewPort} | NewConfig], ListenSocket};
+    try socket_type(Config) of 
+	SocketType ->
+	    case http_transport:start(SocketType) of
+		ok ->
+		    Fd = proplists:get_value(fd, Config),
+		    IpFamily =  proplists:get_value(ipfamily, Config, inet6fb4),
+		    case http_transport:listen(SocketType, Address, Port, Fd, IpFamily) of
+			{ok, ListenSocket} ->
+			    NewConfig = proplists:delete(port, Config),
+			    {NewPort, _} = http_transport:sockname(SocketType, ListenSocket),
+			    {NewPort, [{port, NewPort} | NewConfig], ListenSocket};
+			{error, Reason} ->
+			    {error, {listen, Reason}}
+		    end;
 		{error, Reason} ->
-		    {error, {listen, Reason}}
-	    end;
-	{error, Reason} ->
+		    {error, {socket_start_failed, Reason}}
+	    end
+    catch 
+	_:Reason ->
 	    {error, {socket_start_failed, Reason}}
-    end.
+    end.		
 
 start_listen(Address, Port, Config) ->
     Pid = listen_owner(Address, Port, Config),
@@ -267,7 +287,82 @@ listen_loop() ->
 	    ok
     end.
 	    
+socket_type(Config) ->
+    SocketType = proplists:get_value(socket_type, Config, ip_comm), 
+    socket_type(SocketType, Config).
 
+socket_type(ip_comm = SocketType, _) ->
+    SocketType;
+socket_type({essl, _} = SocketType, _) ->
+    SocketType;
+socket_type(_, Config) ->
+    {essl, ssl_config(Config)}.
 
+%%% Backwards compatibility    
+ssl_config(Config) ->
+    ssl_certificate_key_file(Config) ++
+	ssl_verify_client(Config) ++
+	ssl_ciphers(Config) ++
+	ssl_password(Config) ++
+	ssl_verify_depth(Config) ++
+	ssl_ca_certificate_file(Config).
 
+ssl_certificate_key_file(Config) ->
+    case proplists:get_value(ssl_certificate_key_file, Config) of
+	undefined ->
+	    [];
+	SSLCertificateKeyFile ->
+	    [{keyfile,SSLCertificateKeyFile}]
+    end.
 
+ssl_verify_client(Config) ->
+    case proplists:get_value(ssl_verify_client, Config) of
+	undefined ->
+	    [];
+	SSLVerifyClient ->
+	    [{verify,SSLVerifyClient}]
+    end.
+
+ssl_ciphers(Config) ->
+    case proplists:get_value(ssl_ciphers, Config) of
+	undefined ->
+	    [];
+	Ciphers ->
+	    [{ciphers, Ciphers}]
+    end.
+
+ssl_password(Config) ->
+    case  proplists:get_value(ssl_password_callback_module, Config) of
+	undefined ->
+	    [];
+	Module ->
+	    case proplists:get_value(ssl_password_callback_function, Config) of
+		undefined ->
+		    [];
+		Function ->
+		    Args = case  proplists:get_value(ssl_password_callback_arguments, Config) of
+			       undefined ->
+				   [];
+			       Arguments  ->
+				   [Arguments]
+			   end,
+		    Password = apply(Module, Function, Args),
+		    [{password, Password}]
+	    end
+    end.
+
+ssl_verify_depth(Config) ->
+    case proplists:get_value(ssl_verify_client_depth, Config) of
+	undefined ->
+	    [];
+	Depth ->
+	    [{depth, Depth}]
+    end.
+
+ssl_ca_certificate_file(Config) ->
+    case proplists:get_value(ssl_ca_certificate_file, Config) of
+	undefined ->
+	    [];
+	File ->
+	    [{cacertfile, File}]
+    end.

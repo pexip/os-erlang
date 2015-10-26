@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2009-2011. All Rights Reserved.
+%% Copyright Ericsson AB 2009-2013. All Rights Reserved.
 %%
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -111,6 +111,7 @@ app_dies(_Config) ->
 		     oops(Die,?LINE),
 		     wxFrame:show(Frame),
 		     oops(Die,?LINE),
+		     timer:sleep(100), %% Let the window be shown before DC can be created
 		     DC0  = wxClientDC:new(Win),
 		     oops(Die,?LINE),
 		     DC   = wxBufferedDC:new(DC0),
@@ -128,15 +129,19 @@ app_dies(_Config) ->
 
 app_dies2(Test, N) ->
     spawn_link(fun() -> Test(N) end),
-    receive 
-	{'EXIT', _, {oops, last}} -> ok;
-	{'EXIT', _, {oops, _}} -> app_dies2(Test, N+1)
+    receive
+	{'EXIT', _, {oops, Server, What}} ->
+	    Ref = erlang:monitor(process, Server),
+	    receive {'DOWN', Ref, _, _, _} -> ok end,
+	    timer:sleep(100),
+	    What =/= last andalso app_dies2(Test, N+1)
     end.
 
 oops(Die, Line) when (Die =:= last) orelse (Die =< Line) ->
-    timer:sleep(500),
+    timer:sleep(200),
     ?log(" Exits at line ~p~n",[Line]),
-    exit({oops, Die});
+    Server = element(3, wx:get_env()),
+    exit({oops, Server, Die});
 oops(_,_) -> ok.
 
 
@@ -191,8 +196,12 @@ menu_item_debug(Config) ->
     wxFrame:connect(Frame, close_window),
 
     wxPanel:new(Frame),
-    create_menus(Frame),
+    MenuBar = create_menus(Frame),
     wxWindow:show(Frame),
+    N = wxMenuBar:getMenuCount(MenuBar),
+    io:format("No of menus ~p~n",[N]),
+    [io:format("Menu ~p ~p~n",[Id, wxMenuBar:getLabelTop(MenuBar, Id)]) 
+     || Id <- lists:seq(0, N-1)],
     wx_test_lib:wx_destroy(Frame,Config).
 
 
@@ -224,14 +233,15 @@ create_menus(Frame) ->
      || Id <- lists:seq(600, 620)],
 
     ?m(ok,wxFrame:connect(Frame, command_menu_selected)),
-    ?m(true, wxMenuBar:append(MenuBar, File, "&File")),
-    ?m(true, wxMenuBar:append(MenuBar, Help, "&Help")),
-    ?m(true, wxMenuBar:append(MenuBar, T1, "T1")),
-    ?m(true, wxMenuBar:append(MenuBar, T2, "T2")),
-    ?m(true, wxMenuBar:append(MenuBar, T3, "T3")),
-    ?m(true, wxMenuBar:append(MenuBar, T4, "T4")),
-    ?m(true, wxMenuBar:append(MenuBar, T5, "T5")),
-    ?m(true, wxMenuBar:append(MenuBar, T6, "T6")),
 
+    ?m(true, wxMenuBar:insert(MenuBar, 0,File, "&File")),
+    ?m(true, wxMenuBar:insert(MenuBar, 1,Help, "&Help")),
+    ?m(true, wxMenuBar:insert(MenuBar, 2,T1, "T1")),
+    ?m(true, wxMenuBar:insert(MenuBar, 3,T2, "T2")),
+    ?m(true, wxMenuBar:insert(MenuBar, 4,T3, "T3")),
+    ?m(true, wxMenuBar:insert(MenuBar, 5,T4, "T4")),
+    ?m(true, wxMenuBar:insert(MenuBar, 6,T5, "T5")),
+    ?m(true, wxMenuBar:insert(MenuBar, 7,T6, "T6")),
 
-    ?m(ok, wxFrame:setMenuBar(Frame,MenuBar)).
+    ?m(ok, wxFrame:setMenuBar(Frame,MenuBar)),
+    MenuBar.

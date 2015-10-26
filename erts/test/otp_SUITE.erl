@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2000-2011. All Rights Reserved.
+%% Copyright Ericsson AB 2000-2013. All Rights Reserved.
 %%
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -23,7 +23,8 @@
 	 init_per_suite/1,end_per_suite/1]).
 -export([undefined_functions/1,deprecated_not_in_obsolete/1,
 	 obsolete_but_not_deprecated/1,call_to_deprecated/1,
-         call_to_size_1/1,strong_components/1]).
+         call_to_size_1/1,strong_components/1,
+	 erl_file_encoding/1,xml_file_encoding/1,runtime_dependencies/1]).
 
 -include_lib("test_server/include/test_server.hrl").
 
@@ -34,7 +35,9 @@ suite() -> [{ct_hooks,[ts_install_cth]}].
 all() -> 
     [undefined_functions, deprecated_not_in_obsolete,
      obsolete_but_not_deprecated, call_to_deprecated,
-     call_to_size_1, strong_components].
+     call_to_size_1, strong_components,
+     erl_file_encoding, xml_file_encoding,
+     runtime_dependencies].
 
 groups() -> 
     [].
@@ -84,25 +87,30 @@ undefined_functions(Config) when is_list(Config) ->
 		      "ExcludedFrom = ~p:_/_,"
 		      "Undef - Undef | ExcludedFrom", 
 		      [UndefS,ExcludeFrom]),
-    ?line {ok,Undef0} = xref:q(Server, lists:flatten(Q)),
-    ?line Undef1 = hipe_filter(Undef0),
-    ?line Undef2 = ssl_crypto_filter(Undef1),
-    ?line Undef3 = edoc_filter(Undef2),
-    ?line Undef = eunit_filter(Undef3),
-    ?line Undef = megaco_filter(Undef),
+    {ok,Undef0} = xref:q(Server, lists:flatten(Q)),
+    Undef1 = hipe_filter(Undef0),
+    Undef2 = ssl_crypto_filter(Undef1),
+    Undef3 = edoc_filter(Undef2),
+    Undef4 = eunit_filter(Undef3),
+    Undef5 = dialyzer_filter(Undef4),
+    Undef6 = wx_filter(Undef5),
+    Undef  = gs_filter(Undef6),
 
     case Undef of
 	[] -> ok;
 	_ ->
+	    Fd = open_log(Config, "undefined_functions"),
 	    foreach(fun ({MFA1,MFA2}) ->
 			    io:format("~s calls undefined ~s",
-				      [format_mfa(MFA1),format_mfa(MFA2)])
+				      [format_mfa(Server, MFA1),
+				       format_mfa(MFA2)]),
+			    io:format(Fd, "~s ~s\n",
+				      [format_mfa(Server, MFA1),
+				       format_mfa(MFA2)])
 		    end, Undef),
+	    close_log(Fd),
 	    ?line ?t:fail({length(Undef),undefined_functions_in_otp})
-
-    end,
-
-    ok.
+    end.
 
 hipe_filter(Undef) ->
     case erlang:system_info(hipe_architecture) of
@@ -146,10 +154,13 @@ is_hipe_module(Mod) ->
     end.
 
 ssl_crypto_filter(Undef) ->
-    case {code:lib_dir(crypto),code:lib_dir(ssl)} of
-	{{error,bad_name},{error,bad_name}} ->
+    case {app_exists(crypto),app_exists(ssl)} of
+	{false,false} ->
 	    filter(fun({_,{ssl,_,_}}) -> false;
 		      ({_,{crypto,_,_}}) -> false;
+		      ({_,{ssh,_,_}}) -> false;
+		      ({_,{ssh_connection,_,_}}) -> false;
+		      ({_,{ssh_sftp,_,_}}) -> false;
 		      (_) -> true
 		   end, Undef);
 	{_,_} -> Undef
@@ -167,34 +178,44 @@ eunit_filter(Undef) ->
 	      (_) -> true
 	   end, Undef).
 
-megaco_filter(Undef) ->
-    %% Intentional calls to undefined functions.
-    filter(fun({{megaco_compact_text_encoder,encode_action_reply,3},
-		{megaco_compact_text_encoder_v3,encode_action_reply,2}}) -> false;
-	      ({{megaco_compact_text_encoder,encode_action_request,3},
-		{megaco_compact_text_encoder_v3,encode_action_request,2}}) -> false;
-	      ({{megaco_compact_text_encoder,encode_action_requests,3},
-		{megaco_compact_text_encoder_v3,encode_action_requests,2}}) -> false;
-	      ({{megaco_compact_text_encoder,encode_command_request,3},
-		{megaco_compact_text_encoder_v3,encode_command_request,2}}) -> false;
-	      ({{megaco_compact_text_encoder,encode_message,3},
-		{megaco_compact_text_encoder_v3,encode_message,2}}) -> false;
-	      ({{megaco_compact_text_encoder,encode_transaction,3},
-		{megaco_compact_text_encoder_v3,encode_transaction,2}}) -> false;
-	      ({{megaco_pretty_text_encoder,encode_action_reply,3},
-		{megaco_pretty_text_encoder_v3,encode_action_reply,2}}) -> false;
-	      ({{megaco_pretty_text_encoder,encode_action_request,3},
-		{megaco_pretty_text_encoder_v3,encode_action_request,2}}) -> false;
-	      ({{megaco_pretty_text_encoder,encode_action_requests,3},
-		{megaco_pretty_text_encoder_v3,encode_action_requests,2}}) -> false;
-	      ({{megaco_pretty_text_encoder,encode_command_request,3},
-		{megaco_pretty_text_encoder_v3,encode_command_request,2}}) -> false;
-	      ({{megaco_pretty_text_encoder,encode_message,3},
-		{megaco_pretty_text_encoder_v3,encode_message,2}}) -> false;
-	      ({{megaco_pretty_text_encoder,encode_transaction,3},
-		{megaco_pretty_text_encoder_v3,encode_transaction,2}}) -> false;
-	      (_) -> true
-	   end, Undef).
+dialyzer_filter(Undef) ->
+    case app_exists(dialyzer) of
+	false ->
+	    filter(fun({_,{dialyzer_callgraph,_,_}}) -> false;
+		      ({_,{dialyzer_codeserver,_,_}}) -> false;
+		      ({_,{dialyzer_contracts,_,_}}) -> false;
+		      ({_,{dialyzer_cl_parse,_,_}}) -> false;
+		      ({_,{dialyzer_timing,_,_}}) -> false;
+		      ({_,{dialyzer_plt,_,_}}) -> false;
+		      ({_,{dialyzer_succ_typings,_,_}}) -> false;
+		      ({_,{dialyzer_utils,_,_}}) -> false;
+		      (_) -> true
+		   end, Undef);
+	_ -> Undef
+    end.
+
+wx_filter(Undef) ->
+    case app_exists(wx) of
+	false ->
+	    filter(fun({_,{MaybeWxModule,_,_}}) ->
+			   case atom_to_list(MaybeWxModule) of
+			       "wx"++_ -> false;
+			       _ -> true
+			   end
+		   end, Undef);
+	_ -> Undef
+    end.
+				   
+gs_filter(Undef) ->
+    case code:lib_dir(gs) of
+	{error,bad_name} ->
+	    filter(fun({_,{gs,_,_}}) -> false;
+		      ({_,{gse,_,_}}) -> false;
+                      ({_,{tool_utils,_,_}}) -> false;
+		      (_) -> true
+		   end, Undef);
+	_ -> Undef
+    end.
 
 deprecated_not_in_obsolete(Config) when is_list(Config) ->
     ?line Server = ?config(xref_server, Config),
@@ -211,7 +232,10 @@ deprecated_not_in_obsolete(Config) when is_list(Config) ->
 	_ ->
 	    io:put_chars("The following functions have -deprecated() attributes,\n"
 			 "but are not listed in otp_internal:obsolete/3.\n"),
-	    ?line print_mfas(L),
+	    print_mfas(group_leader(), Server, L),
+	    Fd = open_log(Config, "deprecated_not_obsolete"),
+	    print_mfas(Fd, Server, L),
+	    close_log(Fd),
 	    ?line ?t:fail({length(L),deprecated_but_not_obsolete})
     end.
 
@@ -232,10 +256,12 @@ obsolete_but_not_deprecated(Config) when is_list(Config) ->
 	    io:put_chars("The following functions are listed "
 			 "in otp_internal:obsolete/3,\n"
 			 "but don't have -deprecated() attributes.\n"),
-	    ?line print_mfas(L),
+	    print_mfas(group_leader(), Server, L),
+	    Fd = open_log(Config, "obsolete_not_deprecated"),
+	    print_mfas(Fd, Server, L),
+	    close_log(Fd),
 	    ?line ?t:fail({length(L),obsolete_but_not_deprecated})
     end.
-    
     
 call_to_deprecated(Config) when is_list(Config) ->
     Server = ?config(xref_server, Config),
@@ -250,7 +276,7 @@ call_to_size_1(Config) when is_list(Config) ->
     Server = ?config(xref_server, Config),
 
     %% Applications that do not call erlang:size/1:
-    Apps = [compiler,debugger,kernel,observer,parsetools,
+    Apps = [asn1,compiler,debugger,kernel,observer,parsetools,
 	    runtime_tools,stdlib,tools,webtool],
 
     Fs = [{erlang,size,1}],
@@ -297,15 +323,228 @@ strong_components(Config) when is_list(Config) ->
     io:format("\n\nStrong components:\n\n~p\n", [Cs]),
     ok.
 
+erl_file_encoding(_Config) ->
+    Root = code:root_dir(),
+    Wc = filename:join([Root,"**","*.erl"]),
+    ErlFiles = ordsets:subtract(ordsets:from_list(filelib:wildcard(Wc)),
+				release_files(Root, "*.erl")),
+    {ok, MP} = re:compile(".*lib/(ic)|(orber)|(cos).*", [unicode]),
+    Fs = [F || F <- ErlFiles,
+	       filter_use_latin1_coding(F, MP),
+	       case epp:read_encoding(F) of
+		   none -> false;
+		   _ -> true
+	       end],
+    case Fs of
+	[] ->
+	    ok;
+	[_|_] ->
+	    io:put_chars("Files with \"coding:\":\n"),
+	    [io:put_chars(F) || F <- Fs],
+	    ?t:fail()
+    end.
+
+filter_use_latin1_coding(F, MP) ->
+    case re:run(F, MP) of
+	nomatch ->
+	    true;
+        {match, _} ->
+	    false
+    end.
+
+xml_file_encoding(_Config) ->
+    XmlFiles = xml_files(),
+    Fs = [F || F <- XmlFiles, is_bad_encoding(F)],
+    case Fs of
+	[] ->
+	    ok;
+	[_|_] ->
+	    io:put_chars("Encoding should be \"utf-8\" or \"UTF-8\":\n"),
+	    [io:put_chars(F) || F <- Fs],
+	    ?t:fail()
+    end.
+
+xml_files() ->
+    Root = code:root_dir(),
+    AllWc = filename:join([Root,"**","*.xml"]),
+    AllXmlFiles = ordsets:from_list(filelib:wildcard(AllWc)),
+    TestsWc = filename:join([Root,"lib","*","test","**","*.xml"]),
+    TestXmlFiles = ordsets:from_list(filelib:wildcard(TestsWc)),
+    XmerlWc = filename:join([Root,"lib","xmerl","**","*.xml"]),
+    XmerlXmlFiles = ordsets:from_list(filelib:wildcard(XmerlWc)),
+    Ignore = ordsets:union([TestXmlFiles,XmerlXmlFiles,
+			    release_files(Root, "*.xml")]),
+    ordsets:subtract(AllXmlFiles, Ignore).
+
+release_files(Root, Ext) ->
+    Wc = filename:join([Root,"release","**",Ext]),
+    filelib:wildcard(Wc).
+
+is_bad_encoding(File) ->
+    {ok,Bin} = file:read_file(File),
+    case Bin of
+	<<"<?xml version=\"1.0\" encoding=\"utf-8\"",_/binary>> ->
+	    false;
+	<<"<?xml version=\"1.0\" encoding=\"UTF-8\"",_/binary>> ->
+	    false;
+	_ ->
+	    true
+    end.
+
+runtime_dependencies(Config) ->
+    %% Ignore applications intentionally not declaring dependencies
+    %% found by xref.
+    IgnoreApps = [diameter],
+
+
+    %% Verify that (at least) OTP application runtime dependencies found
+    %% by xref are listed in the runtime_dependencies field of the .app file
+    %% of each application.
+    Server = ?config(xref_server, Config),
+    {ok, AE} = xref:q(Server, "AE"),
+    SAE = lists:keysort(1, AE),
+    put(ignored_failures, []),
+    {AppDep, AppDeps} = lists:foldl(fun ({App, App}, Acc) ->
+					    Acc;
+					({App, Dep}, {undefined, []}) ->
+					    {{App, [Dep]}, []};
+					({App, Dep}, {{App, Deps}, AppDeps}) ->
+					    {{App, [Dep|Deps]}, AppDeps};
+					({App, Dep}, {AppDep, AppDeps}) ->
+					    {{App, [Dep]}, [AppDep | AppDeps]}
+				    end,
+				    {undefined, []},
+				    SAE),
+    [] = lists:filter(fun ({missing_runtime_dependency,
+			    AppFile,
+			    common_test}) ->
+			      %% The test_server app is contaminated by
+			      %% common_test when run in a source tree. It
+			      %% should however *not* be contaminated
+			      %% when run in an installation.
+			      case {filename:basename(AppFile),
+				    is_run_in_src_tree()} of
+				  {"test_server.app", true} ->
+				      false;
+				  _ ->
+				      true
+			      end;
+			  (_) ->
+			      true
+		      end,
+		      check_apps_deps([AppDep|AppDeps], IgnoreApps)),
+    case IgnoreApps of
+	[] ->
+	    ok;
+	_ ->
+	    Comment = lists:flatten(io_lib:format("Ignored applications: ~p "
+						  "Ignored failures: ~p",
+						  [IgnoreApps,
+						   get(ignored_failures)])),
+	    {comment, Comment}
+    end.
+
+is_run_in_src_tree() ->
+    %% At least currently run_erl is not present in <code-root>/bin
+    %% in the source tree, but present in <code-root>/bin of an
+    %% ordinary installation.
+    case file:read_file_info(filename:join([code:root_dir(),
+					    "bin",
+					    "run_erl"])) of
+	{ok, _} -> false;
+	{error, _} -> true
+    end.
+
+have_rdep(_App, [], _Dep) ->
+    false;
+have_rdep(App, [RDep | RDeps], Dep) ->		    
+    [AppStr, _VsnStr] = string:tokens(RDep, "-"),
+    case Dep == list_to_atom(AppStr) of
+	true ->
+	    io:format("~p -> ~s~n", [App, RDep]),
+	    true;
+	false ->
+	    have_rdep(App, RDeps, Dep)
+    end.
+
+check_app_deps(_App, _AppFile, _AFDeps, [], _IgnoreApps) ->
+    [];
+check_app_deps(App, AppFile, AFDeps, [XRDep | XRDeps], IgnoreApps) ->
+    ResOtherDeps = check_app_deps(App, AppFile, AFDeps, XRDeps, IgnoreApps),
+    case have_rdep(App, AFDeps, XRDep) of
+	true ->
+	    ResOtherDeps;
+	false ->
+	    Failure = {missing_runtime_dependency, AppFile, XRDep},
+	    case lists:member(App, IgnoreApps) of
+		true ->
+		    put(ignored_failures, [Failure | get(ignored_failures)]),
+		    ResOtherDeps;
+		false ->
+		    [Failure | ResOtherDeps]
+	    end
+    end.
+
+check_apps_deps([], _IgnoreApps) ->
+    [];
+check_apps_deps([{App, Deps}|AppDeps], IgnoreApps) ->
+    ResOtherApps = check_apps_deps(AppDeps, IgnoreApps),
+    AppFile = code:where_is_file(atom_to_list(App) ++ ".app"),
+    {ok,[{application, App, Info}]} = file:consult(AppFile),
+    case lists:keyfind(runtime_dependencies, 1, Info) of
+	{runtime_dependencies, RDeps} ->
+	    check_app_deps(App, AppFile, RDeps, Deps, IgnoreApps)
+		++ ResOtherApps;
+	false ->
+	    Failure = {missing_runtime_dependencies_key, AppFile},
+	    case lists:member(App, IgnoreApps) of
+		true ->
+		    put(ignored_failures, [Failure | get(ignored_failures)]),
+		    ResOtherApps;
+		false ->
+		    [Failure | ResOtherApps]
+	    end
+    end.
+
 %%%
 %%% Common help functions.
 %%%
     
-
-print_mfas([MFA|T]) ->
-    io:format("~s\n", [format_mfa(MFA)]),
-    print_mfas(T);
-print_mfas([]) -> ok.
+print_mfas(Fd, Server, MFAs) ->
+    [io:format(Fd, "~s\n", [format_mfa(Server, MFA)]) || MFA <- MFAs],
+    ok.
 
 format_mfa({M,F,A}) ->
     lists:flatten(io_lib:format("~s:~s/~p", [M,F,A])).
+
+format_mfa(Server, MFA) ->
+    MFAString = format_mfa(MFA),
+    AQ = "(App)" ++ MFAString,
+    AppPrefix = case xref:q(Server, AQ) of
+		    {ok,[App]} -> "[" ++ atom_to_list(App) ++ "]";
+		    _ -> ""
+		end,
+    AppPrefix ++ MFAString.
+
+open_log(Config, Name) ->
+    PrivDir = ?config(priv_dir, Config),
+    RunDir = filename:dirname(filename:dirname(PrivDir)),
+    Path = filename:join(RunDir, "system_"++Name++".log"),
+    {ok,Fd} = file:open(Path, [write]),
+    Fd.
+
+close_log(Fd) ->
+    ok = file:close(Fd).
+
+app_exists(AppAtom) ->
+    case code:lib_dir(AppAtom) of
+	{error,bad_name} ->
+	    false;
+	Path ->
+	    case file:read_file_info(filename:join(Path,"ebin")) of
+		{ok,_} ->
+		    true;
+		_ ->
+		    false
+	    end
+    end.

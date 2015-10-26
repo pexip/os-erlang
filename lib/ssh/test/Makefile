@@ -1,7 +1,7 @@
 #
 # %CopyrightBegin%
 #
-# Copyright Ericsson AB 2004-2011. All Rights Reserved.
+# Copyright Ericsson AB 2004-2013. All Rights Reserved.
 #
 # The contents of this file are subject to the Erlang Public License,
 # Version 1.1, (the "License"); you may not use this file except in
@@ -32,12 +32,15 @@ VSN=$(GS_VSN)
 
 MODULES= \
 	ssh_test_lib \
-	ssh_SUITE \
 	ssh_basic_SUITE \
 	ssh_to_openssh_SUITE \
 	ssh_sftp_SUITE \
 	ssh_sftpd_SUITE \
-        ssh_sftpd_erlclient_SUITE
+	ssh_sftpd_erlclient_SUITE \
+	ssh_connection_SUITE \
+	ssh_echo_server \
+	ssh_peername_sockname_server \
+	ssh_test_cli 
 
 HRL_FILES_NEEDED_IN_TEST= \
 	$(ERL_TOP)/lib/ssh/src/ssh.hrl \
@@ -111,11 +114,11 @@ include $(ERL_TOP)/make/otp_release_targets.mk
 release_spec: opt
 
 release_tests_spec: opt
-	$(INSTALL_DIR) $(RELSYSDIR)
-	$(INSTALL_DATA) $(ERL_FILES) $(RELSYSDIR)
-	$(INSTALL_DATA) ssh.spec ssh.cover $(RELSYSDIR)
-	$(INSTALL_DATA) $(HRL_FILES_NEEDED_IN_TEST) $(RELSYSDIR)
-	chmod -R u+w $(RELSYSDIR)
-	@tar cf - *_SUITE_data | (cd $(RELSYSDIR); tar xf -)
+	$(INSTALL_DIR) "$(RELSYSDIR)"
+	$(INSTALL_DATA) $(ERL_FILES) "$(RELSYSDIR)"
+	$(INSTALL_DATA) ssh.spec ssh.cover "$(RELSYSDIR)"
+	$(INSTALL_DATA) $(HRL_FILES_NEEDED_IN_TEST) "$(RELSYSDIR)"
+	chmod -R u+w "$(RELSYSDIR)"
+	@tar cf - *_SUITE_data | (cd "$(RELSYSDIR)"; tar xf -)
 
 release_docs_spec:

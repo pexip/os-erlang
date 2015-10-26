@@ -1,10 +1,10 @@
-<?xml version="1.0" encoding="latin1" ?>
+<?xml version="1.0" encoding="utf-8" ?>
 <!DOCTYPE erlref SYSTEM "erlref.dtd">
 
 <erlref>
   <header>
     <copyright>
-      <year>1997</year><year>2011</year>
+      <year>1997</year><year>2013</year>
       <holder>Ericsson AB. All Rights Reserved.</holder>
     </copyright>
     <legalnotice>
@@ -72,11 +72,24 @@
             <p>If the host has several network interfaces, this option
               specifies which one to use.</p>
           </item>
+
+		  <tag><c>{ifaddr, ip_address()}</c></tag>
+          <item>
+			  <p>Same as <c>{ip, ip_address()}</c>. If the host has several network interfaces, this option
+              specifies which one to use.</p>
+		  </item>
+
+
           <tag><c>{fd, integer() >= 0}</c></tag>
           <item>
             <p>If a socket has somehow been opened without using
               <c>gen_udp</c>, use this option to pass the file
-              descriptor for it.</p>
+              descriptor for it. If <c><anno>Port</anno></c> is not set to 0
+              and/or <c>{ip, ip_address()}</c> is combined with this option
+              the fd will be bound to the given interface and port after being
+              opened. If these options are not given it is assumed that the fd
+              is already bound appropriately.
+            </p>
           </item>
           <tag><c>inet6</c></tag>
           <item>
@@ -86,20 +99,74 @@
           <item>
             <p>Set up the socket for IPv4.</p>
           </item>
+
+		  <tag><c>{udp_module, module()}</c></tag>
+		  <item> <p>
+				  Override which callback module is used. Defaults to
+				  <c>inet_udp</c> for IPv4 and <c>inet6_udp</c> for IPv6.
+			  </p>
+		  </item>
+
+          <tag><c>{multicast_if, Address}</c></tag>
+          <item>
+			  <p>Set the local device for a multicast socket.</p>
+          </item>
+ 
+          <tag><c>{multicast_loop, true | false}</c></tag>
+          <item>
+			  <p>
+				  When <c>true</c> sent multicast packets will be looped back to the local
+				  sockets.
+			  </p>
+          </item>
+
+          <tag><c>{multicast_ttl, Integer}</c></tag>
+          <item>
+			  <p>
+				  The <c>multicast_ttl</c> option changes the time-to-live (TTL) for
+				  outgoing multicast datagrams in order to control the scope of the 
+				  multicasts.
+			  </p>
+			  <p>
+				  Datagrams with a TTL of 1 are not forwarded beyond the local
+				  network.
+				  <br />Default: 1
+			  </p>
+          </item>
+
+		  <tag><c>{add_membership, {MultiAddress, InterfaceAddress}}</c></tag>
+          <item>
+			  <p>Join a multicast group. </p>
+          </item>
+
+		  <tag><c>{drop_membership, {MultiAddress, InterfaceAddress}}</c></tag>
+          <item>
+			  <p>Leave multicast group.</p>
+          </item>
+
           <tag><c>Opt</c></tag>
           <item>
             <p>See
               <seealso marker="inet#setopts/2">inet:setopts/2</seealso>.</p>
           </item>
         </taglist>
-        <p>The returned socket <c><anno>Socket</anno></c> is used to send packets
-          from this port with <c>send/4</c>. When UDP packets arrive at
-          the opened port, they are delivered as messages:</p>
+        <p>The returned socket <c><anno>Socket</anno></c> is used to send
+          packets from this port with <c>send/4</c>. When UDP packets arrive
+          at the opened port, if the socket is in an active mode the packets
+          are delivered as messages to the controlling process:</p>
         <code type="none">
 {udp, Socket, IP, InPortNo, Packet}</code>
-        <p>Note that arriving UDP packets that are longer than
+        <p>If the socket is not in an active mode, data can be
+          retrieved via the <seealso marker="#recv/2">recv/2,3</seealso> calls.
+          Note that arriving UDP packets that are longer than
           the receive buffer option specifies, might be truncated
           without warning.</p>
+        <p>When a socket in <c>{active, N}</c> mode (see <seealso marker="inet#setopts/2">
+          inet:setopts/2</seealso> for details) transitions to passive
+          (<c>{active, false}</c>) mode, the controlling process is notified by a
+          message of the following form:</p>
+        <code type="none">
+{udp_passive, Socket}</code>
         <p><c>IP</c> and <c>InPortNo</c> define the address from which
           <c>Packet</c> came. <c>Packet</c> is a list of bytes if
           the option <c>list</c> was specified. <c>Packet</c> is a
@@ -136,7 +203,9 @@
       <desc>
         <p>Assigns a new controlling process <c><anno>Pid</anno></c> to
           <c><anno>Socket</anno></c>. The controlling process is the process which
-          receives messages from the socket.</p>
+          receives messages from the socket. If called by any other
+          process than the current controlling process,
+          <c>{error, not_owner}</c> is returned.</p>
       </desc>
     </func>
     <func>

@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2004-2011. All Rights Reserved.
+%% Copyright Ericsson AB 2004-2014. All Rights Reserved.
 %%
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -21,7 +21,7 @@
 -module(inets_sup_SUITE).
 
 -include_lib("common_test/include/ct.hrl").
--include("test_server_line.hrl").
+
 
 %% Note: This directive should only be used in test suites.
 -compile(export_all).
@@ -77,75 +77,32 @@ end_per_suite(_) ->
 %% variable, but should NOT alter/remove any existing entries.
 %%--------------------------------------------------------------------
 init_per_testcase(httpd_subtree, Config) ->
-    io:format("init_per_testcase(httpd_subtree) -> entry with"
-	      "~n   Config: ~p"
-	      "~n", [Config]),
     Dog = test_server:timetrap(?t:minutes(1)),
     NewConfig = lists:keydelete(watchdog, 1, Config),
-
-    DataDir = ?config(data_dir, Config), 
     PrivDir = ?config(priv_dir, Config), 			   
-    ServerROOT = filename:join(PrivDir, "server_root"),
-    DocROOT = filename:join(PrivDir, "htdocs"),
-    ConfDir = filename:join(ServerROOT, "conf"),
-
-    io:format("init_per_testcase(httpd_subtree) -> create dir(s)"
-	      "~n", []),
-    file:make_dir(ServerROOT), %% until http_test is cleaned up!
-    ok = file:make_dir(DocROOT),
-    ok = file:make_dir(ConfDir),    
-
-    io:format("init_per_testcase(httpd_subtree) -> copy file(s)"
-	      "~n", []),
-    {ok, _} = inets_test_lib:copy_file("simple.conf", DataDir, PrivDir),
-    {ok, _} = inets_test_lib:copy_file("mime.types", DataDir, ConfDir),
-    
-    io:format("init_per_testcase(httpd_subtree) -> write file(s)"
-	      "~n", []),
-    ConfFile = filename:join(PrivDir, "simple.conf"),
-    {ok, Fd} = file:open(ConfFile, [append]),
-    ok = file:write(Fd, "ServerRoot " ++ ServerROOT ++ "\n"),
-    ok = file:write(Fd, "DocumentRoot " ++ DocROOT ++ "\n"),
-    ok = file:close(Fd),
-    
-    %% To make sure application:set_env is not overwritten by any
-    %% app-file settings.
-    io:format("init_per_testcase(httpd_subtree) -> load inets app"
-	      "~n", []),
-    application:load(inets),
-    io:format("init_per_testcase(httpd_subtree) -> update inets env"
-	      "~n", []),
-    ok = application:set_env(inets, services, [{httpd, ConfFile}]),
-    
+   
+    SimpleConfig  = [{port, 0},
+		     {server_name,"www.test"},
+		     {modules, [mod_get]},
+		     {server_root, PrivDir},
+		     {document_root, PrivDir},
+		     {bind_address, any},
+		     {ipfamily, inet}],
     try
-	io:format("init_per_testcase(httpd_subtree) -> start inets app"
-		  "~n", []),
-	ok = inets:start(),
-	io:format("init_per_testcase(httpd_subtree) -> done"
-		  "~n", []),
-	[{watchdog, Dog}, {server_root, ServerROOT}, {doc_root, DocROOT},
-	 {conf_dir, ConfDir}| NewConfig]
+	inets:start(),
+	inets:start(httpd, SimpleConfig),
+	[{watchdog, Dog} | NewConfig]
     catch
 	_:Reason ->
-	    io:format("init_per_testcase(httpd_subtree) -> "
-		      "failed starting inets - cleanup"
-		      "~n   Reason: ~p"
-		      "~n", [Reason]),
-	    application:unset_env(inets, services),
-	    application:unload(inets),
+	    inets:stop(),
 	    exit({failed_starting_inets, Reason})
     end;
     
 
-init_per_testcase(Case, Config) ->
-    io:format("init_per_testcase(~p) -> entry with"
-	      "~n   Config: ~p"
-	      "~n", [Case, Config]),
+init_per_testcase(_Case, Config) ->
     Dog = test_server:timetrap(?t:minutes(5)),
     NewConfig = lists:keydelete(watchdog, 1, Config),
-    Stop = inets:stop(),
-    io:format("init_per_testcase(~p) -> Stop: ~p"
-	      "~n", [Case, Stop]),
+    inets:stop(),
     ok = inets:start(),
     [{watchdog, Dog} | NewConfig].
 
@@ -226,8 +183,6 @@ ftpc_worker(doc) ->
 ftpc_worker(suite) ->
     [];
 ftpc_worker(Config) when is_list(Config) ->
-    inets:disable_trace(),
-    inets:enable_trace(max, io, ftpc), 
     [] = supervisor:which_children(ftp_sup),
     try
 	begin
@@ -239,20 +194,16 @@ ftpc_worker(Config) when is_list(Config) ->
 			    inets:stop(ftpc, Pid), 
 			    test_server:sleep(5000),
 			    [] = supervisor:which_children(ftp_sup),
-			    inets:disable_trace(),
 			    ok;
 			Children ->
-			    inets:disable_trace(),
 			    exit({unexpected_children, Children})
 		    end;
 		_ ->
-		    inets:disable_trace(),
 		    {skip, "Unable to reach test FTP server"}
 	    end
 	end
     catch
 	throw:{error, not_found} ->
-	    inets:disable_trace(),
 	    {skip, "No available FTP servers"}
     end.
 
@@ -266,10 +217,10 @@ tftpd_worker(suite) ->
     [];
 tftpd_worker(Config) when is_list(Config) ->
     [] = supervisor:which_children(tftp_sup),   
-    {ok, Pid0} = inets:start(tftpd, [{host, "localhost"}, 
-				     {port, inet_port()}]),
-    {ok, _Pid1} = inets:start(tftpd, [{host, "localhost"}, 
-				      {port, inet_port()}], stand_alone),
+    {ok, Pid0} = inets:start(tftpd, [{host, inets_test_lib:hostname()}, 
+				     {port, 0}]),
+    {ok, _Pid1} = inets:start(tftpd, [{host, inets_test_lib:hostname()}, 
+				      {port, 0}], stand_alone),
     
     [{_,Pid0, worker, _}] = supervisor:which_children(tftp_sup),
     inets:stop(tftpd, Pid0),
@@ -286,30 +237,22 @@ httpd_subtree(doc) ->
 httpd_subtree(suite) ->
     [];
 httpd_subtree(Config) when is_list(Config) ->
-    io:format("httpd_subtree -> entry with"
-	      "~n   Config: ~p"
-	      "~n", [Config]),
-
     %% Check that we have the httpd top supervisor
-    io:format("httpd_subtree -> verify inets~n", []),
     {ok, _} = verify_child(inets_sup, httpd_sup, supervisor),
 
     %% Check that we have the httpd instance supervisor
-    io:format("httpd_subtree -> verify httpd~n", []),
     {ok, Id} = verify_child(httpd_sup, httpd_instance_sup, supervisor),
     {httpd_instance_sup, Addr, Port} = Id,
     Instance = httpd_util:make_name("httpd_instance_sup", Addr, Port),
     
     %% Check that we have the expected httpd instance children
-    io:format("httpd_subtree -> verify httpd instance children "
-	      "(acceptor, misc and manager)~n", []),
+    {ok, _} = verify_child(Instance, httpd_connection_sup, supervisor),
     {ok, _} = verify_child(Instance, httpd_acceptor_sup, supervisor),
     {ok, _} = verify_child(Instance, httpd_misc_sup, supervisor),
     {ok, _} = verify_child(Instance, httpd_manager, worker),
 
     %% Check that the httpd instance acc supervisor has children
-    io:format("httpd_subtree -> verify acc~n", []),
-    InstanceAcc = httpd_util:make_name("httpd_acc_sup", Addr, Port),
+    InstanceAcc = httpd_util:make_name("httpd_acceptor_sup", Addr, Port),
     case supervisor:which_children(InstanceAcc) of
 	[_ | _] -> 
 	    ok;
@@ -333,15 +276,7 @@ httpd_subtree(Config) when is_list(Config) ->
 
 
 verify_child(Parent, Child, Type) ->
-%%     io:format("verify_child -> entry with"
-%% 	      "~n   Parent: ~p"
-%% 	      "~n   Child:  ~p"
-%% 	      "~n   Type:   ~p"
-%% 	      "~n", [Parent, Child, Type]),
     Children = supervisor:which_children(Parent),
-%%     io:format("verify_child -> which children"
-%% 	      "~n   Children:   ~p"
-%% 	      "~n", [Children]),
     verify_child(Children, Parent, Child, Type).
 
 verify_child([], Parent, Child, _Type) ->
@@ -349,21 +284,12 @@ verify_child([], Parent, Child, _Type) ->
 verify_child([{Id, _Pid, Type2, Mods}|Children], Parent, Child, Type) ->
     case lists:member(Child, Mods) of
 	true when (Type2 =:= Type) ->
-%% 	    io:format("verify_child -> found with expected type"
-%% 		      "~n   Id: ~p"
-%% 		      "~n", [Id]),
 	    {ok, Id};
 	true when (Type2 =/= Type) ->
-%% 	    io:format("verify_child -> found with unexpected type"
-%% 		      "~n   Type2: ~p"
-%% 		      "~n   Id:    ~p"
-%% 		      "~n", [Type2, Id]),
 	    {error, {wrong_type, Type2, Child, Parent}};
 	false ->
 	    verify_child(Children, Parent, Child, Type)
     end.
-					  
-
 
 %%-------------------------------------------------------------------------
 %% httpc_subtree
@@ -373,47 +299,19 @@ httpc_subtree(doc) ->
 httpc_subtree(suite) ->
     [];
 httpc_subtree(Config) when is_list(Config) ->
-    tsp("httpc_subtree -> entry with"
-	"~n   Config: ~p", [Config]),
+    {ok, Foo} = inets:start(httpc, [{profile, foo}]),
 
-    tsp("httpc_subtree -> start inets service httpc with profile foo"),
-    {ok, _Foo} = inets:start(httpc, [{profile, foo}]),
+    {ok, Bar} = inets:start(httpc, [{profile, bar}], stand_alone),
 
-    tsp("httpc_subtree -> "
-	"start stand-alone inets service httpc with profile bar"),
-    {ok, _Bar} = inets:start(httpc, [{profile, bar}], stand_alone),
-
-    tsp("httpc_subtree -> retreive list of httpc instances"),
     HttpcChildren = supervisor:which_children(httpc_profile_sup),
-    tsp("httpc_subtree -> HttpcChildren: ~n~p", [HttpcChildren]),
-    
-    tsp("httpc_subtree -> verify httpc stand-alone instances"),
+
     {value, {httpc_manager, _, worker, [httpc_manager]}} =
 	lists:keysearch(httpc_manager, 1, HttpcChildren),
 
-    tsp("httpc_subtree -> verify httpc (named) instances"),
-    {value,{{httpc,foo}, Pid, worker, [httpc_manager]}} = 
+    {value,{{httpc,foo}, _Pid, worker, [httpc_manager]}} = 
 	lists:keysearch({httpc, foo}, 1, HttpcChildren),
     false = lists:keysearch({httpc, bar}, 1, HttpcChildren),
     
-    tsp("httpc_subtree -> stop inets"),
-    inets:stop(httpc, Pid),
-
-    tsp("httpc_subtree -> done"),
-    ok.
-
-inet_port() ->
-    {ok, Socket} = gen_tcp:listen(0, [{reuseaddr, true}]),
-    {ok, Port} = inet:port(Socket),
-    gen_tcp:close(Socket),
-    Port.
-
-
-tsp(F) ->
-    tsp(F, []).
-tsp(F, A) ->
-    test_server:format("~p ~p:" ++ F ++ "~n", [self(), ?MODULE | A]).
-
-tsf(Reason) ->
-    test_server:fail(Reason).
+    inets:stop(httpc, Foo),
+    exit(Bar, normal).
 

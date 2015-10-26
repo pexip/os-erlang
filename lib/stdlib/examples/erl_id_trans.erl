@@ -144,6 +144,13 @@ pattern({cons,Line,H0,T0}) ->
 pattern({tuple,Line,Ps0}) ->
     Ps1 = pattern_list(Ps0),
     {tuple,Line,Ps1};
+pattern({map,Line,Ps0}) ->
+    Ps1 = pattern_list(Ps0),
+    {map,Line,Ps1};
+pattern({map_field_exact,Line,K,V}) ->
+    Ke = expr(K),
+    Ve = pattern(V),
+    {map_field_exact,Line,Ke,Ve};
 %%pattern({struct,Line,Tag,Ps0}) ->
 %%    Ps1 = pattern_list(Ps0),
 %%    {struct,Line,Tag,Ps1};
@@ -153,7 +160,6 @@ pattern({record,Line,Name,Pfs0}) ->
 pattern({record_index,Line,Name,Field0}) ->
     Field1 = pattern(Field0),
     {record_index,Line,Name,Field1};
-%% record_field occurs in query expressions
 pattern({record_field,Line,Rec0,Name,Field0}) ->
     Rec1 = expr(Rec0),
     Field1 = expr(Field0),
@@ -252,6 +258,20 @@ gexpr({float,Line,F}) -> {float,Line,F};
 gexpr({atom,Line,A}) -> {atom,Line,A};
 gexpr({string,Line,S}) -> {string,Line,S};
 gexpr({nil,Line}) -> {nil,Line};
+gexpr({map,Line,Map0,Es0}) ->
+    [Map1|Es1] = gexpr_list([Map0|Es0]),
+    {map,Line,Map1,Es1};
+gexpr({map,Line,Es0}) ->
+    Es1 = gexpr_list(Es0),
+    {map,Line,Es1};
+gexpr({map_field_assoc,Line,K,V}) ->
+    Ke = gexpr(K),
+    Ve = gexpr(V),
+    {map_field_assoc,Line,Ke,Ve};
+gexpr({map_field_exact,Line,K,V}) ->
+    Ke = gexpr(K),
+    Ve = gexpr(V),
+    {map_field_exact,Line,Ke,Ve};
 gexpr({cons,Line,H0,T0}) ->
     H1 = gexpr(H0),
     T1 = gexpr(T0),				%They see the same variables
@@ -282,15 +302,6 @@ gexpr({call,Line,{remote,La,{atom,Lb,erlang},{atom,Lc,F}},As0}) ->
 	 erl_internal:bool_op(F, length(As0)) of
 	true -> As1 = gexpr_list(As0),
 		{call,Line,{remote,La,{atom,Lb,erlang},{atom,Lc,F}},As1}
-    end;
-% Unfortunately, writing calls as {M,F}(...) is also allowed.
-gexpr({call,Line,{tuple,La,[{atom,Lb,erlang},{atom,Lc,F}]},As0}) ->
-    case erl_internal:guard_bif(F, length(As0)) or
-	 erl_internal:arith_op(F, length(As0)) or 
-	 erl_internal:comp_op(F, length(As0)) or
-	 erl_internal:bool_op(F, length(As0)) of
-	true -> As1 = gexpr_list(As0),
-		{call,Line,{tuple,La,[{atom,Lb,erlang},{atom,Lc,F}]},As1}
     end;
 gexpr({bin,Line,Fs}) ->
     Fs2 = pattern_grp(Fs),
@@ -366,6 +377,20 @@ expr({bc,Line,E0,Qs0}) ->
 expr({tuple,Line,Es0}) ->
     Es1 = expr_list(Es0),
     {tuple,Line,Es1};
+expr({map,Line,Map0,Es0}) ->
+    [Map1|Es1] = exprs([Map0|Es0]),
+    {map,Line,Map1,Es1};
+expr({map,Line,Es0}) ->
+    Es1 = exprs(Es0),
+    {map,Line,Es1};
+expr({map_field_assoc,Line,K,V}) ->
+    Ke = expr(K),
+    Ve = expr(V),
+    {map_field_assoc,Line,Ke,Ve};
+expr({map_field_exact,Line,K,V}) ->
+    Ke = expr(K),
+    Ve = expr(V),
+    {map_field_exact,Line,Ke,Ve};
 %%expr({struct,Line,Tag,Es0}) ->
 %%    Es1 = pattern_list(Es0),
 %%    {struct,Line,Tag,Es1};
@@ -419,9 +444,18 @@ expr({'fun',Line,Body}) ->
 	    {'fun',Line,{clauses,Cs1}};
 	{function,F,A} ->
 	    {'fun',Line,{function,F,A}};
-	{function,M,F,A} ->			%R10B-6: fun M:F/A.
+	{function,M,F,A} when is_atom(M), is_atom(F), is_integer(A) ->
+	    %% R10B-6: fun M:F/A. (Backward compatibility)
+	    {'fun',Line,{function,M,F,A}};
+	{function,M0,F0,A0} ->
+	    %% R15: fun M:F/A with variables.
+	    M = expr(M0),
+	    F = expr(F0),
+	    A = expr(A0),
 	    {'fun',Line,{function,M,F,A}}
     end;
+expr({named_fun,Loc,Name,Cs}) ->
+    {named_fun,Loc,Name,fun_clauses(Cs)};
 expr({call,Line,F0,As0}) ->
     %% N.B. If F an atom then call to local function or BIF, if F a
     %% remote structure (see below) then call to other module,
@@ -433,10 +467,6 @@ expr({'catch',Line,E0}) ->
     %% No new variables added.
     E1 = expr(E0),
     {'catch',Line,E1};
-expr({'query', Line, E0}) ->
-    %% lc expression
-    E = expr(E0),
-    {'query', Line, E};
 expr({match,Line,P0,E0}) ->
     E1 = expr(E0),
     P1 = pattern(P0),

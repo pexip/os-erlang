@@ -1,7 +1,7 @@
 /*
  * %CopyrightBegin%
  *
- * Copyright Ericsson AB 2000-2011. All Rights Reserved.
+ * Copyright Ericsson AB 2000-2014. All Rights Reserved.
  *
  * The contents of this file are subject to the Erlang Public License,
  * Version 1.1, (the "License"); you may not use this file except in
@@ -761,7 +761,7 @@ int ei_close_connection(int fd)
 #endif
 
   /*
-  * Accept and initiate a connection from an other
+  * Accept and initiate a connection from another
   * Erlang node. Return a file descriptor at success,
   * otherwise -1;
 */
@@ -830,7 +830,8 @@ int ei_accept_tmo(ei_cnode* ec, int lfd, ErlConnect *conp, unsigned ms)
     
 error:
     EI_TRACE_ERR0("ei_accept","<- ACCEPT failed");
-    closesocket(fd);
+    if (fd>=0)
+      closesocket(fd);
     return ERL_ERROR;
 } /* ei_accept */
 
@@ -1070,7 +1071,7 @@ int ei_rpc(ei_cnode* ec, int fd, char *mod, char *fun,
     int i, index;
     ei_term t;
     erlang_msg msg;
-    char rex[MAXATOMLEN+1];
+    char rex[MAXATOMLEN];
 
     if (ei_rpc_to(ec, fd, mod, fun, inbuf, inbuflen) < 0) {
 	return -1;
@@ -1160,11 +1161,16 @@ static unsigned int gen_challenge(void)
 	struct utsname name;
     } s;
 
+    memset(&s, 0, sizeof(s));
     gettimeofday(&s.tv, 0);
     uname(&s.name);
     s.cpu  = clock();
     s.pid  = getpid();
+#ifndef __ANDROID__
     s.hid  = gethostid();
+#else
+    s.hid  = 0;
+#endif
     s.uid  = getuid();
     s.gid  = getgid();
 
@@ -1332,7 +1338,10 @@ static int send_name_or_challenge(int fd, char *nodename,
 		| DFLAG_EXTENDED_PIDS_PORTS
 		| DFLAG_FUN_TAGS
 		| DFLAG_NEW_FUN_TAGS
-                | DFLAG_NEW_FLOATS));
+                | DFLAG_NEW_FLOATS
+		| DFLAG_SMALL_ATOM_TAGS
+		| DFLAG_UTF8_ATOMS
+		| DFLAG_MAP_TAG));
     if (f_chall)
 	put32be(s, challenge);
     memcpy(s, nodename, strlen(nodename));

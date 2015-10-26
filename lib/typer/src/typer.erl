@@ -2,7 +2,7 @@
 %%-----------------------------------------------------------------------
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2006-2011. All Rights Reserved.
+%% Copyright Ericsson AB 2006-2014. All Rights Reserved.
 %%
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -63,10 +63,10 @@
 	 %% Files in 'fms' are compilable with option 'to_pp'; we keep them
 	 %% as {FileName, ModuleName} in case the ModuleName is different
 	 fms        = []		 :: [{file:filename(), module()}],
-	 ex_func    = map__new()	 :: map(),
-	 record     = map__new()	 :: map(),
-	 func       = map__new()	 :: map(),
-	 inc_func   = map__new()	 :: map(),
+	 ex_func    = map__new()	 :: map_dict(),
+	 record     = map__new()	 :: map_dict(),
+	 func       = map__new()	 :: map_dict(),
+	 inc_func   = map__new()	 :: map_dict(),
 	 trust_plt  = dialyzer_plt:new() :: plt()}).
 -type analysis() :: #analysis{}.
 
@@ -83,6 +83,7 @@ start() ->
   {Args, Analysis} = process_cl_args(),
   %% io:format("Args: ~p\n", [Args]),
   %% io:format("Analysis: ~p\n", [Analysis]),
+  Timer = dialyzer_timing:init(false),
   TrustedFiles = filter_fd(Args#args.trusted, [], fun is_erl_file/1),
   Analysis2 = extract(Analysis, TrustedFiles),
   All_Files = get_all_files(Args),
@@ -91,6 +92,7 @@ start() ->
   Analysis4 = collect_info(Analysis3),
   %% io:format("Final: ~p\n", [Analysis4#analysis.fms]),
   TypeInfo = get_type_info(Analysis4),
+  dialyzer_timing:stop(Timer),
   show_or_annotate(TypeInfo),
   %% io:format("\nTyper analysis finished\n"),
   erlang:halt(0).
@@ -119,9 +121,9 @@ extract(#analysis{macros = Macros,
 	      {ok, RecDict} ->
 		Mod = list_to_atom(filename:basename(File, ".erl")),
 		case dialyzer_utils:get_spec_info(Mod, AbstractCode, RecDict) of
-		  {ok, SpecDict} ->
+		  {ok, SpecDict, CbDict} ->
 		    CS1 = dialyzer_codeserver:store_temp_records(Mod, RecDict, CS),
-		    dialyzer_codeserver:store_temp_contracts(Mod, SpecDict, CS1);
+		    dialyzer_codeserver:store_temp_contracts(Mod, SpecDict, CbDict, CS1);
 		  {error, Reason} -> compile_error([Reason])
 		end;
 	      {error, Reason} -> compile_error([Reason])
@@ -181,7 +183,6 @@ get_type_info(#analysis{callgraph = CallGraph,
 
 remove_external(CallGraph, PLT) ->
   {StrippedCG0, Ext} = dialyzer_callgraph:remove_external(CallGraph),
-  StrippedCG = dialyzer_callgraph:finalize(StrippedCG0),
   case get_external(Ext, PLT) of
     [] -> ok;
     Externals ->
@@ -192,7 +193,7 @@ remove_external(CallGraph, PLT) ->
         _ -> msg(io_lib:format(" Unknown types: ~p\n", [ExtTypes]))
       end
   end,
-  StrippedCG.
+  StrippedCG0.
 
 -spec get_external([{mfa(), mfa()}], plt()) -> [mfa()].
 
@@ -219,11 +220,11 @@ get_external(Exts, Plt) ->
 -type fa()        :: {atom(), arity()}.
 -type func_info() :: {line(), atom(), arity()}.
 
--record(info, {records = map__new() :: map(),
+-record(info, {records = map__new() :: map_dict(),
 	       functions = []       :: [func_info()],
-	       types = map__new()   :: map(),
+	       types = map__new()   :: map_dict(),
 	       edoc = false	    :: boolean()}).
--record(inc, {map = map__new() :: map(), filter = [] :: files()}).
+-record(inc, {map = map__new() :: map_dict(), filter = [] :: files()}).
 -type inc() :: #inc{}.
 
 -spec show_or_annotate(analysis()) -> 'ok'.
@@ -682,10 +683,10 @@ analyze_result(show_succ, Args, Analysis) ->
 analyze_result(no_spec, Args, Analysis) ->
   {Args, Analysis#analysis{no_spec = true}};
 analyze_result({pa, Dir}, Args, Analysis) ->
-  code:add_patha(Dir),
+  true = code:add_patha(Dir),
   {Args, Analysis};
 analyze_result({pz, Dir}, Args, Analysis) ->
-  code:add_pathz(Dir),
+  true = code:add_pathz(Dir),
   {Args, Analysis}.
 
 %%--------------------------------------------------------------------
@@ -873,16 +874,16 @@ collect_one_file_info(File, Analysis) ->
 	      Mod = cerl:concrete(cerl:module_name(Core)),
 	      case dialyzer_utils:get_spec_info(Mod, AbstractCode, Records) of
 		{error, Reason} -> compile_error([Reason]);
-		{ok, SpecInfo} ->
+		{ok, SpecInfo, CbInfo} ->
                   ExpTypes = get_exported_types_from_core(Core),
-		  analyze_core_tree(Core, Records, SpecInfo, ExpTypes,
-                                    Analysis, File)
+		  analyze_core_tree(Core, Records, SpecInfo, CbInfo,
+				    ExpTypes, Analysis, File)
 	      end
 	  end
       end
   end.
 
-analyze_core_tree(Core, Records, SpecInfo, ExpTypes, Analysis, File) ->
+analyze_core_tree(Core, Records, SpecInfo, CbInfo, ExpTypes, Analysis, File) ->
   Module = cerl:concrete(cerl:module_name(Core)),
   TmpTree = cerl:from_records(Core),
   CS1 = Analysis#analysis.codeserver,
@@ -894,14 +895,16 @@ analyze_core_tree(Core, Records, SpecInfo, ExpTypes, Analysis, File) ->
   CS5 =
     case Analysis#analysis.no_spec of
       true -> CS4;
-      false -> dialyzer_codeserver:store_temp_contracts(Module, SpecInfo, CS4)
+      false ->
+	dialyzer_codeserver:store_temp_contracts(Module, SpecInfo, CbInfo, CS4)
     end,
   OldExpTypes = dialyzer_codeserver:get_temp_exported_types(CS5),
   MergedExpTypes = sets:union(ExpTypes, OldExpTypes),
   CS6 = dialyzer_codeserver:insert_temp_exported_types(MergedExpTypes, CS5),
   Ex_Funcs = [{0,F,A} || {_,_,{F,A}} <- cerl:module_exports(Tree)],
-  TmpCG = Analysis#analysis.callgraph,
-  CG = dialyzer_callgraph:scan_core_tree(Tree, TmpCG),
+  CG = Analysis#analysis.callgraph,
+  {V, E} = dialyzer_callgraph:scan_core_tree(Tree, CG),
+  dialyzer_callgraph:add_edges(E, V, CG),
   Fun = fun analyze_one_function/2,
   All_Defs = cerl:module_defs(Tree),
   Acc = lists:foldl(Fun, #tmpAcc{file = File, module = Module}, All_Defs),
@@ -1004,7 +1007,7 @@ msg(Msg) ->
       port_command(P, Msg),
       true = port_close(P),
       ok;
-    _ ->  % win32, vxworks
+    _ ->  % win32
       io:format("~s", [Msg])
   end.
 
@@ -1091,29 +1094,29 @@ rcv_ext_types(Self, ExtTypes) ->
 %% specialized for the uses in this module
 %%--------------------------------------------------------------------
 
--type map() :: dict().
+-type map_dict() :: dict:dict().
 
--spec map__new() -> map().
+-spec map__new() -> map_dict().
 map__new() ->
   dict:new().
 
--spec map__insert({term(), term()}, map()) -> map().
+-spec map__insert({term(), term()}, map_dict()) -> map_dict().
 map__insert(Object, Map) ->
   {Key, Value} = Object,
   dict:store(Key, Value, Map).
 
--spec map__lookup(term(), map()) -> term().
+-spec map__lookup(term(), map_dict()) -> term().
 map__lookup(Key, Map) ->
   try dict:fetch(Key, Map) catch error:_ -> none end.
 
--spec map__from_list([{fa(), term()}]) -> map().
+-spec map__from_list([{fa(), term()}]) -> map_dict().
 map__from_list(List) ->
   dict:from_list(List).
 
--spec map__remove(term(), map()) -> map().
+-spec map__remove(term(), map_dict()) -> map_dict().
 map__remove(Key, Dict) ->
   dict:erase(Key, Dict).
 
--spec map__fold(fun((term(), term(), term()) -> map()), map(), map()) -> map().
+-spec map__fold(fun((term(), term(), term()) -> map_dict()), map_dict(), map_dict()) -> map_dict().
 map__fold(Fun, Acc0, Dict) -> 
   dict:fold(Fun, Acc0, Dict).

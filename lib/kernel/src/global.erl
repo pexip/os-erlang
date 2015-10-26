@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 1996-2011. All Rights Reserved.
+%% Copyright Ericsson AB 1996-2014. All Rights Reserved.
 %%
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -28,7 +28,7 @@
 
 %% External exports
 -export([start/0, start_link/0, stop/0, sync/0, sync/1,
-	 safe_whereis_name/1, whereis_name/1,  register_name/2, 
+	 whereis_name/1,  register_name/2,
          register_name/3, register_name_external/2, register_name_external/3,
          unregister_name_external/1,re_register_name/2, re_register_name/3,
 	 unregister_name/1, registered_names/0, send/2, node_disconnected/1,
@@ -203,10 +203,6 @@ send(Name, Msg) ->
 whereis_name(Name) ->
     where(Name).
 
--spec safe_whereis_name(term()) -> pid() | 'undefined'.
-safe_whereis_name(Name) ->
-    gen_server:call(global_name_server, {whereis, Name}, infinity).
-
 node_disconnected(Node) ->
     global_name_server ! {nodedown, Node}.
 
@@ -236,7 +232,8 @@ register_name(Name, Pid) when is_pid(Pid) ->
       Name :: term(),
       Pid :: pid(),
       Resolve :: method().
-register_name(Name, Pid, Method) when is_pid(Pid) ->
+register_name(Name, Pid, Method0) when is_pid(Pid) ->
+    Method = allow_tuple_fun(Method0),
     Fun = fun(Nodes) ->
         case (where(Name) =:= undefined) andalso check_dupname(Name, Pid) of
             true ->
@@ -284,17 +281,18 @@ unregister_name(Name) ->
             gen_server:call(global_name_server, {registrar, Fun}, infinity)
     end.
 
--spec re_register_name(Name, Pid) -> _ when
+-spec re_register_name(Name, Pid) -> 'yes' when
       Name :: term(),
       Pid :: pid().
 re_register_name(Name, Pid) when is_pid(Pid) ->
     re_register_name(Name, Pid, fun random_exit_name/3).
 
--spec re_register_name(Name, Pid, Resolve) -> _ when
+-spec re_register_name(Name, Pid, Resolve) -> 'yes' when
       Name :: term(),
       Pid :: pid(),
       Resolve :: method().
-re_register_name(Name, Pid, Method) when is_pid(Pid) ->
+re_register_name(Name, Pid, Method0) when is_pid(Pid) ->
+    Method = allow_tuple_fun(Method0),
     Fun = fun(Nodes) ->
 		  gen_server:multi_call(Nodes,
 					global_name_server,
@@ -510,8 +508,7 @@ init([]) ->
 %%   delay can sometimes be quite substantial. Global guarantees that
 %%   the name will eventually be removed, but there is no
 %%   synchronization between nodes; the name can be removed from some
-%%   node(s) long before it is removed from other nodes. Using
-%%   safe_whereis_name is no cure.
+%%   node(s) long before it is removed from other nodes.
 %%
 %% - Global cannot handle problems with the distribution very well.
 %%   Depending on the value of the kernel variable 'net_ticktime' long
@@ -588,10 +585,6 @@ init([]) ->
         {'noreply', state()} |
 	{'reply', term(), state()} |
 	{'stop', 'normal', 'stopped', state()}.
-
-handle_call({whereis, Name}, From, S) ->
-    do_whereis(Name, From),
-    {noreply, S};
 
 handle_call({registrar, Fun}, From, S) ->
     S#state.the_registrar ! {trans_all_known, Fun, From},
@@ -1235,7 +1228,15 @@ ins_name_ext(Name, Pid, Method, RegNode, FromPidOrNode, ExtraInfo, S0) ->
 
 where(Name) ->
     case ets:lookup(global_names, Name) of
-	[{_Name, Pid, _Method, _RPid, _Ref}] -> Pid;
+	[{_Name, Pid, _Method, _RPid, _Ref}] ->
+	    if node(Pid) == node() ->
+		    case is_process_alive(Pid) of
+			true  -> Pid;
+			false -> undefined
+		    end;
+	       true ->
+		    Pid
+	    end;
 	[] -> undefined
     end.
 
@@ -1512,14 +1513,18 @@ delete_global_name(_Name, _Pid) ->
 -record(him, {node, locker, vsn, my_tag}).
 
 start_the_locker(DoTrace) ->
-    spawn_link(fun() -> init_the_locker(DoTrace) end).
+    spawn_link(init_the_locker_fun(DoTrace)).
 
-init_the_locker(DoTrace) ->
-    process_flag(trap_exit, true),    % needed?
-    S0 = #multi{do_trace = DoTrace},
-    S1 = update_locker_known({add, get_known()}, S0),
-    loop_the_locker(S1),
-    erlang:error(locker_exited).
+-spec init_the_locker_fun(boolean()) -> fun(() -> no_return()).
+
+init_the_locker_fun(DoTrace) ->
+    fun() ->
+            process_flag(trap_exit, true),    % needed?
+            S0 = #multi{do_trace = DoTrace},
+            S1 = update_locker_known({add, get_known()}, S0),
+            loop_the_locker(S1),
+            erlang:error(locker_exited)
+    end.
 
 loop_the_locker(S) ->
     ?trace({loop_the_locker,S}),
@@ -1966,7 +1971,7 @@ resolve_it(Method, Name, Pid1, Pid2) ->
 minmax(P1,P2) ->
     if node(P1) < node(P2) -> {P1, P2}; true -> {P2, P1} end.
 
--spec random_exit_name(Name, Pid1, Pid2) -> 'none' when
+-spec random_exit_name(Name, Pid1, Pid2) -> pid() when
       Name :: term(),
       Pid1 :: pid(),
       Pid2 :: pid().
@@ -1977,7 +1982,7 @@ random_exit_name(Name, Pid, Pid2) ->
     exit(Max, kill),
     Min.
 
--spec random_notify_name(Name, Pid1, Pid2) -> 'none' when
+-spec random_notify_name(Name, Pid1, Pid2) -> pid() when
       Name :: term(),
       Pid1 :: pid(),
       Pid2 :: pid().
@@ -2068,7 +2073,8 @@ random_sleep(Times) ->
     case get(random_seed) of
 	undefined ->
 	    {A1, A2, A3} = now(),
-	    random:seed(A1, A2, A3 + erlang:phash(node(), 100000));
+	    _ = random:seed(A1, A2, A3 + erlang:phash(node(), 100000)),
+            ok;
 	_ -> ok
     end,
     %% First time 1/4 seconds, then doubling each time up to 8 seconds max.
@@ -2176,7 +2182,7 @@ get_own_nodes() ->
 
 start_the_registrar() ->
     spawn_link(fun() -> loop_the_registrar() end).
-                       
+
 loop_the_registrar() ->
     receive 
         {trans_all_known, Fun, From} ->
@@ -2219,3 +2225,9 @@ intersection(_, []) ->
     [];
 intersection(L1, L2) ->
     L1 -- (L1 -- L2).
+
+%% Support legacy tuple funs as resolve functions.
+allow_tuple_fun({M, F}) when is_atom(M), is_atom(F) ->
+    fun M:F/3;
+allow_tuple_fun(Fun) when is_function(Fun, 3) ->
+    Fun.

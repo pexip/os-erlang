@@ -23,17 +23,17 @@
 static ErlDrvData start(ErlDrvPort port,
 			char *command);
 static void output(ErlDrvData drv_data,
-		   char *buf, int len);
+		   char *buf, ErlDrvSizeT len);
 static void outputv(ErlDrvData drv_data,
 		    ErlIOVec *ev);
-static int control(ErlDrvData drv_data,
-		   unsigned int command, char *buf, 
-		   int len, char **rbuf, int rlen);
-static int call(ErlDrvData drv_data,
-		unsigned int command,
-		char *buf, int len,
-		char **rbuf, int rlen,
-		unsigned int *flags);
+static ErlDrvSSizeT control(ErlDrvData drv_data,
+			    unsigned int command, char *buf,
+			    ErlDrvSizeT len, char **rbuf, ErlDrvSizeT rlen);
+static ErlDrvSSizeT call(ErlDrvData drv_data,
+			 unsigned int command,
+			 char *buf, ErlDrvSizeT len,
+			 char **rbuf, ErlDrvSizeT rlen,
+			 unsigned int *flags);
 
 static ErlDrvEntry caller_drv_entry = { 
     NULL /* init */,
@@ -85,9 +85,9 @@ send_caller(ErlDrvData drv_data, char *func)
 	ERL_DRV_PID,	driver_caller(port),
 	ERL_DRV_TUPLE,	(ErlDrvTermData) 4
     };
-    res = driver_output_term(port, msg, sizeof(msg)/sizeof(ErlDrvTermData));
+    res = erl_drv_output_term(driver_mk_port(port), msg, sizeof(msg)/sizeof(ErlDrvTermData));
     if (res <= 0)
-	driver_failure_atom(port, "driver_output_term failed");
+	driver_failure_atom(port, "erl_drv_output_term failed");
 }
 
 static ErlDrvData
@@ -98,7 +98,7 @@ start(ErlDrvPort port, char *command)
 }
 
 static void
-output(ErlDrvData drv_data, char *buf, int len)
+output(ErlDrvData drv_data, char *buf, ErlDrvSizeT len)
 {
     send_caller(drv_data, "output");
 }
@@ -109,20 +109,20 @@ outputv(ErlDrvData drv_data, ErlIOVec *ev)
     send_caller(drv_data, "outputv");
 }
 
-static int
+static ErlDrvSSizeT
 control(ErlDrvData drv_data,
 	unsigned int command, char *buf, 
-	int len, char **rbuf, int rlen)
+	ErlDrvSizeT len, char **rbuf, ErlDrvSizeT rlen)
 {
     send_caller(drv_data, "control");
     return 0;
 }
 
-static int
+static ErlDrvSSizeT
 call(ErlDrvData drv_data,
      unsigned int command,
-     char *buf, int len,
-     char **rbuf, int rlen,
+     char *buf, ErlDrvSizeT len,
+     char **rbuf, ErlDrvSizeT rlen,
      unsigned int *flags)
 {
     /* echo call */

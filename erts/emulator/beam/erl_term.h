@@ -1,7 +1,7 @@
 /*
  * %CopyrightBegin%
  *
- * Copyright Ericsson AB 2000-2011. All Rights Reserved.
+ * Copyright Ericsson AB 2000-2014. All Rights Reserved.
  *
  * The contents of this file are subject to the Erlang Public License,
  * Version 1.1, (the "License"); you may not use this file except in
@@ -112,11 +112,11 @@ struct erl_node_; /* Declared in erl_node_tables.h */
  *	1000	REFC_BINARY	|		|
  *	1001	HEAP_BINARY	| BINARIES	|
  *	1010	SUB_BINARY	|		|
- *      1011    Not used
+ *      1011    Not used; see comment below
  *      1100    EXTERNAL_PID  |                 |
  *      1101    EXTERNAL_PORT | EXTERNAL THINGS |
  *      1110    EXTERNAL_REF  |                 |
- *      1111    Not used
+ *      1111    MAP
  *
  * COMMENTS:
  *
@@ -135,14 +135,16 @@ struct erl_node_; /* Declared in erl_node_tables.h */
 #define REF_SUBTAG		(0x4 << _TAG_PRIMARY_SIZE) /* REF */
 #define FUN_SUBTAG		(0x5 << _TAG_PRIMARY_SIZE) /* FUN */
 #define FLOAT_SUBTAG		(0x6 << _TAG_PRIMARY_SIZE) /* FLOAT */
-#define EXPORT_SUBTAG	(0x7 << _TAG_PRIMARY_SIZE) /* FLOAT */
+#define EXPORT_SUBTAG		(0x7 << _TAG_PRIMARY_SIZE) /* FLOAT */
 #define _BINARY_XXX_MASK	(0x3 << _TAG_PRIMARY_SIZE)
 #define REFC_BINARY_SUBTAG	(0x8 << _TAG_PRIMARY_SIZE) /* BINARY */
 #define HEAP_BINARY_SUBTAG	(0x9 << _TAG_PRIMARY_SIZE) /* BINARY */
 #define SUB_BINARY_SUBTAG	(0xA << _TAG_PRIMARY_SIZE) /* BINARY */
+/*   _BINARY_XXX_MASK depends on 0xB being unused */
 #define EXTERNAL_PID_SUBTAG	(0xC << _TAG_PRIMARY_SIZE) /* EXTERNAL_PID */
 #define EXTERNAL_PORT_SUBTAG	(0xD << _TAG_PRIMARY_SIZE) /* EXTERNAL_PORT */
 #define EXTERNAL_REF_SUBTAG	(0xE << _TAG_PRIMARY_SIZE) /* EXTERNAL_REF */
+#define MAP_SUBTAG		(0xF << _TAG_PRIMARY_SIZE) /* MAP */
 
 
 #define _TAG_HEADER_ARITYVAL	(TAG_PRIMARY_HEADER|ARITYVAL_SUBTAG)
@@ -159,6 +161,7 @@ struct erl_node_; /* Declared in erl_node_tables.h */
 #define _TAG_HEADER_EXTERNAL_PORT (TAG_PRIMARY_HEADER|EXTERNAL_PORT_SUBTAG)
 #define _TAG_HEADER_EXTERNAL_REF  (TAG_PRIMARY_HEADER|EXTERNAL_REF_SUBTAG)
 #define _TAG_HEADER_BIN_MATCHSTATE (TAG_PRIMARY_HEADER|BIN_MATCHSTATE_SUBTAG)
+#define _TAG_HEADER_MAP	 	(TAG_PRIMARY_HEADER|MAP_SUBTAG)
 
 
 #define _TAG_HEADER_MASK	0x3F
@@ -253,15 +256,15 @@ _ET_DECLARE_CHECKED(Eterm*,list_val,Wterm)
 #define SMALL_BITS	(28)
 #define SMALL_DIGITS	(8)
 #endif
-#define MAX_SMALL	((1L << (SMALL_BITS-1))-1)
-#define MIN_SMALL	(-(1L << (SMALL_BITS-1)))
+#define MAX_SMALL	((SWORD_CONSTANT(1) << (SMALL_BITS-1))-1)
+#define MIN_SMALL	(-(SWORD_CONSTANT(1) << (SMALL_BITS-1)))
 #define make_small(x)	(((Uint)(x) << _TAG_IMMED1_SIZE) + _TAG_IMMED1_SMALL)
 #define is_small(x)	(((x) & _TAG_IMMED1_MASK) == _TAG_IMMED1_SMALL)
 #define is_not_small(x)	(!is_small((x)))
 #define is_byte(x)	(((x) & ((~(Uint)0 << (_TAG_IMMED1_SIZE+8)) + _TAG_IMMED1_MASK)) == _TAG_IMMED1_SMALL)
 #define is_valid_bit_size(x) (((Sint)(x)) >= 0 && ((x) & 0x7F) == _TAG_IMMED1_SMALL)
 #define is_not_valid_bit_size(x) (!is_valid_bit_size((x)))
-#define MY_IS_SSMALL(x) (((Uint) (((x) >> (SMALL_BITS-1)) + 1)) < 2)
+#define MY_IS_SSMALL(x) (((Uint) ((((x)) >> (SMALL_BITS-1)) + 1)) < 2)
 #define _unchecked_unsigned_val(x)	((x) >> _TAG_IMMED1_SIZE)
 _ET_DECLARE_CHECKED(Uint,unsigned_val,Eterm)
 #define unsigned_val(x)	_ET_APPLY(unsigned_val,(x))
@@ -300,8 +303,17 @@ _ET_DECLARE_CHECKED(Uint,header_arity,Eterm)
 #define header_arity(x)	_ET_APPLY(header_arity,(x))
 
 /* arityval access methods */
+/* Erlang Spec. 4.7.3 defines max arity to 65535
+ * we will however enforce max arity of 16777215 (24 bits)
+ * (checked in bifs and asserted in debug)
+ */
+#define MAX_ARITYVAL            ((((Uint)1) << 24) - 1)
+#define ERTS_MAX_TUPLE_SIZE     MAX_ARITYVAL
+
 #define make_arityval(sz)	_make_header((sz),_TAG_HEADER_ARITYVAL)
 #define is_arity_value(x)	(((x) & _TAG_HEADER_MASK) == _TAG_HEADER_ARITYVAL)
+#define is_sane_arity_value(x)	((((x) & _TAG_HEADER_MASK) == _TAG_HEADER_ARITYVAL) && \
+				 (((x) >> _HEADER_ARITY_OFFS) <= MAX_ARITYVAL))
 #define is_not_arity_value(x)	(!is_arity_value((x)))
 #define _unchecked_arityval(x)	_unchecked_header_arity((x))
 _ET_DECLARE_CHECKED(Uint,arityval,Eterm)
@@ -331,7 +343,13 @@ _ET_DECLARE_CHECKED(Uint,thing_subtag,Eterm)
  * we now use a non-zero bit-pattern in debug mode.
  */
 #if ET_DEBUG
-#define THE_NON_VALUE	_make_header(0,_TAG_HEADER_FLOAT)
+# ifdef HIPE
+   /* A very large (or negative) value as work-around for ugly hipe-bifs
+      that return untagged integers (eg hipe_bs_put_utf8) */
+#  define THE_NON_VALUE	_make_header((Uint)~0,_TAG_HEADER_FLOAT)
+# else
+#  define THE_NON_VALUE	_make_header(0,_TAG_HEADER_FLOAT)
+# endif
 #else
 #define THE_NON_VALUE	(0)
 #endif
@@ -339,7 +357,10 @@ _ET_DECLARE_CHECKED(Uint,thing_subtag,Eterm)
 #define is_value(x)	((x) != THE_NON_VALUE)
 
 /* binary object access methods */
-#define is_binary_header(x)	(((x) & (_TAG_HEADER_MASK-_BINARY_XXX_MASK)) == _TAG_HEADER_REFC_BIN)
+#define is_binary_header(x) \
+	((((x) & (_TAG_HEADER_MASK)) == _TAG_HEADER_REFC_BIN) || \
+	 (((x) & (_TAG_HEADER_MASK)) == _TAG_HEADER_HEAP_BIN) || \
+	 (((x) & (_TAG_HEADER_MASK)) == _TAG_HEADER_SUB_BIN))
 #define make_binary(x)	make_boxed((Eterm*)(x))
 #define is_binary(x)	(is_boxed((x)) && is_binary_header(*boxed_val((x))))
 #define is_not_binary(x) (!is_binary((x)))
@@ -536,12 +557,6 @@ _ET_DECLARE_CHECKED(Eterm*,tuple_val,Wterm)
 #define _GETBITS(X,Pos,Size) (((X) >> (Pos)) & ~(~((Uint) 0) << (Size)))
 
 /*
- * Observe! New layout for pids, ports and references in R9 (see also note
- * in erl_node_container_utils.h).
- */
-
-
-/*
  * Creation in node specific data (pids, ports, refs)
  */
 
@@ -578,7 +593,6 @@ _ET_DECLARE_CHECKED(Eterm*,tuple_val,Wterm)
  *
  */
 
-#define _PID_R9_SER_SIZE	3
 #define _PID_SER_SIZE		(_PID_DATA_SIZE - _PID_NUM_SIZE)
 #define _PID_NUM_SIZE 		15
 
@@ -592,22 +606,12 @@ _ET_DECLARE_CHECKED(Eterm*,tuple_val,Wterm)
 #define make_pid_data(Ser, Num) \
   ((Uint) ((Ser) << _PID_NUM_SIZE | (Num)))
 
-#define make_internal_pid(X) \
-  ((Eterm) (((X) << _PID_DATA_SHIFT) | _TAG_IMMED1_PID))
-
 #define is_internal_pid(x)	(((x) & _TAG_IMMED1_MASK) == _TAG_IMMED1_PID)
 #define is_not_internal_pid(x)	(!is_internal_pid((x)))
-
-#define _unchecked_internal_pid_data(x) _GET_PID_DATA((x))
-_ET_DECLARE_CHECKED(Uint,internal_pid_data,Eterm)
-#define internal_pid_data(x) _ET_APPLY(internal_pid_data,(x))
 
 #define _unchecked_internal_pid_node(x) erts_this_node
 _ET_DECLARE_CHECKED(struct erl_node_*,internal_pid_node,Eterm)
 #define internal_pid_node(x) _ET_APPLY(internal_pid_node,(x))
-
-#define internal_pid_number(x) _GET_PID_NUM(internal_pid_data((x)))
-#define internal_pid_serial(x) _GET_PID_SER(internal_pid_data((x)))
 
 #define internal_pid_data_words(x) (1)
 
@@ -638,7 +642,6 @@ _ET_DECLARE_CHECKED(struct erl_node_*,internal_pid_node,Eterm)
  *  N : node number
  *
  */
-#define _PORT_R9_NUM_SIZE	18
 #define _PORT_NUM_SIZE		_PORT_DATA_SIZE
 
 #define _PORT_DATA_SIZE		28
@@ -648,17 +651,8 @@ _ET_DECLARE_CHECKED(struct erl_node_*,internal_pid_node,Eterm)
 #define _GET_PORT_NUM(X)	_GETBITS((X), 0, _PORT_NUM_SIZE)
 
 
-#define make_internal_port(X) \
-  ((Eterm) (((X) << _PORT_DATA_SHIFT) | _TAG_IMMED1_PORT))
-
 #define is_internal_port(x)	(((x) & _TAG_IMMED1_MASK) == _TAG_IMMED1_PORT)
 #define is_not_internal_port(x)	(!is_internal_port(x))
-
-#define _unchecked_internal_port_data(x) _GET_PORT_DATA((x))
-_ET_DECLARE_CHECKED(Uint,internal_port_data,Eterm)
-#define internal_port_data(x) _ET_APPLY(internal_port_data,(x))
-
-#define internal_port_number(x) _GET_PORT_NUM(internal_port_data((x)))
 
 #define _unchecked_internal_port_node(x) erts_this_node
 _ET_DECLARE_CHECKED(struct erl_node_*,internal_port_node,Eterm)
@@ -899,7 +893,8 @@ typedef struct external_thing_ {
   (((x) & _TAG_HEADER_MASK) == _TAG_HEADER_EXTERNAL_REF)
 
 #define is_external_header(x) \
-  (((x) & (_TAG_HEADER_MASK-_BINARY_XXX_MASK)) == _TAG_HEADER_EXTERNAL_PID)
+  (((x) & (_TAG_HEADER_MASK-_BINARY_XXX_MASK)) == _TAG_HEADER_EXTERNAL_PID \
+   && ((x) & _TAG_HEADER_MASK) != _TAG_HEADER_MAP)
 
 #define is_external(x) (is_boxed((x)) && is_external_header(*boxed_val((x))))
 
@@ -1076,8 +1071,8 @@ _ET_DECLARE_CHECKED(Uint,y_reg_index,Uint)
 
 /*
  * Backwards compatibility definitions:
- * - #define virtal *_DEF constants with values that fit term order:
- *   number < atom < ref < fun < port < pid < tuple < nil < cons < binary
+ * - #define virtual *_DEF constants with values that fit term order:
+ *   number < atom < ref < fun < port < pid < tuple < map < nil < cons < binary
  * - tag_val_def() function generates virtual _DEF tag
  * - not_eq_tags() and NUMBER_CODE() defined in terms
  *   of the tag_val_def() function
@@ -1086,19 +1081,20 @@ _ET_DECLARE_CHECKED(Uint,y_reg_index,Uint)
 #define BINARY_DEF		0x0
 #define LIST_DEF		0x1
 #define NIL_DEF			0x2
-#define TUPLE_DEF		0x3
-#define PID_DEF			0x4
-#define EXTERNAL_PID_DEF	0x5
-#define PORT_DEF		0x6
-#define EXTERNAL_PORT_DEF	0x7
-#define EXPORT_DEF		0x8
-#define FUN_DEF			0x9
-#define REF_DEF			0xa
-#define EXTERNAL_REF_DEF	0xb
-#define ATOM_DEF		0xc
-#define FLOAT_DEF		0xd
-#define BIG_DEF			0xe
-#define SMALL_DEF		0xf
+#define MAP_DEF			0x3
+#define TUPLE_DEF		0x4
+#define PID_DEF			0x5
+#define EXTERNAL_PID_DEF	0x6
+#define PORT_DEF		0x7
+#define EXTERNAL_PORT_DEF	0x8
+#define EXPORT_DEF		0x9
+#define FUN_DEF			0xa
+#define REF_DEF			0xb
+#define EXTERNAL_REF_DEF	0xc
+#define ATOM_DEF		0xd
+#define FLOAT_DEF		0xe
+#define BIG_DEF			0xf
+#define SMALL_DEF		0x10
 
 #if ET_DEBUG
 extern unsigned tag_val_def_debug(Wterm, const char*, unsigned);
@@ -1108,8 +1104,8 @@ extern unsigned tag_val_def(Wterm);
 #endif
 #define not_eq_tags(X,Y)	(tag_val_def((X)) ^ tag_val_def((Y)))
 
-#define NUMBER_CODE(x,y)	((tag_val_def(x) << 4) | tag_val_def(y))
-#define _NUMBER_CODE(TX,TY)	((TX << 4) | TY)
+#define NUMBER_CODE(x,y)	((tag_val_def(x) << 5) | tag_val_def(y))
+#define _NUMBER_CODE(TX,TY)	((TX << 5) | TY)
 #define SMALL_SMALL	_NUMBER_CODE(SMALL_DEF,SMALL_DEF)
 #define SMALL_BIG 	_NUMBER_CODE(SMALL_DEF,BIG_DEF)
 #define SMALL_FLOAT 	_NUMBER_CODE(SMALL_DEF,FLOAT_DEF)
@@ -1138,6 +1134,7 @@ extern unsigned tag_val_def(Wterm);
 #define make_tuple_rel make_boxed_rel
 #define make_external_rel make_boxed_rel
 #define make_internal_ref_rel make_boxed_rel
+#define make_big_rel make_boxed_rel
 
 #define binary_val_rel(RTERM, BASE) binary_val(rterm2wterm(RTERM, BASE))
 #define list_val_rel(RTERM, BASE) list_val(rterm2wterm(RTERM, BASE))

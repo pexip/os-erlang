@@ -1,7 +1,7 @@
 #
 # %CopyrightBegin%
 # 
-# Copyright Ericsson AB 1997-2009. All Rights Reserved.
+# Copyright Ericsson AB 1997-2013. All Rights Reserved.
 # 
 # The contents of this file are subject to the Erlang Public License,
 # Version 1.1, (the "License"); you may not use this file except in
@@ -49,13 +49,13 @@ XML_FILES = \
 	$(XML_REF3_FILES) $(XML_APPLICATION_FILES) 
 
 GIF_FILES = \
-	images/attach.gif \
-	images/cond_break_dialog.gif \
-	images/function_break_dialog.gif \
-	images/interpret.gif \
-	images/line_break_dialog.gif \
-	images/monitor.gif \
-	images/view.gif
+	images/attach.jpg \
+	images/cond_break_dialog.jpg \
+	images/function_break_dialog.jpg \
+	images/interpret.jpg \
+	images/line_break_dialog.jpg \
+	images/monitor.jpg \
+	images/view.jpg
 
 # ----------------------------------------------------
 
@@ -80,7 +80,7 @@ DVIPS_FLAGS +=
 # ----------------------------------------------------
 # Targets
 # ----------------------------------------------------
-$(HTMLDIR)/%.gif: %.gif
+$(HTMLDIR)/%.jpg: %.jpg
 	$(INSTALL_DIR) $(HTMLDIR)/images
 	$(INSTALL_DATA) $< $@
 
@@ -110,12 +110,12 @@ debug opt:
 include $(ERL_TOP)/make/otp_release_targets.mk
 
 release_docs_spec: docs
-	$(INSTALL_DIR) $(RELSYSDIR)/doc/pdf
-	$(INSTALL_DATA) $(TOP_PDF_FILE) $(RELSYSDIR)/doc/pdf
-	$(INSTALL_DIR) $(RELSYSDIR)/doc/html
-	(/bin/cp -rf  $(HTMLDIR) $(RELSYSDIR)/doc)
-	$(INSTALL_DATA) $(INFO_FILE) $(RELSYSDIR)
-	$(INSTALL_DIR) $(RELEASE_PATH)/man/man3
-	$(INSTALL_DATA) $(MAN3DIR)/* $(RELEASE_PATH)/man/man3
+	$(INSTALL_DIR) "$(RELSYSDIR)/doc/pdf"
+	$(INSTALL_DATA) $(TOP_PDF_FILE) "$(RELSYSDIR)/doc/pdf"
+	$(INSTALL_DIR) "$(RELSYSDIR)/doc/html"
+	(/bin/cp -rf  $(HTMLDIR) "$(RELSYSDIR)/doc")
+	$(INSTALL_DATA) $(INFO_FILE) "$(RELSYSDIR)"
+	$(INSTALL_DIR) "$(RELEASE_PATH)/man/man3"
+	$(INSTALL_DATA) $(MAN3DIR)/* "$(RELEASE_PATH)/man/man3"
 
 release_spec:

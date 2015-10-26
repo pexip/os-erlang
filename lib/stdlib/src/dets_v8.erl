@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2001-2011. All Rights Reserved.
+%% Copyright Ericsson AB 2001-2013. All Rights Reserved.
 %%
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -21,7 +21,7 @@
 %% Dets files, implementation part. This module handles versions up to
 %% and including 8(c). To be called from dets.erl only.
 
--export([constants/0, mark_dirty/1, read_file_header/2,
+-export([mark_dirty/1, read_file_header/2,
          check_file_header/2, do_perform_save/1, initiate_file/11,
          init_freelist/2, fsck_input/4,
          bulk_input/3, output_objs/4, write_cache/1, may_grow/3,
@@ -196,17 +196,13 @@
 %%-define(DEBUGF(X,Y), io:format(X, Y)).
 -define(DEBUGF(X,Y), void).
 
-%% {Bump}
-constants() ->
-    {?BUMP, ?BASE}.
-
 %% -> ok | throw({NewHead,Error})
 mark_dirty(Head) ->
     Dirty = [{?CLOSED_PROPERLY_POS, <<?NOT_PROPERLY_CLOSED:32>>}],
-    dets_utils:pwrite(Head, Dirty),
-    dets_utils:sync(Head),
-    dets_utils:position(Head, Head#head.freelists_p),
-    dets_utils:truncate(Head, cur).
+    {_NewHead, ok} = dets_utils:pwrite(Head, Dirty),
+    ok = dets_utils:sync(Head),
+    {ok, _Pos} = dets_utils:position(Head, Head#head.freelists_p),
+    ok = dets_utils:truncate(Head, cur).
 
 %% -> {ok, head()} | throw(Error)
 initiate_file(Fd, Tab, Fname, Type, Kp, MinSlots, MaxSlots, 
@@ -308,8 +304,9 @@ init_freelist(Head, {convert_freelist,_Version}) ->
     Pos = Head#head.freelists_p,
     case catch prterm(Head, Pos, ?OHDSZ) of
 	{0, _Sz, Term}  ->
-	    FreeList = lists:reverse(Term),
-	    dets_utils:init_slots_from_old_file(FreeList, Ftab);
+	    FreeList1 = lists:reverse(Term),
+            FreeList = dets_utils:init_slots_from_old_file(FreeList1, Ftab),
+            Head#head{freelists = FreeList, base = ?BASE};
 	_ ->
 	    throw({error, {bad_freelists, Head#head.filename}})
     end;
@@ -318,7 +315,7 @@ init_freelist(Head, _) ->
     Pos = Head#head.freelists_p,
     case catch prterm(Head, Pos, ?OHDSZ) of
 	{0, _Sz, Term}  ->
-	    Term;
+            Head#head{freelists = Term, base = ?BASE};
 	_ ->
 	    throw({error, {bad_freelists, Head#head.filename}})
     end.
@@ -331,6 +328,7 @@ read_file_header(Fd, FileName) ->
     {ok, EOF} = dets_utils:position_close(Fd, FileName, eof),
     {ok, <<FileSize:32>>} = dets_utils:pread_close(Fd, FileName, EOF-4, 4),
     FH = #fileheader{freelist = Freelist,
+                     fl_base = ?BASE,
 		     cookie = Cookie,
 		     closed_properly = CP,
 		     type = dets_utils:code_to_type(Type2),
@@ -413,7 +411,7 @@ check_file_header(FH, Fd) ->
 	      version = ?FILE_FORMAT_VERSION,
 	      mod = ?MODULE,
 	      bump = ?BUMP,
-	      base = ?BASE},
+	      base = FH#fileheader.fl_base},
 	    {ok, H, ExtraInfo};
 	Error ->
 	    Error
@@ -1494,7 +1492,7 @@ scan_next_allocated(Bin, From0, _To, <<From:32, To:32, L/binary>>, Ts, R) ->
 %% Read term from file at position Pos
 prterm(Head, Pos, ReadAhead) ->
     Res = dets_utils:pread(Head, Pos, ?OHDSZ, ReadAhead),
-    ?DEBUGF("file:pread(~p, ~p, ?) -> ~p~n", [Head#head.filename, Pos, Res]),
+    ?DEBUGF("file:pread(~tp, ~p, ?) -> ~p~n", [Head#head.filename, Pos, Res]),
     {ok, <<Next:32, Sz:32, _Status:32, Bin0/binary>>} = Res,
     ?DEBUGF("{Next, Sz} = ~p~n", [{Next, Sz}]),
     Bin = case byte_size(Bin0) of

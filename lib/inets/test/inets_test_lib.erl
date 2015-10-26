@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2001-2011. All Rights Reserved.
+%% Copyright Ericsson AB 2001-2013. All Rights Reserved.
 %%
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -22,50 +22,40 @@
 -include("inets_test_lib.hrl").
 -include_lib("inets/src/http_lib/http_internal.hrl").
 
-%% Various small utility functions
--export([start_http_server/1, start_http_server/2]).
--export([start_http_server_ssl/1, start_http_server_ssl/2]).
--export([hostname/0]).
--export([connect_bin/3,  connect_bin/4, 
-	 connect_byte/3, connect_byte/4, 
-	 send/3, close/2]).
--export([copy_file/3, copy_files/2, copy_dirs/2, del_dirs/1]).
--export([info/4, log/4, debug/4, print/4]).
--export([tsp/1, tsp/2, tsf/1]).
--export([check_body/1]).
--export([millis/0, millis_diff/2, hours/1, minutes/1, seconds/1, sleep/1]).
--export([oscmd/1, has_ipv6_support/1]).
--export([non_pc_tc_maybe_skip/4, os_based_skip/1, skip/3, fail/3]).
--export([flush/0]).
--export([start_node/1, stop_node/1]).
+%% Note: This directive should only be used in test suites.
+-compile(export_all).
 
 %% -- Misc os command and stuff
 
+has_ipv6_support() ->
+    tsp("has_ipv6_support -> no ipv6_hosts config"),
+    {ok, Hostname} = inet:gethostname(),
+    case inet:getaddrs(Hostname, inet6) of
+	{ok, [Addr|_]} when is_tuple(Addr) andalso 
+			    (element(1, Addr) =/= 0) ->
+	    %% We actually need to test that the addr can be used, 
+	    %% this is done by attempting to create a (tcp) 
+	    %% listen socket
+	    tsp("has_ipv6_support -> check Addr: ~p", [Addr]),
+	    case (catch gen_tcp:listen(0, [inet6, {ip, Addr}])) of
+		{ok, LSock} ->
+		    tsp("has_ipv6_support -> we are ipv6 host"),
+		    gen_tcp:close(LSock),
+		    {ok, Addr};
+		_ ->
+		    undefined
+	    end;
+	_ ->
+	    undefined
+    end.
+    
 has_ipv6_support(Config) ->
     case lists:keysearch(ipv6_hosts, 1, Config) of
 	false ->
 	    %% Do a basic check to se if 
 	    %% our own host has a working IPv6 address...
-	    tsp("has_ipv6_support -> no ipv6_hosts config"),
-	    {ok, Hostname} = inet:gethostname(),
-	    case inet:getaddrs(Hostname, inet6) of
-		{ok, [Addr|_]} when is_tuple(Addr) andalso 
-				    (element(1, Addr) =/= 0) ->
-		    %% We actually need to test that the addr can be used, 
-		    %% this is done by attempting to create a (tcp) 
-		    %% listen socket
-		    tsp("has_ipv6_support -> check Addr: ~p", [Addr]),
-		    case (catch gen_tcp:listen(0, [inet6, {ip, Addr}])) of
-			{ok, LSock} ->
-			    tsp("has_ipv6_support -> we are ipv6 host"),
-			    gen_tcp:close(LSock),
-			    {ok, Addr};
-			_ ->
-			    undefined
-		    end;
-		_ ->
-		    undefined
-	    end;
+	    has_ipv6_support();
+
 	{value, {_, Hosts}} when is_list(Hosts) ->
 	    %% Check if our host is in the list of *known* IPv6 hosts
 	    tsp("has_ipv6_support -> Hosts: ~p", [Hosts]),
@@ -87,6 +77,49 @@ has_ipv6_support(Config) ->
 oscmd(Cmd) ->
   string:strip(os:cmd(Cmd), right, $\n).
 
+
+print_system_info([]) ->
+    do_print_system_info("System Info");
+print_system_info(Prefix) when is_list(Prefix) ->
+    NewPrefix = lists:flatten(io_lib:format("~s: System Info", [Prefix])), 
+    do_print_system_info(NewPrefix).
+
+do_print_system_info(Prefix) ->
+    tsp("~s => "
+	"~n"
+	"~n   OS Type:            ~p"
+	"~n   OS version:         ~p"
+	"~n   Sys Arch:           ~p"
+	"~n   CPU Topology:       ~p"
+	"~n   Num logical procs:  ~p"
+	"~n   SMP support:        ~p"
+	"~n   Num schedulers:     ~p"
+	"~n   Scheduler bindings: ~p"
+	"~n   Wordsize:           ~p"
+	"~n~n", [Prefix, 
+		 os:type(), os:version(), 
+		 erlang:system_info(system_architecture),
+		 erlang:system_info(cpu_topology),
+		 erlang:system_info(logical_processors),
+		 erlang:system_info(smp_support),
+		 erlang:system_info(schedulers),
+		 erlang:system_info(scheduler_bindings),
+		 erlang:system_info(wordsize)]),
+    ok.
+    
+    
+run_on_windows(Fun) ->
+    run_on_os(windows, Fun).
+
+run_on_os(windows, Fun) ->
+    case os:type() of
+	{win32, _} ->
+	    Fun();
+	_ ->
+	    ok
+    end.
+	    
+    
 %% -- Misc node operation wrapper functions --
 
 start_node(Name) ->
@@ -126,6 +159,48 @@ await_stopped(Node, N) ->
 
 
 %% ----------------------------------------------------------------
+%% Ensure apps are started
+%% This to ensure we dont attempt to run teatcases on platforms 
+%% where there is no working ssl app.
+
+ensure_started([]) ->
+    ok;
+ensure_started([App|Apps]) ->
+    ensure_started(App),
+    ensure_started(Apps);
+ensure_started(crypto = App) ->
+    %% We have to treat crypto in this special way because 
+    %% only this function ensures that the NIF lib is actually
+    %% loaded. And only by loading that lib can we know if it 
+    %% is even possible to run crypto.
+    do_ensure_started(App, fun() -> crypto:start() end);
+ensure_started(App) when is_atom(App) ->
+    do_ensure_started(App, fun() -> application:start(App) end).
+
+do_ensure_started(App, Start) when is_function(Start) ->
+    case (catch Start()) of
+	ok ->
+	    ok;
+	{error, {already_started, _}} ->
+	    ok;
+	Error ->
+	    throw({error, {failed_starting, App, Error}})
+    end.
+
+
+ensure_loaded(App) ->
+    case application:load(App) of
+	ok ->
+	    ok;
+	{error, {already_loaded,inets}} ->
+	    ok;
+	Error ->
+	    Error
+    end.
+
+
+
+%% ----------------------------------------------------------------
 %% HTTPD starter functions
 %%
 
@@ -133,8 +208,9 @@ start_http_server(Conf) ->
     start_http_server(Conf, ?HTTP_DEFAULT_SSL_KIND).
 
 start_http_server(Conf, essl = _SslTag) ->
-    tsp("start_http_server(essl) -> entry - try start crypto and public_key"),
+    tsp("start_http_server(essl) -> try start crypto"),
     application:start(crypto), 
+    tsp("start_http_server(essl) -> try start public_key"),
     application:start(public_key), 
     do_start_http_server(Conf);
 start_http_server(Conf, SslTag) ->
@@ -145,23 +221,32 @@ do_start_http_server(Conf) ->
     tsp("do_start_http_server -> entry with"
 	"~n   Conf: ~p"
 	"~n", [Conf]),
-    application:load(inets), 
-    case application:set_env(inets, services, [{httpd, Conf}]) of
+    tsp("do_start_http_server -> load inets"),
+    case ensure_loaded(inets) of
 	ok ->
-	    tsp("start_http_server -> httpd conf stored in inets app env"),
-	    case application:start(inets) of
+	    tsp("do_start_http_server -> inets loaded - now set_env for httpd"),
+	    case application:set_env(inets, services, [{httpd, Conf}]) of
 		ok ->
-		    tsp("start_http_server -> inets started"),
-		    ok;
-		Error1 ->
-		    tsp("<ERROR> Failed starting application: "
-			"~n   Error1: ~p", [Error1]),
-		    Error1
+		    tsp("do_start_http_server -> "
+			"httpd conf stored in inets app env"),
+		    case (catch application:start(inets)) of
+			ok ->
+			    tsp("do_start_http_server -> inets started"),
+			    ok;
+			Error1 ->
+			    tsp("<ERROR> Failed starting application: "
+				"~n   Error1: ~p", [Error1]),
+			    tsf({failed_starting_inets, Error1})
+		    end;
+		Error2 ->
+		    tsp("<ERROR> Failed set application env: "
+			"~n   Error: ~p", [Error2]),
+		    tsf({failed_set_env, Error2})
 	    end;
-	Error2 ->
-	    tsp("<ERROR> Failed set application env: "
-		"~n   Error: ~p", [Error2]),
-	    Error2
+	{error, Reason} ->
+	    tsp("do_start_http_server -> failed loading inets"
+		"~n   Reason: ~p", [Reason]),
+	    tsf({failed_loading_inets, Reason})
     end.
 	    
 start_http_server_ssl(FileName) ->
@@ -179,6 +264,7 @@ do_start_http_server_ssl(FileName) ->
 	"~n", [FileName]),
     application:start(ssl),	       
     catch do_start_http_server(FileName).
+
 
 
 %% ----------------------------------------------------------------------
@@ -201,7 +287,9 @@ print(F, A, Mod, Line) ->
     print("", F, A, Mod, Line).
 
 hostname() ->
-    from($@, atom_to_list(node())).
+   {ok, Name} = inet:gethostname(),
+    Name.
+
 from(H, [H | T]) -> T;
 from(H, [_ | T]) -> from(H, T);
 from(_, []) -> [].
@@ -225,20 +313,49 @@ copy_files(FromDir, ToDir) ->
 
 
 copy_dirs(FromDirRoot, ToDirRoot) ->
-    {ok, Files} = file:list_dir(FromDirRoot),
-    lists:foreach(
-      fun(FileOrDir) -> 
-	      %% Check if it's a directory or a file
-	      case filelib:is_dir(filename:join(FromDirRoot, FileOrDir)) of
-		  true ->
-		      FromDir = filename:join([FromDirRoot, FileOrDir]),
-		      ToDir   = filename:join([ToDirRoot, FileOrDir]),
-		      ok      = file:make_dir(ToDir),
-		      copy_dirs(FromDir, ToDir);
-		  false ->
-		      copy_file(FileOrDir, FromDirRoot, ToDirRoot)
-	      end
-      end, Files).
+    case file:list_dir(FromDirRoot) of
+	{ok, Files}  ->
+	    lists:foreach(
+	      fun(FileOrDir) -> 
+		      %% Check if it's a directory or a file
+		      case filelib:is_dir(filename:join(FromDirRoot, 
+							FileOrDir)) of
+			  true ->
+			      FromDir = filename:join([FromDirRoot, FileOrDir]),
+			      ToDir   = filename:join([ToDirRoot, FileOrDir]),
+			      case file:make_dir(ToDir) of
+				  ok ->
+				      copy_dirs(FromDir, ToDir);
+				  {error, Reason} ->
+				      tsp("<ERROR> Failed creating directory: "
+					  "~n   ToDir:  ~p"
+					  "~n   Reason: ~p"
+					  "~nwhen"
+					  "~n   ToDirRoot:           ~p"
+					  "~n   ToDirRoot file info: ~p", 
+					  [ToDir, 
+					   Reason, 
+					   ToDirRoot, 
+					   file:read_file_info(ToDirRoot)]),
+				      tsf({failed_copy_dir, ToDir, Reason})
+			      end;
+			  false ->
+			      copy_file(FileOrDir, FromDirRoot, ToDirRoot)
+		      end
+	      end, Files);
+	{error, Reason} ->
+	    tsp("<ERROR> Failed get directory file list: "
+		"~n   FromDirRoot: ~p"
+		"~n   Reason:      ~p"
+		"~nwhen"
+		"~n   FromDirRoot file info: ~p", 
+		[FromDirRoot, 
+		 Reason, 
+		 file:read_file_info(FromDirRoot)]),
+	    tsf({failed_list_dir, FromDirRoot, Reason})
+    end.
+	    
+		
 
 del_dirs(Dir) ->
     case file:list_dir(Dir) of
@@ -340,11 +457,8 @@ connect_bin(SockType, Host, Port) ->
 connect_bin(ssl, Host, Port, Opts0) ->
     Opts = [binary, {packet,0} | Opts0], 
     connect(ssl, Host, Port, Opts);
-connect_bin(ossl, Host, Port, Opts0) ->
-    Opts = [{ssl_imp, old}, binary, {packet,0} | Opts0], 
-    connect(ssl, Host, Port, Opts);
 connect_bin(essl, Host, Port, Opts0) ->
-    Opts = [{ssl_imp, new}, binary, {packet,0}, {reuseaddr, true} | Opts0], 
+    Opts = [{ssl_imp, new}, binary, {packet,0}| Opts0], 
     connect(ssl, Host, Port, Opts);
 connect_bin(ip_comm, Host, Port, Opts0) ->
     Opts = [binary, {packet, 0} | Opts0],
@@ -357,9 +471,6 @@ connect_byte(SockType, Host, Port) ->
 connect_byte(ssl, Host, Port, Opts0) ->
     Opts = [{packet,0} | Opts0], 
     connect(ssl, Host, Port, Opts);
-connect_byte(ossl, Host, Port, Opts0) ->
-    Opts = [{ssl_imp, old}, {packet,0} | Opts0], 
-    connect(ssl, Host, Port, Opts);
 connect_byte(essl, Host, Port, Opts0) ->
     Opts = [{ssl_imp, new}, {packet,0} | Opts0], 
     connect(ssl, Host, Port, Opts);
@@ -367,61 +478,12 @@ connect_byte(ip_comm, Host, Port, Opts0) ->
     Opts = [{packet,0} | Opts0],
     connect(ip_comm, Host, Port, Opts).
 
-
-connect(ssl, Host, Port, Opts) ->
-    tsp("connect(ssl) -> entry with"
-	"~n   Host: ~p"
-	"~n   Port: ~p"
-	"~n   Opts: ~p", [Host, Port, Opts]),
-    ssl:start(),
-    %% Does not support ipv6 in old ssl 
-    case ssl:connect(Host, Port, Opts) of
-	{ok, Socket} ->
-	    {ok, Socket};
-	{error, Reason} ->
-	    {error, Reason};
-	Error ->
-	    Error
-    end;
 connect(ip_comm, Host, Port, Opts) ->
-    tsp("connect(ip_comm) -> entry with"
-	"~n   Host: ~p"
-	"~n   Port: ~p"
-	"~n   Opts: ~p", [Host, Port, Opts]),
-    case gen_tcp:connect(Host,Port, Opts) of
-	{ok, Socket} ->
-	    tsp("connect success"),
-	    {ok, Socket};
-	{error, nxdomain} ->
-	    tsp("connect error nxdomain when opts: ~p", [Opts]),
-	    connect(ip_comm, Host, Port, lists:delete(inet6, Opts));
-	{error, eafnosupport}  ->
-	    tsp("connect error eafnosupport when opts: ~p", [Opts]),
-	    connect(ip_comm, Host, Port, lists:delete(inet6, Opts));
-	{error, econnreset} ->
-	    tsp("connect error econnreset when opts: ~p", [Opts]),
-	    connect(ip_comm, Host, Port, lists:delete(inet6, Opts));
-	{error, enetunreach}  ->
-	    tsp("connect error eafnosupport when opts: ~p", [Opts]),
-	    connect(ip_comm, Host, Port, lists:delete(inet6, Opts));
-	{error, {enfile,_}} ->
-	    tsp("connect error enfile when opts: ~p", [Opts]),
-	    {error, enfile};
-	Error ->
-	    tsp("Unexpected error: "
-		"~n   Error: ~p"
-		"~nwhen"
-		"~n   Host:  ~p"
-		"~n   Port:  ~p"
-		"~n   Opts:  ~p"
-		"~n", [Error, Host, Port, Opts]),
-	    Error
-    end.
-
+    gen_tcp:connect(Host, Port, Opts);
+connect(ssl, Host, Port, Opts) ->
+    ssl:connect(Host, Port, Opts).
 
 send(ssl, Socket, Data) ->
-    ssl:send(Socket, Data);
-send(ossl, Socket, Data) ->
     ssl:send(Socket, Data);
 send(essl, Socket, Data) ->
     ssl:send(Socket, Data);
@@ -430,8 +492,6 @@ send(ip_comm,Socket,Data) ->
 
 
 close(ssl,Socket) ->
-    catch ssl:close(Socket);
-close(ossl,Socket) ->
     catch ssl:close(Socket);
 close(essl,Socket) ->
     catch ssl:close(Socket);
@@ -487,11 +547,17 @@ tsp(F) ->
     tsp(F, []).
 tsp(F, A) ->
     Timestamp = formated_timestamp(), 
-    test_server:format("*** ~s ~p ~p ~w:" ++ F ++ "~n", 
-		       [Timestamp, node(), self(), ?MODULE | A]).
+    ct:pal("*** ~s ~p ~p " ++ F ++ "~n", 
+		       [Timestamp, node(), self() | A]).
 
 tsf(Reason) ->
-    test_server:fail(Reason).
+    ct:fail(Reason).
+
+tss(Time) ->
+    ct:sleep(Time).
+
+timestamp() ->
+    http_util:timestamp().
 
 formated_timestamp() ->
     format_timestamp( os:timestamp() ).
@@ -504,4 +570,14 @@ format_timestamp({_N1, _N2, N3} = Now) ->
         io_lib:format("~.4w:~.2.0w:~.2.0w ~.2.0w:~.2.0w:~.2.0w 4~w",
                       [YYYY,MM,DD,Hour,Min,Sec,round(N3/1000)]),
     lists:flatten(FormatDate).
+
+start_apps(Apps) ->
+    lists:foreach(fun(App) ->
+			  application:stop(App),
+			  application:start(App)
+		  end, Apps).
+stop_apps(Apps) ->
+    lists:foreach(fun(App) ->
+			  application:stop(App)
+		  end, Apps).
 

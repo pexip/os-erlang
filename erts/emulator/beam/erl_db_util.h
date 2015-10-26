@@ -1,7 +1,7 @@
 /*
  * %CopyrightBegin%
  *
- * Copyright Ericsson AB 1998-2011. All Rights Reserved.
+ * Copyright Ericsson AB 1998-2013. All Rights Reserved.
  *
  * The contents of this file are subject to the Erlang Public License,
  * Version 1.1, (the "License"); you may not use this file except in
@@ -209,7 +209,7 @@ typedef struct db_fixation {
  */
 
 typedef struct db_table_common {
-    erts_refc_t ref;          /* fixation counter and delete counter */
+    erts_refc_t ref;          /* fixation counter */
 #ifdef ERTS_SMP
     erts_smp_rwmtx_t rwlock;  /* rw lock on table */
     erts_smp_mtx_t fixlock;   /* Protects fixations,megasec,sec,microsec */
@@ -219,7 +219,7 @@ typedef struct db_table_common {
     Eterm owner;              /* Pid of the creator */
     Eterm heir;               /* Pid of the heir */
     UWord heir_data;          /* To send in ETS-TRANSFER (is_immed or (DbTerm*) */
-    SysTimeval heir_started;  /* To further identify the heir */
+    Uint64 heir_started_interval;  /* To further identify the heir */
     Eterm the_name;           /* an atom */
     Eterm id;                 /* atom | integer */
     DbTableMethod* meth;      /* table methods */
@@ -320,14 +320,16 @@ ERTS_GLB_INLINE int db_eq(DbTableCommon* tb, Eterm a, DbTerm* b)
 #define DB_INFO  (DB_PROTECTED|DB_PUBLIC|DB_PRIVATE)
 
 #define ONLY_WRITER(P,T) (((T)->common.status & (DB_PRIVATE|DB_PROTECTED)) \
-			  && (T)->common.owner == (P)->id)
+			  && (T)->common.owner == (P)->common.id)
 
 #define ONLY_READER(P,T) (((T)->common.status & DB_PRIVATE) && \
-(T)->common.owner == (P)->id)
+(T)->common.owner == (P)->common.id)
 
 /* Function prototypes */
-Eterm db_get_trace_control_word_0(Process *p);
-Eterm db_set_trace_control_word_1(Process *p, Eterm val);
+BIF_RETTYPE db_get_trace_control_word(Process* p);
+BIF_RETTYPE db_set_trace_control_word(Process* p, Eterm tcw);
+BIF_RETTYPE db_get_trace_control_word_0(BIF_ALIST_0);
+BIF_RETTYPE db_set_trace_control_word_1(BIF_ALIST_1);
 
 void db_initialize_util(void);
 Eterm db_getkey(int keypos, Eterm obj);
@@ -455,7 +457,7 @@ int erts_db_is_compiled_ms(Eterm term);
    && ERTS_MAGIC_BIN_DESTRUCTOR((BP)) == erts_db_match_prog_destructor)
 
 #define Binary2MatchProg(BP) \
-  (ASSERT_EXPR(IsMatchProgBinary((BP))), \
+  (ASSERT(IsMatchProgBinary((BP))), \
    ((MatchProg *) ERTS_MAGIC_BIN_DATA((BP))))
 /*
 ** Debugging 

@@ -311,19 +311,18 @@ resolve_initial_references_remote(_ObjectId, [], _Ctx) ->
     raise(#'BAD_PARAM'{completion_status=?COMPLETED_NO});
 resolve_initial_references_remote(ObjectId, [RemoteModifier| Rest], Ctx) 
   when is_list(RemoteModifier) ->
-    case lists:prefix("iiop://", RemoteModifier) of
-       true ->
-	    [_, Host, Port] = string:tokens(RemoteModifier, ":/"),
+    case parse_remote_modifier(RemoteModifier) of
+	{error, _} -> 
+	    resolve_initial_references_remote(ObjectId, Rest, Ctx);
+	{ok, Host, Port} ->
 	    IOR = iop_ior:create_external(orber:giop_version(), "", 
-				 Host, list_to_integer(Port), "INIT"),
+					  Host, list_to_integer(Port), "INIT"),
 	    %% We know it's an external referens. Hence, no need to check.
 	    {_, Key} = iop_ior:get_key(IOR),
 	    orber_iiop:request(Key, 'get', [ObjectId], 
 			       {{'tk_objref', 12, "object"},
 				[{'tk_string', 0}],
-				[]}, 'true', infinity, IOR, Ctx);
-       false ->
-	    resolve_initial_references_remote(ObjectId, Rest, Ctx)
+				[]}, 'true', infinity, IOR, Ctx)
     end.
 
 list_initial_services_remote(Address) ->
@@ -332,24 +331,44 @@ list_initial_services_remote(Address) ->
 list_initial_services_remote([], _Ctx) ->
     raise(#'BAD_PARAM'{completion_status=?COMPLETED_NO});
 list_initial_services_remote([RemoteModifier| Rest], Ctx) when is_list(RemoteModifier) ->
-    case lists:prefix("iiop://", RemoteModifier) of
-	true ->
-	    [_, Host, Port] = string:tokens(RemoteModifier, ":/"),
+    case parse_remote_modifier(RemoteModifier) of
+	{error, _} -> 
+	    resolve_initial_references_remote(Rest, Ctx);
+	{ok, Host, Port} ->
 	    IOR = iop_ior:create_external(orber:giop_version(), "", 
 					  Host, list_to_integer(Port), "INIT"),
 	    %% We know it's an external referens. Hence, no need to check.
 	    {_, Key} = iop_ior:get_key(IOR),
 	    orber_iiop:request(Key, 'list', [],
 			       {{'tk_sequence', {'tk_string',0},0},
-				[], []}, 'true', infinity, IOR, Ctx);
-	false -> 
-	    list_initial_services_remote(Rest, Ctx)
+				[], []}, 'true', infinity, IOR, Ctx)
     end;
 list_initial_services_remote(_, _) ->
     raise(#'BAD_PARAM'{completion_status=?COMPLETED_NO}).
 
 
+parse_remote_modifier("iiop://" ++ Rest) ->
+    parse_host_version(Rest);
+parse_remote_modifier(_RemoteModifier) ->
+    {error, not_supported}.
 
+parse_host_version("[" ++ Rest) ->
+    parse_ipv6(Rest, []);
+parse_host_version(Rest) ->
+    parse_ipv4_or_dnsname(Rest, []).
+
+
+parse_ipv4_or_dnsname([$: |Rest], Acc) ->
+    {ok, lists:reverse(Acc), Rest};
+parse_ipv4_or_dnsname([C |Rest], Acc) ->
+    parse_ipv4_or_dnsname(Rest, [C |Acc]).
+
+parse_ipv6("]:" ++ Rest, Acc) ->
+    {ok, lists:reverse(Acc), Rest};
+parse_ipv6([C |Rest], Acc) ->
+    parse_ipv6(Rest, [C |Acc]).
+
+    
 %%-----------------------------------------------------------------
 %% Objectreference convertions
 %%-----------------------------------------------------------------
@@ -947,7 +966,7 @@ handle_cast2(M, F, A, InternalState, State, Ctx) ->
 	    {noreply, {InternalState, NewState}}
     end.
 
-handle_exit(InternalState, State, {undef, [{M, F, _}|_]} = Reason, 
+handle_exit(InternalState, State, {undef, [{M, F, _, _}|_]} = Reason, 
 	    OnewayOp, {M, F}, A) ->
     case catch check_exports(M:module_info(exports), F) of
 	{'EXIT',{undef,_}} ->
@@ -979,7 +998,7 @@ handle_exit(InternalState, State, {undef, [{M, F, _}|_]} = Reason,
 			     #'OBJ_ADAPTER'{minor=(?ORBER_VMCID bor 4),
 					    completion_status=?COMPLETED_MAYBE})
     end;
-handle_exit(InternalState, State, {undef, [{M2, F2, A2}|_]} = Reason, 
+handle_exit(InternalState, State, {undef, [{M2, F2, A2, _}|_]} = Reason, 
 	    OnewayOp, {M, F}, A) ->
     case catch check_exports(M2:module_info(exports), F2) of
 	{'EXIT',{undef,_}} ->

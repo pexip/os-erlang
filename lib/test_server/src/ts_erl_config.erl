@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 1997-2010. All Rights Reserved.
+%% Copyright Ericsson AB 1997-2013. All Rights Reserved.
 %%
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -32,7 +32,7 @@ variables(Base0, OsType) ->
     Base2 = get_app_vars(fun erl_interface/2, Base1, OsType),
     Base3 = get_app_vars(fun ic/2, Base2, OsType),
     Base4 = get_app_vars(fun jinterface/2, Base3, OsType),
-    Base5 = dl_vars(Base4, OsType),
+    Base5 = dl_vars(Base4, Base3, OsType),
     Base6 = emu_vars(Base5),
     Base7 = get_app_vars(fun ssl/2, Base6, OsType),
     Base8 = erts_lib(Base7, OsType),
@@ -60,7 +60,7 @@ get_app_vars(AppFun, Vars, OsType) ->
 	    exit({unexpected_internal_error, Garbage})
     end.
 
-dl_vars(Vars, _) ->
+dl_vars(Vars, Base3, OsType) ->
     ShlibRules0 = ".SUFFIXES:\n" ++
  	".SUFFIXES: @dll@ @obj@ .c\n\n" ++
  	".c@dll@:\n" ++
@@ -68,7 +68,23 @@ dl_vars(Vars, _) ->
 	"\t@SHLIB_LD@ @CROSSLDFLAGS@ @SHLIB_LDFLAGS@ $(SHLIB_EXTRA_LDFLAGS) -o $@ $*@obj@ @SHLIB_LDLIBS@ $(SHLIB_EXTRA_LDLIBS)",
 
     ShlibRules = ts_lib:subst(ShlibRules0, Vars),
-    [{'SHLIB_RULES', ShlibRules}|Vars].
+    case get_app_vars2(fun jinterface/2, Base3, OsType) of
+	{App, not_found} ->
+	    [{'SHLIB_RULES', ShlibRules}, {App, "not_found"}|Vars];
+	_ ->
+	    [{'SHLIB_RULES', ShlibRules}|Vars]
+    end.
+get_app_vars2(AppFun, Vars, OsType) ->
+    case catch AppFun(Vars,OsType) of
+	Res when is_list(Res) ->
+	    {jinterface, ok};
+	{cannot_find_app, App} ->
+	    {App, not_found};
+	{'EXIT', Reason} ->
+	    exit(Reason);
+	Garbage ->
+	    exit({unexpected_internal_error, Garbage})
+    end.
 
 erts_lib_name(multi_threaded, {win32, V}) ->
     link_library("erts_MD" ++ case is_debug_build() of
@@ -93,7 +109,10 @@ erts_lib(Vars,OsType) ->
      ErtsLibIncludeInternal,
      ErtsLibIncludeInternalGenerated,
      ErtsLibPath,
-     ErtsLibInternalPath}
+     ErtsLibInternalPath,
+     ErtsLibEthreadMake,
+     ErtsLibInternalMake
+    }
 	= case erl_root(Vars) of
 	      {installed, _Root} ->
 		  Erts = lib_dir(Vars, erts),
@@ -101,12 +120,17 @@ erts_lib(Vars,OsType) ->
 		  ErtsIncludeInternal = filename:join([ErtsInclude, "internal"]),
 		  ErtsLib = filename:join([Erts, "lib"]),
 		  ErtsLibInternal = filename:join([ErtsLib, "internal"]),
+		  ErtsEthreadMake = filename:join([ErtsIncludeInternal, "ethread.mk"]),
+		  ErtsInternalMake = filename:join([ErtsIncludeInternal, "erts_internal.mk"]),
+
 		  {ErtsInclude,
 		   ErtsInclude,
 		   ErtsIncludeInternal,
 		   ErtsIncludeInternal,
 		   ErtsLib,
-		   ErtsLibInternal};
+		   ErtsLibInternal,
+		   ErtsEthreadMake,
+		   ErtsInternalMake};
 	      {srctree, Root, Target} ->
 		  Erts = filename:join([Root, "erts"]),
 		  ErtsInclude = filename:join([Erts, "include"]),
@@ -120,38 +144,45 @@ erts_lib(Vars,OsType) ->
 						   "lib",
 						   "internal",
 						   Target]),
+		  ErtsEthreadMake = filename:join([ErtsIncludeInternalTarget, "ethread.mk"]),
+		  ErtsInternalMake = filename:join([ErtsIncludeInternalTarget, "erts_internal.mk"]),
+
 		  {ErtsInclude,
 		   ErtsIncludeTarget,
 		   ErtsIncludeInternal,
 		   ErtsIncludeInternalTarget,
 		   ErtsLib,
-		   ErtsLibInternal}
+		   ErtsLibInternal,
+		   ErtsEthreadMake,
+		   ErtsInternalMake}
 	  end,
     [{erts_lib_include,
-      filename:nativename(ErtsLibInclude)},
+      quote(filename:nativename(ErtsLibInclude))},
      {erts_lib_include_generated,
-      filename:nativename(ErtsLibIncludeGenerated)},
+      quote(filename:nativename(ErtsLibIncludeGenerated))},
      {erts_lib_include_internal,
-      filename:nativename(ErtsLibIncludeInternal)},
+      quote(filename:nativename(ErtsLibIncludeInternal))},
      {erts_lib_include_internal_generated,
-      filename:nativename(ErtsLibIncludeInternalGenerated)},
-     {erts_lib_path, filename:nativename(ErtsLibPath)},
-     {erts_lib_internal_path, filename:nativename(ErtsLibInternalPath)},
+      quote(filename:nativename(ErtsLibIncludeInternalGenerated))},
+     {erts_lib_path, quote(filename:nativename(ErtsLibPath))},
+     {erts_lib_internal_path, quote(filename:nativename(ErtsLibInternalPath))},
      {erts_lib_multi_threaded, erts_lib_name(multi_threaded, OsType)},
-     {erts_lib_single_threaded, erts_lib_name(single_threaded, OsType)}
+     {erts_lib_single_threaded, erts_lib_name(single_threaded, OsType)},
+     {erts_lib_make_ethread, quote(ErtsLibEthreadMake)},
+     {erts_lib_make_internal, quote(ErtsLibInternalMake)}
      | Vars].
 
 erl_include(Vars) ->
     Include = 
 	case erl_root(Vars) of
 	    {installed, Root} ->
-		filename:join([Root, "usr", "include"]);
+		quote(filename:join([Root, "usr", "include"]));
 	    {srctree, Root, Target} ->
-		filename:join([Root, "erts", "emulator", "beam"])
-		    ++ " -I" ++ filename:join([Root, "erts", "emulator"])
+		quote(filename:join([Root, "erts", "emulator", "beam"]))
+		    ++ " -I" ++ quote(filename:join([Root, "erts", "emulator"]))
 		    ++ system_include(Root, Vars)
-		    ++ " -I" ++ filename:join([Root, "erts", "include"])
-		    ++ " -I" ++ filename:join([Root, "erts", "include", Target])
+		    ++ " -I" ++ quote(filename:join([Root, "erts", "include"]))
+		    ++ " -I" ++ quote(filename:join([Root, "erts", "include", Target]))
 	end,
     [{erl_include, filename:nativename(Include)}|Vars].
 
@@ -160,10 +191,9 @@ system_include(Root, Vars) ->
     SysDir =
 	case ts_lib:var(os, Vars) of
 	    "Windows" ++ _T -> "sys/win32";
-	    "VxWorks" -> "sys.vxworks";
 	    _ -> "sys/unix"
 	end,
-    " -I" ++ filename:nativename(filename:join([Root, "erts", "emulator", SysDir])).
+    " -I" ++ quote(filename:nativename(filename:join([Root, "erts", "emulator", SysDir]))).
 
 erl_interface(Vars,OsType) ->
     {Incl, {LibPath, MkIncl}} =
@@ -175,13 +205,10 @@ erl_interface(Vars,OsType) ->
 		 case erl_root(Vars) of
 		     {installed, _Root} ->
 			 {filename:join(Dir, "lib"),
-			  filename:join(Dir, "src")};
-		     {srctree, _Root, _Target} when OsType =:= vxworks ->
-			 {filename:join(Dir, "lib"),
-			  filename:join([Dir, "src"])};
+			  filename:join([Dir, "src", "eidefs.mk"])};
 		     {srctree, _Root, Target} ->
 			 {filename:join([Dir, "obj", Target]),
-			  filename:join([Dir, "src", Target])}
+			  filename:join([Dir, "src", Target, "eidefs.mk"])}
 		 end}
 	end,
     Lib = link_library("erl_interface",OsType),
@@ -218,22 +245,18 @@ erl_interface(Vars,OsType) ->
 		    {unix,_} ->
 			"-lpthread";
 		    _ -> 
-			"" % VxWorks
+			""
 		end,
-    CrossCompile = case OsType of
-		       vxworks -> "true";
-		       _ ->       "false"
-		   end,
-    [{erl_interface_libpath, filename:nativename(LibPath)},
+    [{erl_interface_libpath, quote(filename:nativename(LibPath))},
      {erl_interface_sock_libs, sock_libraries(OsType)},
-     {erl_interface_lib, Lib},
-     {erl_interface_eilib, Lib1},
-     {erl_interface_lib_drv, LibDrv},
-     {erl_interface_eilib_drv, Lib1Drv},
+     {erl_interface_lib, quote(filename:join(LibPath, Lib))},
+     {erl_interface_eilib, quote(filename:join(LibPath, Lib1))},
+     {erl_interface_lib_drv, quote(filename:join(LibPath, LibDrv))},
+     {erl_interface_eilib_drv, quote(filename:join(LibPath, Lib1Drv))},
      {erl_interface_threadlib, ThreadLib},
-     {erl_interface_include, filename:nativename(Incl)},
-     {erl_interface_mk_include, filename:nativename(MkIncl)},
-     {erl_interface_cross_compile, CrossCompile} | Vars].
+     {erl_interface_include, quote(filename:nativename(Incl))},
+     {erl_interface_mk_include, quote(filename:nativename(MkIncl))}
+     | Vars].
 
 ic(Vars, OsType) ->
     {ClassPath, LibPath, Incl} =
@@ -250,10 +273,10 @@ ic(Vars, OsType) ->
 		 end,
 		 filename:join(Dir, "include")}
 	end,
-    [{ic_classpath, filename:nativename(ClassPath)},
-     {ic_libpath, filename:nativename(LibPath)},
-     {ic_lib, link_library("ic", OsType)},
-     {ic_include_path, filename:nativename(Incl)}|Vars].
+    [{ic_classpath, quote(filename:nativename(ClassPath))},
+     {ic_libpath, quote(filename:nativename(LibPath))},
+     {ic_lib, quote(filename:join(filename:nativename(LibPath),link_library("ic", OsType)))},
+     {ic_include_path, quote(filename:nativename(Incl))}|Vars].
 
 jinterface(Vars, _OsType) ->
     ClassPath =
@@ -263,7 +286,7 @@ jinterface(Vars, _OsType) ->
 	    Dir ->
 		filename:join([Dir, "priv", "OtpErlang.jar"])
 	end,
-    [{jinterface_classpath, filename:nativename(ClassPath)}|Vars].
+    [{jinterface_classpath, quote(filename:nativename(ClassPath))}|Vars].
 
 lib_dir(Vars, Lib) ->
     LibLibDir = case Lib of
@@ -275,8 +298,6 @@ lib_dir(Vars, Lib) ->
 		end,
     case {get_var(crossroot, Vars), LibLibDir} of
 	{{error, _}, _} ->			%no crossroot
-	    LibLibDir;
-	{_, {error, _}} ->			%no lib
 	    LibLibDir;
 	{CrossRoot, _} ->
 	    %% XXX: Ugly. So ugly I won't comment it
@@ -299,18 +320,16 @@ lib_dir(Vars, Lib) ->
     end.
 
 erl_root(Vars) ->
-    Root = code:root_dir(),
-    case ts_lib:erlang_type() of
+    Root = case get_var(crossroot,Vars) of
+	       {error, notfound} -> code:root_dir();
+	       CrossRoot -> CrossRoot
+	   end,
+    case ts_lib:erlang_type(Root) of
 	{srctree, _Version} ->
 	    Target = get_var(target, Vars),
 	    {srctree, Root, Target};
 	{_, _Version} ->
-	    case get_var(crossroot,Vars) of
-		{error, notfound} ->
-		    {installed, Root};
-		CrossRoot ->
-		    {installed, CrossRoot}
-	    end
+	    {installed, Root}
     end.
 
 
@@ -326,15 +345,11 @@ get_var(Key, Vars) ->
 sock_libraries({win32, _}) ->
     "ws2_32.lib";
 sock_libraries({unix, _}) ->
-    "";	% Included in general libraries if needed.
-sock_libraries(vxworks) ->
-    "".
+    "".	% Included in general libraries if needed.
 
 link_library(LibName,{win32, _}) ->
     LibName ++ ".lib";
 link_library(LibName,{unix, _}) ->
-    "lib" ++ LibName ++ ".a";
-link_library(LibName,vxworks) ->
     "lib" ++ LibName ++ ".a";
 link_library(_LibName,_Other) ->
     exit({link_library, not_supported}).
@@ -362,10 +377,26 @@ ssl(Vars, _OsType) ->
 	{error, bad_name} ->
 	    throw({cannot_find_app, ssl});
 	Dir ->
-	    [{ssl_libdir, filename:nativename(Dir)}| Vars]
+	    [{ssl_libdir, quote(filename:nativename(Dir))}| Vars]
     end.
 
 separators(Vars, {win32,_}) ->
     [{'DS',"\\"},{'PS',";"}|Vars];
 separators(Vars, _) ->
     [{'DS',"/"},{'PS',":"}|Vars].
+
+quote(List) ->
+    case lists:member($ , List) of
+	false -> List;
+	true -> make_quote(List)
+    end.
+
+make_quote(List) ->
+    case os:type() of
+	{win32, _} -> %% nmake"
+	    [$"] ++ List ++ [$"];
+	_ -> %% make
+	    BackQuote = fun($ , Acc) -> [$\\ , $  |Acc];
+			   (Char, Acc) -> [Char|Acc] end,
+	    lists:foldr(BackQuote, [], List)
+    end.

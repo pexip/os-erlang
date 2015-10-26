@@ -308,7 +308,7 @@ ac_includes_default="\
 # include <unistd.h>
 #endif"
 
-ac_subst_vars='SHELL PATH_SEPARATOR PACKAGE_NAME PACKAGE_TARNAME PACKAGE_VERSION PACKAGE_STRING PACKAGE_BUGREPORT exec_prefix prefix program_transform_name bindir sbindir libexecdir datadir sysconfdir sharedstatedir localstatedir libdir includedir oldincludedir infodir mandir build_alias host_alias target_alias DEFS ECHO_C ECHO_N ECHO_T LIBS build build_cpu build_vendor build_os host host_cpu host_vendor host_os TARGET CC CFLAGS LDFLAGS CPPFLAGS ac_ct_CC EXEEXT OBJEXT CXX CXXFLAGS ac_ct_CXX RANLIB ac_ct_RANLIB CPP MIXED_CYGWIN_VC MIXED_CYGWIN_MINGW MIXED_CYGWIN EGREP GL_LIBS DEBUG_CFLAGS DEBUG_CXXFLAGS ERLC WX_BUILDING_INSIDE_ERLSRC ERLANG_ROOT_DIR WX_CONFIG_PATH WX_CPPFLAGS WX_CFLAGS WX_CXXFLAGS WX_CFLAGS_ONLY WX_CXXFLAGS_ONLY WX_LIBS WX_LIBS_STATIC WX_VERSION WX_RESCOMP DEBUG_WX_CFLAGS DEBUG_WX_CXXFLAGS DEBUG_WX_LIBS DEBUG_WX_LIBS_STATIC FORCED_DEBUG_BUILD WX_HAVE_STATIC_LIBS RC_FILE_TYPE HAVE_GL_SUPPORT TESS_CB_TIGER_STYLE WXERL_CAN_BUILD_DRIVER SO_EXT RUN_ERL WXERL_SYS_TYPE LIBOBJS LTLIBOBJS'
+ac_subst_vars='SHELL PATH_SEPARATOR PACKAGE_NAME PACKAGE_TARNAME PACKAGE_VERSION PACKAGE_STRING PACKAGE_BUGREPORT exec_prefix prefix program_transform_name bindir sbindir libexecdir datadir sysconfdir sharedstatedir localstatedir libdir includedir oldincludedir infodir mandir build_alias host_alias target_alias DEFS ECHO_C ECHO_N ECHO_T LIBS build build_cpu build_vendor build_os host host_cpu host_vendor host_os TARGET CC CFLAGS LDFLAGS CPPFLAGS ac_ct_CC EXEEXT OBJEXT CXX CXXFLAGS ac_ct_CXX RANLIB ac_ct_RANLIB CPP MIXED_CYGWIN_VC MIXED_MSYS_VC MIXED_VC MIXED_CYGWIN_MINGW MIXED_CYGWIN MIXED_MSYS EGREP OBJC_CC OBJC_CFLAGS GL_LIBS DEBUG_CFLAGS DEBUG_CXXFLAGS ERLC WX_BUILDING_INSIDE_ERLSRC ERLANG_ROOT_DIR WX_CONFIG_PATH WX_CPPFLAGS WX_CFLAGS WX_CXXFLAGS WX_CFLAGS_ONLY WX_CXXFLAGS_ONLY WX_LIBS WX_LIBS_STATIC WX_VERSION WX_RESCOMP WX_VERSION_MAJOR WX_VERSION_MINOR WX_VERSION_MICRO DEBUG_WX_CFLAGS DEBUG_WX_CXXFLAGS DEBUG_WX_LIBS DEBUG_WX_LIBS_STATIC FORCED_DEBUG_BUILD WX_HAVE_STATIC_LIBS RC_FILE_TYPE HAVE_GL_SUPPORT TESS_CB_TIGER_STYLE WXERL_CAN_BUILD_DRIVER SO_EXT RUN_ERL WXERL_SYS_TYPE LIBOBJS LTLIBOBJS'
 ac_subst_files=''
 
 # Initialize some variables set by options.
@@ -847,6 +847,12 @@ fi
 if test -n "$ac_init_help"; then
 
   cat <<\_ACEOF
+
+Optional Features:
+  --disable-FEATURE       do not include FEATURE (same as --enable-FEATURE=no)
+  --enable-FEATURE[=ARG]  include FEATURE [ARG=yes]
+  --enable-sanitizers[=comma-separated list of sanitizers]
+                          Default=address,undefined
 
 Optional Packages:
   --with-PACKAGE[=ARG]    use PACKAGE [ARG=yes]
@@ -3100,19 +3106,29 @@ ac_compiler_gnu=$ac_cv_c_compiler_gnu
 
 { echo "$as_me:$LINENO: Building for $host_os" >&5
 echo "$as_me: Building for $host_os" >&6;}
-MIXED_CYGWIN=no
 WXERL_CAN_BUILD_DRIVER=true
 
-echo "$as_me:$LINENO: checking for mixed cygwin and native VC++ environment" >&5
-echo $ECHO_N "checking for mixed cygwin and native VC++ environment... $ECHO_C" >&6
-if test "X$CC" = "Xcc.sh" -a "X$host" = "Xwin32" -a "x$GCC" != x"yes"; then
+
+MIXED_CYGWIN=no
+MIXED_MSYS=no
+
+echo "$as_me:$LINENO: checking for mixed cygwin or msys and native VC++ environment" >&5
+echo $ECHO_N "checking for mixed cygwin or msys and native VC++ environment... $ECHO_C" >&6
+if test "X$host" = "Xwin32" -a "x$GCC" != "xyes"; then
 	if test -x /usr/bin/cygpath; then
-		CFLAGS="-Owx"
+		CFLAGS="-O2"
 		MIXED_CYGWIN=yes
-		echo "$as_me:$LINENO: result: yes" >&5
-echo "${ECHO_T}yes" >&6
+		echo "$as_me:$LINENO: result: Cygwin and VC" >&5
+echo "${ECHO_T}Cygwin and VC" >&6
 		MIXED_CYGWIN_VC=yes
 		CPPFLAGS="$CPPFLAGS -DERTS_MIXED_CYGWIN_VC"
+	elif test -x /usr/bin/msysinfo; then
+	        CFLAGS="-O2"
+		MIXED_MSYS=yes
+		echo "$as_me:$LINENO: result: MSYS and VC" >&5
+echo "${ECHO_T}MSYS and VC" >&6
+		MIXED_MSYS_VC=yes
+		CPPFLAGS="$CPPFLAGS -DERTS_MIXED_MSYS_VC"
 	else
 		echo "$as_me:$LINENO: result: undeterminable" >&5
 echo "${ECHO_T}undeterminable" >&6
@@ -3124,12 +3140,22 @@ else
 	echo "$as_me:$LINENO: result: no" >&5
 echo "${ECHO_T}no" >&6
 	MIXED_CYGWIN_VC=no
+	MIXED_MSYS_VC=no
 fi
 
 
-echo "$as_me:$LINENO: checking for mixed cygwin and native MinGW environment" >&5
+
+MIXED_VC=no
+if test "x$MIXED_MSYS_VC" = "xyes" -o  "x$MIXED_CYGWIN_VC" = "xyes" ; then
+   MIXED_VC=yes
+fi
+
+
+
+if test "x$MIXED_MSYS" != "xyes"; then
+   echo "$as_me:$LINENO: checking for mixed cygwin and native MinGW environment" >&5
 echo $ECHO_N "checking for mixed cygwin and native MinGW environment... $ECHO_C" >&6
-if test "X$CC" = "Xcc.sh" -a "X$host" = "Xwin32" -a "x$GCC" = x"yes"; then
+   if test "X$host" = "Xwin32" -a "x$GCC" = x"yes"; then
 	if test -x /usr/bin/cygpath; then
 		CFLAGS="-O2"
 		MIXED_CYGWIN=yes
@@ -3144,16 +3170,31 @@ echo "${ECHO_T}undeterminable" >&6
 echo "$as_me: error: Seems to be mixed windows but not with cygwin" >&2;}
    { (exit cannot handle this!); exit cannot handle this!; }; }
 	fi
-else
+    else
 	echo "$as_me:$LINENO: result: no" >&5
 echo "${ECHO_T}no" >&6
+	MIXED_CYGWIN_MINGW=no
+    fi
+else
 	MIXED_CYGWIN_MINGW=no
 fi
 
 
 echo "$as_me:$LINENO: checking if we mix cygwin with any native compiler" >&5
 echo $ECHO_N "checking if we mix cygwin with any native compiler... $ECHO_C" >&6
-if test "X$MIXED_CYGWIN" = "Xyes" ; then
+if test "X$MIXED_CYGWIN" = "Xyes"; then
+	echo "$as_me:$LINENO: result: yes" >&5
+echo "${ECHO_T}yes" >&6
+else
+	echo "$as_me:$LINENO: result: no" >&5
+echo "${ECHO_T}no" >&6
+fi
+
+
+
+echo "$as_me:$LINENO: checking if we mix msys with another native compiler" >&5
+echo $ECHO_N "checking if we mix msys with another native compiler... $ECHO_C" >&6
+if test "X$MIXED_MSYS" = "Xyes" ; then
 	echo "$as_me:$LINENO: result: yes" >&5
 echo "${ECHO_T}yes" >&6
 else
@@ -3164,9 +3205,12 @@ fi
 
 
 
-## Check that we are in 32 bits mode on darwin
-## (wxWidgets require that it currently uses 32-bits Carbon)
-## Otherwise skip building wxErlang
+USER_CFLAGS=$CFLAGS
+
+if test  X"$MIXED_CYGWIN_VC" = X"yes" -o X"$MIXED_MSYS_VC" = X"yes"; then
+   CFLAGS="-Owx"
+fi
+
 
 
 echo "$as_me:$LINENO: checking for egrep" >&5
@@ -3837,29 +3881,129 @@ _ACEOF
 
 
 
-case $ac_cv_sizeof_void_p-$host_os in
-    8-darwin*)
-	if test X"$WX_BUILDING_INSIDE_ERLSRC" != X"true" ; then
-		{ { echo "$as_me:$LINENO: error: Can not use 64bits wxWidgets on Darwin" >&5
-echo "$as_me: error: Can not use 64bits wxWidgets on Darwin" >&2;}
-   { (exit 1); exit 1; }; }
-	else
-		echo "Can not combine 64bits erlang with wxWidgets on MacOSX, wx will not be useable" > ./CONF_INFO
-		WXERL_CAN_BUILD_DRIVER=false
-		{ echo "$as_me:$LINENO: WARNING: Can not combine 64bits erlang with wxWidgets on MacOSX, wx will not be useable" >&5
-echo "$as_me: WARNING: Can not combine 64bits erlang with wxWidgets on MacOSX, wx will not be useable" >&2;}
-	fi
-	WXERL_CAN_BUILD_DRIVER=false
-	;;
-    *)
-	;;
-esac
-
 PTHR_CFLAGS="-D_THREAD_SAFE -D_REENTRANT"
 
+OBJC_CC=$CC
+OBJC_CFLAGS=""
+CXXFLAGS=""
 case $host_os in
     darwin*)
-        C_ONLY_FLAGS="-ObjC"
+	echo "$as_me:$LINENO: checking Checking wxWidgets for min version:" >&5
+echo $ECHO_N "checking Checking wxWidgets for min version:... $ECHO_C" >&6
+	WX_CC=`wx-config --cc`
+	MAC_MIN=`echo "$WX_CC" | sed 's/^[^ ]*\ *//'`
+	echo "$as_me:$LINENO: result: $MAC_MIN" >&5
+echo "${ECHO_T}$MAC_MIN" >&6
+
+	echo "$as_me:$LINENO: checking if compiler accepts -ObjC" >&5
+echo $ECHO_N "checking if compiler accepts -ObjC... $ECHO_C" >&6
+  	CFLAGS="$CFLAGS -ObjC"
+  	cat >conftest.$ac_ext <<_ACEOF
+/* confdefs.h.  */
+_ACEOF
+cat confdefs.h >>conftest.$ac_ext
+cat >>conftest.$ac_ext <<_ACEOF
+/* end confdefs.h.  */
+
+int
+main ()
+{
+;
+  ;
+  return 0;
+}
+_ACEOF
+rm -f conftest.$ac_objext
+if { (eval echo "$as_me:$LINENO: \"$ac_compile\"") >&5
+  (eval $ac_compile) 2>conftest.er1
+  ac_status=$?
+  grep -v '^ *+' conftest.er1 >conftest.err
+  rm -f conftest.er1
+  cat conftest.err >&5
+  echo "$as_me:$LINENO: \$? = $ac_status" >&5
+  (exit $ac_status); } &&
+	 { ac_try='test -z "$ac_c_werror_flag"
+			 || test ! -s conftest.err'
+  { (eval echo "$as_me:$LINENO: \"$ac_try\"") >&5
+  (eval $ac_try) 2>&5
+  ac_status=$?
+  echo "$as_me:$LINENO: \$? = $ac_status" >&5
+  (exit $ac_status); }; } &&
+	 { ac_try='test -s conftest.$ac_objext'
+  { (eval echo "$as_me:$LINENO: \"$ac_try\"") >&5
+  (eval $ac_try) 2>&5
+  ac_status=$?
+  echo "$as_me:$LINENO: \$? = $ac_status" >&5
+  (exit $ac_status); }; }; then
+  accept_objc_flag=true
+else
+  echo "$as_me: failed program was:" >&5
+sed 's/^/| /' conftest.$ac_ext >&5
+
+accept_objc_flag=false
+fi
+rm -f conftest.err conftest.$ac_objext conftest.$ac_ext
+  	if test "X$accept_objc_flag" = "Xtrue"; then
+	   echo "$as_me:$LINENO: result: yes" >&5
+echo "${ECHO_T}yes" >&6
+           C_ONLY_FLAGS="-ObjC"
+	else
+	   	   	   	   echo "$as_me:$LINENO: result: no" >&5
+echo "${ECHO_T}no" >&6
+	   echo "$as_me:$LINENO: checking for a Cocoa compliant Objective C compiler" >&5
+echo $ECHO_N "checking for a Cocoa compliant Objective C compiler... $ECHO_C" >&6
+	   SEARCHFOR=""
+	   SEARCHFORXX=""
+	   save_IFS=$IFS
+	   IFS=:
+	   set $PATH
+	   IFS=$save_IFS
+	   while test X"$1" != X""; do
+	       	       SEARCHFOR="$1/gcc-apple-4.2 $SEARCHFOR"
+	       SEARCHFORXX="$1/g++-apple-4.2 $SEARCHFORXX"
+	       shift
+	   done
+	   	   SEARCHFOR="/usr/bin/clang /usr/bin/gcc $SEARCHFOR"
+	   SEARCHFORXX="/usr/bin/clang /usr/bin/g++ $SEARCHFORXX"
+	   APPLE_CC=""
+	   APPLE_CXX=""
+	   	   	   IFS=" "
+	   set $SEARCHFORXX
+	   for x in $SEARCHFOR; do
+	       if test -x $x; then
+	       	  APPLE_CC=$x
+	       fi
+	       if test -x "$1"; then
+	       	  APPLE_CXX="$1"
+	       fi
+	       shift
+	   done
+	   IFS=$save_IFS
+	   if test X$APPLE_CC = X -o X$APPLE_CXX = X; then
+	      echo "$as_me:$LINENO: result: no" >&5
+echo "${ECHO_T}no" >&6
+	      	      if test X"$WX_BUILDING_INSIDE_ERLSRC" != X"true" ; then
+		{ { echo "$as_me:$LINENO: error: Can not find compiler to compile Cocoa applications" >&5
+echo "$as_me: error: Can not find compiler to compile Cocoa applications" >&2;}
+   { (exit 1); exit 1; }; }
+	      else
+		echo "Can not find compiler to compile Cocoa applications" > ./CONF_INFO
+		WXERL_CAN_BUILD_DRIVER=false
+		{ echo "$as_me:$LINENO: WARNING: Can not find compiler to compile Cocoa applications" >&5
+echo "$as_me: WARNING: Can not find compiler to compile Cocoa applications" >&2;}
+	      fi
+	      WXERL_CAN_BUILD_DRIVER=false
+	   else
+	      	      	      echo "$as_me:$LINENO: result: $APPLE_CC ($APPLE_CXX)" >&5
+echo "${ECHO_T}$APPLE_CC ($APPLE_CXX)" >&6
+	      	      CC=$APPLE_CC
+	      CXX=$APPLE_CXX
+	      	      #CXXFLAGS="-x c++ $CXXFLAGS"
+	      OBJC_CC=$APPLE_CC
+	      OBJC_CFLAGS="-ObjC"
+	   fi
+  	fi
+  	CFLAGS="$USER_CFLAGS $MAC_MIN -Wno-deprecated-declarations"
 	CPPFLAGS="$CPPFLAGS -D_MACOSX $PTHR_CFLAGS"
 	;;
     mingw32)
@@ -3874,14 +4018,21 @@ echo "$as_me: WARNING: Reverting to 32-bit time_t" >&2;}
 	CPPFLAGS="$CPPFLAGS -D_WIN32_WINNT=0x0500"
 	;;
     *)
+	CFLAGS="$CFLAGS -Wno-deprecated-declarations"
 	CPPFLAGS="$CPPFLAGS -D_GNU_SOURCE $PTHR_CFLAGS"
 	;;
 esac
 
+
+
+
 case $host_os in
     darwin*)
-	CFLAGS="-no-cpp-precomp $CFLAGS"
-	LDFLAGS="-bundle -flat_namespace -undefined warning -fPIC $LDFLAGS"
+	LDFLAGS="$MAC_MIN -bundle -flat_namespace -undefined warning -fPIC $LDFLAGS"
+	# Check sizof_void_p as future will hold 64bit MacOS wx
+	if test $ac_cv_sizeof_void_p = 4; then
+	    LDFLAGS="-m32 $LDFLAGS"
+	fi
 	GL_LIBS="-framework OpenGL"
 	;;
     win32)
@@ -3902,15 +4053,20 @@ esac
 case $host_os in
     mingw32)
 	DEBUG_CFLAGS="-g -Wall -DDEBUG $CFLAGS"
-	CFLAGS="-g -Wall -O2 -fomit-frame-pointer -fno-strict-aliasing $CFLAGS"
+	CFLAGS="-g -Wall -O2 $CFLAGS -fomit-frame-pointer -fno-strict-aliasing"
 	;;
     win32)
-	DEBUG_CFLAGS="-g -Wall -DDEBUG $CFLAGS"
+	DEBUG_CFLAGS="-g -Wall $CFLAGS -DDEBUG"
 	CFLAGS="-g -Wall -O2 $CFLAGS"
 	;;
+    darwin*)
+	DEBUG_CFLAGS="-g -Wall -fPIC $CFLAGS -DDEBUG"
+	# omit-frame-pointer causes seg faults with 10.9 and clang
+	CFLAGS="-g -Wall -fPIC $CFLAGS -fno-strict-aliasing"
+	;;
     *)
-	DEBUG_CFLAGS="-g -Wall -fPIC -DDEBUG $CFLAGS"
-	CFLAGS="-g -Wall -O2 -fPIC -fomit-frame-pointer -fno-strict-aliasing $CFLAGS"
+	DEBUG_CFLAGS="-g -Wall -fPIC $CFLAGS -DDEBUG"
+	CFLAGS="-g -Wall -O2 -fPIC $CFLAGS -fomit-frame-pointer -fno-strict-aliasing"
 	;;
 esac
 
@@ -4605,13 +4761,386 @@ done
 
 fi
 
+if test X"$host_os" != X"win32" ; then
+
+for ac_header in GL/glu.h
+do
+as_ac_Header=`echo "ac_cv_header_$ac_header" | $as_tr_sh`
+if eval "test \"\${$as_ac_Header+set}\" = set"; then
+  echo "$as_me:$LINENO: checking for $ac_header" >&5
+echo $ECHO_N "checking for $ac_header... $ECHO_C" >&6
+if eval "test \"\${$as_ac_Header+set}\" = set"; then
+  echo $ECHO_N "(cached) $ECHO_C" >&6
+fi
+echo "$as_me:$LINENO: result: `eval echo '${'$as_ac_Header'}'`" >&5
+echo "${ECHO_T}`eval echo '${'$as_ac_Header'}'`" >&6
+else
+  # Is the header compilable?
+echo "$as_me:$LINENO: checking $ac_header usability" >&5
+echo $ECHO_N "checking $ac_header usability... $ECHO_C" >&6
+cat >conftest.$ac_ext <<_ACEOF
+/* confdefs.h.  */
+_ACEOF
+cat confdefs.h >>conftest.$ac_ext
+cat >>conftest.$ac_ext <<_ACEOF
+/* end confdefs.h.  */
+$ac_includes_default
+#include <$ac_header>
+_ACEOF
+rm -f conftest.$ac_objext
+if { (eval echo "$as_me:$LINENO: \"$ac_compile\"") >&5
+  (eval $ac_compile) 2>conftest.er1
+  ac_status=$?
+  grep -v '^ *+' conftest.er1 >conftest.err
+  rm -f conftest.er1
+  cat conftest.err >&5
+  echo "$as_me:$LINENO: \$? = $ac_status" >&5
+  (exit $ac_status); } &&
+	 { ac_try='test -z "$ac_c_werror_flag"
+			 || test ! -s conftest.err'
+  { (eval echo "$as_me:$LINENO: \"$ac_try\"") >&5
+  (eval $ac_try) 2>&5
+  ac_status=$?
+  echo "$as_me:$LINENO: \$? = $ac_status" >&5
+  (exit $ac_status); }; } &&
+	 { ac_try='test -s conftest.$ac_objext'
+  { (eval echo "$as_me:$LINENO: \"$ac_try\"") >&5
+  (eval $ac_try) 2>&5
+  ac_status=$?
+  echo "$as_me:$LINENO: \$? = $ac_status" >&5
+  (exit $ac_status); }; }; then
+  ac_header_compiler=yes
+else
+  echo "$as_me: failed program was:" >&5
+sed 's/^/| /' conftest.$ac_ext >&5
+
+ac_header_compiler=no
+fi
+rm -f conftest.err conftest.$ac_objext conftest.$ac_ext
+echo "$as_me:$LINENO: result: $ac_header_compiler" >&5
+echo "${ECHO_T}$ac_header_compiler" >&6
+
+# Is the header present?
+echo "$as_me:$LINENO: checking $ac_header presence" >&5
+echo $ECHO_N "checking $ac_header presence... $ECHO_C" >&6
+cat >conftest.$ac_ext <<_ACEOF
+/* confdefs.h.  */
+_ACEOF
+cat confdefs.h >>conftest.$ac_ext
+cat >>conftest.$ac_ext <<_ACEOF
+/* end confdefs.h.  */
+#include <$ac_header>
+_ACEOF
+if { (eval echo "$as_me:$LINENO: \"$ac_cpp conftest.$ac_ext\"") >&5
+  (eval $ac_cpp conftest.$ac_ext) 2>conftest.er1
+  ac_status=$?
+  grep -v '^ *+' conftest.er1 >conftest.err
+  rm -f conftest.er1
+  cat conftest.err >&5
+  echo "$as_me:$LINENO: \$? = $ac_status" >&5
+  (exit $ac_status); } >/dev/null; then
+  if test -s conftest.err; then
+    ac_cpp_err=$ac_c_preproc_warn_flag
+    ac_cpp_err=$ac_cpp_err$ac_c_werror_flag
+  else
+    ac_cpp_err=
+  fi
+else
+  ac_cpp_err=yes
+fi
+if test -z "$ac_cpp_err"; then
+  ac_header_preproc=yes
+else
+  echo "$as_me: failed program was:" >&5
+sed 's/^/| /' conftest.$ac_ext >&5
+
+  ac_header_preproc=no
+fi
+rm -f conftest.err conftest.$ac_ext
+echo "$as_me:$LINENO: result: $ac_header_preproc" >&5
+echo "${ECHO_T}$ac_header_preproc" >&6
+
+# So?  What about this header?
+case $ac_header_compiler:$ac_header_preproc:$ac_c_preproc_warn_flag in
+  yes:no: )
+    { echo "$as_me:$LINENO: WARNING: $ac_header: accepted by the compiler, rejected by the preprocessor!" >&5
+echo "$as_me: WARNING: $ac_header: accepted by the compiler, rejected by the preprocessor!" >&2;}
+    { echo "$as_me:$LINENO: WARNING: $ac_header: proceeding with the compiler's result" >&5
+echo "$as_me: WARNING: $ac_header: proceeding with the compiler's result" >&2;}
+    ac_header_preproc=yes
+    ;;
+  no:yes:* )
+    { echo "$as_me:$LINENO: WARNING: $ac_header: present but cannot be compiled" >&5
+echo "$as_me: WARNING: $ac_header: present but cannot be compiled" >&2;}
+    { echo "$as_me:$LINENO: WARNING: $ac_header:     check for missing prerequisite headers?" >&5
+echo "$as_me: WARNING: $ac_header:     check for missing prerequisite headers?" >&2;}
+    { echo "$as_me:$LINENO: WARNING: $ac_header: see the Autoconf documentation" >&5
+echo "$as_me: WARNING: $ac_header: see the Autoconf documentation" >&2;}
+    { echo "$as_me:$LINENO: WARNING: $ac_header:     section \"Present But Cannot Be Compiled\"" >&5
+echo "$as_me: WARNING: $ac_header:     section \"Present But Cannot Be Compiled\"" >&2;}
+    { echo "$as_me:$LINENO: WARNING: $ac_header: proceeding with the preprocessor's result" >&5
+echo "$as_me: WARNING: $ac_header: proceeding with the preprocessor's result" >&2;}
+    { echo "$as_me:$LINENO: WARNING: $ac_header: in the future, the compiler will take precedence" >&5
+echo "$as_me: WARNING: $ac_header: in the future, the compiler will take precedence" >&2;}
+    (
+      cat <<\_ASBOX
+## ------------------------------------------ ##
+## Report this to the AC_PACKAGE_NAME lists.  ##
+## ------------------------------------------ ##
+_ASBOX
+    ) |
+      sed "s/^/$as_me: WARNING:     /" >&2
+    ;;
+esac
+echo "$as_me:$LINENO: checking for $ac_header" >&5
+echo $ECHO_N "checking for $ac_header... $ECHO_C" >&6
+if eval "test \"\${$as_ac_Header+set}\" = set"; then
+  echo $ECHO_N "(cached) $ECHO_C" >&6
+else
+  eval "$as_ac_Header=\$ac_header_preproc"
+fi
+echo "$as_me:$LINENO: result: `eval echo '${'$as_ac_Header'}'`" >&5
+echo "${ECHO_T}`eval echo '${'$as_ac_Header'}'`" >&6
+
+fi
+if test `eval echo '${'$as_ac_Header'}'` = yes; then
+  cat >>confdefs.h <<_ACEOF
+#define `echo "HAVE_$ac_header" | $as_tr_cpp` 1
+_ACEOF
+
+else
+
+for ac_header in OpenGL/glu.h
+do
+as_ac_Header=`echo "ac_cv_header_$ac_header" | $as_tr_sh`
+if eval "test \"\${$as_ac_Header+set}\" = set"; then
+  echo "$as_me:$LINENO: checking for $ac_header" >&5
+echo $ECHO_N "checking for $ac_header... $ECHO_C" >&6
+if eval "test \"\${$as_ac_Header+set}\" = set"; then
+  echo $ECHO_N "(cached) $ECHO_C" >&6
+fi
+echo "$as_me:$LINENO: result: `eval echo '${'$as_ac_Header'}'`" >&5
+echo "${ECHO_T}`eval echo '${'$as_ac_Header'}'`" >&6
+else
+  # Is the header compilable?
+echo "$as_me:$LINENO: checking $ac_header usability" >&5
+echo $ECHO_N "checking $ac_header usability... $ECHO_C" >&6
+cat >conftest.$ac_ext <<_ACEOF
+/* confdefs.h.  */
+_ACEOF
+cat confdefs.h >>conftest.$ac_ext
+cat >>conftest.$ac_ext <<_ACEOF
+/* end confdefs.h.  */
+$ac_includes_default
+#include <$ac_header>
+_ACEOF
+rm -f conftest.$ac_objext
+if { (eval echo "$as_me:$LINENO: \"$ac_compile\"") >&5
+  (eval $ac_compile) 2>conftest.er1
+  ac_status=$?
+  grep -v '^ *+' conftest.er1 >conftest.err
+  rm -f conftest.er1
+  cat conftest.err >&5
+  echo "$as_me:$LINENO: \$? = $ac_status" >&5
+  (exit $ac_status); } &&
+	 { ac_try='test -z "$ac_c_werror_flag"
+			 || test ! -s conftest.err'
+  { (eval echo "$as_me:$LINENO: \"$ac_try\"") >&5
+  (eval $ac_try) 2>&5
+  ac_status=$?
+  echo "$as_me:$LINENO: \$? = $ac_status" >&5
+  (exit $ac_status); }; } &&
+	 { ac_try='test -s conftest.$ac_objext'
+  { (eval echo "$as_me:$LINENO: \"$ac_try\"") >&5
+  (eval $ac_try) 2>&5
+  ac_status=$?
+  echo "$as_me:$LINENO: \$? = $ac_status" >&5
+  (exit $ac_status); }; }; then
+  ac_header_compiler=yes
+else
+  echo "$as_me: failed program was:" >&5
+sed 's/^/| /' conftest.$ac_ext >&5
+
+ac_header_compiler=no
+fi
+rm -f conftest.err conftest.$ac_objext conftest.$ac_ext
+echo "$as_me:$LINENO: result: $ac_header_compiler" >&5
+echo "${ECHO_T}$ac_header_compiler" >&6
+
+# Is the header present?
+echo "$as_me:$LINENO: checking $ac_header presence" >&5
+echo $ECHO_N "checking $ac_header presence... $ECHO_C" >&6
+cat >conftest.$ac_ext <<_ACEOF
+/* confdefs.h.  */
+_ACEOF
+cat confdefs.h >>conftest.$ac_ext
+cat >>conftest.$ac_ext <<_ACEOF
+/* end confdefs.h.  */
+#include <$ac_header>
+_ACEOF
+if { (eval echo "$as_me:$LINENO: \"$ac_cpp conftest.$ac_ext\"") >&5
+  (eval $ac_cpp conftest.$ac_ext) 2>conftest.er1
+  ac_status=$?
+  grep -v '^ *+' conftest.er1 >conftest.err
+  rm -f conftest.er1
+  cat conftest.err >&5
+  echo "$as_me:$LINENO: \$? = $ac_status" >&5
+  (exit $ac_status); } >/dev/null; then
+  if test -s conftest.err; then
+    ac_cpp_err=$ac_c_preproc_warn_flag
+    ac_cpp_err=$ac_cpp_err$ac_c_werror_flag
+  else
+    ac_cpp_err=
+  fi
+else
+  ac_cpp_err=yes
+fi
+if test -z "$ac_cpp_err"; then
+  ac_header_preproc=yes
+else
+  echo "$as_me: failed program was:" >&5
+sed 's/^/| /' conftest.$ac_ext >&5
+
+  ac_header_preproc=no
+fi
+rm -f conftest.err conftest.$ac_ext
+echo "$as_me:$LINENO: result: $ac_header_preproc" >&5
+echo "${ECHO_T}$ac_header_preproc" >&6
+
+# So?  What about this header?
+case $ac_header_compiler:$ac_header_preproc:$ac_c_preproc_warn_flag in
+  yes:no: )
+    { echo "$as_me:$LINENO: WARNING: $ac_header: accepted by the compiler, rejected by the preprocessor!" >&5
+echo "$as_me: WARNING: $ac_header: accepted by the compiler, rejected by the preprocessor!" >&2;}
+    { echo "$as_me:$LINENO: WARNING: $ac_header: proceeding with the compiler's result" >&5
+echo "$as_me: WARNING: $ac_header: proceeding with the compiler's result" >&2;}
+    ac_header_preproc=yes
+    ;;
+  no:yes:* )
+    { echo "$as_me:$LINENO: WARNING: $ac_header: present but cannot be compiled" >&5
+echo "$as_me: WARNING: $ac_header: present but cannot be compiled" >&2;}
+    { echo "$as_me:$LINENO: WARNING: $ac_header:     check for missing prerequisite headers?" >&5
+echo "$as_me: WARNING: $ac_header:     check for missing prerequisite headers?" >&2;}
+    { echo "$as_me:$LINENO: WARNING: $ac_header: see the Autoconf documentation" >&5
+echo "$as_me: WARNING: $ac_header: see the Autoconf documentation" >&2;}
+    { echo "$as_me:$LINENO: WARNING: $ac_header:     section \"Present But Cannot Be Compiled\"" >&5
+echo "$as_me: WARNING: $ac_header:     section \"Present But Cannot Be Compiled\"" >&2;}
+    { echo "$as_me:$LINENO: WARNING: $ac_header: proceeding with the preprocessor's result" >&5
+echo "$as_me: WARNING: $ac_header: proceeding with the preprocessor's result" >&2;}
+    { echo "$as_me:$LINENO: WARNING: $ac_header: in the future, the compiler will take precedence" >&5
+echo "$as_me: WARNING: $ac_header: in the future, the compiler will take precedence" >&2;}
+    (
+      cat <<\_ASBOX
+## ------------------------------------------ ##
+## Report this to the AC_PACKAGE_NAME lists.  ##
+## ------------------------------------------ ##
+_ASBOX
+    ) |
+      sed "s/^/$as_me: WARNING:     /" >&2
+    ;;
+esac
+echo "$as_me:$LINENO: checking for $ac_header" >&5
+echo $ECHO_N "checking for $ac_header... $ECHO_C" >&6
+if eval "test \"\${$as_ac_Header+set}\" = set"; then
+  echo $ECHO_N "(cached) $ECHO_C" >&6
+else
+  eval "$as_ac_Header=\$ac_header_preproc"
+fi
+echo "$as_me:$LINENO: result: `eval echo '${'$as_ac_Header'}'`" >&5
+echo "${ECHO_T}`eval echo '${'$as_ac_Header'}'`" >&6
+
+fi
+if test `eval echo '${'$as_ac_Header'}'` = yes; then
+  cat >>confdefs.h <<_ACEOF
+#define `echo "HAVE_$ac_header" | $as_tr_cpp` 1
+_ACEOF
+
+fi
+
+done
+
+fi
+
+done
+
+    if test X"$ac_cv_header_GL_glu_h" != Xyes &&
+        test X"$ac_cv_header_OpenGL_glu_h" != Xyes
+    then
+	{ echo "$as_me:$LINENO: WARNING: No GLU headers found, wx will NOT be usable" >&5
+echo "$as_me: WARNING: No GLU headers found, wx will NOT be usable" >&2;}
+    fi
+else
+
+for ac_header in gl/glu.h
+do
+as_ac_Header=`echo "ac_cv_header_$ac_header" | $as_tr_sh`
+echo "$as_me:$LINENO: checking for $ac_header" >&5
+echo $ECHO_N "checking for $ac_header... $ECHO_C" >&6
+if eval "test \"\${$as_ac_Header+set}\" = set"; then
+  echo $ECHO_N "(cached) $ECHO_C" >&6
+else
+  cat >conftest.$ac_ext <<_ACEOF
+/* confdefs.h.  */
+_ACEOF
+cat confdefs.h >>conftest.$ac_ext
+cat >>conftest.$ac_ext <<_ACEOF
+/* end confdefs.h.  */
+#include <windows.h>
+
+#include <$ac_header>
+_ACEOF
+rm -f conftest.$ac_objext
+if { (eval echo "$as_me:$LINENO: \"$ac_compile\"") >&5
+  (eval $ac_compile) 2>conftest.er1
+  ac_status=$?
+  grep -v '^ *+' conftest.er1 >conftest.err
+  rm -f conftest.er1
+  cat conftest.err >&5
+  echo "$as_me:$LINENO: \$? = $ac_status" >&5
+  (exit $ac_status); } &&
+	 { ac_try='test -z "$ac_c_werror_flag"
+			 || test ! -s conftest.err'
+  { (eval echo "$as_me:$LINENO: \"$ac_try\"") >&5
+  (eval $ac_try) 2>&5
+  ac_status=$?
+  echo "$as_me:$LINENO: \$? = $ac_status" >&5
+  (exit $ac_status); }; } &&
+	 { ac_try='test -s conftest.$ac_objext'
+  { (eval echo "$as_me:$LINENO: \"$ac_try\"") >&5
+  (eval $ac_try) 2>&5
+  ac_status=$?
+  echo "$as_me:$LINENO: \$? = $ac_status" >&5
+  (exit $ac_status); }; }; then
+  eval "$as_ac_Header=yes"
+else
+  echo "$as_me: failed program was:" >&5
+sed 's/^/| /' conftest.$ac_ext >&5
+
+eval "$as_ac_Header=no"
+fi
+rm -f conftest.err conftest.$ac_objext conftest.$ac_ext
+fi
+echo "$as_me:$LINENO: result: `eval echo '${'$as_ac_Header'}'`" >&5
+echo "${ECHO_T}`eval echo '${'$as_ac_Header'}'`" >&6
+if test `eval echo '${'$as_ac_Header'}'` = yes; then
+  cat >>confdefs.h <<_ACEOF
+#define `echo "HAVE_$ac_header" | $as_tr_cpp` 1
+_ACEOF
+
+fi
+
+done
+
+fi
 
 
-CXXFLAGS="$CFLAGS $CPPFLAGS"
+
+DEBUG_CXXFLAGS="$CXXFLAGS $DEBUG_CFLAGS $CPPFLAGS"
+DEBUG_CFLAGS="$DEBUG_CFLAGS $CPPFLAGS $C_ONLY_FLAGS"
+
+CXXFLAGS="$CXXFLAGS $CFLAGS $CPPFLAGS"
 CFLAGS="$CFLAGS $CPPFLAGS $C_ONLY_FLAGS"
 
-DEBUG_CXXFLAGS="$DEBUG_CFLAGS $CPPFLAGS"
-DEBUG_CFLAGS="$DEBUG_CFLAGS $CPPFLAGS $C_ONLY_FLAGS"
 
 
 
@@ -4668,7 +5197,10 @@ fi
 if test "$cross_compiling" = "yes"; then
     echo "Cross compilation of the wx driver is not supported yet, wx will NOT be usable" > ./CONF_INFO
     WXERL_CAN_BUILD_DRIVER=false
-elif test X"$MIXED_CYGWIN_VC" != X"yes" ; then
+elif test  X"$MIXED_CYGWIN_VC" = X"no" -a X"$MIXED_MSYS_VC" = X"no"; then
+    WX_VERSION=`wx-config --version`
+    case $WX_VERSION in
+         2.8.*)
 
 
 
@@ -4684,6 +5216,59 @@ elif test X"$MIXED_CYGWIN_VC" != X"yes" ; then
 
 
 
+		;;
+	 *)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+		;;
+    esac
 
 
 
@@ -4722,6 +5307,7 @@ fi;
 
     echo "$as_me:$LINENO: checking for debug build of wxWidgets" >&5
 echo $ECHO_N "checking for debug build of wxWidgets... $ECHO_C" >&6
+
 
 
     if test x${WX_CONFIG_NAME+set} != xset ; then
@@ -4806,7 +5392,7 @@ echo $ECHO_N "checking for wxWidgets version >= $min_wx_version... $ECHO_C" >&6
 echo $ECHO_N "checking for wxWidgets version >= $min_wx_version (--unicode --debug=yes)... $ECHO_C" >&6
     fi
 
-    WX_CONFIG_WITH_ARGS="$WX_CONFIG_PATH $wx_config_args --unicode --debug=yes stc,xrc,html,adv,xml,core,base,gl,aui"
+            WX_CONFIG_WITH_ARGS="$WX_CONFIG_PATH $wx_config_args --unicode --debug=yes"
 
     WX_VERSION=`$WX_CONFIG_WITH_ARGS --version 2>/dev/null`
     wx_config_major_version=`echo $WX_VERSION | \
@@ -4845,14 +5431,13 @@ echo $ECHO_N "checking for wxWidgets version >= $min_wx_version (--unicode --deb
 
 
     if test -n "$wx_ver_ok"; then
-
       echo "$as_me:$LINENO: result: yes (version $WX_VERSION)" >&5
 echo "${ECHO_T}yes (version $WX_VERSION)" >&6
-      WX_LIBS=`$WX_CONFIG_WITH_ARGS --libs`
+      WX_LIBS=`$WX_CONFIG_WITH_ARGS --libs stc,xrc,html,adv,xml,core,base,gl,aui`
 
                               echo "$as_me:$LINENO: checking for wxWidgets static library" >&5
 echo $ECHO_N "checking for wxWidgets static library... $ECHO_C" >&6
-      WX_LIBS_STATIC=`$WX_CONFIG_WITH_ARGS --static --libs 2>/dev/null`
+      WX_LIBS_STATIC=`$WX_CONFIG_WITH_ARGS --static --libs stc,xrc,html,adv,xml,core,base,gl,aui 2>/dev/null`
       if test "x$WX_LIBS_STATIC" = "x"; then
         echo "$as_me:$LINENO: result: no" >&5
 echo "${ECHO_T}no" >&6
@@ -4895,16 +5480,16 @@ echo "${ECHO_T}yes" >&6
       fi
 
       if test "x$wx_has_cppflags" = x ; then
-                  WX_CFLAGS=`$WX_CONFIG_WITH_ARGS --cflags`
+                  WX_CFLAGS=`$WX_CONFIG_WITH_ARGS --cflags stc,xrc,html,adv,xml,core,base,gl,aui`
          WX_CPPFLAGS=$WX_CFLAGS
          WX_CXXFLAGS=$WX_CFLAGS
 
          WX_CFLAGS_ONLY=$WX_CFLAGS
          WX_CXXFLAGS_ONLY=$WX_CFLAGS
       else
-                  WX_CPPFLAGS=`$WX_CONFIG_WITH_ARGS --cppflags`
-         WX_CXXFLAGS=`$WX_CONFIG_WITH_ARGS --cxxflags`
-         WX_CFLAGS=`$WX_CONFIG_WITH_ARGS --cflags`
+                  WX_CPPFLAGS=`$WX_CONFIG_WITH_ARGS --cppflags stc,xrc,html,adv,xml,core,base,gl,aui`
+         WX_CXXFLAGS=`$WX_CONFIG_WITH_ARGS --cxxflags stc,xrc,html,adv,xml,core,base,gl,aui`
+         WX_CFLAGS=`$WX_CONFIG_WITH_ARGS --cflags stc,xrc,html,adv,xml,core,base,gl,aui`
 
          WX_CFLAGS_ONLY=`echo $WX_CFLAGS | sed "s@^$WX_CPPFLAGS *@@"`
          WX_CXXFLAGS_ONLY=`echo $WX_CXXFLAGS | sed "s@^$WX_CFLAGS *@@"`
@@ -4928,6 +5513,31 @@ echo "${ECHO_T}no (version $WX_VERSION is not new enough)" >&6
        WX_LIBS=""
        WX_LIBS_STATIC=""
        WX_RESCOMP=""
+
+       if test ! -z "--unicode --debug=yes"; then
+
+          wx_error_message="
+    The configuration you asked for $PACKAGE_NAME requires a wxWidgets
+    build with the following settings:
+        --unicode --debug=yes
+    but such build is not available.
+
+    To see the wxWidgets builds available on this system, please use
+    'wx-config --list' command. To use the default build, returned by
+    'wx-config --selected-config', use the options with their 'auto'
+    default values."
+
+       fi
+
+       wx_error_message="
+    The requested wxWidgets build couldn't be found.
+    $wx_error_message
+
+    If you still get this error, then check that 'wx-config' is
+    in path, the directory where wxWidgets libraries are installed
+    (returned by 'wx-config --libs' command) is in LD_LIBRARY_PATH
+    or equivalent variable and wxWidgets version is $reqwx or above."
+
        wxWinWithGLDBG=0
 
     fi
@@ -4954,6 +5564,14 @@ echo "${ECHO_T}no (version $WX_VERSION is not new enough)" >&6
 
 
 
+      WX_VERSION_MAJOR="$wx_config_major_version"
+  WX_VERSION_MINOR="$wx_config_minor_version"
+  WX_VERSION_MICRO="$wx_config_micro_version"
+
+
+
+
+
     DEBUG_WX_CFLAGS=$WX_CFLAGS
     DEBUG_WX_CXXFLAGS=$WX_CXXFLAGS
     DEBUG_WX_LIBS=$WX_LIBS
@@ -4965,6 +5583,7 @@ echo "${ECHO_T}no (version $WX_VERSION is not new enough)" >&6
 
     echo "$as_me:$LINENO: checking for standard build of wxWidgets" >&5
 echo $ECHO_N "checking for standard build of wxWidgets... $ECHO_C" >&6
+
 
     if test x${WX_CONFIG_NAME+set} != xset ; then
      WX_CONFIG_NAME=wx-config
@@ -5048,7 +5667,7 @@ echo $ECHO_N "checking for wxWidgets version >= $min_wx_version... $ECHO_C" >&6
 echo $ECHO_N "checking for wxWidgets version >= $min_wx_version (--unicode --debug=no)... $ECHO_C" >&6
     fi
 
-    WX_CONFIG_WITH_ARGS="$WX_CONFIG_PATH $wx_config_args --unicode --debug=no stc,xrc,html,adv,xml,core,base,gl,aui"
+            WX_CONFIG_WITH_ARGS="$WX_CONFIG_PATH $wx_config_args --unicode --debug=no"
 
     WX_VERSION=`$WX_CONFIG_WITH_ARGS --version 2>/dev/null`
     wx_config_major_version=`echo $WX_VERSION | \
@@ -5087,14 +5706,13 @@ echo $ECHO_N "checking for wxWidgets version >= $min_wx_version (--unicode --deb
 
 
     if test -n "$wx_ver_ok"; then
-
       echo "$as_me:$LINENO: result: yes (version $WX_VERSION)" >&5
 echo "${ECHO_T}yes (version $WX_VERSION)" >&6
-      WX_LIBS=`$WX_CONFIG_WITH_ARGS --libs`
+      WX_LIBS=`$WX_CONFIG_WITH_ARGS --libs stc,xrc,html,adv,xml,core,base,gl,aui`
 
                               echo "$as_me:$LINENO: checking for wxWidgets static library" >&5
 echo $ECHO_N "checking for wxWidgets static library... $ECHO_C" >&6
-      WX_LIBS_STATIC=`$WX_CONFIG_WITH_ARGS --static --libs 2>/dev/null`
+      WX_LIBS_STATIC=`$WX_CONFIG_WITH_ARGS --static --libs stc,xrc,html,adv,xml,core,base,gl,aui 2>/dev/null`
       if test "x$WX_LIBS_STATIC" = "x"; then
         echo "$as_me:$LINENO: result: no" >&5
 echo "${ECHO_T}no" >&6
@@ -5137,16 +5755,16 @@ echo "${ECHO_T}yes" >&6
       fi
 
       if test "x$wx_has_cppflags" = x ; then
-                  WX_CFLAGS=`$WX_CONFIG_WITH_ARGS --cflags`
+                  WX_CFLAGS=`$WX_CONFIG_WITH_ARGS --cflags stc,xrc,html,adv,xml,core,base,gl,aui`
          WX_CPPFLAGS=$WX_CFLAGS
          WX_CXXFLAGS=$WX_CFLAGS
 
          WX_CFLAGS_ONLY=$WX_CFLAGS
          WX_CXXFLAGS_ONLY=$WX_CFLAGS
       else
-                  WX_CPPFLAGS=`$WX_CONFIG_WITH_ARGS --cppflags`
-         WX_CXXFLAGS=`$WX_CONFIG_WITH_ARGS --cxxflags`
-         WX_CFLAGS=`$WX_CONFIG_WITH_ARGS --cflags`
+                  WX_CPPFLAGS=`$WX_CONFIG_WITH_ARGS --cppflags stc,xrc,html,adv,xml,core,base,gl,aui`
+         WX_CXXFLAGS=`$WX_CONFIG_WITH_ARGS --cxxflags stc,xrc,html,adv,xml,core,base,gl,aui`
+         WX_CFLAGS=`$WX_CONFIG_WITH_ARGS --cflags stc,xrc,html,adv,xml,core,base,gl,aui`
 
          WX_CFLAGS_ONLY=`echo $WX_CFLAGS | sed "s@^$WX_CPPFLAGS *@@"`
          WX_CXXFLAGS_ONLY=`echo $WX_CXXFLAGS | sed "s@^$WX_CFLAGS *@@"`
@@ -5170,6 +5788,31 @@ echo "${ECHO_T}no (version $WX_VERSION is not new enough)" >&6
        WX_LIBS=""
        WX_LIBS_STATIC=""
        WX_RESCOMP=""
+
+       if test ! -z "--unicode --debug=no"; then
+
+          wx_error_message="
+    The configuration you asked for $PACKAGE_NAME requires a wxWidgets
+    build with the following settings:
+        --unicode --debug=no
+    but such build is not available.
+
+    To see the wxWidgets builds available on this system, please use
+    'wx-config --list' command. To use the default build, returned by
+    'wx-config --selected-config', use the options with their 'auto'
+    default values."
+
+       fi
+
+       wx_error_message="
+    The requested wxWidgets build couldn't be found.
+    $wx_error_message
+
+    If you still get this error, then check that 'wx-config' is
+    in path, the directory where wxWidgets libraries are installed
+    (returned by 'wx-config --libs' command) is in LD_LIBRARY_PATH
+    or equivalent variable and wxWidgets version is $reqwx or above."
+
        wxWinWithGL=0
 
     fi
@@ -5191,6 +5834,14 @@ echo "${ECHO_T}no (version $WX_VERSION is not new enough)" >&6
 
 
 
+
+
+
+
+
+      WX_VERSION_MAJOR="$wx_config_major_version"
+  WX_VERSION_MINOR="$wx_config_minor_version"
+  WX_VERSION_MICRO="$wx_config_micro_version"
 
 
 
@@ -5269,7 +5920,27 @@ else
     echo "$as_me:$LINENO: checking for wxWidgets in standard locations" >&5
 echo $ECHO_N "checking for wxWidgets in standard locations... $ECHO_C" >&6
 
-    CWXWIN_CONFIG=`cygpath $wx_config_name 2>/dev/null`
+    # Check whether --with-wxdir was given.
+    { echo "$as_me:$LINENO: OptionCheck: $with_wxdir $with_wx_prefix" >&5
+echo "$as_me: OptionCheck: $with_wxdir $with_wx_prefix" >&6;}
+
+    if test "${with_wxdir+set}" = set; then :
+      withval=$with_wxdir;  CWXWIN0=$withval
+    else
+      # Check whether --with-wx-prefix was given.
+      if test "${with_wx_prefix+set}" = set; then :
+        withval=$with_wx_prefix; CWXWIN0=$withval
+      else
+        echo Setting it empty
+        CWXWIN0=""
+      fi
+    fi
+
+    if test "x$MIXED_MSYS" = "xyes"; then
+        CWXWIN_CONFIG=`win2msys_path.sh $wx_config_name 2>/dev/null`
+    else
+	CWXWIN_CONFIG=`cygpath $wx_config_name 2>/dev/null`
+    fi
     CWXWIN1=`dirname $CWXWIN_CONFIG 2>/dev/null`
     CWXWIN2=`dirname $CWXWIN1 2>/dev/null`
 
@@ -5277,26 +5948,44 @@ echo $ECHO_N "checking for wxWidgets in standard locations... $ECHO_C" >&6
        PROGRAMFILES=c:/Program Files
     fi
 
-    CWXWIN_PROG=`cygpath -d "$PROGRAMFILES" | cygpath -f - 2>/dev/null`
-    CWXWIN3=$CWXWIN_PROG/wxWidgets-2.8
-    CWXWIN4=$CWXWIN_PROG/wxMSW-2.8
-    CWX_DOCUMENTED="/opt/local/pgm/wxMSW-2.8.* /opt/local/pgm/wxWidgets-2.8.*"
-    CWXPATH="$CWXWIN1 $CWXWIN2 $CWX_DOCUMENTED $CWXWIN3.* $CWXWIN4.*"
+
+    if test "x$MIXED_MSYS" = "xyes"; then
+        CWXWIN_PROG=`win2msys_path.sh "$PROGRAMFILES" 2>/dev/null`
+    else
+	CWXWIN_PROG=`cygpath -d "$PROGRAMFILES" | cygpath -f - 2>/dev/null`
+    fi
+    CWXWIN3=$CWXWIN_PROG/wxWidgets-?.*.*
+    CWXWIN4=$CWXWIN_PROG/wxMSW-?.*.*
+    CWX_DOCUMENTED="/opt/local/pgm/wxMSW-?.*.* /opt/local/pgm/wxWidgets-?.*.*"
+    case $ac_cv_sizeof_void_p in
+    	 8)
+		CWX_DOCUMENTED="/opt/local64/pgm/wxMSW-?.*.* /opt/local64/pgm/wxWidgets-?.*.* $CWX_DOCUMENTED"
+		;;
+         *)
+		true
+		;;
+    esac
+
+    CWXPATH="$CWXWIN0 $CWXWIN1 $CWXWIN2 $CWX_DOCUMENTED $CWXWIN3.* $CWXWIN4.*"
 
     for dir in $CWXPATH; do
+        { echo "$as_me:$LINENO: Checking: $dir" >&5
+echo "$as_me: Checking: $dir" >&6;}
 	if test -f $dir/include/wx/wx.h; then
 	    WXINCLUDE_MSVC=$dir/include/msvc
 	    WXINCLUDE_PLAIN=$dir/include
 	    WXINCLUDE_CONTRIB=$dir/contrib/include
 	    WX_CFLAGS="-EHsc -D_UNICODE -DUNICODE -I$WXINCLUDE_MSVC -I$WXINCLUDE_PLAIN -I$WXINCLUDE_CONTRIB -D__WXMSW__"
-	    WX_CXXFLAGS=$WX_CFLAGS
+	    WX_CXXFLAGS="-TP $WX_CFLAGS"
 	    WX_LIBDIR=$dir/lib/vc_lib
+	    WX_LIBDIR64=$dir/lib/vc_x64_lib
 	    WX_RESCOMP="rc.sh -I$WXINCLUDE_PLAIN -D __WIN32__"
 	    RC_FILE_TYPE=res
-	    for lib in $WX_LIBDIR/wxbase*.lib; do
-		maybe=`echo $lib | egrep 'wxbase[0-9]*u\.lib'`
+	    for lib in $WX_LIBDIR $WX_LIBDIR64; do
+		maybe=`ls $lib/wxbase*.lib | egrep 'wxbase[0-9]*u\.lib'`
 		if test '!' -z "$maybe"; then
 		   corelib_number=`echo $maybe | sed 's,.*\([0-9].\)u\.lib,\1,'`
+		   WX_LIBDIR=$lib
 		   break
 		fi
 	    done
@@ -5317,6 +6006,7 @@ echo "${ECHO_T}$dir" >&6
 	    fi
 	fi
     done
+
     if test -z "$WX_LIBS_STATIC"; then
 	echo "$as_me:$LINENO: result: failed" >&5
 echo "${ECHO_T}failed" >&6
@@ -6020,8 +6710,8 @@ _ACEOF
 else
   WXERL_CAN_BUILD_DRIVER=false
 	 echo "wxWidgets don't have wxStyledTextControl (stc.h), wx will NOT be useable" > ./CONF_INFO
-     	 { echo "$as_me:$LINENO: WARNING: Can not find wx/stc/stc.h" >&5
-echo "$as_me: WARNING: Can not find wx/stc/stc.h" >&2;}
+     	 { echo "$as_me:$LINENO: WARNING: Can not find wx/stc/stc.h $CXXFLAGS" >&5
+echo "$as_me: WARNING: Can not find wx/stc/stc.h $CXXFLAGS" >&2;}
 
 fi
 
@@ -6038,6 +6728,11 @@ if test X"$WX_HAVE_STATIC_LIBS" = X"true" ; then
 fi
 
 cat >conftest.$ac_ext <<_ACEOF
+/* confdefs.h.  */
+_ACEOF
+cat confdefs.h >>conftest.$ac_ext
+cat >>conftest.$ac_ext <<_ACEOF
+/* end confdefs.h.  */
 
 		#ifdef WIN32
 		# include <windows.h>
@@ -6050,6 +6745,7 @@ cat >conftest.$ac_ext <<_ACEOF
                 #include "wx/wx.h"
 		#include "wx/stc/stc.h"
 		#include "wx/glcanvas.h"
+
 
 		class MyApp : public wxApp
 		{
@@ -6122,6 +6818,147 @@ fi
 
 fi
 
+
+if test "x$GCC" = xyes; then
+    # Treat certain GCC warnings as errors
+
+    echo "$as_me:$LINENO: checking if we can add -Werror=return-type to CFLAGS (via CFLAGS)" >&5
+echo $ECHO_N "checking if we can add -Werror=return-type to CFLAGS (via CFLAGS)... $ECHO_C" >&6
+    saved_CFLAGS=$CFLAGS;
+    CFLAGS="-Werror=return-type $CFLAGS";
+    cat >conftest.$ac_ext <<_ACEOF
+/* confdefs.h.  */
+_ACEOF
+cat confdefs.h >>conftest.$ac_ext
+cat >>conftest.$ac_ext <<_ACEOF
+/* end confdefs.h.  */
+
+int
+main ()
+{
+return 0;
+  ;
+  return 0;
+}
+_ACEOF
+rm -f conftest.$ac_objext
+if { (eval echo "$as_me:$LINENO: \"$ac_compile\"") >&5
+  (eval $ac_compile) 2>conftest.er1
+  ac_status=$?
+  grep -v '^ *+' conftest.er1 >conftest.err
+  rm -f conftest.er1
+  cat conftest.err >&5
+  echo "$as_me:$LINENO: \$? = $ac_status" >&5
+  (exit $ac_status); } &&
+	 { ac_try='test -z "$ac_c_werror_flag"
+			 || test ! -s conftest.err'
+  { (eval echo "$as_me:$LINENO: \"$ac_try\"") >&5
+  (eval $ac_try) 2>&5
+  ac_status=$?
+  echo "$as_me:$LINENO: \$? = $ac_status" >&5
+  (exit $ac_status); }; } &&
+	 { ac_try='test -s conftest.$ac_objext'
+  { (eval echo "$as_me:$LINENO: \"$ac_try\"") >&5
+  (eval $ac_try) 2>&5
+  ac_status=$?
+  echo "$as_me:$LINENO: \$? = $ac_status" >&5
+  (exit $ac_status); }; }; then
+  can_enable_flag=true
+else
+  echo "$as_me: failed program was:" >&5
+sed 's/^/| /' conftest.$ac_ext >&5
+
+can_enable_flag=false
+fi
+rm -f conftest.err conftest.$ac_objext conftest.$ac_ext
+    CFLAGS=$saved_CFLAGS;
+    if test "X$can_enable_flag" = "Xtrue"; then
+        echo "$as_me:$LINENO: result: yes" >&5
+echo "${ECHO_T}yes" >&6
+        CFLAGS="-Werror=return-type $CFLAGS"
+    else
+        echo "$as_me:$LINENO: result: no" >&5
+echo "${ECHO_T}no" >&6
+    fi
+
+
+    echo "$as_me:$LINENO: checking if we can add -Werror=return-type to CXXFLAGS (via CFLAGS)" >&5
+echo $ECHO_N "checking if we can add -Werror=return-type to CXXFLAGS (via CFLAGS)... $ECHO_C" >&6
+    saved_CFLAGS=$CFLAGS;
+    CFLAGS="-Werror=return-type $CXXFLAGS";
+    cat >conftest.$ac_ext <<_ACEOF
+/* confdefs.h.  */
+_ACEOF
+cat confdefs.h >>conftest.$ac_ext
+cat >>conftest.$ac_ext <<_ACEOF
+/* end confdefs.h.  */
+
+int
+main ()
+{
+return 0;
+  ;
+  return 0;
+}
+_ACEOF
+rm -f conftest.$ac_objext
+if { (eval echo "$as_me:$LINENO: \"$ac_compile\"") >&5
+  (eval $ac_compile) 2>conftest.er1
+  ac_status=$?
+  grep -v '^ *+' conftest.er1 >conftest.err
+  rm -f conftest.er1
+  cat conftest.err >&5
+  echo "$as_me:$LINENO: \$? = $ac_status" >&5
+  (exit $ac_status); } &&
+	 { ac_try='test -z "$ac_c_werror_flag"
+			 || test ! -s conftest.err'
+  { (eval echo "$as_me:$LINENO: \"$ac_try\"") >&5
+  (eval $ac_try) 2>&5
+  ac_status=$?
+  echo "$as_me:$LINENO: \$? = $ac_status" >&5
+  (exit $ac_status); }; } &&
+	 { ac_try='test -s conftest.$ac_objext'
+  { (eval echo "$as_me:$LINENO: \"$ac_try\"") >&5
+  (eval $ac_try) 2>&5
+  ac_status=$?
+  echo "$as_me:$LINENO: \$? = $ac_status" >&5
+  (exit $ac_status); }; }; then
+  can_enable_flag=true
+else
+  echo "$as_me: failed program was:" >&5
+sed 's/^/| /' conftest.$ac_ext >&5
+
+can_enable_flag=false
+fi
+rm -f conftest.err conftest.$ac_objext conftest.$ac_ext
+    CFLAGS=$saved_CFLAGS;
+    if test "X$can_enable_flag" = "Xtrue"; then
+        echo "$as_me:$LINENO: result: yes" >&5
+echo "${ECHO_T}yes" >&6
+        CXXFLAGS="-Werror=return-type $CXXFLAGS"
+    else
+        echo "$as_me:$LINENO: result: no" >&5
+echo "${ECHO_T}no" >&6
+    fi
+
+fi
+
+
+
+# Check whether --enable-sanitizers or --disable-sanitizers was given.
+if test "${enable_sanitizers+set}" = set; then
+  enableval="$enable_sanitizers"
+
+case "$enableval" in
+    no) sanitizers= ;;
+    yes) sanitizers="-fsanitize=address,undefined" ;;
+    *) sanitizers="-fsanitize=$enableval" ;;
+esac
+CFLAGS="$CFLAGS $sanitizers"
+CXXFLAGS="$CXXFLAGS $sanitizers"
+LDFLAGS="$LDFLAGS $sanitizers"
+
+fi;
 
 #############################################################################
 
@@ -6820,9 +7657,14 @@ s,@RANLIB@,$RANLIB,;t t
 s,@ac_ct_RANLIB@,$ac_ct_RANLIB,;t t
 s,@CPP@,$CPP,;t t
 s,@MIXED_CYGWIN_VC@,$MIXED_CYGWIN_VC,;t t
+s,@MIXED_MSYS_VC@,$MIXED_MSYS_VC,;t t
+s,@MIXED_VC@,$MIXED_VC,;t t
 s,@MIXED_CYGWIN_MINGW@,$MIXED_CYGWIN_MINGW,;t t
 s,@MIXED_CYGWIN@,$MIXED_CYGWIN,;t t
+s,@MIXED_MSYS@,$MIXED_MSYS,;t t
 s,@EGREP@,$EGREP,;t t
+s,@OBJC_CC@,$OBJC_CC,;t t
+s,@OBJC_CFLAGS@,$OBJC_CFLAGS,;t t
 s,@GL_LIBS@,$GL_LIBS,;t t
 s,@DEBUG_CFLAGS@,$DEBUG_CFLAGS,;t t
 s,@DEBUG_CXXFLAGS@,$DEBUG_CXXFLAGS,;t t
@@ -6839,6 +7681,9 @@ s,@WX_LIBS@,$WX_LIBS,;t t
 s,@WX_LIBS_STATIC@,$WX_LIBS_STATIC,;t t
 s,@WX_VERSION@,$WX_VERSION,;t t
 s,@WX_RESCOMP@,$WX_RESCOMP,;t t
+s,@WX_VERSION_MAJOR@,$WX_VERSION_MAJOR,;t t
+s,@WX_VERSION_MINOR@,$WX_VERSION_MINOR,;t t
+s,@WX_VERSION_MICRO@,$WX_VERSION_MICRO,;t t
 s,@DEBUG_WX_CFLAGS@,$DEBUG_WX_CFLAGS,;t t
 s,@DEBUG_WX_CXXFLAGS@,$DEBUG_WX_CXXFLAGS,;t t
 s,@DEBUG_WX_LIBS@,$DEBUG_WX_LIBS,;t t

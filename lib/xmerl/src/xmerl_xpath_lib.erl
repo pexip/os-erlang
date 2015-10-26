@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %% 
-%% Copyright Ericsson AB 2008-2009. All Rights Reserved.
+%% Copyright Ericsson AB 2008-2011. All Rights Reserved.
 %% 
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -49,5 +49,7 @@ primary_expr({function_call, F, Args}, C) ->
 	    %% here, we should look up the function in the context provided 
 	    %% by the caller, but we haven't figured this out yet.
 	    exit({not_a_core_function, F})
-    end.
+    end;
+primary_expr(PrimExpr, _C) ->
+    exit({primary_expression, {not_implemented, PrimExpr}}).
 

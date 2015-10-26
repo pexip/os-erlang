@@ -1,7 +1,7 @@
 /*
  * %CopyrightBegin%
  *
- * Copyright Ericsson AB 2006-2010. All Rights Reserved.
+ * Copyright Ericsson AB 2006-2011. All Rights Reserved.
  *
  * The contents of this file are subject to the Erlang Public License,
  * Version 1.1, (the "License"); you may not use this file except in
@@ -33,6 +33,7 @@
 #include "bif.h"
 #include "big.h"
 #include "erl_binary.h"
+#include "erl_map.h"
 
 static Eterm gc_double_to_integer(Process* p, double x, Eterm* reg, Uint live);
 
@@ -52,7 +53,7 @@ BIF_RETTYPE abs_1(BIF_ALIST_1)
     /* integer arguments */
     if (is_small(BIF_ARG_1)) {
 	i0 = signed_val(BIF_ARG_1);
-	i = labs(i0);
+	i = ERTS_SMALL_ABS(i0);
 	if (i0 == MIN_SMALL) {
 	    hp = HAlloc(BIF_P, BIG_UINT_HEAP_SIZE);
 	    BIF_RET(uint_to_big(i, hp));
@@ -455,6 +456,28 @@ Eterm erts_gc_byte_size_1(Process* p, Eterm* reg, Uint live)
     }
 }
 
+Eterm erts_gc_map_size_1(Process* p, Eterm* reg, Uint live)
+{
+    Eterm arg = reg[live];
+    if (is_map(arg)) {
+	map_t *mp = (map_t*)map_val(arg);
+	Uint size = map_get_size(mp);
+	if (IS_USMALL(0, size)) {
+	    return make_small(size);
+	} else {
+	    Eterm* hp;
+	    if (ERTS_NEED_GC(p, BIG_UINT_HEAP_SIZE)) {
+		erts_garbage_collect(p, BIG_UINT_HEAP_SIZE, reg, live);
+	    }
+	    hp = p->htop;
+	    p->htop += BIG_UINT_HEAP_SIZE;
+	    return uint_to_big(size, hp);
+	}
+    } else {
+	BIF_ERROR(p, BADARG);
+    }
+}
+
 Eterm erts_gc_abs_1(Process* p, Eterm* reg, Uint live)
 {
     Eterm arg;
@@ -467,7 +490,7 @@ Eterm erts_gc_abs_1(Process* p, Eterm* reg, Uint live)
     /* integer arguments */
     if (is_small(arg)) {
 	i0 = signed_val(arg);
-	i = labs(i0);
+	i = ERTS_SMALL_ABS(i0);
 	if (i0 == MIN_SMALL) {
 	    if (ERTS_NEED_GC(p, BIG_UINT_HEAP_SIZE)) {
 		erts_garbage_collect(p, BIG_UINT_HEAP_SIZE, reg, live+1);

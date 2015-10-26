@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2004-2011. All Rights Reserved.
+%% Copyright Ericsson AB 2004-2012. All Rights Reserved.
 %%
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -80,7 +80,7 @@ end_per_group(_GroupName, Config) ->
 %%-----------------------------------------------------------------
 init_per_suite(Config) ->
     if
-        list(Config) ->
+        is_list(Config) ->
             Config;
         true ->
             exit("Config not a list")

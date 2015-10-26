@@ -78,8 +78,6 @@ struct ErlDrvTid_ {
 
 static ethr_tsd_key tid_key;
 
-static ethr_thr_opts def_ethr_opts = ETHR_THR_OPTS_DEFAULT_INITER;
-
 #else /* USE_THREADS */
 static Uint tsd_len;
 static void **tsd;
@@ -123,7 +121,7 @@ void erl_drv_thr_init(void)
 {
     int i;
 #ifdef USE_THREADS
-    int res = ethr_tsd_key_create(&tid_key);
+    int res = ethr_tsd_key_create(&tid_key,"erts_tid_key");
     if (res == 0)
 	res = ethr_install_exit_handler(thread_exit_handler);
     if (res != 0)
@@ -158,7 +156,9 @@ erl_drv_mutex_create(char *name)
 				       (sizeof(ErlDrvMutex)
 					+ (name ? sys_strlen(name) + 1 : 0)));
     if (dmtx) {
-	if (ethr_mutex_init(&dmtx->mtx) != 0) {
+	ethr_mutex_opt opt = ETHR_MUTEX_OPT_DEFAULT_INITER;
+	opt.posix_compliant = 1;
+	if (ethr_mutex_init_opt(&dmtx->mtx, &opt) != 0) {
 	    erts_free(ERTS_ALC_T_DRV_MTX, (void *) dmtx);
 	    dmtx = NULL;
 	}
@@ -183,6 +183,17 @@ erl_drv_mutex_destroy(ErlDrvMutex *dmtx)
     if (res != 0)
 	fatal_error(res, "erl_drv_mutex_destroy()");
     erts_free(ERTS_ALC_T_DRV_MTX, (void *) dmtx);
+#endif
+}
+
+
+char *
+erl_drv_mutex_name(ErlDrvMutex *dmtx)
+{
+#ifdef USE_THREADS
+    return dmtx ? dmtx->name : NULL;
+#else
+    return NULL;
 #endif
 }
 
@@ -226,7 +237,9 @@ erl_drv_cond_create(char *name)
 				      (sizeof(ErlDrvCond)
 				       + (name ? sys_strlen(name) + 1 : 0)));
     if (dcnd) {
-	if (ethr_cond_init(&dcnd->cnd) != 0) {
+	ethr_cond_opt opt = ETHR_COND_OPT_DEFAULT_INITER;
+	opt.posix_compliant = 1;
+	if (ethr_cond_init_opt(&dcnd->cnd, &opt) != 0) {
 	    erts_free(ERTS_ALC_T_DRV_CND, (void *) dcnd);
 	    dcnd = NULL;
 	}
@@ -254,6 +267,15 @@ erl_drv_cond_destroy(ErlDrvCond *dcnd)
 #endif
 }
 
+char *
+erl_drv_cond_name(ErlDrvCond *dcnd)
+{
+#ifdef USE_THREADS
+    return dcnd ? dcnd->name : NULL;
+#else
+    return NULL;
+#endif
+}
 
 void
 erl_drv_cond_signal(ErlDrvCond *dcnd)
@@ -324,6 +346,16 @@ erl_drv_rwlock_destroy(ErlDrvRWLock *drwlck)
     if (res != 0)
 	fatal_error(res, "erl_drv_rwlock_destroy()");
     erts_free(ERTS_ALC_T_DRV_RWLCK, (void *) drwlck);
+#endif
+}
+
+char *
+erl_drv_rwlock_name(ErlDrvRWLock *drwlck)
+{
+#ifdef USE_THREADS
+    return drwlck ? drwlck->name : NULL;
+#else
+    return NULL;
 #endif
 }
 
@@ -571,6 +603,7 @@ erl_drv_thread_create(char *name,
     struct ErlDrvTid_ *dtid;
     ethr_thr_opts ethr_opts;
     ethr_thr_opts *use_opts;
+    ethr_thr_opts def_ethr_opts = ETHR_THR_OPTS_DEFAULT_INITER;
 
     if (!opts)
 	use_opts = NULL;
@@ -612,6 +645,18 @@ erl_drv_thread_create(char *name,
     return ENOTSUP;
 #endif
 }
+
+char *
+erl_drv_thread_name(ErlDrvTid tid)
+{
+#ifdef USE_THREADS
+    struct ErlDrvTid_ *dtid = (struct ErlDrvTid_ *) tid;
+    return dtid ? dtid->name : NULL;
+#else
+    return NULL;
+#endif
+}
+
 
 ErlDrvTid
 erl_drv_thread_self(void)

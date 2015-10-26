@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %% 
-%% Copyright Ericsson AB 1996-2011. All Rights Reserved.
+%% Copyright Ericsson AB 1996-2013. All Rights Reserved.
 %% 
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -18,6 +18,11 @@
 %%
 
 -module(mandel).
+-compile([{nowarn_deprecated_function,{gs,assq,2}},
+          {nowarn_deprecated_function,{gs,config,2}},
+          {nowarn_deprecated_function,{gs,create,4}},
+          {nowarn_deprecated_function,{gs,image,2}},
+          {nowarn_deprecated_function,{gs,start,0}}]).
 -author('(mbj,eklas)@erlang.ericsson.se').
 
 %% User's interface
@@ -29,7 +34,7 @@
 %%%-----------------------------------------------------------------
 %%% Distributed Mandelbrot program.
 %%% Originally written i C++/rpc/lwp/interviews by Klas Eriksson.(1200 lines)
-%%% Rewritten in Erlang by Klas Eriksson and Martin Björklund.
+%%% Rewritten in Erlang by Klas Eriksson and Martin BjÃ¶rklund.
 %%%-----------------------------------------------------------------
 
 %% unix>erl -sname foo            (all nodes will get the same name)

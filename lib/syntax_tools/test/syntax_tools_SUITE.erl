@@ -24,12 +24,12 @@
 	 init_per_group/2,end_per_group/2]).
 
 %% Test cases
--export([smoke_test/1]).
+-export([app_test/1,appup_test/1,smoke_test/1,revert/1,revert_map/1]).
 
 suite() -> [{ct_hooks,[ts_install_cth]}].
 
 all() -> 
-    [smoke_test].
+    [app_test,appup_test,smoke_test,revert,revert_map].
 
 groups() -> 
     [].
@@ -46,6 +46,11 @@ init_per_group(_GroupName, Config) ->
 end_per_group(_GroupName, Config) ->
     Config.
 
+app_test(Config) when is_list(Config) ->
+    ok = ?t:app_test(syntax_tools).
+
+appup_test(Config) when is_list(Config) ->
+    ok = ?t:appup_test(syntax_tools).
 
 %% Read and parse all source in the OTP release.
 smoke_test(Config) when is_list(Config) ->
@@ -73,11 +78,46 @@ print_error_markers(F, File) ->
     case erl_syntax:type(F) of
 	error_marker ->
 	    {L,M,Info} = erl_syntax:error_marker_info(F),
-	    io:format("~s:~p: ~s", [File,L,M:format_error(Info)]);
+	    io:format("~ts:~p: ~s", [File,L,M:format_error(Info)]);
 	_ ->
 	    ok
     end.
     
+
+%% Read with erl_parse, wrap and revert with erl_syntax and check for equality.
+revert(Config) when is_list(Config) ->
+    Dog = ?t:timetrap(?t:minutes(12)),
+    Wc = filename:join([code:lib_dir("stdlib"),"src","*.erl"]),
+    Fs = filelib:wildcard(Wc),
+    Path = [filename:join(code:lib_dir(stdlib), "include"),
+            filename:join(code:lib_dir(kernel), "include")],
+    io:format("~p files\n", [length(Fs)]),
+    case p_run(fun (File) -> revert_file(File, Path) end, Fs) of
+        0 -> ok;
+        N -> ?line ?t:fail({N,errors})
+        end,
+    ?line ?t:timetrap_cancel(Dog).
+
+revert_file(File, Path) ->
+    case epp:parse_file(File, Path, []) of
+        {ok,Fs0} ->
+            Fs1 = erl_syntax:form_list(Fs0),
+            Fs2 = erl_syntax_lib:map(fun (Node) -> Node end, Fs1),
+            Fs3 = erl_syntax:form_list_elements(Fs2),
+            Fs4 = [ erl_syntax:revert(Form) || Form <- Fs3 ],
+            {ok,_} = compile:forms(Fs4, [report,strong_validation]),
+            ok
+    end.
+
+%% Testing bug fix for reverting map_field_assoc
+revert_map(Config) ->
+    Dog = ?t:timetrap(?t:minutes(1)),
+    ?line [{map_field_assoc,16,{atom,17,name},{var,18,'Value'}}] =
+        erl_syntax:revert_forms([{tree,map_field_assoc,
+                                  {attr,16,[],none},
+                                  {map_field_assoc,
+                                   {atom,17,name},{var,18,'Value'}}}]),
+    ?line ?t:timetrap_cancel(Dog).
 
 p_run(Test, List) ->
     N = erlang:system_info(schedulers),

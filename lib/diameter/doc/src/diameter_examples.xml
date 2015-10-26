@@ -1,11 +1,11 @@
-<?xml version="1.0" encoding="latin1" ?>
+<?xml version="1.0" encoding="utf-8" ?>
 <!DOCTYPE chapter SYSTEM "chapter.dtd">
 
 <chapter>
 <header>
 
 <copyright>
-<year>2011</year>
+<year>2011</year><year>2013</year>
 <holder>Ericsson AB. All Rights Reserved.</holder>
 </copyright>
 
@@ -37,7 +37,6 @@ under the License.
 <!-- ===================================================================== -->
 
 <p>
-To be written.
 Example code can be found in the diameter application's
 <c>examples</c> subdirectory.</p>
 

@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %% 
-%% Copyright Ericsson AB 2009. All Rights Reserved.
+%% Copyright Ericsson AB 2009-2012. All Rights Reserved.
 %% 
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -21,7 +21,7 @@
 -behaviour(wx_object).
 
 -export([start/1, init/1, terminate/2,  code_change/3,
-	 handle_info/2, handle_call/3, handle_event/2]).
+	 handle_info/2, handle_call/3, handle_cast/2, handle_event/2]).
 
 -include_lib("wx/include/wx.hrl").
 
@@ -51,27 +51,23 @@ do_init(Config) ->
     Sizer3 = wxStaticBoxSizer:new(?wxVERTICAL, Panel, 
 				  [{label, "wxTextCtrl multiline"}]),
 
-    TextCtrl = wxTextCtrl:new(Panel, 1, [{value, "This is a single line wxTextCtrl"},
+    TextCtrl  = wxTextCtrl:new(Panel, 1, [{value, "This is a single line wxTextCtrl"},
 					 {style, ?wxDEFAULT}]),
     TextCtrl2 = wxTextCtrl:new(Panel, 2, [{value, "password"},
-					 {style, ?wxDEFAULT bor
-					   	  ?wxTE_PASSWORD}]),
-    TextCtrl3 = wxTextCtrl:new(Panel, 3, [{value, "This is a\n"
-					   	  "multiline\n"
-					   	  "wxTextCtrl"},
-					 {style, ?wxDEFAULT bor
-					   	  ?wxTE_MULTILINE}]),
+					  {style, ?wxDEFAULT bor ?wxTE_PASSWORD}]),
+    TextCtrl3 = wxTextCtrl:new(Panel, 3, [{value, "This is a\nmultiline\nwxTextCtrl"},
+					  {style, ?wxDEFAULT bor ?wxTE_MULTILINE}]),
 
     %% Add to sizers
-    wxSizer:add(Sizer, TextCtrl, [{flag, ?wxEXPAND}]),
+    wxSizer:add(Sizer, TextCtrl,  [{flag, ?wxEXPAND}]),
     wxSizer:add(Sizer2, TextCtrl2, []),
-    wxSizer:add(Sizer3, TextCtrl3, [{flag, ?wxEXPAND}]),
+    wxSizer:add(Sizer3, TextCtrl3, [{flag, ?wxEXPAND}, {proportion, 1}]),
 
     wxSizer:add(MainSizer, Sizer,  [{flag, ?wxEXPAND}]),
     wxSizer:addSpacer(MainSizer, 10),
     wxSizer:add(MainSizer, Sizer2, [{flag, ?wxEXPAND}]),
     wxSizer:addSpacer(MainSizer, 10),
-    wxSizer:add(MainSizer, Sizer3, [{flag, ?wxEXPAND}]),
+    wxSizer:add(MainSizer, Sizer3, [{flag, ?wxEXPAND}, {proportion, 1}]),
 
     wxPanel:setSizer(Panel, MainSizer),
     {Panel, #state{parent=Panel, config=Config}}.
@@ -88,9 +84,17 @@ handle_info(Msg, State) ->
     demo:format(State#state.config, "Got Info ~p\n",[Msg]),
     {noreply, State}.
 
+handle_call(shutdown, _From, State=#state{parent=Panel}) ->
+    wxPanel:destroy(Panel),
+    {stop, normal, ok, State};
+
 handle_call(Msg, _From, State) ->
     demo:format(State#state.config,"Got Call ~p\n",[Msg]),
     {reply, {error,nyi}, State}.
+
+handle_cast(Msg, State) ->
+    io:format("Got cast ~p~n",[Msg]),
+    {noreply,State}.
 
 code_change(_, _, State) ->
     {stop, ignore, State}.

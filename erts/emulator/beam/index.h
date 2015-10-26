@@ -1,7 +1,7 @@
 /*
  * %CopyrightBegin%
  * 
- * Copyright Ericsson AB 1996-2009. All Rights Reserved.
+ * Copyright Ericsson AB 1996-2013. All Rights Reserved.
  * 
  * The contents of this file are subject to the Erlang Public License,
  * Version 1.1, (the "License"); you may not use this file except in
@@ -55,12 +55,24 @@ void index_info(int, void *, IndexTable*);
 int index_table_sz(IndexTable *);
 
 int index_get(IndexTable*, void*);
-int index_put(IndexTable*, void*);
+
+IndexSlot* index_put_entry(IndexTable*, void*);
 void erts_index_merge(Hash*, IndexTable*);
 
+/* Erase all entries with index 'ix' and higher
+*/
+void index_erase_latest_from(IndexTable*, Uint ix);
+
+ERTS_GLB_INLINE int index_put(IndexTable*, void*);
 ERTS_GLB_INLINE IndexSlot* erts_index_lookup(IndexTable*, Uint);
 
 #if ERTS_GLB_INLINE_INCL_FUNC_DEF
+
+ERTS_GLB_INLINE int index_put(IndexTable* t, void* tmpl)
+{
+    return index_put_entry(t, tmpl)->index;
+}
+
 ERTS_GLB_INLINE IndexSlot*
 erts_index_lookup(IndexTable* t, Uint ix)
 {

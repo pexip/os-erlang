@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %% 
-%% Copyright Ericsson AB 1998-2011. All Rights Reserved.
+%% Copyright Ericsson AB 1998-2013. All Rights Reserved.
 %% 
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -20,8 +20,7 @@
 
 -export([eval/3,exit_info/5]).
 -export([eval_expr/3]).
--export([check_exit_msg/3,exception/4,in_use_p/2]).
--export([stack_level/0, bindings/1, stack_frame/2, backtrace/1]).
+-export([check_exit_msg/3,exception/4]).
 
 -include("dbg_ieval.hrl").
 
@@ -71,13 +70,12 @@ exit_info(Int, AttPid, OrigPid, Reason, ExitInfo) ->
     
     case ExitInfo of
 	{{Mod,Line},Bs,S} ->
-	    Stack = binary_to_term(S),
-	    put(stack, Stack),
-	    Le = stack_level(Stack),
+	    dbg_istk:from_external(S),
+	    Le = dbg_istk:stack_level(),
 	    dbg_icmd:tell_attached({exit_at, {Mod, Line}, Reason, Le}),
 	    exit_loop(OrigPid, Reason, Bs,#ieval{module=Mod,line=Line});
 	{} ->
-	    put(stack, []),
+	    dbg_istk:init(),
 	    dbg_icmd:tell_attached({exit_at, null, Reason, 1}),
 	    exit_loop(OrigPid, Reason, erl_eval:new_bindings(),#ieval{})
     end.
@@ -142,12 +140,12 @@ check_exit_msg({'DOWN',_,_,_,Reason}, Bs,
 	    undefined when Le =:= 1 -> % died outside interpreted code
 		{};
 	    undefined when Le > 1 ->
-		StackBin = term_to_binary(get(stack)),
-		{{Mod, Li}, Bs, StackBin};
+		StackExternal = (dbg_istk:delayed_to_external())(),
+		{{Mod, Li}, Bs, StackExternal};
 
 	    %% Debugged has terminated due to an exception
-	    ExitInfo0 ->
-		ExitInfo0
+	    ExitInfo0 when is_function(ExitInfo0, 0) ->
+		ExitInfo0()
 	end,
     dbg_iserver:cast(get(int), {set_exit_info,self(),ExitInfo}),
 
@@ -170,29 +168,25 @@ check_exit_msg(_Msg, _Bs, _Ieval) ->
 %% and then raise the exception.
 %%--------------------------------------------------------------------
 exception(Class, Reason, Bs, Ieval) ->
-    exception(Class, Reason, fix_stacktrace(1), Bs, Ieval).
+    exception(Class, Reason, Bs, Ieval, false).
 
-exception(Class, Reason, Stacktrace, Bs, #ieval{module=M, line=Line}) ->
-    ExitInfo = {{M,Line}, Bs, term_to_binary(get(stack))},
+exception(Class, Reason, Bs, Ieval, false) ->
+    do_exception(Class, Reason,
+		 dbg_istk:delayed_stacktrace(no_args, Ieval),
+		 Bs, Ieval);
+exception(Class, Reason, Bs, Ieval, true) ->
+    do_exception(Class, Reason,
+		 dbg_istk:delayed_stacktrace(include_args, Ieval),
+		 Bs, Ieval).
+
+do_exception(Class, Reason, Stacktrace, Bs, #ieval{module=M, line=Line}) ->
+    StackFun = dbg_istk:delayed_to_external(),
+    ExitInfo = fun() ->
+		       {{M,Line},Bs,StackFun()}
+	       end,
     put(exit_info, ExitInfo),
     put(stacktrace, Stacktrace),
     erlang:Class(Reason).
-
-%%--------------------------------------------------------------------
-%% in_use_p(Mod, Cm) -> boolean()
-%%   Mod = Cm = atom()
-%% Returns true if Mod is found on the stack, otherwise false.
-%%--------------------------------------------------------------------
-in_use_p(Mod, Mod) -> true;
-in_use_p(Mod, _Cm) ->
-    case get(trace_stack) of
-	false -> true;
-	_ -> %  all | no_tail
-	    lists:any(fun({_,{M,_,_,_}}) when M =:= Mod -> true;
-			 (_) -> false
-		      end,
-		      get(stack))
-    end.
 
 %%====================================================================
 %% Internal functions
@@ -210,7 +204,8 @@ meta(Int, Debugged, M, F, As) ->
 		%% If it's a fun we're evaluating, show a text
 		%% representation of the fun and its arguments,
 		%% not dbg_ieval:eval_fun(...)
-		{dbg_ieval, eval_fun} ->
+		{dbg_ieval, EvalFun} when EvalFun =:= eval_fun;
+					  EvalFun =:= eval_named_fun ->
 		    {Mx, Fx} = lists:last(As),
 		    {Mx, Fx, lists:nth(2, As)};
 		_ ->
@@ -225,7 +220,7 @@ meta(Int, Debugged, M, F, As) ->
     put(cache, []),
     put(next_break, Status), % break | running (other values later)
     put(self, Debugged),     % pid() interpreted process
-    put(stack, []),
+    dbg_istk:init(),
     put(stacktrace, []),
     put(trace_stack, dbg_iserver:call(Int, get_stack_trace)),
     put(trace, false),       % bool() Trace on/off
@@ -243,8 +238,7 @@ meta(Int, Debugged, M, F, As) ->
 
 debugged_cmd(Cmd, Bs, Ieval) ->
     Debugged = get(self),
-    Stacktrace = fix_stacktrace(2),
-    Debugged ! {sys, self(), {command,Cmd,Stacktrace}},
+    Debugged ! {sys, self(), {command,Cmd}},
     meta_loop(Debugged, Bs, Ieval).
 
 meta_loop(Debugged, Bs, #ieval{level=Le} = Ieval) ->
@@ -256,13 +250,18 @@ meta_loop(Debugged, Bs, #ieval{level=Le} = Ieval) ->
 	{sys, Debugged, {value,Val}} ->
 	    {value, Val, Bs};
 	{sys, Debugged, {value,Val,Bs2}} ->
-	    {value, Val, Bs2};
-	{sys, Debugged, {exception,{Class,Reason,Stacktrace}}} ->
+	    {value, Val, merge_bindings(Bs2, Bs, Ieval)};
+	{sys, Debugged, {exception,{Class,Reason,Stk}}} ->
 	    case get(exit_info) of
 
-		%% Error occured outside interpreted code
+		%% Error occurred outside of interpreted code.
 		undefined ->
-		    exception(Class,Reason,Stacktrace,Bs,Ieval);
+		    MakeStk0 = dbg_istk:delayed_stacktrace(),
+		    MakeStk = fun(Depth0) ->
+				      Depth = max(0, Depth0 - length(Stk)),
+				      Stk ++ MakeStk0(Depth)
+			      end,
+		    do_exception(Class, Reason, MakeStk, Bs, Ieval);
 
 		%% Error must have occured within a re-entry to
 		%% interpreted code, simply raise the exception
@@ -275,7 +274,7 @@ meta_loop(Debugged, Bs, #ieval{level=Le} = Ieval) ->
 	    %% Reset process dictionary
 	    %% This is really only necessary if the process left
 	    %% interpreted code at a call level > 1
-	    put(stack, []),
+	    dbg_istk:init(),
 	    put(stacktrace, []),
 	    put(exit_info, undefined),
 	    
@@ -313,177 +312,6 @@ exit_loop(OrigPid, Reason, Bs, Ieval) ->
 	    exit_loop(OrigPid, Reason, Bs, Ieval)
     end.
 
-%%--Stack emulation---------------------------------------------------
-
-%% We keep track of a call stack that is used for
-%%  1) saving stack frames that can be inspected from an Attached
-%%     Process GUI (using dbg_icmd:get(Meta, stack_frame, {Dir, SP})
-%%  2) generate an approximation of regular stacktrace -- sent to
-%%     Debugged when it should raise an exception or evaluate a
-%%     function (since it might possible raise an exception)
-%%
-%% Stack = [Entry]
-%%   Entry = {Le, {MFA, Where, Bs}}
-%%     Le = int()         % current call level
-%%     MFA = {M,F,Args}   % called function (or fun)
-%%         | {Fun,Args}   %
-%%     Where = {M,Li}     % from where (module+line) function is called
-%%     Bs = bindings()    % current variable bindings
-%%
-%% How to push depends on the "Stack Trace" option (value saved in
-%% process dictionary item 'trace_stack').
-%%   all - everything is pushed
-%%   no_tail - tail recursive push
-%%   false - nothing is pushed
-%% Whenever a function returns, the corresponding call frame is popped.
-
-push(MFA, Bs, #ieval{level=Le,module=Cm,line=Li,last_call=Lc}) ->
-    Entry = {Le, {MFA, {Cm,Li}, Bs}},
-    case get(trace_stack) of
-	false -> ignore;
-	no_tail when Lc ->
-	    case get(stack) of
-		[] -> put(stack, [Entry]);
-		[_Entry|Entries] -> put(stack, [Entry|Entries])
-	    end;
-	_ -> % all | no_tail when Lc =:= false
-	    put(stack, [Entry|get(stack)])
-    end.
-
-pop() ->
-    case get(trace_stack) of
-	false -> ignore;
-	_ -> % all ¦ no_tail
-	    case get(stack) of
-		[_Entry|Entries] ->
-		    put(stack, Entries);
-		[] ->
-		    ignore
-	    end
-    end.
-
-pop(Le) ->
-    case get(trace_stack) of
-	false -> ignore;
-	_ -> % all | no_tail
-	    put(stack, pop(Le, get(stack)))
-    end.
-
-pop(Level, [{Le, _}|Stack]) when Level=<Le ->
-    pop(Level, Stack);
-pop(_Level, Stack) ->
-    Stack.
-
-
-%% stack_level() -> Le
-%% stack_level(Stack) -> Le
-%% Top call level
-stack_level() ->
-    stack_level(get(stack)).
-
-stack_level([]) -> 1;
-stack_level([{Le,_}|_]) -> Le.
-
-%% fix_stacktrace(Start) -> Stacktrace
-%%   Start = 1|2
-%%   Stacktrace = [{M,F,Args|Arity} | {Fun,Args}]
-%% Convert internal stack format to imitation of regular stacktrace.
-%% Max three elements, no repeated (recursive) calls to the same
-%% function and convert argument lists to arity for all but topmost
-%% entry (and funs).
-%% 'Start' indicates where at get(stack) to start. This somewhat ugly
-%% solution is because fix_stacktrace has two uses: 1) to imitate
-%% the stacktrace in the case of an exception in the interpreted code,
-%% in which case the current call (top of the stack = first of the list)
-%% should be included, and 2) to send a current stacktrace to Debugged
-%% when evaluation passes into non-interpreted code, in which case
-%% the current call should NOT be included (as it is Debugged which
-%% will make the actual function call).
-fix_stacktrace(Start) ->
-    case fix_stacktrace2(sublist(get(stack), Start, 3)) of
-	[] ->
-	    [];
-	[H|T] ->
-	    [H|args2arity(T)]
-    end.
-
-sublist([], _Start, _Length) ->
-    []; % workaround, lists:sublist([],2,3) fails
-sublist(L, Start, Length) ->
-    lists:sublist(L, Start, Length).
-
-fix_stacktrace2([{_,{{M,F,As1},_,_}}, {_,{{M,F,As2},_,_}}|_])
-  when length(As1) =:= length(As2) ->
-    [{M,F,As1}];
-fix_stacktrace2([{_,{{Fun,As1},_,_}}, {_,{{Fun,As2},_,_}}|_])
-  when length(As1) =:= length(As2) ->
-    [{Fun,As1}];
-fix_stacktrace2([{_,{MFA,_,_}}|Entries]) ->
-    [MFA|fix_stacktrace2(Entries)];
-fix_stacktrace2([]) ->
-    [].
-
-args2arity([{M,F,As}|Entries]) when is_list(As) ->
-    [{M,F,length(As)}|args2arity(Entries)];
-args2arity([Entry|Entries]) ->
-    [Entry|args2arity(Entries)];
-args2arity([]) ->
-    [].
-
-%% bindings(SP) -> Bs
-%%   SP = Le  % stack pointer
-%% Return the bindings for the specified call level
-bindings(SP) ->
-    bindings(SP, get(stack)).
-
-bindings(SP, [{SP,{_MFA,_Wh,Bs}}|_]) ->
-    Bs;
-bindings(SP, [_Entry|Entries]) ->
-    bindings(SP, Entries);
-bindings(_SP, []) ->
-    erl_eval:new_bindings().
-
-%% stack_frame(Dir, SP) -> {Le, Where, Bs} | top | bottom
-%%   Dir = up | down
-%%   Where = {Cm, Li}
-%%     Cm = Module | undefined  % module
-%%     Li = int()  | -1         % line number
-%%     Bs = bindings()
-%% Return stack frame info one step up/down from given stack pointer
-%%  up = to lower call levels
-%%  down = to higher call levels
-stack_frame(up, SP) ->
-    stack_frame(SP, up, get(stack));
-stack_frame(down, SP) ->
-    stack_frame(SP, down, lists:reverse(get(stack))).
-
-stack_frame(SP, up, [{Le, {_MFA,Where,Bs}}|_]) when Le<SP ->
-    {Le, Where, Bs};
-stack_frame(SP, down, [{Le, {_MFA,Where,Bs}}|_]) when Le>SP ->
-    {Le, Where, Bs};
-stack_frame(SP, Dir, [{SP, _}|Stack]) ->
-    case Stack of
-	[{Le, {_MFA,Where,Bs}}|_] ->
-	    {Le, Where, Bs};
-	[] when Dir =:= up ->
-	    top;
-	[] when Dir =:= down ->
-	    bottom
-    end;
-stack_frame(SP, Dir, [_Entry|Stack]) ->
-    stack_frame(SP, Dir, Stack).
-
-%% backtrace(HowMany) -> Backtrace
-%%   HowMany = all | int()
-%%   Backtrace = {Le, MFA}
-%% Return all/the last N called functions, in reversed call order
-backtrace(HowMany) ->
-    Stack = case HowMany of
-		all -> get(stack);
-		N -> lists:sublist(get(stack), N)
-	    end,
-    [{Le, MFA} || {Le,{MFA,_Wh,_Bs}} <- Stack].
-
 %%--Trace function----------------------------------------------------
 
 %%--------------------------------------------------------------------
@@ -497,68 +325,71 @@ trace(What, Args) ->
 trace(return, {_Le,{dbg_apply,_,_,_}}, _Bool) ->
     ignore;
 trace(What, Args, true) ->
-    Str = case What of
-	      send ->
-		  {To,Msg} = Args,
-		  io_lib:format("==> ~w : ~p~n", [To, Msg]);
-	      receivex ->
-		  {Le, TimeoutP} = Args,
-		  Tail = case TimeoutP of
-			     true -> "with timeout~n";
-			     false -> "~n"
-			 end,
-		  io_lib:format("   (~w) receive " ++ Tail, [Le]);
-		      
-	      received when Args =:= null ->
-		  io_lib:format("~n", []);
-	      received -> % Args=Msg
-		  io_lib:format("~n<== ~p~n", [Args]);
-		      
-	      call ->
-		  {Called, {Le,Li,M,F,As}} = Args,
-		  case Called of
-		      extern ->
-			  io_lib:format("++ (~w) <~w> ~w:~w~s~n",
-					[Le,Li,M,F,format_args(As)]);
-		      local ->
-			  io_lib:format("++ (~w) <~w> ~w~s~n",
-					[Le,Li,F,format_args(As)])
-		  end;
-	      call_fun ->
-		  {Le,Li,F,As} = Args,
-		  io_lib:format("++ (~w) <~w> ~w~s~n",
-				[Le, Li, F, format_args(As)]);
-	      return ->
-		  {Le,Val} = Args,
-		  io_lib:format("-- (~w) ~p~n", [Le, Val]);
-		      
-		      
-	      bif ->
-		  {Le,Li,M,F,As} = Args,
-		  io_lib:format("++ (~w) <~w> ~w:~w~s~n",
-				[Le, Li, M, F, format_args(As)])
-	  end,
-    dbg_icmd:tell_attached({trace_output, Str});
+    Fun = fun(P) -> format_trace(What, Args, P) end,
+    dbg_icmd:tell_attached({trace_output, Fun});
 trace(_What, _Args, false) ->
     ignore.
 
-format_args(As) when is_list(As) ->
-    [$(,format_args1(As),$)];
-format_args(A) ->
-    [$/,io_lib:format("~p", [A])].
+format_trace(What, Args, P) ->
+    case What of
+        send ->
+            {To,Msg} = Args,
+            io_lib:format("==> ~w : "++P++"~n", [To, Msg]);
+        receivex ->
+            {Le, TimeoutP} = Args,
+            Tail = case TimeoutP of
+                       true -> "with timeout~n";
+                       false -> "~n"
+                   end,
+            io_lib:format("   (~w) receive " ++ Tail, [Le]);
 
-format_args1([A]) ->
-    [io_lib:format("~p", [A])];
-format_args1([A|As]) ->
-    [io_lib:format("~p", [A]),$,|format_args1(As)];
-format_args1([]) ->
+        received when Args =:= null ->
+            io_lib:format("~n", []);
+        received -> % Args=Msg
+            io_lib:format("~n<== "++P++"~n", [Args]);
+
+        call ->
+            {Called, {Le,Li,M,F,As}} = Args,
+            case Called of
+                extern ->	
+                    io_lib:format("++ (~w) <~w> ~w:~w~ts~n",
+                                  [Le,Li,M,F,format_args(As, P)]);
+                local ->
+                    io_lib:format("++ (~w) <~w> ~w~ts~n",
+                                  [Le,Li,F,format_args(As, P)])
+            end;
+        call_fun ->
+            {Le,Li,F,As} = Args,
+            io_lib:format("++ (~w) <~w> ~w~ts~n",
+                          [Le, Li, F, format_args(As, P)]);
+        return ->
+            {Le,Val} = Args,
+            io_lib:format("-- (~w) "++P++"~n", [Le, Val]);
+
+
+        bif ->
+            {Le,Li,M,F,As} = Args,
+            io_lib:format("++ (~w) <~w> ~w:~w~ts~n",
+                          [Le, Li, M, F, format_args(As, P)])
+    end.
+
+format_args(As, P) when is_list(As) ->
+    [$(,format_args1(As, P),$)];
+format_args(A, P) ->
+    [$/,io_lib:format(P, [A])].
+
+format_args1([A], P) ->
+    [io_lib:format(P, [A])];
+format_args1([A|As], P) ->
+    [io_lib:format(P, [A]),$,|format_args1(As, P)];
+format_args1([], _) ->
     [].
 
 %%--Other useful functions--------------------------------------------
 
 %% Mimic catch behaviour
 catch_value(error, Reason) ->
-    {'EXIT',{Reason,get(stacktrace)}};
+    {'EXIT',{Reason,get_stacktrace()}};
 catch_value(exit, Reason) ->
     {'EXIT',Reason};
 catch_value(throw, Reason) ->
@@ -570,11 +401,13 @@ catch_value(throw, Reason) ->
 %% Top level function of meta evaluator. 
 %% Return message to be replied to the target process.
 %%--------------------------------------------------------------------
-eval_mfa(Debugged, M, F, As, Ieval) ->
+eval_mfa(Debugged, M, F, As, #ieval{level=Le}=Ieval0) ->
     Int = get(int),
     Bs = erl_eval:new_bindings(),
-    try eval_function(M,F,As,Bs,extern,Ieval#ieval{last_call=true}) of
+    Ieval = Ieval0#ieval{level=Le+1,top=true},
+    try do_eval_function(M, F, As, Bs, extern, Ieval) of
 	{value, Val, _Bs} ->
+	    trace(return, {Le,Val}),
 	    {ready, Val}
     catch
 	exit:{Debugged, Reason} ->
@@ -582,76 +415,69 @@ eval_mfa(Debugged, M, F, As, Ieval) ->
 	exit:{Int, Reason} ->
 	    exit(Reason);
 	Class:Reason ->
-	    {exception, {Class, Reason, get(stacktrace)}}
+	    {exception, {Class, Reason, get_stacktrace()}}
     end.
 
-eval_function(Mod, Fun, As0, Bs0, _Called, Ieval) when is_function(Fun);
-						       Mod =:= ?MODULE,
-						       Fun =:= eval_fun ->
-    #ieval{level=Le, line=Li, last_call=Lc} = Ieval,
-    case lambda(Fun, As0) of
-	{Cs,Module,Name,As,Bs} ->
-	    push({Module,Name,As}, Bs0, Ieval),
-	    trace(call_fun, {Le,Li,Name,As}),
-	    {value, Val, _Bs} =
-		fnk_clauses(Cs, Module, Name, As, Bs,
-			    Ieval#ieval{level=Le+1}),
-	    pop(),
-	    trace(return, {Le,Val}),
-	    {value, Val, Bs0};
+eval_function(Mod, Name, As, Bs, Called, Ieval0, Lc) ->
+    Tail = Lc andalso get(trace_stack) =:= no_tail,
+    case Tail of
+	false ->
+	    Ieval = dbg_istk:push(Bs, Ieval0, Lc),
+	    {value,Val,_} = do_eval_function(Mod, Name, As, Bs, Called, Ieval),
+	    dbg_istk:pop(),
+	    trace(return, {Ieval#ieval.level,Val}),
+	    {value,Val,Bs};
+	true ->
+	    do_eval_function(Mod, Name, As, Bs, Called, Ieval0)
+    end.
 
-	not_interpreted when Lc -> % We are leaving interpreted code
+do_eval_function(Mod, Fun, As0, Bs0, _, Ieval0) when is_function(Fun);
+						    Mod =:= ?MODULE,
+						    Fun =:= eval_fun orelse
+						    Fun =:= eval_named_fun ->
+    #ieval{level=Le,line=Li,top=Top} = Ieval0,
+    case lambda(Fun, As0) of
+	{[{clause,Fc,_,_,_}|_]=Cs,Module,Name,As,Bs} ->
+	    Ieval = Ieval0#ieval{module=Module,function=Name,
+				 arguments=As0,line=Fc},
+	    trace(call_fun, {Le,Li,Name,As}),
+	    fnk_clauses(Cs, As, Bs, Ieval);
+
+	not_interpreted when Top -> % We are leaving interpreted code
 	    trace(call_fun, {Le,Li,Fun,As0}),
 	    {value, {dbg_apply,erlang,apply,[Fun,As0]}, Bs0};
 	not_interpreted ->
-	    push({Fun,As0}, Bs0, Ieval),
 	    trace(call_fun, {Le,Li,Fun,As0}),
-	    {value, Val, _Bs} =
-		debugged_cmd({apply,erlang,apply,[Fun,As0]},Bs0,
-			     Ieval#ieval{level=Le+1}),
-	    pop(),
-	    trace(return, {Le,Val}),
-	    {value, Val, Bs0};
+	    debugged_cmd({apply,erlang,apply,[Fun,As0]}, Bs0, Ieval0);
 
 	{error,Reason} ->
 	    %% It's ok not to push anything in this case, the error
 	    %% reason contains information about the culprit
 	    %% ({badarity,{{Mod,Name},As}})
-	    exception(error, Reason, Bs0, Ieval)
+	    exception(error, Reason, Bs0, Ieval0)
     end;
 
 %% Common Test adaptation
-eval_function(ct_line, line, As, Bs, extern, #ieval{level=Le}=Ieval) ->
+do_eval_function(ct_line, line, As, Bs, extern, #ieval{level=Le}=Ieval) ->
     debugged_cmd({apply,ct_line,line,As}, Bs, Ieval#ieval{level=Le+1}),
     {value, ignore, Bs};
 
-eval_function(Mod, Name, As0, Bs0, Called, Ieval) ->
-    #ieval{level=Le, line=Li, last_call=Lc} = Ieval,
-
-    push({Mod,Name,As0}, Bs0, Ieval),
+do_eval_function(Mod, Name, As0, Bs0, Called, Ieval0) ->
+    #ieval{level=Le,line=Li,top=Top} = Ieval0,
     trace(call, {Called, {Le,Li,Mod,Name,As0}}),
-
+    Ieval = Ieval0#ieval{module=Mod,function=Name,arguments=As0},
     case get_function(Mod, Name, As0, Called) of
-	Cs when is_list(Cs) ->
-	    {value, Val, _Bs} =
-		fnk_clauses(Cs, Mod, Name, As0, erl_eval:new_bindings(),
-			    Ieval#ieval{level=Le+1}),
-	    pop(),
-	    trace(return, {Le,Val}),
-	    {value, Val, Bs0};
+	[{clause,FcLine,_,_,_}|_]=Cs ->
+	    fnk_clauses(Cs, As0, erl_eval:new_bindings(),
+			Ieval#ieval{line=FcLine});
 
-	not_interpreted when Lc -> % We are leaving interpreted code
+	not_interpreted when Top -> % We are leaving interpreted code
 	    {value, {dbg_apply,Mod,Name,As0}, Bs0};
 	not_interpreted ->
-	    {value, Val, _Bs} =
-		debugged_cmd({apply,Mod,Name,As0}, Bs0,
-			     Ieval#ieval{level=Le+1}),
-	    pop(),
-	    trace(return, {Le,Val}),
-	    {value, Val, Bs0};
+	    debugged_cmd({apply,Mod,Name,As0}, Bs0, Ieval);
 
 	undef ->
-	    exception(error, undef, Bs0, Ieval)
+	    exception(error, undef, Bs0, Ieval, true)
     end.
 
 lambda(eval_fun, [Cs,As,Bs,{Mod,Name}=F]) ->
@@ -663,13 +489,29 @@ lambda(eval_fun, [Cs,As,Bs,{Mod,Name}=F]) ->
 	true -> 
 	    {error,{badarity,{F,As}}}
     end;
+lambda(eval_named_fun, [Cs,As,Bs0,FName,RF,{Mod,Name}=F]) ->
+    %% Fun defined in interpreted code, called from outside
+    if
+	length(element(3,hd(Cs))) =:= length(As) ->
+	    db_ref(Mod),  %% Adds ref between module and process
+	    Bs1 = add_binding(FName, RF, Bs0),
+	    {Cs,Mod,Name,As,Bs1};
+	true ->
+	    {error,{badarity,{F,As}}}
+    end;
 lambda(Fun, As) when is_function(Fun) ->
     %% Fun called from within interpreted code...
     case erlang:fun_info(Fun, module) of
 
 	%% ... and the fun was defined in interpreted code
 	{module, ?MODULE} ->
-	    {env, [{Mod,Name},Bs,Cs]} = erlang:fun_info(Fun, env),
+	    {Mod,Name,Bs, Cs} =
+		case erlang:fun_info(Fun, env) of
+		    {env,[{{M,F},Bs0,Cs0}]} ->
+		        {M,F,Bs0, Cs0};
+		    {env,[{{M,F},Bs0,Cs0,FName}]} ->
+		        {M,F,add_binding(FName, Fun, Bs0), Cs0}
+		end,
 	    {arity, Arity} = erlang:fun_info(Fun, arity),
 	    if 
 		length(As) =:= Arity ->
@@ -752,23 +594,21 @@ cached(Key) ->
 
 %% Try to find a matching function clause
 %% #ieval.level is set, the other fields must be set in this function
-fnk_clauses([{clause,Line,Pars,Gs,Body}|Cs], M, F, As, Bs0, Ieval) ->
+fnk_clauses([{clause,Line,Pars,Gs,Body}|Cs], As, Bs0, Ieval) ->
     case head_match(Pars, As, [], Bs0) of
 	{match,Bs1} ->
 	    Bs = add_bindings(Bs1, Bs0),
 	    case guard(Gs, Bs) of
 		true ->
-		    seq(Body, Bs,
-			Ieval#ieval{line=Line,
-				    module=M,function=F,arguments=As});
+		    seq(Body, Bs, Ieval#ieval{line=Line});
 		false ->
-		    fnk_clauses(Cs, M, F, As, Bs0, Ieval)
+		    fnk_clauses(Cs, As, Bs0, Ieval)
 	    end;
 	nomatch ->
-	    fnk_clauses(Cs, M, F, As, Bs0, Ieval)
+	    fnk_clauses(Cs, As, Bs0, Ieval)
     end;
-fnk_clauses([], _M, _F, _As, Bs, Ieval) ->
-    exception(error, function_clause, Bs, Ieval).
+fnk_clauses([], _As, Bs, Ieval) ->
+    exception(error, function_clause, Bs, Ieval, true).
 
 seq([E], Bs0, Ieval) ->
     case dbg_icmd:cmd(E, Bs0, Ieval) of
@@ -782,7 +622,7 @@ seq([E|Es], Bs0, Ieval) ->
 	{skip,Bs} ->
 	    seq(Es, Bs, Ieval);
 	Bs1 ->
-	    {value,_,Bs} = expr(E, Bs1, Ieval#ieval{last_call=false}),
+	    {value,_,Bs} = expr(E, Bs1, Ieval#ieval{top=false}),
 	    seq(Es, Bs, Ieval)
     end;
 seq([], Bs, _) ->
@@ -804,10 +644,9 @@ expr({value,Val}, Bs, _Ieval) -> % Special case straight values
 
 %% List
 expr({cons,Line,H0,T0}, Bs0, Ieval0) ->
-    Ieval = Ieval0#ieval{line=Line},
-    Ieval1 = Ieval#ieval{last_call=false},
-    {value,H,Bs1} = expr(H0,Bs0,Ieval1),
-    {value,T,Bs2} = expr(T0,Bs0,Ieval1),
+    Ieval = Ieval0#ieval{line=Line,top=false},
+    {value,H,Bs1} = expr(H0, Bs0, Ieval),
+    {value,T,Bs2} = expr(T0, Bs0, Ieval),
     {value,[H|T],merge_bindings(Bs2, Bs1, Ieval)};
 
 %% Tuple
@@ -815,18 +654,37 @@ expr({tuple,Line,Es0}, Bs0, Ieval) ->
     {Vs,Bs} = eval_list(Es0, Bs0, Ieval#ieval{line=Line}),
     {value,list_to_tuple(Vs),Bs};
 
+%% Map
+expr({map,Line,Fs0}, Bs0, Ieval) ->
+    {Fs,Bs} = eval_map_fields(Fs0, Bs0, Ieval#ieval{line=Line,top=false}),
+    Value = lists:foldl(fun ({map_assoc,K,V}, Mi) -> maps:put(K,V,Mi) end,
+                        #{}, Fs),
+    {value,Value,Bs};
+expr({map,Line,E0,Fs0}, Bs0, Ieval0) ->
+    Ieval = Ieval0#ieval{line=Line,top=false},
+    {value,E,Bs1} = expr(E0, Bs0, Ieval),
+    case E of
+        #{} ->
+            {Fs,Bs2} = eval_map_fields(Fs0, Bs0, Ieval),
+            Value = lists:foldl(fun ({map_assoc,K,V}, Mi) -> maps:put(K,V,Mi);
+                                    ({map_exact,K,V}, Mi) -> maps:update(K,V,Mi)
+                                end, E, Fs),
+            {value,Value,merge_bindings(Bs2, Bs1, Ieval)};
+        _ ->
+            exception(error, {badarg,E}, Bs1, Ieval)
+    end;
 %% A block of statements
 expr({block,Line,Es},Bs,Ieval) ->
     seq(Es, Bs, Ieval#ieval{line=Line});
 
 %% Catch statement
 expr({'catch',Line,Expr}, Bs0, Ieval) ->
-    try expr(Expr, Bs0, Ieval#ieval{line=Line, last_call=false})
+    try expr(Expr, Bs0, Ieval#ieval{line=Line, top=false})
     catch
 	Class:Reason ->
 	    %% Exception caught, reset exit info
 	    put(exit_info, undefined),
-	    pop(Ieval#ieval.level),
+	    dbg_istk:pop(Ieval#ieval.level),
 	    Value = catch_value(Class, Reason),
 	    trace(return, {Ieval#ieval.level,Value}),
 	    {value, Value, Bs0}
@@ -835,7 +693,7 @@ expr({'catch',Line,Expr}, Bs0, Ieval) ->
 %% Try-catch statement
 expr({'try',Line,Es,CaseCs,CatchCs,[]}, Bs0, Ieval0) ->
     Ieval = Ieval0#ieval{line=Line},
-    try seq(Es, Bs0, Ieval#ieval{last_call=false}) of
+    try seq(Es, Bs0, Ieval#ieval{top=false}) of
 	{value,Val,Bs} = Value ->
 	    case CaseCs of
 		[] -> Value;
@@ -848,7 +706,7 @@ expr({'try',Line,Es,CaseCs,CatchCs,[]}, Bs0, Ieval0) ->
     end;
 expr({'try',Line,Es,CaseCs,CatchCs,As}, Bs0, Ieval0) ->
     Ieval = Ieval0#ieval{line=Line},
-    try seq(Es, Bs0, Ieval#ieval{last_call=false}) of
+    try seq(Es, Bs0, Ieval#ieval{top=false}) of
 	{value,Val,Bs} = Value ->
 	    case CaseCs of
 		[] -> Value;
@@ -859,13 +717,13 @@ expr({'try',Line,Es,CaseCs,CatchCs,As}, Bs0, Ieval0) ->
 	Class:Reason when CatchCs =/= [] ->
 	    catch_clauses({Class,Reason,[]}, CatchCs, Bs0, Ieval)
     after
-            seq(As, Bs0, Ieval#ieval{last_call=false})
+            seq(As, Bs0, Ieval#ieval{top=false})
     end;
 
 %% Case statement
 expr({'case',Line,E,Cs}, Bs0, Ieval) ->
     {value,Val,Bs} =
-	expr(E, Bs0, Ieval#ieval{line=Line, last_call=false}),
+	expr(E, Bs0, Ieval#ieval{line=Line, top=false}),
     case_clauses(Val, Cs, Bs, case_clause, Ieval#ieval{line=Line});
 
 %% If statement
@@ -873,29 +731,31 @@ expr({'if',Line,Cs}, Bs, Ieval) ->
     if_clauses(Cs, Bs, Ieval#ieval{line=Line});
 
 %% Andalso/orelse
-expr({'andalso',Line,E1,E2}, Bs, Ieval) ->
-    case expr(E1, Bs, Ieval#ieval{line=Line, last_call=false}) of
-	{value,false,_}=Res ->
-	    Res;
-	{value,true,_} -> 
-	    expr(E2, Bs, Ieval#ieval{line=Line, last_call=false});
-	{value,Val,Bs} ->
-	    exception(error, {badarg,Val}, Bs, Ieval)
+expr({'andalso',Line,E1,E2}, Bs0, Ieval) ->
+    case expr(E1, Bs0, Ieval#ieval{line=Line, top=false}) of
+        {value,false,_}=Res ->
+           Res;
+        {value,true,Bs} ->
+            {value,Val,_} = expr(E2, Bs, Ieval#ieval{line=Line, top=false}),
+            {value,Val,Bs};
+        {value,Val,Bs} ->
+            exception(error, {badarg,Val}, Bs, Ieval)
     end;
-expr({'orelse',Line,E1,E2}, Bs, Ieval) ->
-    case expr(E1, Bs, Ieval#ieval{line=Line, last_call=false}) of
-	{value,true,_}=Res ->
-	    Res;
-	{value,false,_} ->
-	    expr(E2, Bs, Ieval#ieval{line=Line, last_call=false});
-	{value,Val,_} ->
-	    exception(error, {badarg,Val}, Bs, Ieval)
+expr({'orelse',Line,E1,E2}, Bs0, Ieval) ->
+    case expr(E1, Bs0, Ieval#ieval{line=Line, top=false}) of
+        {value,true,_}=Res ->
+           Res;
+        {value,false,Bs} ->
+            {value,Val,_} = expr(E2, Bs, Ieval#ieval{line=Line, top=false}),
+            {value,Val,Bs};
+        {value,Val,Bs} ->
+            exception(error, {badarg,Val}, Bs, Ieval)
     end;
 
 %% Matching expression
 expr({match,Line,Lhs,Rhs0}, Bs0, Ieval0) ->
     Ieval = Ieval0#ieval{line=Line},
-    {value,Rhs,Bs1} = expr(Rhs0, Bs0, Ieval#ieval{last_call=false}),
+    {value,Rhs,Bs1} = expr(Rhs0, Bs0, Ieval#ieval{top=false}),
     case match(Lhs, Rhs, Bs1) of
 	{match,Bs} ->
 	    {value,Rhs,Bs};
@@ -906,66 +766,152 @@ expr({match,Line,Lhs,Rhs0}, Bs0, Ieval0) ->
 %% Construct a fun
 expr({make_fun,Line,Name,Cs}, Bs, #ieval{module=Module}=Ieval) ->
     Arity = length(element(3,hd(Cs))),
-    Info = {Module,Name},
+    Info = {{Module,Name},Bs,Cs},
     Fun = 
 	case Arity of
-	    0 -> fun() -> eval_fun(Cs, [], Bs, Info) end;
-	    1 -> fun(A) -> eval_fun(Cs, [A], Bs,Info) end;
-	    2 -> fun(A,B) -> eval_fun(Cs, [A,B], Bs,Info) end;
-	    3 -> fun(A,B,C) -> eval_fun(Cs, [A,B,C], Bs,Info) end;
-	    4 -> fun(A,B,C,D) -> eval_fun(Cs, [A,B,C,D], Bs,Info) end;
-	    5 -> fun(A,B,C,D,E) -> eval_fun(Cs, [A,B,C,D,E], Bs,Info) end;
-	    6 -> fun(A,B,C,D,E,F) -> eval_fun(Cs, [A,B,C,D,E,F], Bs,Info) end;
+	    0 -> fun() -> eval_fun([], Info) end;
+	    1 -> fun(A) -> eval_fun([A], Info) end;
+	    2 -> fun(A,B) -> eval_fun([A,B], Info) end;
+	    3 -> fun(A,B,C) -> eval_fun([A,B,C], Info) end;
+	    4 -> fun(A,B,C,D) -> eval_fun([A,B,C,D], Info) end;
+	    5 -> fun(A,B,C,D,E) -> eval_fun([A,B,C,D,E], Info) end;
+	    6 -> fun(A,B,C,D,E,F) -> eval_fun([A,B,C,D,E,F], Info) end;
 	    7 -> fun(A,B,C,D,E,F,G) -> 
-			 eval_fun(Cs, [A,B,C,D,E,F,G], Bs,Info) end;
+			 eval_fun([A,B,C,D,E,F,G], Info) end;
 	    8 -> fun(A,B,C,D,E,F,G,H) -> 
-			 eval_fun(Cs, [A,B,C,D,E,F,G,H], Bs,Info) end;
+			 eval_fun([A,B,C,D,E,F,G,H], Info) end;
 	    9 -> fun(A,B,C,D,E,F,G,H,I) -> 
-			 eval_fun(Cs, [A,B,C,D,E,F,G,H,I], Bs,Info) end;
+			 eval_fun([A,B,C,D,E,F,G,H,I], Info) end;
 	    10 -> fun(A,B,C,D,E,F,G,H,I,J) -> 
-		     	  eval_fun(Cs, [A,B,C,D,E,F,G,H,I,J], Bs,Info) end;
+			  eval_fun([A,B,C,D,E,F,G,H,I,J], Info) end;
 	    11 -> fun(A,B,C,D,E,F,G,H,I,J,K) -> 
-		     	  eval_fun(Cs, [A,B,C,D,E,F,G,H,I,J,K], Bs,Info) end;
+			  eval_fun([A,B,C,D,E,F,G,H,I,J,K], Info) end;
 	    12 -> fun(A,B,C,D,E,F,G,H,I,J,K,L) -> 
-		     	  eval_fun(Cs, [A,B,C,D,E,F,G,H,I,J,K,L], Bs,Info) end;
+			  eval_fun([A,B,C,D,E,F,G,H,I,J,K,L], Info) end;
 	    13 -> fun(A,B,C,D,E,F,G,H,I,J,K,L,M) -> 
-		     	  eval_fun(Cs, [A,B,C,D,E,F,G,H,I,J,K,L,M], Bs,Info) end;
+			  eval_fun([A,B,C,D,E,F,G,H,I,J,K,L,M], Info) end;
 	    14 -> fun(A,B,C,D,E,F,G,H,I,J,K,L,M,N) -> 
-		     	  eval_fun(Cs, [A,B,C,D,E,F,G,H,I,J,K,L,M,N], Bs,Info) end;
+			  eval_fun([A,B,C,D,E,F,G,H,I,J,K,L,M,N], Info) end;
 	    15 -> fun(A,B,C,D,E,F,G,H,I,J,K,L,M,N,O) -> 
-		     	  eval_fun(Cs, [A,B,C,D,E,F,G,H,I,J,K,L,M,N,O], Bs,Info) end;
+			  eval_fun([A,B,C,D,E,F,G,H,I,J,K,L,M,N,O], Info) end;
 	    16 -> fun(A,B,C,D,E,F,G,H,I,J,K,L,M,N,O,P) -> 
-		     	  eval_fun(Cs, [A,B,C,D,E,F,G,H,I,J,K,L,M,N,O,P], Bs,Info) end;
+			  eval_fun([A,B,C,D,E,F,G,H,I,J,K,L,M,N,O,P], Info) end;
 	    17 -> fun(A,B,C,D,E,F,G,H,I,J,K,L,M,N,O,P,Q) -> 
-		     	  eval_fun(Cs, [A,B,C,D,E,F,G,H,I,J,K,L,M,N,O,P,Q], Bs,Info) end;
+			  eval_fun([A,B,C,D,E,F,G,H,I,J,K,L,M,N,O,P,Q], Info) end;
 	    18 -> fun(A,B,C,D,E,F,G,H,I,J,K,L,M,N,O,P,Q,R) -> 
-		     	  eval_fun(Cs, [A,B,C,D,E,F,G,H,I,J,K,L,M,N,O,P,Q,R], Bs,Info) end;
+			  eval_fun([A,B,C,D,E,F,G,H,I,J,K,L,M,N,O,P,Q,R], Info) end;
 	    19 -> fun(A,B,C,D,E,F,G,H,I,J,K,L,M,N,O,P,Q,R,S) -> 
-		     	  eval_fun(Cs, [A,B,C,D,E,F,G,H,I,J,K,L,M,N,O,P,Q,R,S],Bs,Info) end;
+			  eval_fun([A,B,C,D,E,F,G,H,I,J,K,L,M,N,O,P,Q,R,S],Info) end;
 	    20 -> fun(A,B,C,D,E,F,G,H,I,J,K,L,M,N,O,P,Q,R,S,T) -> 
-			  eval_fun(Cs, [A,B,C,D,E,F,G,H,I,J,K,L,M,N,O,P,Q,R,S,T],Bs,Info) end;
+			  eval_fun([A,B,C,D,E,F,G,H,I,J,K,L,M,N,O,P,Q,R,S,T],Info) end;
 	    _Other ->
 		exception(error, {'argument_limit',{'fun',Cs}}, Bs,
 			  Ieval#ieval{line=Line})
 	end,
     {value,Fun,Bs};
 
+%% Construct a fun
+expr({make_named_fun,Line,Name,FName,Cs}, Bs, #ieval{module=Module}=Ieval) ->
+    Arity = length(element(3,hd(Cs))),
+    Info = {{Module,Name},Bs,Cs,FName},
+    Fun =
+	case Arity of
+	    0 -> fun RF() -> eval_named_fun([], RF, Info) end;
+	    1 -> fun RF(A) -> eval_named_fun([A], RF, Info) end;
+	    2 -> fun RF(A,B) ->
+			 eval_named_fun([A,B], RF, Info) end;
+	    3 -> fun RF(A,B,C) ->
+			 eval_named_fun([A,B,C], RF, Info) end;
+	    4 -> fun RF(A,B,C,D) ->
+			 eval_named_fun([A,B,C,D], RF, Info) end;
+	    5 -> fun RF(A,B,C,D,E) ->
+			 eval_named_fun([A,B,C,D,E],
+					RF, Info) end;
+	    6 -> fun RF(A,B,C,D,E,F) ->
+			 eval_named_fun([A,B,C,D,E,F],
+					RF, Info) end;
+	    7 -> fun RF(A,B,C,D,E,F,G) ->
+			 eval_named_fun([A,B,C,D,E,F,G],
+					RF, Info) end;
+	    8 -> fun RF(A,B,C,D,E,F,G,H) ->
+			 eval_named_fun([A,B,C,D,E,F,G,H],
+					RF, Info) end;
+	    9 -> fun RF(A,B,C,D,E,F,G,H,I) ->
+			 eval_named_fun([A,B,C,D,E,F,G,H,I],
+					RF, Info) end;
+	    10 -> fun RF(A,B,C,D,E,F,G,H,I,J) ->
+			 eval_named_fun([A,B,C,D,E,F,G,H,I,J],
+					RF, Info) end;
+	    11 -> fun RF(A,B,C,D,E,F,G,H,I,J,K) ->
+			 eval_named_fun([A,B,C,D,E,F,G,H,I,J,K],
+					RF, Info) end;
+	    12 -> fun RF(A,B,C,D,E,F,G,H,I,J,K,L) ->
+			 eval_named_fun([A,B,C,D,E,F,G,H,I,J,K,L],
+					RF, Info) end;
+	    13 -> fun RF(A,B,C,D,E,F,G,H,I,J,K,L,M) ->
+			 eval_named_fun([A,B,C,D,E,F,G,H,I,J,K,L,M],
+					RF, Info) end;
+	    14 -> fun RF(A,B,C,D,E,F,G,H,I,J,K,L,M,N) ->
+			 eval_named_fun([A,B,C,D,E,F,G,H,I,J,K,L,M,N],
+					RF, Info) end;
+	    15 -> fun RF(A,B,C,D,E,F,G,H,I,J,K,L,M,N,O) ->
+			 eval_named_fun([A,B,C,D,E,F,G,H,I,J,K,L,M,N,O],
+					RF, Info) end;
+	    16 -> fun RF(A,B,C,D,E,F,G,H,I,J,K,L,M,N,O,P) ->
+			 eval_named_fun([A,B,C,D,E,F,G,H,I,J,K,L,M,N,O,P],
+					RF, Info) end;
+	    17 -> fun RF(A,B,C,D,E,F,G,H,I,J,K,L,M,N,O,P,Q) ->
+			 eval_named_fun([A,B,C,D,E,F,G,H,I,J,K,L,M,N,O,P,Q],
+					RF, Info) end;
+	    18 -> fun RF(A,B,C,D,E,F,G,H,I,J,K,L,M,N,O,P,Q,R) ->
+			 eval_named_fun([A,B,C,D,E,F,G,H,I,J,K,L,M,N,O,P,Q,
+					     R],
+					RF, Info) end;
+	    19 -> fun RF(A,B,C,D,E,F,G,H,I,J,K,L,M,N,O,P,Q,R,S) ->
+			 eval_named_fun([A,B,C,D,E,F,G,H,I,J,K,L,M,N,O,P,Q,
+					     R,S],
+					RF, Info) end;
+	    20 -> fun RF(A,B,C,D,E,F,G,H,I,J,K,L,M,N,O,P,Q,R,S,T) ->
+			 eval_named_fun([A,B,C,D,E,F,G,H,I,J,K,L,M,N,O,P,Q,
+					     R,S,T],
+					RF, Info) end;
+	    _Other ->
+		exception(error, {'argument_limit',{named_fun,FName,Cs}}, Bs,
+			  Ieval#ieval{line=Line})
+	end,
+    {value,Fun,Bs};
+
+%% Construct an external fun.
+expr({make_ext_fun,Line,MFA0}, Bs0, Ieval0) ->
+    {[M,F,A],Bs} = eval_list(MFA0, Bs0, Ieval0),
+    try erlang:make_fun(M, F, A) of
+	Value ->
+	    {value,Value,Bs}
+    catch
+	error:badarg ->
+	    Ieval1 = Ieval0#ieval{line=Line},
+	    Ieval2 = dbg_istk:push(Bs0, Ieval1, false),
+	    Ieval = Ieval2#ieval{module=erlang,function=make_fun,
+				 arguments=[M,F,A],line=-1},
+	    exception(error, badarg, Bs, Ieval, true)
+    end;
+
 %% Common test adaptation
-expr({call_remote,0,ct_line,line,As0}, Bs0, Ieval0) ->
+expr({call_remote,0,ct_line,line,As0,Lc}, Bs0, Ieval0) ->
     {As,_Bs} = eval_list(As0, Bs0, Ieval0),
-    eval_function(ct_line, line, As, Bs0, extern, Ieval0);
+    eval_function(ct_line, line, As, Bs0, extern, Ieval0, Lc);
 
 %% Local function call
-expr({local_call,Line,F,As0}, Bs0, #ieval{module=M} = Ieval0) ->
+expr({local_call,Line,F,As0,Lc}, Bs0, #ieval{module=M} = Ieval0) ->
     Ieval = Ieval0#ieval{line=Line},
     {As,Bs} = eval_list(As0, Bs0, Ieval),
-    eval_function(M, F, As, Bs, local, Ieval);
+    eval_function(M, F, As, Bs, local, Ieval, Lc);
 
 %% Remote function call
-expr({call_remote,Line,M,F,As0}, Bs0, Ieval0) ->
+expr({call_remote,Line,M,F,As0,Lc}, Bs0, Ieval0) ->
     Ieval = Ieval0#ieval{line=Line},
     {As,Bs} = eval_list(As0, Bs0, Ieval),
-    eval_function(M, F, As, Bs, extern, Ieval);
+    eval_function(M, F, As, Bs, extern, Ieval, Lc);
 
 %% Emulated semantics of some BIFs
 expr({dbg,Line,self,[]}, Bs, #ieval{level=Le}) ->
@@ -975,9 +921,28 @@ expr({dbg,Line,self,[]}, Bs, #ieval{level=Le}) ->
     {value,Self,Bs};
 expr({dbg,Line,get_stacktrace,[]}, Bs, #ieval{level=Le}) ->
     trace(bif, {Le,Line,erlang,get_stacktrace,[]}),
-    Stacktrace = get(stacktrace),
+    Stacktrace = get_stacktrace(),
     trace(return, {Le,Stacktrace}),
     {value,Stacktrace,Bs};
+expr({dbg,Line,raise,As0}, Bs0, #ieval{level=Le}=Ieval0) ->
+    %% Since erlang:get_stacktrace/0 is emulated, we will
+    %% need to emulate erlang:raise/3 too so that we can
+    %% capture the stacktrace.
+    Ieval = Ieval0#ieval{line=Line},
+    {[Class,Reason,Stk0]=As,Bs} = eval_list(As0, Bs0, Ieval),
+    trace(bif, {Le,Line,erlang,raise,As}),
+    try
+	%% Evaluate raise/3 for error checking and
+	%% truncating of the stacktrace to the correct depth.
+	Error = erlang:raise(Class, Reason, Stk0),
+	trace(return, {Le,Error}),
+	{value,Error,Bs}
+    catch
+	_:_ ->
+	    Stk = erlang:get_stacktrace(),	%Possibly truncated.
+	    StkFun = fun(_) -> Stk end,
+	    do_exception(Class, Reason, StkFun, Bs, Ieval)
+    end;
 expr({dbg,Line,throw,As0}, Bs0, #ieval{level=Le}=Ieval0) ->
     Ieval = Ieval0#ieval{line=Line},
     {[Term],Bs} = eval_list(As0, Bs0, Ieval),
@@ -988,11 +953,6 @@ expr({dbg,Line,error,As0}, Bs0, #ieval{level=Le}=Ieval0) ->
     {[Term],Bs} = eval_list(As0, Bs0, Ieval),
     trace(bif, {Le,Line,erlang,error,[Term]}),
     exception(error, Term, Bs, Ieval);
-expr({dbg,Line,fault,As0}, Bs0, #ieval{level=Le}=Ieval0) ->
-    Ieval = Ieval0#ieval{line=Line},
-    {[Term],Bs} = eval_list(As0, Bs0, Ieval),
-    trace(bif, {Le,Line,erlang,fault,[Term]}),
-    exception(fault, Term, Bs, Ieval);
 expr({dbg,Line,exit,As0}, Bs0, #ieval{level=Le}=Ieval0) ->
     Ieval = Ieval0#ieval{line=Line},
     {[Term],Bs} = eval_list(As0, Bs0, Ieval),
@@ -1001,36 +961,26 @@ expr({dbg,Line,exit,As0}, Bs0, #ieval{level=Le}=Ieval0) ->
 
 %% Call to "safe" BIF, ie a BIF that can be executed in Meta process
 expr({safe_bif,Line,M,F,As0}, Bs0, #ieval{level=Le}=Ieval0) ->
-    Ieval = Ieval0#ieval{line=Line},
-    {As,Bs} = eval_list(As0, Bs0, Ieval),
+    Ieval1 = Ieval0#ieval{line=Line},
+    {As,Bs} = eval_list(As0, Bs0, Ieval1),
     trace(bif, {Le,Line,M,F,As}),
-    push({M,F,As}, Bs0, Ieval),
+    Ieval2 = dbg_istk:push(Bs0, Ieval1, false),
+    Ieval = Ieval2#ieval{module=M,function=F,arguments=As,line=-1},
     {_,Value,_} = Res = safe_bif(M, F, As, Bs, Ieval),
     trace(return, {Le,Value}),
-    pop(),
+    dbg_istk:pop(),
     Res;
 
 %% Call to a BIF that must be evaluated in the correct process
 expr({bif,Line,M,F,As0}, Bs0, #ieval{level=Le}=Ieval0) ->
-    Ieval = Ieval0#ieval{line=Line},
-    {As,Bs} = eval_list(As0, Bs0, Ieval),
+    Ieval1 = Ieval0#ieval{line=Line},
+    {As,Bs} = eval_list(As0, Bs0, Ieval1),
     trace(bif, {Le,Line,M,F,As}),
-    push({M,F,As}, Bs0, Ieval),
-    {_,Value,_} =
-	Res = debugged_cmd({apply,M,F,As}, Bs, Ieval#ieval{level=Le+1}),
+    Ieval2 = dbg_istk:push(Bs0, Ieval1, false),
+    Ieval = Ieval2#ieval{module=M,function=F,arguments=As,line=-1},
+    {_,Value,_} = Res = debugged_cmd({apply,M,F,As}, Bs, Ieval),
     trace(return, {Le,Value}),
-    pop(),
-    Res;
-
-%% Call to a BIF that spawns a new process
-expr({spawn_bif,Line,M,F,As0}, Bs0, #ieval{level=Le}=Ieval0) ->
-    Ieval = Ieval0#ieval{line=Line},
-    {As,Bs} = eval_list(As0, Bs0, Ieval),
-    trace(bif, {Le,Line,M,F,As}),
-    push({M,F,As}, Bs0, Ieval),
-    Res = debugged_cmd({apply,M,F,As}, Bs,Ieval#ieval{level=Le+1}),
-    trace(return, {Le,Res}),
-    pop(),
+    dbg_istk:pop(),
     Res;
 
 %% Call to an operation
@@ -1046,7 +996,7 @@ expr({op,Line,Op,As0}, Bs0, Ieval0) ->
     end;
 
 %% apply/2 (fun)
-expr({apply_fun,Line,Fun0,As0}, Bs0, #ieval{level=Le}=Ieval0) ->
+expr({apply_fun,Line,Fun0,As0,Lc}, Bs0, #ieval{level=Le}=Ieval0) ->
     Ieval = Ieval0#ieval{line=Line},
     FunValue = case expr(Fun0, Bs0, Ieval) of
 		   {value,{dbg_apply,Mx,Fx,Asx},Bsx} ->
@@ -1058,31 +1008,20 @@ expr({apply_fun,Line,Fun0,As0}, Bs0, #ieval{level=Le}=Ieval0) ->
     case FunValue of
 	{value,Fun,Bs1} when is_function(Fun) ->
 	    {As,Bs} = eval_list(As0, Bs1, Ieval),
-	    eval_function(undefined, Fun, As, Bs, extern, Ieval);
+	    eval_function(undefined, Fun, As, Bs, extern, Ieval, Lc);
 	{value,{M,F},Bs1} when is_atom(M), is_atom(F) ->
 	    {As,Bs} = eval_list(As0, Bs1, Ieval),
-	    eval_function(M, F, As, Bs, extern, Ieval);
+	    eval_function(M, F, As, Bs, extern, Ieval, Lc);
 	{value,BadFun,Bs1} ->
 	    exception(error, {badfun,BadFun}, Bs1, Ieval)
     end;
 
 %% apply/3
-expr({apply,Line,As0}, Bs0, Ieval0) ->
+expr({apply,Line,As0,Lc}, Bs0, Ieval0) ->
     Ieval = Ieval0#ieval{line=Line},
     {[M,F,As],Bs} = eval_list(As0, Bs0, Ieval),
-    eval_function(M, F, As, Bs, extern, Ieval);
+    eval_function(M, F, As, Bs, extern, Ieval, Lc);
     
-%% Mod:module_info/0,1
-expr({module_info_0,_,Mod}, Bs, _Ieval) ->
-    {value,[{compile,module_info(Mod,compile)},
-	    {attributes,module_info(Mod,attributes)},
-	    {imports,module_info(Mod,imports)},
-	    {exports,module_info(Mod,exports)}],Bs};
-expr({module_info_1,Line,Mod,[As0]}, Bs0, Ieval0) ->
-    Ieval = Ieval0#ieval{line=Line},
-    {value,What,Bs} = expr(As0, Bs0, Ieval),
-    {value,module_info(Mod, What),Bs};
-
 %% Receive statement
 expr({'receive',Line,Cs}, Bs0, #ieval{level=Le}=Ieval) ->
     trace(receivex, {Le,false}),
@@ -1091,7 +1030,7 @@ expr({'receive',Line,Cs}, Bs0, #ieval{level=Le}=Ieval) ->
 %% Receive..after statement
 expr({'receive',Line,Cs,To,ToExprs}, Bs0, #ieval{level=Le}=Ieval0) ->
     Ieval = Ieval0#ieval{line=Line},
-    {value,ToVal,ToBs} = expr(To, Bs0, Ieval#ieval{last_call=false}),
+    {value,ToVal,ToBs} = expr(To, Bs0, Ieval#ieval{top=false}),
     trace(receivex, {Le,true}),
     check_timeoutvalue(ToVal, ToBs, To, Ieval),
     {Stamp,_} = statistics(wall_clock),
@@ -1101,7 +1040,7 @@ expr({'receive',Line,Cs,To,ToExprs}, Bs0, #ieval{level=Le}=Ieval0) ->
 %% Send (!)
 expr({send,Line,To0,Msg0}, Bs0, Ieval0) ->
     Ieval = Ieval0#ieval{line=Line},
-    Ieval1 = Ieval#ieval{last_call=false},
+    Ieval1 = Ieval#ieval{top=false},
     {value,To,Bs1} = expr(To0, Bs0, Ieval1),
     {value,Msg,Bs2} = expr(Msg0, Bs0, Ieval1),
     Bs = merge_bindings(Bs2, Bs1, Ieval),
@@ -1110,10 +1049,15 @@ expr({send,Line,To0,Msg0}, Bs0, Ieval0) ->
 %% Binary
 expr({bin,Line,Fs}, Bs0, Ieval0) ->
     Ieval = Ieval0#ieval{line=Line},
-    eval_bits:expr_grp(Fs, Bs0,
-		       fun (E, B) -> expr(E, B, Ieval) end,
-		       [],
-		       false);
+    try
+	eval_bits:expr_grp(Fs, Bs0,
+			   fun (E, B) -> expr(E, B, Ieval) end,
+			   [],
+			   false)
+    catch
+	Class:Reason ->
+	    exception(Class, Reason, Bs0, Ieval)
+    end;
 
 %% List comprehension
 expr({lc,_Line,E,Qs}, Bs, Ieval) ->
@@ -1126,8 +1070,12 @@ expr(E, _Bs, _Ieval) ->
     erlang:error({'NYI',E}).
 
 %% Interpreted fun() called from uninterpreted module, recurse
-eval_fun(Cs, As, Bs, Info) ->
+eval_fun(As, {Info,Bs,Cs}) ->
     dbg_debugged:eval(?MODULE, eval_fun, [Cs,As,Bs,Info]).
+
+%% Interpreted named fun() called from uninterpreted module, recurse
+eval_named_fun(As, RF, {Info,Bs,Cs,FName}) ->
+    dbg_debugged:eval(?MODULE, eval_named_fun, [Cs,As,Bs,FName,RF,Info]).
 
 %% eval_lc(Expr,[Qualifier],Bindings,IevalState) ->
 %%	{value,Value,Bindings}.
@@ -1138,12 +1086,12 @@ eval_lc(E, Qs, Bs, Ieval) ->
 
 eval_lc1(E, [{generate,Line,P,L0}|Qs], Bs0, Ieval0) ->
     Ieval = Ieval0#ieval{line=Line},
-    {value,L1,Bs1} = expr(L0, Bs0, Ieval#ieval{last_call=false}),
+    {value,L1,Bs1} = expr(L0, Bs0, Ieval#ieval{top=false}),
     CompFun = fun(NewBs) -> eval_lc1(E, Qs, NewBs, Ieval) end,
     eval_generate(L1, P, Bs1, CompFun, Ieval);
 eval_lc1(E, [{b_generate,Line,P,L0}|Qs], Bs0, Ieval0) ->
     Ieval = Ieval0#ieval{line=Line},
-    {value,Bin,_} = expr(L0, Bs0, Ieval#ieval{last_call=false}),
+    {value,Bin,_} = expr(L0, Bs0, Ieval#ieval{top=false}),
     CompFun = fun(NewBs) -> eval_lc1(E, Qs, NewBs, Ieval) end,
     eval_b_generate(Bin, P, Bs0, CompFun, Ieval);
 eval_lc1(E, [{guard,Q}|Qs], Bs0, Ieval) ->
@@ -1152,13 +1100,13 @@ eval_lc1(E, [{guard,Q}|Qs], Bs0, Ieval) ->
 	false -> []
     end;
 eval_lc1(E, [Q|Qs], Bs0, Ieval) ->
-    case expr(Q, Bs0, Ieval#ieval{last_call=false}) of
+    case expr(Q, Bs0, Ieval#ieval{top=false}) of
 	{value,true,Bs} -> eval_lc1(E, Qs, Bs, Ieval);
 	{value,false,_Bs} -> [];
 	{value,V,Bs} -> exception(error, {bad_filter,V}, Bs, Ieval)
     end;
 eval_lc1(E, [], Bs, Ieval) ->
-    {value,V,_} = expr(E, Bs, Ieval#ieval{last_call=false}),
+    {value,V,_} = expr(E, Bs, Ieval#ieval{top=false}),
     [V].
 
 %% eval_bc(Expr,[Qualifier],Bindings,IevalState) ->
@@ -1171,12 +1119,12 @@ eval_bc(E, Qs, Bs, Ieval) ->
 
 eval_bc1(E, [{generate,Line,P,L0}|Qs], Bs0, Ieval0) ->
     Ieval = Ieval0#ieval{line=Line},
-    {value,L1,Bs1} = expr(L0, Bs0, Ieval#ieval{last_call=false}),
+    {value,L1,Bs1} = expr(L0, Bs0, Ieval#ieval{top=false}),
     CompFun = fun(NewBs) -> eval_bc1(E, Qs, NewBs, Ieval) end,
     eval_generate(L1, P, Bs1, CompFun, Ieval);
 eval_bc1(E, [{b_generate,Line,P,L0}|Qs], Bs0, Ieval0) ->
     Ieval = Ieval0#ieval{line=Line},
-    {value,Bin,_} = expr(L0, Bs0, Ieval#ieval{last_call=false}),
+    {value,Bin,_} = expr(L0, Bs0, Ieval#ieval{top=false}),
     CompFun = fun(NewBs) -> eval_bc1(E, Qs, NewBs, Ieval) end,
     eval_b_generate(Bin, P, Bs0, CompFun, Ieval);
 eval_bc1(E, [{guard,Q}|Qs], Bs0, Ieval) ->
@@ -1185,20 +1133,20 @@ eval_bc1(E, [{guard,Q}|Qs], Bs0, Ieval) ->
 	false -> []
     end;
 eval_bc1(E, [Q|Qs], Bs0, Ieval) ->
-    case expr(Q, Bs0, Ieval#ieval{last_call=false}) of
+    case expr(Q, Bs0, Ieval#ieval{top=false}) of
 	{value,true,Bs} -> eval_bc1(E, Qs, Bs, Ieval);
 	{value,false,_Bs} -> [];
 	{value,V,Bs} -> exception(error, {bad_filter,V}, Bs, Ieval)
     end;
 eval_bc1(E, [], Bs, Ieval) ->
-    {value,V,_} = expr(E, Bs, Ieval#ieval{last_call=false}),
+    {value,V,_} = expr(E, Bs, Ieval#ieval{top=false}),
     [V].
 
 eval_generate([V|Rest], P, Bs0, CompFun, Ieval) ->
     case catch match1(P, V, erl_eval:new_bindings(), Bs0) of
 	{match,Bsn} ->
 	    Bs2 = add_bindings(Bsn, Bs0),
-            CompFun(Bs2) ++ eval_generate(Rest, P, Bs2, CompFun, Ieval);
+            CompFun(Bs2) ++ eval_generate(Rest, P, Bs0, CompFun, Ieval);
 	nomatch -> 
 	    eval_generate(Rest, P, Bs0, CompFun, Ieval)
 	end;
@@ -1208,7 +1156,7 @@ eval_generate(Term, _P, Bs, _CompFun, Ieval) ->
     exception(error, {bad_generator,Term}, Bs, Ieval).
 
 eval_b_generate(<<_/bitstring>>=Bin, P, Bs0, CompFun, Ieval) ->
-    Mfun = fun(L, R, Bs) -> match1(L, R, Bs, Bs0) end,
+    Mfun = match_fun(Bs0),
     Efun = fun(Exp, Bs) -> expr(Exp, Bs, #ieval{}) end,
     case eval_bits:bin_gen(P, Bin, erl_eval:new_bindings(), Bs0, Mfun, Efun) of
 	{match,Rest,Bs1} ->
@@ -1222,24 +1170,13 @@ eval_b_generate(<<_/bitstring>>=Bin, P, Bs0, CompFun, Ieval) ->
 eval_b_generate(Term, _P, Bs, _CompFun, Ieval) ->
     exception(error, {bad_generator,Term}, Bs, Ieval).
 
-module_info(Mod, module) -> Mod;
-module_info(_Mod, compile) -> [];
-module_info(Mod, attributes) ->
-    {ok, Attr} = dbg_iserver:call(get(int), {lookup, Mod, attributes}),
-    Attr;
-module_info(_Mod, imports) -> [];
-module_info(Mod, exports) ->
-    {ok, Exp} = dbg_iserver:call(get(int), {lookup, Mod, exports}),
-    Exp;
-module_info(_Mod, functions) -> [].
-
 safe_bif(M, F, As, Bs, Ieval) ->
     try apply(M, F, As) of
        	Value ->
 	    {value,Value,Bs}
     catch
 	Class:Reason ->
-	    exception(Class, Reason, Bs, Ieval)
+	    exception(Class, Reason, Bs, Ieval, true)
     end.
 
 eval_send(To, Msg, Bs, Ieval) ->
@@ -1408,12 +1345,12 @@ flush_traces(Debugged) ->
 %% eval_list(ExpressionList, Bindings, Ieval)
 %%  Evaluate a list of expressions "in parallel" at the same level.
 eval_list(Es, Bs, Ieval) ->
-    eval_list(Es, [], Bs, Bs, Ieval).
+    eval_list_1(Es, [], Bs, Bs, Ieval#ieval{top=false}).
 
-eval_list([E|Es], Vs, BsOrig, Bs0, Ieval) ->
-    {value,V,Bs1} = expr(E, BsOrig, Ieval#ieval{last_call=false}),
-    eval_list(Es, [V|Vs], BsOrig, merge_bindings(Bs1,Bs0,Ieval), Ieval);
-eval_list([], Vs, _, Bs, _Ieval) ->
+eval_list_1([E|Es], Vs, BsOrig, Bs0, Ieval) ->
+    {value,V,Bs1} = expr(E, BsOrig, Ieval),
+    eval_list_1(Es, [V|Vs], BsOrig, merge_bindings(Bs1, Bs0, Ieval), Ieval);
+eval_list_1([], Vs, _, Bs, _Ieval) ->
     {lists:reverse(Vs,[]),Bs}.
 
 %% if_clauses(Clauses, Bindings, Ieval)
@@ -1428,7 +1365,7 @@ if_clauses([], Bs, Ieval) ->
     exception(error, if_clause, Bs, Ieval).
 
 %% case_clauses(Value, Clauses, Bindings, Error, Ieval)
-%%   Error = try_clause ¦ case_clause
+%%   Error = try_clause | case_clause
 case_clauses(Val, [{clause,_,[P],G,B}|Cs], Bs0, Error, Ieval) ->
     case match(P, Val, Bs0) of
 	{match,Bs} ->
@@ -1453,7 +1390,7 @@ catch_clauses(Exception, [{clause,_,[P],G,B}|CatchCs], Bs0, Ieval) ->
 		true ->
 		    %% Exception caught, reset exit info
 		    put(exit_info, undefined),
-		    pop(Ieval#ieval.level),
+		    dbg_istk:pop(Ieval#ieval.level),
 		    seq(B, Bs, Ieval);
 		false ->
 		    catch_clauses(Exception, CatchCs, Bs0, Ieval)
@@ -1550,6 +1487,19 @@ guard_expr({cons,_,H0,T0}, Bs) ->
 guard_expr({tuple,_,Es0}, Bs) ->
     {values,Es} = guard_exprs(Es0, Bs),
     {value,list_to_tuple(Es)};
+guard_expr({map,_,Fs0}, Bs) ->
+    Fs = eval_map_fields_guard(Fs0, Bs),
+    Value = lists:foldl(fun ({map_assoc,K,V}, Mi) -> maps:put(K,V,Mi) end,
+                        #{}, Fs),
+    {value,Value};
+guard_expr({map,_,E0,Fs0}, Bs) ->
+    {value,E} = guard_expr(E0, Bs),
+    Fs = eval_map_fields_guard(Fs0, Bs),
+    Value = lists:foldl(fun ({map_assoc,K,V}, Mi) -> maps:put(K,V,Mi);
+                            ({map_exact,K,V}, Mi) -> maps:update(K,V,Mi) end,
+                        E, Fs),
+    io:format("~p~n", [{E,Value}]),
+    {value,Value};
 guard_expr({bin,_,Flds}, Bs) ->
     {value,V,_Bs} = 
 	eval_bits:expr_grp(Flds, Bs,
@@ -1558,6 +1508,37 @@ guard_expr({bin,_,Flds}, Bs) ->
 				   {value,V,B}
 			   end, [], false),
     {value,V}.
+
+
+%% eval_map_fields([Field], Bindings, IEvalState) ->
+%%  {[{map_assoc | map_exact,Key,Value}],Bindings}
+
+eval_map_fields(Fs, Bs, Ieval) ->
+    eval_map_fields(Fs, Bs, Ieval, fun expr/3).
+
+eval_map_fields_guard(Fs0, Bs) ->
+    {Fs,_} = eval_map_fields(Fs0, Bs, #ieval{},
+                             fun (G0, Bs0, _) ->
+                            {value,G} = guard_expr(G0, Bs0),
+                            {value,G,Bs0}
+                    end),
+    Fs.
+
+eval_map_fields(Fs, Bs, Ieval, F) ->
+    eval_map_fields(Fs, Bs, Ieval, F, []).
+
+eval_map_fields([{map_field_assoc,Line,K0,V0}|Fs], Bs0, Ieval0, F, Acc) ->
+    Ieval = Ieval0#ieval{line=Line},
+    {value,K,Bs1} = F(K0, Bs0, Ieval),
+    {value,V,Bs2} = F(V0, Bs1, Ieval),
+    eval_map_fields(Fs, Bs2, Ieval0, F, [{map_assoc,K,V}|Acc]);
+eval_map_fields([{map_field_exact,Line,K0,V0}|Fs], Bs0, Ieval0, F, Acc) ->
+    Ieval = Ieval0#ieval{line=Line},
+    {value,K,Bs1} = F(K0, Bs0, Ieval),
+    {value,V,Bs2} = F(V0, Bs1, Ieval),
+    eval_map_fields(Fs, Bs2, Ieval0, F, [{map_exact,K,V}|Acc]);
+eval_map_fields([], Bs, _Ieval, _F, Acc) ->
+    {lists:reverse(Acc),Bs}.
 
 %% match(Pattern,Term,Bs) -> {match,Bs} | nomatch
 match(Pat, Term, Bs) ->
@@ -1588,11 +1569,11 @@ match1({cons,_,H,T}, [H1|T1], Bs0, BBs) ->
 match1({tuple,_,Elts}, Tuple, Bs, BBs) 
   when length(Elts) =:= tuple_size(Tuple) ->
     match_tuple(Elts, Tuple, 1, Bs, BBs);
-match1({bin,_,Fs}, B, Bs0, BBs0) when is_bitstring(B) ->
-    Bs1 = lists:sort(Bs0),  %Kludge.
-    BBs = lists:sort(BBs0),
-    try eval_bits:match_bits(Fs, B, Bs1, BBs,
-			     fun(L, R, Bs) -> match1(L, R, Bs, BBs) end,
+match1({map,_,Fields}, Map, Bs, BBs) when is_map(Map) ->
+    match_map(Fields, Map, Bs, BBs);
+match1({bin,_,Fs}, B, Bs0, BBs) when is_bitstring(B) ->
+    try eval_bits:match_bits(Fs, B, Bs0, BBs,
+			     match_fun(BBs),
 			     fun(E, Bs) -> expr(E, Bs, #ieval{}) end,
 			     false)
     catch
@@ -1601,10 +1582,27 @@ match1({bin,_,Fs}, B, Bs0, BBs0) when is_bitstring(B) ->
 match1(_,_,_,_) ->
     throw(nomatch).
 
+match_fun(BBs) ->
+    fun(match, {L,R,Bs}) -> match1(L, R, Bs, BBs);
+       (binding, {Name,Bs}) -> binding(Name, Bs);
+       (add_binding, {Name,Val,Bs}) -> add_binding(Name, Val, Bs)
+    end.
+
 match_tuple([E|Es], Tuple, I, Bs0, BBs) ->
     {match,Bs} = match1(E, element(I, Tuple), Bs0, BBs),
     match_tuple(Es, Tuple, I+1, Bs, BBs);
 match_tuple([], _, _, Bs, _BBs) ->
+    {match,Bs}.
+
+match_map([{map_field_exact,_,K0,Pat}|Fs], Map, Bs0, BBs) ->
+    {value,K,BBs} = expr(K0, BBs, #ieval{}),
+    case maps:find(K, Map) of
+        {ok,Value} ->
+            {match,Bs} = match1(Pat, Value, Bs0, BBs),
+            match_map(Fs, Map, Bs, BBs);
+        error -> throw(nomatch)
+    end;
+match_map([], _, Bs, _BBs) ->
     {match,Bs}.
 
 head_match([Par|Pars], [Arg|Args], Bs0, BBs) ->
@@ -1731,3 +1729,19 @@ add_binding(N,Val,[B1|Bs]) ->
     [B1|add_binding(N,Val,Bs)];
 add_binding(N,Val,[]) ->
     [{N,Val}].
+
+%% get_stacktrace() -> Stacktrace
+%%  Return the latest stacktrace for the process.
+get_stacktrace() ->
+    case get(stacktrace) of
+	MakeStk when is_function(MakeStk, 1) ->
+	    %% The stacktrace has not been constructed before.
+	    %% Construct it and remember the result.
+	    Depth = erlang:system_flag(backtrace_depth, 8),
+	    erlang:system_flag(backtrace_depth, Depth),
+	    Stk = MakeStk(Depth),
+	    put(stacktrace, Stk),
+	    Stk;
+	Stk when is_list(Stk) ->
+	    Stk
+    end.

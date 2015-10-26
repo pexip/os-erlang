@@ -49,7 +49,7 @@
 
 #include "error.h"
 
-int hipe_modeswitch_debug;
+extern int hipe_modeswitch_debug;
 
 void hipe_mode_switch_init(void);
 void hipe_set_call_trap(Uint *bfun, void *nfun, int is_closure);
@@ -58,6 +58,9 @@ void hipe_inc_nstack(Process *p);
 void hipe_empty_nstack(Process *p);
 void hipe_set_closure_stub(ErlFunEntry *fe, unsigned num_free);
 Eterm hipe_build_stacktrace(Process *p, struct StackTrace *s);
+
+void hipe_reserve_beam_trap_frame(Process*, Eterm reg[], unsigned arity);
+void hipe_unreserve_beam_trap_frame(Process*);
 
 extern Uint hipe_beam_pc_return[];
 extern Uint hipe_beam_pc_throw[];

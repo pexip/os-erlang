@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2002-2011. All Rights Reserved.
+%% Copyright Ericsson AB 2002-2013. All Rights Reserved.
 %%
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -131,10 +131,9 @@
 -import(lists, [mapfoldl/3,reverse/1]).
 
 module({Mod,Exp,Attr,Fs0,_}, _Opts) ->
-    Fs1 = [split_blocks(F) || F <- Fs0],
-    {Fs2,Lc1} = beam_clean:clean_labels(Fs1),
-    {Fs,Lc} = mapfoldl(fun function/2, Lc1, Fs2),
-    %%{Fs,Lc} = {Fs2,Lc1},
+    {Fs1,Lc1} = beam_clean:clean_labels(Fs0),
+    {Fs,Lc} = mapfoldl(fun function/2, Lc1, Fs1),
+    %%{Fs,Lc} = {Fs1,Lc1},
     {ok,{Mod,Exp,Attr,Fs,Lc}}.
 
 function({function,Name,Arity,CLabel,Is0}, Lc0) ->
@@ -144,9 +143,9 @@ function({function,Name,Arity,CLabel,Is0}, Lc0) ->
 	%% Initialize label information with the code
 	%% for the func_info label. Without it, a register
 	%% may seem to be live when it is not.
-	[{label,L},{func_info,_,_,_}=FI|_] = Is1,
+	[{label,L}|FiIs] = Is1,
 	D0 = beam_utils:empty_label_index(),
-	D = beam_utils:index_label(L, [FI], D0),
+	D = beam_utils:index_label(L, FiIs, D0),
 
 	%% Optimize away dead code.
 	{Is2,Lc} = forward(Is1, Lc0),
@@ -159,62 +158,6 @@ function({function,Name,Arity,CLabel,Is0}, Lc0) ->
 	    io:fwrite("Function: ~w/~w\n", [Name,Arity]),
 	    erlang:raise(Class, Error, Stack)
     end.
-
-%% We must split the basic block when we encounter instructions with labels,
-%% such as catches and BIFs. All labels must be visible outside the blocks.
-
-split_blocks({function,Name,Arity,CLabel,Is0}) ->
-    Is = split_blocks(Is0, []),
-    {function,Name,Arity,CLabel,Is}.
-
-split_blocks([{block,Bl}|Is], Acc0) ->
-    Acc = split_block(Bl, [], Acc0),
-    split_blocks(Is, Acc);
-split_blocks([I|Is], Acc) ->
-    split_blocks(Is, [I|Acc]);
-split_blocks([], Acc) -> reverse(Acc).
-
-split_block([{set,[R],[_,_,_]=As,{bif,is_record,{f,Lbl}}}|Is], Bl, Acc) ->
-    %% is_record/3 must be translated by beam_clean; therefore,
-    %% it must be outside of any block.
-    split_block(Is, [], [{bif,is_record,{f,Lbl},As,R}|make_block(Bl, Acc)]);
-split_block([{set,[R],As,{bif,N,{f,Lbl}=Fail}}|Is], Bl, Acc) when Lbl =/= 0 ->
-    split_block(Is, [], [{bif,N,Fail,As,R}|make_block(Bl, Acc)]);
-split_block([{set,[R],As,{alloc,Live,{gc_bif,N,{f,Lbl}=Fail}}}|Is], Bl, Acc)
-  when Lbl =/= 0 ->
-    split_block(Is, [], [{gc_bif,N,Fail,Live,As,R}|make_block(Bl, Acc)]);
-split_block([{set,[R],[],{'catch',L}}|Is], Bl, Acc) ->
-    split_block(Is, [], [{'catch',R,L}|make_block(Bl, Acc)]);
-split_block([I|Is], Bl, Acc) ->
-    split_block(Is, [I|Bl], Acc);
-split_block([], Bl, Acc) -> make_block(Bl, Acc).
-
-make_block([], Acc) -> Acc;
-make_block([{set,[D],Ss,{bif,Op,Fail}}|Bl]=Bl0, Acc) ->
-    %% If the last instruction in the block is a comparison or boolean operator
-    %% (such as '=:='), move it out of the block to facilitate further
-    %% optimizations.
-    Arity = length(Ss),
-    case erl_internal:comp_op(Op, Arity) orelse
-	erl_internal:new_type_test(Op, Arity) orelse
-	erl_internal:bool_op(Op, Arity) of
-	false ->
-	    [{block,reverse(Bl0)}|Acc];
-	true ->
-	    I = {bif,Op,Fail,Ss,D},
-	    case Bl =:= [] of
-		true -> [I|Acc];
-		false -> [I,{block,reverse(Bl)}|Acc]
-	    end
-    end;
-make_block([{set,[Dst],[Src],move}|Bl], Acc) ->
-    %% Make optimization of {move,Src,Dst}, {jump,...} possible.
-    I = {move,Src,Dst},
-    case Bl =:= [] of
-	true -> [I|Acc];
-	false -> [I,{block,reverse(Bl)}|Acc]
-    end;
-make_block(Bl, Acc) -> [{block,reverse(Bl)}|Acc].
 
 %% 'move' instructions outside of blocks may thwart the jump optimizer.
 %% Move them back into the block.
@@ -239,7 +182,7 @@ forward(Is, Lc) ->
 forward([{block,[]}|Is], D, Lc, Acc) ->
     %% Empty blocks can prevent optimizations.
     forward(Is, D, Lc, Acc);
-forward([{select_val,Reg,_,{list,List}}=I|Is], D0, Lc, Acc) ->
+forward([{select,select_val,Reg,_,List}=I|Is], D0, Lc, Acc) ->
     D = update_value_dict(List, Reg, D0),
     forward(Is, D, Lc, [I|Acc]);
 forward([{label,Lbl}=LblI,{block,[{set,[Dst],[Lit],move}|BlkIs]}=Blk|Is], D, Lc, Acc) ->
@@ -328,11 +271,11 @@ backward([{test,is_eq_exact,Fail,[Dst,{integer,Arity}]}=I|
     end;
 backward([{label,Lbl}=L|Is], D, Acc) ->
     backward(Is, beam_utils:index_label(Lbl, Acc, D), [L|Acc]);
-backward([{select_val,Reg,{f,Fail0},{list,List0}}|Is], D, Acc) ->
+backward([{select,select_val,Reg,{f,Fail0},List0}|Is], D, Acc) ->
     List = shortcut_select_list(List0, Reg, D, []),
     Fail1 = shortcut_label(Fail0, D),
     Fail = shortcut_bs_test(Fail1, Is, D),
-    Sel = {select_val,Reg,{f,Fail},{list,List}},
+    Sel = {select,select_val,Reg,{f,Fail},List},
     backward(Is, D, [Sel|Acc]);
 backward([{jump,{f,To0}},{move,Src,Reg}=Move0|Is], D, Acc) ->
     {To,Move} = case Src of
@@ -406,7 +349,7 @@ backward([{test,Op,{f,To0},Live,Ops0,Dst}|Is], D, Acc) ->
 	 end,
     I = {test,Op,{f,To},Live,Ops0,Dst},
     backward(Is, D, [I|Acc]);
-backward([{kill,_}=I|Is], D, [Exit|_]=Acc) ->
+backward([{kill,_}=I|Is], D, [{line,_},Exit|_]=Acc) ->
     case beam_jump:is_exit_instruction(Exit) of
 	false -> backward(Is, D, [I|Acc]);
 	true -> backward(Is, D, Acc)
@@ -439,7 +382,7 @@ shortcut_select_label(To0, Reg, Val, D) ->
     case beam_utils:code_at(To0, D) of
  	[{jump,{f,To}}|_] ->
  	    shortcut_select_label(To, Reg, Val, D);
-	[{test,is_atom,_,[Reg]},{select_val,Reg,{f,Fail},{list,Map}}|_] ->
+	[{test,is_atom,_,[Reg]},{select,select_val,Reg,{f,Fail},Map}|_] ->
 	    To = find_select_val(Map, Val, Fail),
 	    shortcut_select_label(To, Reg, Val, D);
   	[{test,is_eq_exact,{f,_},[Reg,{atom,Val}]},{label,To}|_] when is_atom(Val) ->
@@ -471,7 +414,7 @@ shortcut_fail_label(To0, Reg, Val, D) ->
 
 shortcut_boolean_label(To0, Reg, Bool0, D) when is_boolean(Bool0) ->
     case beam_utils:code_at(To0, D) of
-	[{bif,'not',_,[Reg],Reg},{jump,{f,To}}|_] ->
+	[{line,_},{bif,'not',_,[Reg],Reg},{jump,{f,To}}|_] ->
 	    Bool = not Bool0,
 	    {shortcut_select_label(To, Reg, Bool, D),Bool};
 	_ ->
@@ -529,10 +472,10 @@ combine_eqs(To, [Reg,{Type,_}=Lit1]=Ops, D, [{label,L1}|_])
     case beam_utils:code_at(To, D) of
 	[{test,is_eq_exact,{f,F2},[Reg,{Type,_}=Lit2]},
 	 {label,L2}|_] when Lit1 =/= Lit2 ->
-	    {select_val,Reg,{f,F2},{list,[Lit1,{f,L1},Lit2,{f,L2}]}};
-	[{select_val,Reg,{f,F2},{list,[{Type,_}|_]=List0}}|_] ->
+	    {select,select_val,Reg,{f,F2},[Lit1,{f,L1},Lit2,{f,L2}]};
+	[{select,select_val,Reg,{f,F2},[{Type,_}|_]=List0}|_] ->
 	    List = remove_from_list(Lit1, List0),
-	    {select_val,Reg,{f,F2},{list,[Lit1,{f,L1}|List]}};
+	    {select,select_val,Reg,{f,F2},[Lit1,{f,L1}|List]};
 	_Is ->
 	    {test,is_eq_exact,{f,To},Ops}
 	end;
@@ -584,6 +527,8 @@ count_bits_matched([{test,_,_,_,[_,Sz,U,{field_flags,_}],_}|Is], SavePoint, Bits
 	{integer,N} -> count_bits_matched(Is, SavePoint, Bits+N*U);
 	_ -> count_bits_matched(Is, SavePoint, Bits)
     end;
+count_bits_matched([{test,bs_match_string,_,[_,Bits,_]}|Is], SavePoint, Bits0) ->
+    count_bits_matched(Is, SavePoint, Bits0+Bits);
 count_bits_matched([{test,_,_,_}|Is], SavePoint, Bits) ->
     count_bits_matched(Is, SavePoint, Bits);
 count_bits_matched([{bs_save2,Reg,SavePoint}|_], {Reg,SavePoint}, Bits) ->

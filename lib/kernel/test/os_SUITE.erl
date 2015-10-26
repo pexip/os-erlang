@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 1997-2011. All Rights Reserved.
+%% Copyright Ericsson AB 1997-2013. All Rights Reserved.
 %%
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -18,20 +18,20 @@
 %%
 -module(os_SUITE).
 
--export([all/0, suite/0,groups/0,init_per_suite/1, end_per_suite/1, 
+-export([all/0, suite/0,groups/0,init_per_suite/1, end_per_suite/1,
 	 init_per_group/2,end_per_group/2]).
--export([space_in_cwd/1, quoting/1, space_in_name/1, bad_command/1,
-	 find_executable/1, unix_comment_in_command/1, evil/1]).
+-export([space_in_cwd/1, quoting/1, cmd_unicode/1, space_in_name/1, bad_command/1,
+	 find_executable/1, unix_comment_in_command/1, deep_list_command/1, evil/1]).
 
 -include_lib("test_server/include/test_server.hrl").
 
 suite() -> [{ct_hooks,[ts_install_cth]}].
 
-all() -> 
-    [space_in_cwd, quoting, space_in_name, bad_command,
-     find_executable, unix_comment_in_command, evil].
+all() ->
+    [space_in_cwd, quoting, cmd_unicode, space_in_name, bad_command,
+     find_executable, unix_comment_in_command, deep_list_command, evil].
 
-groups() -> 
+groups() ->
     [].
 
 init_per_suite(Config) ->
@@ -94,6 +94,21 @@ quoting(Config) when is_list(Config) ->
     ?line [] = receive_all(),
     ok.
 
+
+cmd_unicode(doc) -> "Test that unicode arguments work.";
+cmd_unicode(suite) -> [];
+cmd_unicode(Config) when is_list(Config) ->
+    ?line DataDir = ?config(data_dir, Config),
+    ?line Echo = filename:join(DataDir, "my_echo"),
+
+    ?line comp("one", os:cmd(Echo ++ " one")),
+    ?line comp("one::two", os:cmd(Echo ++ " one two")),
+    ?line comp("åäö::ϼΩ", os:cmd(Echo ++ " åäö " ++ [1020, 937])),
+    ?t:sleep(5),
+    ?line [] = receive_all(),
+    ok.
+
+
 space_in_name(doc) ->
     "Test that program with a space in its name can be executed.";
 space_in_name(suite) -> [];
@@ -117,13 +132,25 @@ space_in_name(Config) when is_list(Config) ->
     ?line ok = file:change_mode(Echo, 8#777),	% Make it executable on Unix.
 
     %% Run the echo program.
-
-    ?line comp("", os:cmd("\"" ++ Echo ++ "\"")),
-    ?line comp("a::b::c", os:cmd("\"" ++ Echo ++ "\" a b c")),
+    %% Quoting on windows depends on if the full path of the executable
+    %% contains special characters. Paths when running common_tests always
+    %% include @, why Windows would always fail if we do not double the
+    %% quotes (this is the behaviour of cmd.exe, not Erlang's idea).
+    Quote = case os:type() of
+                {win32,_} ->
+		    case (Echo -- "&<>()@^|") =:= Echo of
+		        true -> "\"";
+			false -> "\"\""
+	 	    end;
+		_ ->
+		    "\""
+	    end,
+    ?line comp("", os:cmd(Quote ++ Echo ++ Quote)),
+    ?line comp("a::b::c", os:cmd(Quote ++ Echo ++ Quote ++ " a b c")),
     ?t:sleep(5),
     ?line [] = receive_all(),
     ok.
-    
+
 bad_command(doc) ->
     "Check that a bad command doesn't crasch the server or the emulator (it used to).";
 bad_command(suite) -> [];
@@ -141,17 +168,17 @@ find_executable(suite) -> [];
 find_executable(doc) -> [];
 find_executable(Config) when is_list(Config) ->
     case os:type() of
-	{win32, _} -> 
+	{win32, _} ->
 	    ?line DataDir = filename:join(?config(data_dir, Config), "win32"),
 	    ?line ok = file:set_cwd(filename:join([DataDir, "current"])),
 	    ?line Bin = filename:join(DataDir, "bin"),
 	    ?line Abin = filename:join(DataDir, "abin"),
 	    ?line UsrBin = filename:join([DataDir, "usr", "bin"]),
 	    ?line {ok, Current} = file:get_cwd(),
-	    
+
 	    ?line Path = lists:concat([Bin, ";", Abin, ";", UsrBin]),
 	    ?line io:format("Path = ~s", [Path]),
-	    
+
 	    %% Search for programs in Bin (second element in PATH).
 	    ?line find_exe(Abin, "my_ar", ".exe", Path),
 	    ?line find_exe(Abin, "my_ascii", ".com", Path),
@@ -163,18 +190,18 @@ find_executable(Config) when is_list(Config) ->
 	    ?line find_exe(Abin, "my_ar.EXE", "", Path),
 	    ?line find_exe(Abin, "my_ascii.COM", "", Path),
 	    ?line find_exe(Abin, "MY_ADB.BAT", "", Path),
-	    
+
 	    %% Search for programs in Abin (second element in PATH).
 	    ?line find_exe(Abin, "my_ar", ".exe", Path),
 	    ?line find_exe(Abin, "my_ascii", ".com", Path),
 	    ?line find_exe(Abin, "my_adb", ".bat", Path),
-	    
+
 	    %% Search for programs in the current working directory.
 	    ?line find_exe(Current, "my_program", ".exe", Path),
 	    ?line find_exe(Current, "my_command", ".com", Path),
 	    ?line find_exe(Current, "my_batch", ".bat", Path),
 	    ok;
-	{unix, _}  -> 
+	{unix, _}  ->
 	    DataDir = ?config(data_dir, Config),
 
 	    %% Smoke test.
@@ -190,8 +217,6 @@ find_executable(Config) when is_list(Config) ->
 
 	    %% Never return a directory name.
 	    ?line false = os:find_executable("unix", [DataDir]),
-	    ok;
-	vxworks -> 
 	    ok
     end.
 
@@ -226,6 +251,21 @@ unix_comment_in_command(Config) when is_list(Config) ->
     ?line [] = receive_all(),
     ?line test_server:timetrap_cancel(Dog),
     ok.
+
+deep_list_command(doc) ->
+    "Check that a deep list in command works equally on unix and on windows.";
+deep_list_command(suite) -> [];
+deep_list_command(Config) when is_list(Config) ->
+    %% As a 'io_lib' module description says: "There is no guarantee that the
+    %% character lists returned from some of the functions are flat, they can
+    %% be deep lists."
+    %% That's why os:cmd/1 can have arguments that are deep lists.
+    %% It is not a problem for unix, but for windows it is (in R15B02 for ex.).
+    Echo = os:cmd([$e, $c, "ho"]),
+    true = erlang:is_list(Echo),
+    %% FYI: [$e, $c, "ho"] =:= io_lib:format("ec~s", ["ho"])
+    ok.
+
 
 -define(EVIL_PROCS, 100).
 -define(EVIL_LOOPS, 100).
@@ -276,8 +316,8 @@ comp(Expected, Got) ->
 	Expected ->
 	    ok;
 	Other ->
-	    ok = io:format("Expected: ~s\n", [Expected]),
-	    ok = io:format("Got:      ~s\n", [Other]),
+	    ok = io:format("Expected: ~ts\n", [Expected]),
+	    ok = io:format("Got:      ~ts\n", [Other]),
 	    test_server:fail()
     end.
 
@@ -293,4 +333,3 @@ receive_all() ->
 	X -> [X|receive_all()]
     after 0 -> []
     end.
-	    

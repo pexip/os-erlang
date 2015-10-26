@@ -210,7 +210,8 @@ layout_module(#xmlElement{name = module, content = Es}=E, Opts) ->
 	    ++ [hr, ?NL]
 	    ++ navigation("bottom")
 	    ++ timestamp()),
-    xhtml(Title, stylesheet(Opts), Body).
+    Encoding = get_attrval(encoding, E),
+    xhtml(Title, stylesheet(Opts), Body, Encoding).
 
 module_params(Es) ->
     As = [{get_text(argName, Es1),
@@ -828,6 +829,10 @@ t_type([#xmlElement{name = list, content = Es}]) ->
     t_list(Es);
 t_type([#xmlElement{name = nonempty_list, content = Es}]) ->
     t_nonempty_list(Es);
+t_type([#xmlElement{name = map, content = Es}]) ->
+    t_map(Es);
+t_type([#xmlElement{name = map_field, content=Es}]) ->
+    t_map_field(Es);
 t_type([#xmlElement{name = tuple, content = Es}]) ->
     t_tuple(Es);
 t_type([#xmlElement{name = 'fun', content = Es}]) ->
@@ -875,6 +880,12 @@ t_tuple(Es) ->
 t_fun(Es) ->
     ["("] ++ seq(fun t_utype_elem/1, get_content(argtypes, Es),
 		 [") -> "] ++ t_utype(get_elem(type, Es))).
+
+t_map(Es) ->
+    ["#{"] ++ seq(fun t_utype_elem/1, Es, ["}"]).
+
+t_map_field([K,V]) ->
+    t_utype_elem(K) ++ [" => "] ++ t_utype_elem(V).
 
 t_record(E, Es) ->
     Name = ["#"] ++ t_type(get_elem(atom, Es)),
@@ -956,10 +967,17 @@ local_label(R) ->
     "#" ++ R.
 
 xhtml(Title, CSS, Body) ->
+    xhtml(Title, CSS, Body, "latin1").
+
+xhtml(Title, CSS, Body, Encoding) ->
+    EncString = case Encoding of
+                    "latin1" -> "ISO-8859-1";
+                    _ -> "UTF-8"
+                end,
     [{html, [?NL,
 	     {head, [?NL,
 		     {meta, [{'http-equiv',"Content-Type"},
-			     {content, "text/html; charset=ISO-8859-1"}],
+			     {content, "text/html; charset="++EncString}],
 		      []},
 		     ?NL,
 		     {title, Title},
@@ -1021,7 +1039,8 @@ overview(E=#xmlElement{name = overview, content = Es}, Options) ->
 	    ++ [?NL, hr]
 	    ++ navigation("bottom")
 	    ++ timestamp()),
-    XML = xhtml(Title, stylesheet(Opts), Body),
+    Encoding = get_attrval(encoding, E),
+    XML = xhtml(Title, stylesheet(Opts), Body, Encoding),
     xmerl:export_simple(XML, ?HTML_EXPORT, []).
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% NYTT
@@ -1063,6 +1082,10 @@ ot_type([#xmlElement{name = nonempty_list, content = Es}]) ->
     ot_nonempty_list(Es);
 ot_type([#xmlElement{name = tuple, content = Es}]) ->
     ot_tuple(Es);
+ot_type([#xmlElement{name = map, content = Es}]) ->
+    ot_map(Es);
+ot_type([#xmlElement{name = map_field, content = Es}]) ->
+    ot_map_field(Es);
 ot_type([#xmlElement{name = 'fun', content = Es}]) ->
     ot_fun(Es);
 ot_type([#xmlElement{name = record, content = Es}]) ->
@@ -1118,6 +1141,12 @@ ot_nonempty_list(Es) ->
 
 ot_tuple(Es) ->
     {type,0,tuple,[ot_utype_elem(E) || E <- Es]}.
+
+ot_map(Es) ->
+    {type,0,map,[ot_utype_elem(E) || E <- Es]}.
+
+ot_map_field(Es) ->
+    {type,0,map_field_assoc,[ot_utype_elem(E) || E <- Es]}.
 
 ot_fun(Es) ->
     Range = ot_utype(get_elem(type, Es)),
