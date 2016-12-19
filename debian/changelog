@@ -1,3 +1,9 @@
+erlang (1:17.3-dfsg-4pexip3) pexip; urgency=medium
+
+  * Add stop debug
+
+ -- John-Mark Bell <jmb@pexip.com>  Mon, 19 Dec 2016 09:43:28 +0000
+
 erlang (1:17.3-dfsg-4pexip2) pexip; urgency=medium
 
   * Rebuild against libssl1.0.2

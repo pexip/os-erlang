@@ -1,0 +1,52 @@
+diff --git a/erts/preloaded/src/init.erl b/erts/preloaded/src/init.erl
+index e95e11b..654a9e1 100644
+--- a/erts/preloaded/src/init.erl
++++ b/erts/preloaded/src/init.erl
+@@ -323,6 +323,7 @@ boot_loop(BootPid, State) ->
+ 	    terminate(Pid,Kernel,Reason), %% If Pid is a Kernel pid, halt()!
+ 	    boot_loop(BootPid,State);
+ 	{stop,Reason} ->
++	    debug(true, {stopping, boot_loop, Reason, State}),
+ 	    stop(Reason,State);
+ 	{From,fetch_loaded} ->   %% Fetch and reset initially loaded modules.
+ 	    From ! {init,State#state.loaded},
+@@ -382,6 +383,7 @@ loop(State) ->
+ 	    terminate(Pid,Kernel,Reason), %% If Pid is a Kernel pid, halt()!
+ 	    loop(State);
+ 	{stop,Reason} ->
++	    debug(true, {stopping, loop, Reason, State}),
+ 	    stop(Reason,State);
+ 	{From,fetch_loaded} ->           %% The Loaded info is cleared in
+ 	    Loaded = State#state.loaded, %% boot_loop but is handled here 
+@@ -485,10 +487,13 @@ set_flag(_,_,_) ->
+ %%% -------------------------------------------------
+ 
+ stop(Reason,State) ->
++    debug(true, {stopping, stop, Reason, State}),
+     BootPid = State#state.bootpid,
+     {_,Progress} = State#state.status,
+     State1 = State#state{status = {stopping, Progress}},
++    debug(true, {stopping, clear_system, State}),
+     clear_system(BootPid,State1),
++    debug(true, {stopping, do_stop, State}),
+     do_stop(Reason,State1).
+ 
+ do_stop(restart,#state{start = Start, flags = Flags, args = Args}) ->
+@@ -496,7 +501,9 @@ do_stop(restart,#state{start = Start, flags = Flags, args = Args}) ->
+ do_stop(reboot,_) ->
+     halt();
+ do_stop(stop,State) ->
++    debug(true, {stopping, stop_heart, State}),
+     stop_heart(State),
++    debug(true, {stopping, halt, State}),
+     halt();
+ do_stop({stop,Status},State) ->
+     stop_heart(State),
+@@ -544,6 +551,7 @@ shutdown(_,_,_,_) ->
+ %% {'EXIT',Parent,Reason} and terminate upon it!
+ %%
+ shutdown_kernel_pid(Pid, BootPid, Timer, State) ->
++    debug(true, {stopping, shutdown_kernel_pid, Pid}),
+     Pid ! {'EXIT',BootPid,shutdown},
+     shutdown_loop(Pid, Timer, State, []).
+ 

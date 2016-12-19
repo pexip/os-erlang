@@ -6,7 +6,7 @@ Section: interpreters
 Priority: optional
 Standards-Version: 3.9.6
 Build-Depends: debhelper (>= 8.0.0), autoconf (>= 2.50), openssl, libssl-dev, m4,
- libncurses5-dev, autotools-dev, unixodbc-dev, bison, flex, ed,
+ libncurses5-dev, autotools-dev, unixodbc-dev, bison, flex, ed, erlang-base,
  dctrl-tools, xsltproc,
  libgl1-mesa-dev | libgl-dev, libglu1-mesa-dev | libglu-dev,
  libsctp-dev [linux-any]

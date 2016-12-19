@@ -319,6 +319,9 @@ manpages-stamp: $(INSTALL_RULE)
 build-hipe: build-hipe-stamp
 build-hipe-stamp: configure-hipe-stamp
 	dh_testdir
+	rm -f $(ROOT_DIR)/erts/preloaded/ebin/*
+	${MAKE} -j ${JOBS} TYPE=$(TYPE) GEN_OPT_FLGS="$(GEN_OPT_FLGS)" JAVA_OPTIONS="$(JAVA_OPTIONS)" preloaded
+	cp $(ROOT_DIR)/erts/preloaded/src/*.beam $(ROOT_DIR)/erts/preloaded/ebin/
 ifeq ($(findstring debug,$(DEB_BUILD_OPTIONS)),debug)
 	${MAKE} -j ${JOBS} TYPE=$(TYPE) FLAVOR=smp GEN_OPT_FLGS="$(GEN_OPT_FLGS)" JAVA_OPTIONS="$(JAVA_OPTIONS)" emulator
 	${MAKE} -j ${JOBS} TYPE=$(TYPE) FLAVOR=plain GEN_OPT_FLGS="$(GEN_OPT_FLGS)" JAVA_OPTIONS="$(JAVA_OPTIONS)" emulator
@@ -329,6 +332,9 @@ endif
 build-stnd: build-stnd-stamp
 build-stnd-stamp: configure-stnd-stamp
 	dh_testdir
+	rm -f $(ROOT_DIR)/erts/preloaded/ebin/*
+	${MAKE} -j ${JOBS} TYPE=$(TYPE) GEN_OPT_FLGS="$(GEN_OPT_FLGS)" JAVA_OPTIONS="$(JAVA_OPTIONS)" preloaded
+	cp $(ROOT_DIR)/erts/preloaded/src/*.beam $(ROOT_DIR)/erts/preloaded/ebin/
 ifeq ($(findstring debug,$(DEB_BUILD_OPTIONS)),debug)
 	${MAKE} -j ${JOBS} TYPE=$(TYPE) FLAVOR=smp GEN_OPT_FLGS="$(GEN_OPT_FLGS)" JAVA_OPTIONS="$(JAVA_OPTIONS)" emulator
 	${MAKE} -j ${JOBS} TYPE=$(TYPE) FLAVOR=plain GEN_OPT_FLGS="$(GEN_OPT_FLGS)" JAVA_OPTIONS="$(JAVA_OPTIONS)" emulator
