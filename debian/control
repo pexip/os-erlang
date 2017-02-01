@@ -11,7 +11,7 @@ Build-Depends: debhelper (>= 8.0.0), autoconf (>= 2.50), openssl, libssl-dev, m4
  libgl1-mesa-dev | libgl-dev, libglu1-mesa-dev | libglu-dev,
  libsctp-dev [linux-any]
 #, libsystemd-dev [linux-any], dh-systemd
-# libwxgtk3.0-dev, 
+# libwxgtk3.0-dev,
 Build-Depends-Indep: fop, default-jdk | sun-java6-jdk
 Build-Conflicts: autoconf2.13, libwxgtk2.4-dev, libwxgtk2.6-dev, libwxgtk2.8-dev
 Homepage: http://www.erlang.org/
@@ -21,7 +21,7 @@ XS-Pexip-Upstream: http://ftp.debian.org/debian/ jessie
 
 Package: erlang-base
 Architecture: any
-Depends: procps, adduser, ${shlibs:Depends}, ${misc:Depends}
+Depends: procps, adduser, erlang-upgrade-helper, ${shlibs:Depends}, ${misc:Depends}
 Recommends: ${libsctp:Version}, erlang-crypto (= ${binary:Version}), erlang-syntax-tools (= ${binary:Version})
 Suggests: erlang-tools (= ${binary:Version}),  erlang, erlang-manpages, erlang-doc
 Conflicts: erlang (<< ${source:Version}), erlang-base-hipe, erlang-doc (<< ${source:Upstream-Version}), erlang-doc (>> ${source:Upstream-Version}-999), erlang-manpages (<= 1:11.b.1-2), erlang-doc-html (<< 1:13.b.4)
@@ -636,3 +636,9 @@ Description: Concurrent, real-time, distributed functional language
  .
  This package is a dummy package which will install Erlang/OTP runtime,
  applications, sources, code examples and the Erlang editing mode for Emacs.
+
+Package: erlang-upgrade-helper
+Architecture: all
+Depends: ${misc:Depends}
+Description: Upgrade helper package for erlang to abort badly behaved dependent
+ services.

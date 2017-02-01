@@ -1,3 +1,10 @@
+erlang (1:17.3-dfsg-4pexip4) pexip; urgency=low
+
+  * Introduce upgrade helper package.
+  * Forcefully stop dependent services as part of erlang-nox upgrade.
+
+ -- Colin Bradbury <colin@pexip.com>  Wed, 02 Feb 2017 13:58:27 +0000
+
 erlang (1:17.3-dfsg-4pexip3) pexip; urgency=medium
 
   * Add stop debug
@@ -372,7 +379,7 @@ erlang (1:14.b.4-dfsg-1ubuntu1pexip1) pexip; urgency=low
 erlang (1:14.b.4-dfsg-1ubuntu1) precise; urgency=low
 
   * Merge from Debian testing.  Remaining changes:
-    - debian/patches/fix-pointer-conversion.patch: Remove implicit 
+    - debian/patches/fix-pointer-conversion.patch: Remove implicit
       integer to pointer conversion (patch refreshed)
     - Drop libwxgtk2.8-dev build dependency. Wx isn't in main, and not
       supposed to.
@@ -1901,7 +1908,7 @@ erlang (49.1-1) unstable; urgency=low
 erlang (47.4.1-2) unstable; urgency=low
 
   * Closed bugs: #38119, #38265 - sparc, alpha ports and clean target.
-  
+
  -- Mark Ng <ng@debian.org>  Mon,  21 Jun 1999 21:45:00 +1100
 
 erlang (47.4.1-1) unstable; urgency=low
@@ -1909,7 +1916,7 @@ erlang (47.4.1-1) unstable; urgency=low
   * the .erl files now have their own package, giving a total of 5 packages.
   * moved the .jam files and docs into their arch independent packages.
   * New upstream release.
-  
+
  -- Mark Ng <ng@debian.org>  Sat,  8 May 1999 16:45:00 +1100
 
 erlang (47.4.0-1) unstable; urgency=low
