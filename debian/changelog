@@ -1,3 +1,9 @@
+erlang (1:17.3-dfsg-4pexip5) pexip; urgency=low
+
+  * Fix up preinst policy checks.
+
+ -- Colin Bradbury <colin@pexip.com>  Tue, 07 Feb 2017 16:39:45 +0000
+
 erlang (1:17.3-dfsg-4pexip4) pexip; urgency=low
 
   * Introduce upgrade helper package.

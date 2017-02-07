@@ -68,9 +68,11 @@ if [ -x "/etc/init.d/rabbitmq-server" ]; then
   PROCEED=1
 
   if [ -x "/usr/sbin/policy-rc.d" ]; then
+    set +e
     RL=`/sbin/runlevel | sed 's/.*\ //'`
     FALLBACK=`/usr/sbin/policy-rc.d rabbitmq-server stop ${RL}`
     RC=$?
+    set -e
     case ${RC} in
       0|105|106)
         PROCEED=1
