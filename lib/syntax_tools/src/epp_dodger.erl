@@ -11,7 +11,7 @@
 %%
 %% You should have received a copy of the GNU Lesser General Public
 %% License along with this library; if not, write to the Free Software
-%% Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307
+%% Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301
 %% USA
 %%
 %% @copyright 2001-2006 Richard Carlsson
@@ -88,7 +88,7 @@
 %% This is a so-called Erlang I/O ErrorInfo structure; see the {@link
 %% //stdlib/io} module for details.
 
--type errorinfo() :: term(). % {integer(), atom(), term()}.
+-type errorinfo() :: {integer(), atom(), term()}.
 
 -type option() :: atom() | {atom(), term()}.
 
@@ -208,8 +208,8 @@ do_parse_file(DefEncoding, File, Parser, Options) ->
             try Parser(Dev, 1, Options)
             after ok = file:close(Dev)
 	    end;
-        {error, _} = Error ->
-            Error
+        {error, Error} ->
+            {error, {0, file, Error}}  % defer to file:format_error/1
     end.
 
 find_invalid_unicode([H|T]) ->
@@ -454,7 +454,7 @@ io_error(L, Desc) ->
     {L, ?MODULE, Desc}.
 
 start_pos([T | _Ts], _L) ->
-    element(2, T);
+    erl_anno:line(element(2, T));
 start_pos([], L) ->
     L.
 

@@ -59,11 +59,9 @@
 ./usr/lib/erlang/lib/ssl-.*/src/
 ./usr/lib/erlang/lib/stdlib-.*/src/
 ./usr/lib/erlang/lib/syntax_tools-.*/src/
-./usr/lib/erlang/lib/test_server-.*/src/
 ./usr/lib/erlang/lib/tools-.*/c_src/
 ./usr/lib/erlang/lib/tools-.*/src/
 ./usr/lib/erlang/lib/typer-.*/src/
-./usr/lib/erlang/lib/webtool-.*/src/
 ./usr/lib/erlang/lib/wx-.*/src/
 ./usr/lib/erlang/lib/xmerl-.*/src/
 ./usr/lib/erlang/releases/.*\.src

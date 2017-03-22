@@ -1,18 +1,19 @@
 /*
  * %CopyrightBegin%
  * 
- * Copyright Ericsson AB 1996-2012. All Rights Reserved.
+ * Copyright Ericsson AB 1996-2016. All Rights Reserved.
  * 
- * The contents of this file are subject to the Erlang Public License,
- * Version 1.1, (the "License"); you may not use this file except in
- * compliance with the License. You should have received a copy of the
- * Erlang Public License along with this software. If not, it can be
- * retrieved online at http://www.erlang.org/.
- * 
- * Software distributed under the License is distributed on an "AS IS"
- * basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See
- * the License for the specific language governing rights and limitations
- * under the License.
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  * 
  * %CopyrightEnd%
  */
@@ -26,7 +27,7 @@
 #include "global.h"
 #include "index.h"
 
-void index_info(int to, void *arg, IndexTable *t)
+void index_info(fmtfn_t to, void *arg, IndexTable *t)
 {
     hash_info(to, arg, &t->htable);
     erts_print(to, arg, "=index_table:%s\n", t->htable.name);
@@ -83,16 +84,23 @@ index_put_entry(IndexTable* t, void* tmpl)
 	Uint sz;
 	if (ix >= t->limit) {
 	    /* A core dump is unnecessary */
-	    erl_exit(ERTS_DUMP_EXIT, "no more index entries in %s (max=%d)\n",
+	    erts_exit(ERTS_DUMP_EXIT, "no more index entries in %s (max=%d)\n",
 		     t->htable.name, t->limit);
 	}
 	sz = INDEX_PAGE_SIZE*sizeof(IndexSlot*);
 	t->seg_table[ix>>INDEX_PAGE_SHIFT] = erts_alloc(t->type, sz);
 	t->size += INDEX_PAGE_SIZE;
     }
-    t->entries++;
     p->index = ix;
     t->seg_table[ix>>INDEX_PAGE_SHIFT][ix&INDEX_PAGE_MASK] = p;
+
+    /*
+     * Do a write barrier here to allow readers to do lock free iteration.
+     * erts_index_num_entries() does matching read barrier.
+     */
+    ERTS_SMP_WRITE_MEMORY_BARRIER;
+    t->entries++;
+
     return p;
 }
 
@@ -122,7 +130,7 @@ void erts_index_merge(Hash* src, IndexTable* dst)
 	    ix = dst->entries++;
 	    if (ix >= dst->size) {
 		if (ix >= dst->limit) {
-		    erl_exit(1, "no more index entries in %s (max=%d)\n",
+		    erts_exit(ERTS_ERROR_EXIT, "no more index entries in %s (max=%d)\n",
 			     dst->htable.name, dst->limit);
 		}
 		sz = INDEX_PAGE_SIZE*sizeof(IndexSlot*);

@@ -2,18 +2,19 @@
 %%----------------------------------------------------------------------
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2006-2014. All Rights Reserved.
+%% Copyright Ericsson AB 2006-2016. All Rights Reserved.
 %%
-%% The contents of this file are subject to the Erlang Public License,
-%% Version 1.1, (the "License"); you may not use this file except in
-%% compliance with the License. You should have received a copy of the
-%% Erlang Public License along with this software. If not, it can be
-%% retrieved online at http://www.erlang.org/.
+%% Licensed under the Apache License, Version 2.0 (the "License");
+%% you may not use this file except in compliance with the License.
+%% You may obtain a copy of the License at
 %%
-%% Software distributed under the License is distributed on an "AS IS"
-%% basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See
-%% the License for the specific language governing rights and limitations
-%% under the License.
+%%     http://www.apache.org/licenses/LICENSE-2.0
+%%
+%% Unless required by applicable law or agreed to in writing, software
+%% distributed under the License is distributed on an "AS IS" BASIS,
+%% WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+%% See the License for the specific language governing permissions and
+%% limitations under the License.
 %%
 %% %CopyrightEnd%
 %%
@@ -136,7 +137,7 @@ delete_list(#plt{info = Info, types = Types,
   #plt{info = table_delete_list(Info, List),
        types = Types,
        contracts = table_delete_list(Contracts, List),
-       callbacks = table_delete_list(Callbacks, List),
+       callbacks = Callbacks,
        exported_types = ExpTypes}.
 
 -spec insert_contract_list(plt(), dialyzer_contracts:plt_contracts()) -> plt().
@@ -158,9 +159,7 @@ lookup_contract(#mini_plt{contracts = ETSContracts},
   ets_table_lookup(ETSContracts, MFA).
 
 -spec lookup_callbacks(plt(), module()) ->
-	 'none' | {'value', [{mfa(), {{Filename::string(),
-				       Line::pos_integer()},
-				      #contract{}}}]}.
+	 'none' | {'value', [{mfa(), dialyzer_contracts:file_contract()}]}.
 
 lookup_callbacks(#mini_plt{callbacks = ETSCallbacks}, Mod) when is_atom(Mod) ->
   ets_table_lookup(ETSCallbacks, Mod).
@@ -618,9 +617,7 @@ table_insert_list(Plt, [{Key, Val}|Left]) ->
 table_insert_list(Plt, []) ->
   Plt.
 
-table_insert(Plt, Key, {_Ret, _Arg} = Obj) ->
-  dict:store(Key, Obj, Plt);
-table_insert(Plt, Key, #contract{} = C) ->
+table_insert(Plt, Key, {_File, #contract{}, _Xtra} = C) ->
   dict:store(Key, C, Plt).
 
 table_lookup(Plt, Obj) ->

@@ -1,18 +1,19 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 1997-2014. All Rights Reserved.
+%% Copyright Ericsson AB 1997-2016. All Rights Reserved.
 %%
-%% The contents of this file are subject to the Erlang Public License,
-%% Version 1.1, (the "License"); you may not use this file except in
-%% compliance with the License. You should have received a copy of the
-%% Erlang Public License along with this software. If not, it can be
-%% retrieved online at http://www.erlang.org/.
+%% Licensed under the Apache License, Version 2.0 (the "License");
+%% you may not use this file except in compliance with the License.
+%% You may obtain a copy of the License at
 %%
-%% Software distributed under the License is distributed on an "AS IS"
-%% basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See
-%% the License for the specific language governing rights and limitations
-%% under the License.
+%%     http://www.apache.org/licenses/LICENSE-2.0
+%%
+%% Unless required by applicable law or agreed to in writing, software
+%% distributed under the License is distributed on an "AS IS" BASIS,
+%% WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+%% See the License for the specific language governing permissions and
+%% limitations under the License.
 %%
 %% %CopyrightEnd%
 %%
@@ -20,21 +21,20 @@
 %%% Kernel application test suite.
 %%%-----------------------------------------------------------------
 -module(kernel_SUITE).
--include_lib("test_server/include/test_server.hrl").
+-include_lib("common_test/include/ct.hrl").
 
 
-% Test server specific exports
+%% Test server specific exports
 -export([all/0, suite/0,groups/0,init_per_suite/1, end_per_suite/1, 
 	 init_per_group/2,end_per_group/2]).
 -export([init_per_testcase/2, end_per_testcase/2]).
 
-% Test cases must be exported.
+%% Test cases must be exported.
 -export([app_test/1, appup_test/1]).
 
-%%
-%% all/1
-%%
-suite() -> [{ct_hooks,[ts_install_cth]}].
+suite() ->
+    [{ct_hooks,[ts_install_cth]},
+     {timetrap,{minutes,2}}].
 
 all() -> 
     [app_test, appup_test].
@@ -60,15 +60,12 @@ init_per_testcase(_Case, Config) ->
 end_per_testcase(_Case, _Config) ->
     ok.
 
-%
-% Test cases starts here.
-%
-app_test(doc) ->
-    ["Tests the applications consistency."];
-app_test(suite) ->
-    [];
+%%
+%% Test cases starts here.
+%%
+%% Tests the applications consistency.
 app_test(Config) when is_list(Config) ->
-    ?line ok=?t:app_test(kernel),
+    ok=test_server:app_test(kernel),
     ok.
 
 
@@ -79,17 +76,29 @@ appup_test(_Config) ->
 
 appup_tests(_App,{[],[]}) ->
     {skip,"no previous releases available"};
-appup_tests(App,{OkVsns,NokVsns}) ->
+appup_tests(App,{OkVsns0,NokVsns}) ->
     application:load(App),
     {_,_,Vsn} = lists:keyfind(App,1,application:loaded_applications()),
     AppupFileName = atom_to_list(App) ++ ".appup",
     AppupFile = filename:join([code:lib_dir(App),ebin,AppupFileName]),
     {ok,[{Vsn,UpFrom,DownTo}=AppupScript]} = file:consult(AppupFile),
     ct:log("~p~n",[AppupScript]),
-    ct:log("Testing ok versions: ~p~n",[OkVsns]),
+    OkVsns =
+	case OkVsns0 -- [Vsn] of
+	    OkVsns0 ->
+		OkVsns0;
+	    Ok ->
+		ct:log("Current version, ~p, is same as in previous release.~n"
+		       "Removing this from the list of ok versions.",
+		      [Vsn]),
+		Ok
+	end,
+    ct:log("Testing that appup allows upgrade from these versions: ~p~n",
+	   [OkVsns]),
     check_appup(OkVsns,UpFrom,{ok,[restart_new_emulator]}),
     check_appup(OkVsns,DownTo,{ok,[restart_new_emulator]}),
-    ct:log("Testing not ok versions: ~p~n",[NokVsns]),
+    ct:log("Testing that appup does not allow upgrade from these versions: ~p~n",
+	   [NokVsns]),
     check_appup(NokVsns,UpFrom,error),
     check_appup(NokVsns,DownTo,error),
     ok.

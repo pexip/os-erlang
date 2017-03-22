@@ -1,18 +1,19 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2009-2013. All Rights Reserved.
+%% Copyright Ericsson AB 2009-2016. All Rights Reserved.
 %%
-%% The contents of this file are subject to the Erlang Public License,
-%% Version 1.1, (the "License"); you may not use this file except in
-%% compliance with the License. You should have received a copy of the
-%% Erlang Public License along with this software. If not, it can be
-%% retrieved online at http://www.erlang.org/.
+%% Licensed under the Apache License, Version 2.0 (the "License");
+%% you may not use this file except in compliance with the License.
+%% You may obtain a copy of the License at
 %%
-%% Software distributed under the License is distributed on an "AS IS"
-%% basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See
-%% the License for the specific language governing rights and limitations
-%% under the License.
+%%     http://www.apache.org/licenses/LICENSE-2.0
+%%
+%% Unless required by applicable law or agreed to in writing, software
+%% distributed under the License is distributed on an "AS IS" BASIS,
+%% WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+%% See the License for the specific language governing permissions and
+%% limitations under the License.
 %%
 %% %CopyrightEnd%
 %%
@@ -727,23 +728,25 @@ test_events(lib_error) ->
       {lib_error_1_SUITE,no_lines_throw,{failed,{error,{thrown,catch_me_if_u_can}}}}},
      {?eh,test_stats,{0,8,{0,0}}},
      {?eh,tc_start,{lib_error_1_SUITE,init_tc_error}},
-     {?eh,tc_done,{lib_error_1_SUITE,init_tc_error,ok}},
-     {?eh,test_stats,{1,8,{0,0}}},
+     {?eh,tc_done,{ct_framework,init_tc,
+         {framework_error,{{badmatch,[1,2]},'_'}}}},
+     {?eh,test_stats,{0,9,{0,0}}},
      {?eh,tc_start,{lib_error_1_SUITE,init_tc_exit}},
-     {?eh,tc_done,{lib_error_1_SUITE,init_tc_exit,ok}},
-     {?eh,test_stats,{2,8,{0,0}}},
+     {?eh,tc_done,{ct_framework,init_tc,{framework_error,byebye}}},
+     {?eh,test_stats,{0,10,{0,0}}},
      {?eh,tc_start,{lib_error_1_SUITE,init_tc_throw}},
-     {?eh,tc_done,{lib_error_1_SUITE,init_tc_throw,ok}},
-     {?eh,test_stats,{3,8,{0,0}}},
+     {?eh,tc_done,{ct_framework,init_tc,{framework_error,catch_me_if_u_can}}},
+     {?eh,test_stats,{0,11,{0,0}}},
      {?eh,tc_start,{lib_error_1_SUITE,end_tc_error}},
-     {?eh,tc_done,{lib_error_1_SUITE,end_tc_error,ok}},
-     {?eh,test_stats,{3,9,{0,0}}},
+     {?eh,tc_done,{ct_framework,end_tc,
+		   {framework_error,{{badmatch,[1,2]},'_'}}}},
+     {?eh,test_stats,{0,12,{0,0}}},
      {?eh,tc_start,{lib_error_1_SUITE,end_tc_exit}},
-     {?eh,tc_done,{lib_error_1_SUITE,end_tc_exit,ok}},
-     {?eh,test_stats,{3,10,{0,0}}},
+     {?eh,tc_done,{ct_framework,end_tc,{framework_error,byebye}}},
+     {?eh,test_stats,{0,13,{0,0}}},
      {?eh,tc_start,{lib_error_1_SUITE,end_tc_throw}},
-     {?eh,tc_done,{lib_error_1_SUITE,end_tc_throw,ok}},
-     {?eh,test_stats,{3,11,{0,0}}},
+     {?eh,tc_done,{ct_framework,end_tc,{framework_error,catch_me_if_u_can}}},
+     {?eh,test_stats,{0,14,{0,0}}},
      {?eh,tc_start,{lib_error_1_SUITE,end_per_suite}},
      {?eh,tc_done,{lib_error_1_SUITE,end_per_suite,ok}},
      {?eh,test_done,{'DEF','STOP_TIME'}},
@@ -1466,7 +1469,8 @@ test_events(misc_errors) ->
 		   {failed,{error,{suite_failed,this_is_expected}}}}},
      {?eh,test_stats,{0,5,{0,0}}},
      {?eh,tc_start,{misc_error_1_SUITE,killed_by_signal_1}},
-     {?eh,tc_done,{misc_error_1_SUITE,killed_by_signal_1,i_die_now}},
+     {?eh,tc_done,{misc_error_1_SUITE,killed_by_signal_1,
+		   {failed,{'EXIT',i_die_now}}}},
      {?eh,test_stats,{0,6,{0,0}}},
      {?eh,tc_start,{misc_error_1_SUITE,killed_by_signal_2}},
      {?eh,tc_done,{misc_error_1_SUITE,killed_by_signal_2,

@@ -1,19 +1,266 @@
-erlang (1:17.3-dfsg-4+deb8u2) jessie-security; urgency=high
+erlang (1:19.2.1+dfsg-2+deb9u1) stretch-security; urgency=high
 
   * Applied a patch from the upstream which fixes CVE-2017-1000385
     vulnerability (TLS server vunlerable to Adaptive Chosen Ciphertext attack
     allowing plaintext recovery ot MITM attack).
 
- -- Sergei Golovan <sgolovan@debian.org>  Wed, 06 Dec 2017 09:50:47 +0300
+ -- Sergei Golovan <sgolovan@debian.org>  Wed, 22 Mar 2017 15:31:29 +0300
 
-erlang (1:17.3-dfsg-4+deb8u1) stable-proposed-updates; urgency=medium
+erlang (1:19.2.1+dfsg-2) unstable; urgency=high
 
   * Applied a patch from the PCRE upstream which fixes CVE-2016-10253
     vulnerability (heap overflow while compiling certain regular expressions).
     The patch is taken from https://github.com/erlang/otp/pull/1108 and
     modified to match the original patch by PCRE developers (closes: #858313).
 
- -- Sergei Golovan <sgolovan@debian.org>  Mon, 24 Apr 2017 09:13:29 +0300
+ -- Sergei Golovan <sgolovan@debian.org>  Wed, 22 Mar 2017 15:31:29 +0300
+
+erlang (1:19.2.1+dfsg-1) unstable; urgency=medium
+
+  * New upstream bugfix release.
+
+ -- Sergei Golovan <sgolovan@debian.org>  Mon, 16 Jan 2017 23:02:47 +0300
+
+erlang (1:19.2+dfsg-1) unstable; urgency=medium
+
+  * New upstream release.
+  * Refreshed patches.
+  * Removed the patch which fixed HiPE build with PIE enabled by default in
+    the GCC C compiler, because it's been applied upstream.
+
+ -- Sergei Golovan <sgolovan@debian.org>  Wed, 14 Dec 2016 23:32:53 +0300
+
+erlang (1:19.1.6+dfsg-2) unstable; urgency=medium
+
+  * Use the solution from upstream to build HiPE if GCC enables PIE by default.
+    The previous one breaks erlang-wx (closes: #844593).
+
+ -- Sergei Golovan <sgolovan@debian.org>  Sat, 19 Nov 2016 12:45:43 +0300
+
+erlang (1:19.1.6+dfsg-1) unstable; urgency=medium
+
+  * New upstream bugfix release.
+
+ -- Sergei Golovan <sgolovan@debian.org>  Fri, 11 Nov 2016 08:26:20 +0300
+
+erlang (1:19.1.5+dfsg-2) unstable; urgency=medium
+
+  * Temporarily switched to libssl1.0-dev until porting to OpensSSL 1.1 is
+    complete.
+  * Added -fno-pie -no-pie GCC flags to make sure the HiPE build works
+    (closes: #842998).
+  * Enabled verbose build logs to make them more useful in debugging.
+
+ -- Sergei Golovan <sgolovan@debian.org>  Mon, 07 Nov 2016 09:07:18 +0300
+
+erlang (1:19.1.5+dfsg-1) unstable; urgency=medium
+
+  * New upstream bugfix release.
+
+ -- Sergei Golovan <sgolovan@debian.org>  Fri, 21 Oct 2016 07:45:04 +0300
+
+erlang (1:19.1.4+dfsg-1) unstable; urgency=medium
+
+  * New upstream bugfix release.
+
+ -- Sergei Golovan <sgolovan@debian.org>  Sat, 15 Oct 2016 09:50:31 +0300
+
+erlang (1:19.1.2+dfsg-1) unstable; urgency=medium
+
+  * New upstream bugfix release.
+  * Removed dangled symlink (closes: #839854).
+
+ -- Sergei Golovan <sgolovan@debian.org>  Thu, 06 Oct 2016 13:33:30 +0300
+
+erlang (1:19.1.1+dfsg-1) unstable; urgency=medium
+
+  * New upstream bugfix release.
+
+ -- Sergei Golovan <sgolovan@debian.org>  Thu, 29 Sep 2016 23:17:19 +0300
+
+erlang (1:19.1+dfsg-1) unstable; urgency=medium
+
+  * New upstream release.
+  * Refreshed patches.
+  * Refined patches which fix function prototype in beamload.c and help
+    with FTBFS on x32.
+
+ -- Sergei Golovan <sgolovan@debian.org>  Wed, 21 Sep 2016 15:02:56 +0300
+
+erlang (1:19.0.7+dfsg-1) unstable; urgency=medium
+
+  * New upstream bugfix release.
+
+ -- Sergei Golovan <sgolovan@debian.org>  Wed, 14 Sep 2016 16:27:48 +0300
+
+erlang (1:19.0.6+dfsg-1) unstable; urgency=medium
+
+  * New upstream bugfix release.
+
+ -- Sergei Golovan <sgolovan@debian.org>  Wed, 14 Sep 2016 11:02:02 +0300
+
+erlang (1:19.0.5+dfsg-3) unstable; urgency=medium
+
+  * Upload to unstable.
+
+ -- Sergei Golovan <sgolovan@debian.org>  Sun, 04 Sep 2016 09:49:08 +0300
+
+erlang (1:19.0.5+dfsg-2) experimental; urgency=medium
+
+  * Dropped the erlang-test-server binary package since the corresponding
+    application has been removed from the upstream distribution.
+  * Adjusted the binary packages interdependencies.
+
+ -- Sergei Golovan <sgolovan@debian.org>  Sat, 03 Sep 2016 11:47:54 +0300
+
+erlang (1:19.0.5+dfsg-1) experimental; urgency=medium
+
+  * New upstream bugfix release.
+
+ -- Sergei Golovan <sgolovan@debian.org>  Thu, 18 Aug 2016 09:30:31 +0300
+
+erlang (1:19.0.4+dfsg-1) experimental; urgency=medium
+
+  * New upstream bugfix release.
+  * Dropped the erlang-webtool binary package since the corresponding
+    application has been removed from the upstream distribution.
+
+ -- Sergei Golovan <sgolovan@debian.org>  Sat, 13 Aug 2016 10:52:09 +0300
+
+erlang (1:19.0.2+dfsg-1) experimental; urgency=medium
+
+  * New upstream bugfix release.
+
+ -- Sergei Golovan <sgolovan@debian.org>  Fri, 15 Jul 2016 15:57:00 +0300
+
+erlang (1:19.0.1+dfsg-1) experimental; urgency=medium
+
+  * New upstream bugfix release.
+  * Disabled HiPE for the sparc64 architecture because it causes FTBFS.
+
+ -- Sergei Golovan <sgolovan@debian.org>  Thu, 30 Jun 2016 16:36:21 +0300
+
+erlang (1:19.0+dfsg-1) experimental; urgency=medium
+
+  * New upstream release.
+  * Upload to experimental.
+  * Enabled HiPE for the ppc64, ppc64el, and sparc64 architectures.
+  * Bumped Java bytecode compatibility level to 1.7.
+
+ -- Sergei Golovan <sgolovan@debian.org>  Wed, 29 Jun 2016 10:59:29 +0300
+
+erlang (1:19.0~rc2+dfsg-1) experimental; urgency=medium
+
+  * New upstream release candidate.
+  * Upload to experimental.
+
+ -- Sergei Golovan <sgolovan@debian.org>  Wed, 15 Jun 2016 15:31:10 +0300
+
+erlang (1:18.3.4.4+dfsg-1) unstable; urgency=medium
+
+  * New upstream minor release.
+
+ -- Sergei Golovan <sgolovan@debian.org>  Sat, 13 Aug 2016 11:22:08 +0300
+
+erlang (1:18.3.4.2+dfsg-1) unstable; urgency=medium
+
+  * New upstream minor release.
+
+ -- Sergei Golovan <sgolovan@debian.org>  Mon, 25 Jul 2016 11:57:21 +0300
+
+erlang (1:18.3.4.1+dfsg-1) unstable; urgency=medium
+
+  * New upstream minor release.
+  * Enabled HiPE for the ppc64 and ppc64el architectures (closes: #827447).
+  * Bumped Java bytecode compatibility level to 1.7.
+
+ -- Sergei Golovan <sgolovan@debian.org>  Wed, 29 Jun 2016 10:35:57 +0300
+
+erlang (1:18.3.4+dfsg-1) unstable; urgency=medium
+
+  * New upstream minor release (closes: #827363).
+  * Switched to Github for downloading the code because the minor updates
+    haven't been released as tarballs on erlang.org.
+  * Added libxml2-utils to the build dependencies because of xmllint (it
+    is required for building docs).
+  * Bumped standards version to 3.9.8.
+
+ -- Sergei Golovan <sgolovan@debian.org>  Wed, 15 Jun 2016 15:19:45 +0300
+
+erlang (1:18.3-dfsg-1) unstable; urgency=medium
+
+  * New upstream release.
+  * Removed patch which fixed FTBFS for GNU/kFreeBSD and GNU/Hurd introduced
+    in 1:18.2-dfsg-2 because the bug is fixed upstream.
+  * Bumped standards version to 3.9.7.
+
+ -- Sergei Golovan <sgolovan@debian.org>  Thu, 17 Mar 2016 21:22:08 +0300
+
+erlang (1:18.2-dfsg-2) unstable; urgency=medium
+
+  * Fixed FTBFS for GNU/kFreeBSD and GNU/Hurd due to incorrectly checked
+    presence of gethostname_r() function.
+  * Fixed FTBFS for X32 architecture due to incorrectly used inline assembly.
+
+ -- Sergei Golovan <sgolovan@debian.org>  Sun, 27 Dec 2015 12:40:53 +0300
+
+erlang (1:18.2-dfsg-1) unstable; urgency=medium
+
+  * New upstream release.
+
+ -- Sergei Golovan <sgolovan@debian.org>  Sun, 20 Dec 2015 21:11:53 +0300
+
+erlang (1:18.1-dfsg-1) unstable; urgency=medium
+
+  * New upstream release.
+
+ -- Sergei Golovan <sgolovan@debian.org>  Sat, 07 Nov 2015 10:33:50 +0300
+
+erlang (1:18.0-dfsg-2) unstable; urgency=medium
+
+  * Added a patch from Chris Lamb which allows Erlang compiler to put
+    a specified timestamp into the compiled binaries instead of the
+    current time. This helps with reproducibility of Erlang binaries
+    (closes: #795834).
+
+ -- Sergei Golovan <sgolovan@debian.org>  Mon, 17 Aug 2015 15:14:59 +0300
+
+erlang (1:18.0-dfsg-1) unstable; urgency=medium
+
+  * New upstream release.
+  * Refreshed patches, removed patch which disables SSLv3 protocol in
+    the ssl application because this protocol has been disabled upstream.
+  * Changed the license in debian/copyright because upstream relicensed
+    Erlang/OTP from Erlang public license to Apache 2.0 license.
+
+ -- Sergei Golovan <sgolovan@debian.org>  Sat, 27 Jun 2015 14:29:01 +0300
+
+erlang (1:17.5-dfsg-2) unstable; urgency=medium
+
+  * Upload into unstable.
+  * Removed the patch which fixes TLS POODLE vulnerability in the Erlang
+    SSL application (CVE-2015-2774) because it has been applied upstream.
+
+ -- Sergei Golovan <sgolovan@debian.org>  Wed, 27 May 2015 08:18:40 +0300
+
+erlang (1:17.5-dfsg-1) experimental; urgency=medium
+
+  * New upstream release.
+  * Put erl_interface.app and erl_interface.appup into the erlang-dev package.
+
+ -- Sergei Golovan <sgolovan@debian.org>  Wed, 01 Apr 2015 12:04:55 +0300
+
+erlang (1:17.4-dfsg-1) experimental; urgency=medium
+
+  * New upstream release.
+  * Removed a patch which fixed empty SNI extension processing in the
+    ssl application because it has been applied upstream.
+  * Removed a patch which removes rpath from the crypto application binary
+    and use the new --with-ssl-rpath=no configure option instead.
+  * Search for an Erlang module manual page in section 3erl only in
+    Emacs Erlang mode (closes: #772876).
+
+ -- Sergei Golovan <sgolovan@debian.org>  Sun, 14 Dec 2014 09:07:42 +0300
 
 erlang (1:17.3-dfsg-4) unstable; urgency=medium
 

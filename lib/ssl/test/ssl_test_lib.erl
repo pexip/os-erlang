@@ -1,18 +1,19 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2008-2014. All Rights Reserved.
+%% Copyright Ericsson AB 2008-2016. All Rights Reserved.
 %%
-%% The contents of this file are subject to the Erlang Public License,
-%% Version 1.1, (the "License"); you may not use this file except in
-%% compliance with the License. You should have received a copy of the
-%% Erlang Public License along with this software. If not, it can be
-%% retrieved online at http://www.erlang.org/.
+%% Licensed under the Apache License, Version 2.0 (the "License");
+%% you may not use this file except in compliance with the License.
+%% You may obtain a copy of the License at
 %%
-%% Software distributed under the License is distributed on an "AS IS"
-%% basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See
-%% the License for the specific language governing rights and limitations
-%% under the License.
+%%     http://www.apache.org/licenses/LICENSE-2.0
+%%
+%% Unless required by applicable law or agreed to in writing, software
+%% distributed under the License is distributed on an "AS IS" BASIS,
+%% WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+%% See the License for the specific language governing permissions and
+%% limitations under the License.
 %%
 %% %CopyrightEnd%
 %%
@@ -187,6 +188,7 @@ run_client(Opts) ->
     Transport =  proplists:get_value(transport, Opts, ssl),
     Options = proplists:get_value(options, Opts),
     ct:log("~p:~p~n~p:connect(~p, ~p)@~p~n", [?MODULE,?LINE, Transport, Host, Port, Node]),
+    ct:log("SSLOpts: ~p", [Options]),
     case rpc:call(Node, Transport, connect, [Host, Port, Options]) of
 	{ok, Socket} ->
 	    Pid ! {connected, Socket},
@@ -224,6 +226,17 @@ run_client(Opts) ->
 		    ct:log("~p:~p~nClient faild several times: connection failed: ~p ~n", [?MODULE,?LINE, Reason]),
 		    Pid ! {self(), {error, Reason}}
 	    end;
+	{error, econnreset = Reason} ->
+	      case get(retries) of
+		N when N < 5 ->
+		    ct:log("~p:~p~neconnreset retries=~p sleep ~p",[?MODULE,?LINE, N,?SLEEP]),
+		    put(retries, N+1),
+		    ct:sleep(?SLEEP),
+		    run_client(Opts);
+	       _ ->
+		    ct:log("~p:~p~nClient faild several times: connection failed: ~p ~n", [?MODULE,?LINE, Reason]),
+		    Pid ! {self(), {error, Reason}}
+	    end;
 	{error, Reason} ->
 	    ct:log("~p:~p~nClient: connection failed: ~p ~n", [?MODULE,?LINE, Reason]),
 	    Pid ! {connect_failed, Reason};
@@ -239,7 +252,21 @@ close(Pid) ->
     receive
 	{'DOWN', Monitor, process, Pid, Reason} ->
 	    erlang:demonitor(Monitor),
-	    ct:log("~p:~p~nPid: ~p down due to:~p ~n", [?MODULE,?LINE, Pid, Reason])
+	    ct:log("~p:~p~nPid: ~p down due to:~p ~n", [?MODULE,?LINE, Pid, Reason]) 
+		
+    end.
+
+close(Pid, Timeout) ->
+    ct:log("~p:~p~n Close ~p ~n", [?MODULE,?LINE, Pid]),
+    Monitor = erlang:monitor(process, Pid),
+    Pid ! close,
+    receive
+	{'DOWN', Monitor, process, Pid, Reason} ->
+	    erlang:demonitor(Monitor),
+	    ct:log("~p:~p~nPid: ~p down due to:~p ~n", [?MODULE,?LINE, Pid, Reason]) 
+    after 
+	Timeout ->
+	    exit(Pid, kill)
     end.
 
 check_result(Server, ServerMsg, Client, ClientMsg) -> 
@@ -253,7 +280,6 @@ check_result(Server, ServerMsg, Client, ClientMsg) ->
 	{Port, {data,Debug}} when is_port(Port) ->
 	    ct:log("~p:~p~nopenssl ~s~n",[?MODULE,?LINE, Debug]),
 	    check_result(Server, ServerMsg, Client, ClientMsg);
-
 	Unexpected ->
 	    Reason = {{expected, {Client, ClientMsg}},
 		      {expected, {Server, ServerMsg}}, {got, Unexpected}},
@@ -267,6 +293,9 @@ check_result(Pid, Msg) ->
 	{Port, {data,Debug}} when is_port(Port) ->
 	    ct:log("~p:~p~nopenssl ~s~n",[?MODULE,?LINE, Debug]),
 	    check_result(Pid,Msg);
+	%% {Port, {exit_status, Status}} when is_port(Port) ->
+	%%     ct:log("~p:~p Exit status: ~p~n",[?MODULE,?LINE, Status]),
+	%%    check_result(Pid, Msg);
 	Unexpected ->
 	    Reason = {{expected, {Pid, Msg}}, 
 		      {got, Unexpected}},
@@ -320,49 +349,56 @@ wait_for_result(Pid, Msg) ->
 user_lookup(psk, _Identity, UserState) ->
     {ok, UserState};
 user_lookup(srp, Username, _UserState) ->
-    Salt = ssl:random_bytes(16),
+    Salt = ssl_cipher:random_bytes(16),
     UserPassHash = crypto:hash(sha, [Salt, crypto:hash(sha, [Username, <<$:>>, <<"secret">>])]),
     {ok, {srp_1024, Salt, UserPassHash}}.
 
 cert_options(Config) ->
-    ClientCaCertFile = filename:join([?config(priv_dir, Config), 
+    ClientCaCertFile = filename:join([proplists:get_value(priv_dir, Config), 
 				      "client", "cacerts.pem"]),
-    ClientCertFile = filename:join([?config(priv_dir, Config), 
+    ClientCertFile = filename:join([proplists:get_value(priv_dir, Config), 
 				    "client", "cert.pem"]),
-    ClientCertFileDigitalSignatureOnly = filename:join([?config(priv_dir, Config),
+    ClientCertFileDigitalSignatureOnly = filename:join([proplists:get_value(priv_dir, Config),
 				    "client", "digital_signature_only_cert.pem"]),
-    ServerCaCertFile = filename:join([?config(priv_dir, Config), 
+    ServerCaCertFile = filename:join([proplists:get_value(priv_dir, Config), 
 				      "server", "cacerts.pem"]),
-    ServerCertFile = filename:join([?config(priv_dir, Config), 
+    ServerCertFile = filename:join([proplists:get_value(priv_dir, Config), 
 				    "server", "cert.pem"]),
-    ServerKeyFile = filename:join([?config(priv_dir, Config), 
+    ServerKeyFile = filename:join([proplists:get_value(priv_dir, Config), 
 			     "server", "key.pem"]),
-    ClientKeyFile = filename:join([?config(priv_dir, Config), 
+    ClientKeyFile = filename:join([proplists:get_value(priv_dir, Config), 
 			     "client", "key.pem"]),
-    ServerKeyCertFile = filename:join([?config(priv_dir, Config), 
+    ServerKeyCertFile = filename:join([proplists:get_value(priv_dir, Config), 
 				       "server", "keycert.pem"]),
-    ClientKeyCertFile = filename:join([?config(priv_dir, Config), 
+    ClientKeyCertFile = filename:join([proplists:get_value(priv_dir, Config), 
 				       "client", "keycert.pem"]),
 
-    BadCaCertFile = filename:join([?config(priv_dir, Config), 
+    BadCaCertFile = filename:join([proplists:get_value(priv_dir, Config), 
 				   "badcacert.pem"]),
-    BadCertFile = filename:join([?config(priv_dir, Config), 
+    BadCertFile = filename:join([proplists:get_value(priv_dir, Config), 
 				   "badcert.pem"]),
-    BadKeyFile = filename:join([?config(priv_dir, Config), 
+    BadKeyFile = filename:join([proplists:get_value(priv_dir, Config), 
 			      "badkey.pem"]),
     PskSharedSecret = <<1,2,3,4,5,6,7,8,9,10,11,12,13,14,15>>,
-    [{client_opts, [{ssl_imp, new},{reuseaddr, true}]}, 
-     {client_verification_opts, [{cacertfile, ClientCaCertFile}, 
+
+    SNIServerACertFile = filename:join([proplists:get_value(priv_dir, Config), "a.server", "cert.pem"]),
+    SNIServerAKeyFile = filename:join([proplists:get_value(priv_dir, Config), "a.server", "key.pem"]),
+    SNIServerBCertFile = filename:join([proplists:get_value(priv_dir, Config), "b.server", "cert.pem"]),
+    SNIServerBKeyFile = filename:join([proplists:get_value(priv_dir, Config), "b.server", "key.pem"]),
+    [{client_opts, [{cacertfile, ClientCaCertFile}, 
+		    {certfile, ClientCertFile},  
+		    {keyfile, ClientKeyFile}]}, 
+     {client_verification_opts, [{cacertfile, ServerCaCertFile}, 
 				{certfile, ClientCertFile},  
 				{keyfile, ClientKeyFile},
 				{ssl_imp, new}]}, 
-     {client_verification_opts_digital_signature_only, [{cacertfile, ClientCaCertFile},
+     {client_verification_opts_digital_signature_only, [{cacertfile, ServerCaCertFile},
 				{certfile, ClientCertFileDigitalSignatureOnly},
 				{keyfile, ClientKeyFile},
 				{ssl_imp, new}]},
-     {server_opts, [{ssl_imp, new},{reuseaddr, true}, 
+     {server_opts, [{ssl_imp, new},{reuseaddr, true}, {cacertfile, ServerCaCertFile}, 
 		    {certfile, ServerCertFile}, {keyfile, ServerKeyFile}]},
-     {server_anon, [{ssl_imp, new},{reuseaddr, true}, {ciphers, anonymous_suites()}]},
+     %%{server_anon, [{ssl_imp, new},{reuseaddr, true}, {ciphers, anonymous_suites()}]},
      {client_psk, [{ssl_imp, new},{reuseaddr, true},
 		   {psk_identity, "Test-User"},
 		   {user_lookup_fun, {fun user_lookup/3, PskSharedSecret}}]},
@@ -392,7 +428,7 @@ cert_options(Config) ->
 			{user_lookup_fun, {fun user_lookup/3, undefined}},
 			{ciphers, srp_anon_suites()}]},
      {server_verification_opts, [{ssl_imp, new},{reuseaddr, true}, 
-		    {cacertfile, ServerCaCertFile},
+		    {cacertfile, ClientCaCertFile},
 		    {certfile, ServerCertFile}, {keyfile, ServerKeyFile}]},
      {client_kc_opts, [{certfile, ClientKeyCertFile},  {ssl_imp, new}]}, 
      {server_kc_opts, [{ssl_imp, new},{reuseaddr, true}, 
@@ -411,14 +447,25 @@ cert_options(Config) ->
      {server_bad_cert, [{ssl_imp, new},{cacertfile, ServerCaCertFile},
 			{certfile, BadCertFile}, {keyfile, ServerKeyFile}]},
      {server_bad_key, [{ssl_imp, new},{cacertfile, ServerCaCertFile},
-		       {certfile, ServerCertFile}, {keyfile, BadKeyFile}]}
+		       {certfile, ServerCertFile}, {keyfile, BadKeyFile}]},
+     {sni_server_opts, [{sni_hosts, [
+                                     {"a.server", [
+                                                   {certfile, SNIServerACertFile},
+                                                   {keyfile, SNIServerAKeyFile}
+                                                  ]},
+                                     {"b.server", [
+                                                   {certfile, SNIServerBCertFile},
+                                                   {keyfile, SNIServerBKeyFile}
+                                                  ]}
+                                    ]}]}
      | Config].
 
 
 make_dsa_cert(Config) ->
-    
-    {ServerCaCertFile, ServerCertFile, ServerKeyFile} = make_cert_files("server", Config, dsa, dsa, ""),
-    {ClientCaCertFile, ClientCertFile, ClientKeyFile} = make_cert_files("client", Config, dsa, dsa, ""),
+    {ServerCaCertFile, ServerCertFile, ServerKeyFile} = 
+	make_cert_files("server", Config, dsa, dsa, "", []),
+    {ClientCaCertFile, ClientCertFile, ClientKeyFile} = 
+	make_cert_files("client", Config, dsa, dsa, "", []),
     [{server_dsa_opts, [{ssl_imp, new},{reuseaddr, true}, 
 				 {cacertfile, ServerCaCertFile},
 				 {certfile, ServerCertFile}, {keyfile, ServerKeyFile}]},
@@ -444,13 +491,15 @@ make_ecdsa_cert(Config) ->
     CryptoSupport = crypto:supports(),
     case proplists:get_bool(ecdsa, proplists:get_value(public_keys, CryptoSupport)) of
 	    true ->
-	    {ServerCaCertFile, ServerCertFile, ServerKeyFile} = make_cert_files("server", Config, ec, ec, ""),
-	    {ClientCaCertFile, ClientCertFile, ClientKeyFile} = make_cert_files("client", Config, ec, ec, ""),
+	    {ServerCaCertFile, ServerCertFile, ServerKeyFile} = 
+		make_cert_files("server", Config, ec, ec, "", [{digest, appropriate_sha(CryptoSupport)}]),
+	    {ClientCaCertFile, ClientCertFile, ClientKeyFile} = 
+		make_cert_files("client", Config, ec, ec, "", [{digest, appropriate_sha(CryptoSupport)}]),
 	    [{server_ecdsa_opts, [{ssl_imp, new},{reuseaddr, true},
 				  {cacertfile, ServerCaCertFile},
 				  {certfile, ServerCertFile}, {keyfile, ServerKeyFile}]},
 	     {server_ecdsa_verify_opts, [{ssl_imp, new},{reuseaddr, true},
-					 {cacertfile, ServerCaCertFile},
+					 {cacertfile, ClientCaCertFile},
 					 {certfile, ServerCertFile}, {keyfile, ServerKeyFile},
 					 {verify, verify_peer}]},
 	     {client_ecdsa_opts, [{ssl_imp, new},{reuseaddr, true},
@@ -461,6 +510,14 @@ make_ecdsa_cert(Config) ->
 	    Config
     end.
 
+appropriate_sha(CryptoSupport) ->
+    case proplists:get_bool(sha256, CryptoSupport) of
+	true ->
+	    sha256;
+	false ->
+	    sha1
+    end.
+
 %% RFC 4492, Sect. 2.3.  ECDH_RSA
 %%
 %%    This key exchange algorithm is the same as ECDH_ECDSA except that the
@@ -469,13 +526,15 @@ make_ecdh_rsa_cert(Config) ->
     CryptoSupport = crypto:supports(),
     case proplists:get_bool(ecdh, proplists:get_value(public_keys, CryptoSupport)) of
 	true ->
-	    {ServerCaCertFile, ServerCertFile, ServerKeyFile} = make_cert_files("server", Config, rsa, ec, "rsa_"),
-	    {ClientCaCertFile, ClientCertFile, ClientKeyFile} = make_cert_files("client", Config, rsa, ec, "rsa_"),
+	    {ServerCaCertFile, ServerCertFile, ServerKeyFile} = 
+		make_cert_files("server", Config, rsa, ec, "rsa_", []),
+	    {ClientCaCertFile, ClientCertFile, ClientKeyFile} = 
+		make_cert_files("client", Config, rsa, ec, "rsa_",[]),
 	    [{server_ecdh_rsa_opts, [{ssl_imp, new},{reuseaddr, true},
 				     {cacertfile, ServerCaCertFile},
 				     {certfile, ServerCertFile}, {keyfile, ServerKeyFile}]},
 	     {server_ecdh_rsa_verify_opts, [{ssl_imp, new},{reuseaddr, true},
-					    {cacertfile, ServerCaCertFile},
+					    {cacertfile, ClientCaCertFile},
 					    {certfile, ServerCertFile}, {keyfile, ServerKeyFile},
 					    {verify, verify_peer}]},
 	     {client_ecdh_rsa_opts, [{ssl_imp, new},{reuseaddr, true},
@@ -488,9 +547,9 @@ make_ecdh_rsa_cert(Config) ->
 
 make_mix_cert(Config) ->
     {ServerCaCertFile, ServerCertFile, ServerKeyFile} = make_cert_files("server", Config, dsa,
-									rsa, "mix"),
+									rsa, "mix", []),
     {ClientCaCertFile, ClientCertFile, ClientKeyFile} = make_cert_files("client", Config, dsa,
-									rsa, "mix"),
+									rsa, "mix", []),
     [{server_mix_opts, [{ssl_imp, new},{reuseaddr, true},
 				 {cacertfile, ServerCaCertFile},
 				 {certfile, ServerCertFile}, {keyfile, ServerKeyFile}]},
@@ -503,16 +562,16 @@ make_mix_cert(Config) ->
 			{certfile, ClientCertFile}, {keyfile, ClientKeyFile}]}
      | Config].
 
-make_cert_files(RoleStr, Config, Alg1, Alg2, Prefix) ->
+make_cert_files(RoleStr, Config, Alg1, Alg2, Prefix, Opts) ->
     Alg1Str = atom_to_list(Alg1),
     Alg2Str = atom_to_list(Alg2),
-    CaInfo = {CaCert, _} = erl_make_certs:make_cert([{key, Alg1}]),
-    {Cert, CertKey} = erl_make_certs:make_cert([{key, Alg2}, {issuer, CaInfo}]),
-    CaCertFile = filename:join([?config(priv_dir, Config), 
+    CaInfo = {CaCert, _} = erl_make_certs:make_cert([{key, Alg1}| Opts]),
+    {Cert, CertKey} = erl_make_certs:make_cert([{key, Alg2}, {issuer, CaInfo} | Opts]),
+    CaCertFile = filename:join([proplists:get_value(priv_dir, Config), 
 				RoleStr, Prefix ++ Alg1Str ++ "_cacerts.pem"]),
-    CertFile = filename:join([?config(priv_dir, Config), 
+    CertFile = filename:join([proplists:get_value(priv_dir, Config), 
 			      RoleStr, Prefix ++ Alg2Str ++ "_cert.pem"]),
-    KeyFile = filename:join([?config(priv_dir, Config), 
+    KeyFile = filename:join([proplists:get_value(priv_dir, Config), 
 				   RoleStr, Prefix ++ Alg2Str ++ "_key.pem"]),
     
     der_to_pem(CaCertFile, [{'Certificate', CaCert, not_encrypted}]),
@@ -760,48 +819,76 @@ send_selected_port(_,_,_) ->
 
 rsa_suites(CounterPart) ->
     ECC = is_sane_ecc(CounterPart),
+    FIPS = is_fips(CounterPart),
+    CryptoSupport = crypto:supports(),
+    Ciphers = proplists:get_value(ciphers, CryptoSupport),
+    lists:filter(fun({rsa, des_cbc, sha}) when FIPS == true ->
+			 false;
+		    ({dhe_rsa, des_cbc, sha}) when FIPS == true ->
+			 false;
+		    ({rsa, Cipher, _}) ->
+			 lists:member(Cipher, Ciphers);
+		    ({dhe_rsa, Cipher, _}) ->
+			 lists:member(Cipher, Ciphers);
+		    ({ecdhe_rsa, Cipher, _}) when ECC == true ->
+			 lists:member(Cipher, Ciphers);
+		    ({rsa, Cipher, _, _}) ->
+			 lists:member(Cipher, Ciphers);
+		    ({dhe_rsa, Cipher, _,_}) ->
+			 lists:member(Cipher, Ciphers);
+		    ({ecdhe_rsa, Cipher, _,_}) when ECC == true ->
+			 lists:member(Cipher, Ciphers);
+		    (_) ->
+			 false
+		 end,
+                 common_ciphers(CounterPart)).
+
+common_ciphers(crypto) ->
+    ssl:cipher_suites();
+common_ciphers(openssl) ->
+    OpenSslSuites =
+        string:tokens(string:strip(os:cmd("openssl ciphers"), right, $\n), ":"),
+    [ssl_cipher:erl_suite_definition(S)
+     || S <- ssl_cipher:suites(tls_record:highest_protocol_version([])),
+        lists:member(ssl_cipher:openssl_suite_name(S), OpenSslSuites)
+    ].
+
+available_suites(Version) ->
+    [ssl_cipher:erl_suite_definition(Suite) || 
+	Suite  <-  ssl_cipher:filter_suites(ssl_cipher:suites(Version))].
+
+
+rsa_non_signed_suites(Version) ->
     lists:filter(fun({rsa, _, _}) ->
-			 true;
-		    ({dhe_rsa, _, _}) ->
-			 true;
-		    ({ecdhe_rsa, _, _}) when ECC == true ->
 			 true;
 		    (_) ->
 			 false
 		 end,
-		 ssl:cipher_suites()).
+		 available_suites(Version)).
 
-rsa_non_signed_suites() ->
-    lists:filter(fun({rsa, _, _}) ->
-			 true;
-		    (_) ->
-			 false
-		 end,
-		 ssl:cipher_suites()).
-
-dsa_suites() ->
+dsa_suites(Version) ->
      lists:filter(fun({dhe_dss, _, _}) ->
 			 true;
 		    (_) ->
 			 false
 		 end,
-		 ssl:cipher_suites()).
+		 available_suites(Version)).
 
-ecdsa_suites() ->
+ecdsa_suites(Version) ->
      lists:filter(fun({ecdhe_ecdsa, _, _}) ->
 			 true;
 		    (_) ->
 			 false
 		 end,
-		 ssl:cipher_suites()).
+		 available_suites(Version)).
 
-ecdh_rsa_suites() ->
+ecdh_rsa_suites(Version) ->
      lists:filter(fun({ecdh_rsa, _, _}) ->
 			 true;
 		    (_) ->
 			 false
 		 end,
-		 ssl:cipher_suites()).
+		 available_suites(Version)).
 
 openssl_rsa_suites(CounterPart) ->
     Ciphers = ssl:cipher_suites(openssl),
@@ -811,59 +898,36 @@ openssl_rsa_suites(CounterPart) ->
 		false ->
 		    "DSS | ECDHE | ECDH"
 		end,
-    lists:filter(fun(Str) ->
-			 case re:run(Str, Names,[]) of
-			     nomatch ->
-				 false;
-			     _ ->
-				 true
-			 end 
-		     end, Ciphers).
+    lists:filter(fun(Str) -> string_regex_filter(Str, Names)
+		 end, Ciphers).
 
 openssl_dsa_suites() ->
     Ciphers = ssl:cipher_suites(openssl),
-    lists:filter(fun(Str) ->
-			 case re:run(Str,"DSS",[]) of
-			     nomatch ->
-				 false;
-			     _ ->
-				 true
-			 end 
+    lists:filter(fun(Str) -> string_regex_filter(Str, "DSS")
 		 end, Ciphers).
 
 openssl_ecdsa_suites() ->
     Ciphers = ssl:cipher_suites(openssl),
-    lists:filter(fun(Str) ->
-			 case re:run(Str,"ECDHE-ECDSA",[]) of
-			     nomatch ->
-				 false;
-			     _ ->
-				 true
-			 end
+    lists:filter(fun(Str) -> string_regex_filter(Str, "ECDHE-ECDSA")
 		 end, Ciphers).
 
 openssl_ecdh_rsa_suites() ->
     Ciphers = ssl:cipher_suites(openssl),
-    lists:filter(fun(Str) ->
-			 case re:run(Str,"ECDH-RSA",[]) of
-			     nomatch ->
-				 false;
-			     _ ->
-				 true
-			 end
+    lists:filter(fun(Str) -> string_regex_filter(Str, "ECDH-RSA")
 		 end, Ciphers).
 
-anonymous_suites() ->
-    Suites =
-	[{dh_anon, rc4_128, md5},
-	 {dh_anon, des_cbc, sha},
-	 {dh_anon, '3des_ede_cbc', sha},
-	 {dh_anon, aes_128_cbc, sha},
-	 {dh_anon, aes_256_cbc, sha},
-	 {ecdh_anon,rc4_128,sha},
-	 {ecdh_anon,'3des_ede_cbc',sha},
-	 {ecdh_anon,aes_128_cbc,sha},
-	 {ecdh_anon,aes_256_cbc,sha}],
+string_regex_filter(Str, Search) when is_list(Str) ->
+    case re:run(Str, Search, []) of
+	nomatch ->
+	    false;
+	_ ->
+	    true
+    end;
+string_regex_filter(_Str, _Search) ->
+    false.
+
+anonymous_suites(Version) ->
+    Suites = ssl_cipher:anonymous_suites(Version),
     ssl_cipher:filter_suites(Suites).
 
 psk_suites() ->
@@ -885,8 +949,13 @@ psk_suites() ->
 	 {rsa_psk, aes_128_cbc, sha},
 	 {rsa_psk, aes_256_cbc, sha},
 	 {rsa_psk, aes_128_cbc, sha256},
-	 {rsa_psk, aes_256_cbc, sha384}
-],
+	 {rsa_psk, aes_256_cbc, sha384},
+	 {psk, aes_128_gcm, null, sha256},
+	 {psk, aes_256_gcm, null, sha384},
+	 {dhe_psk, aes_128_gcm, null, sha256},
+	 {dhe_psk, aes_256_gcm, null, sha384},
+	 {rsa_psk, aes_128_gcm, null, sha256},
+	 {rsa_psk, aes_256_gcm, null, sha384}],
     ssl_cipher:filter_suites(Suites).
 
 psk_anon_suites() ->
@@ -925,6 +994,14 @@ srp_dss_suites() ->
 	 {srp_dss, aes_256_cbc, sha}],
     ssl_cipher:filter_suites(Suites).
 
+rc4_suites(Version) ->
+    Suites = ssl_cipher:rc4_suites(Version),
+    ssl_cipher:filter_suites(Suites).
+
+des_suites(Version) ->
+    Suites = ssl_cipher:des_suites(Version),
+    ssl_cipher:filter_suites(Suites).
+
 pem_to_der(File) ->
     {ok, PemBin} = file:read_file(File),
     public_key:pem_decode(PemBin).
@@ -934,7 +1011,8 @@ der_to_pem(File, Entries) ->
     file:write_file(File, PemBin).
 
 cipher_result(Socket, Result) ->
-    Result = ssl:connection_info(Socket),
+    {ok, Info} = ssl:connection_information(Socket),
+    Result = {ok, {proplists:get_value(protocol, Info), proplists:get_value(cipher_suite, Info)}},
     ct:log("~p:~p~nSuccessfull connect: ~p~n", [?MODULE,?LINE, Result]),
     %% Importante to send two packets here
     %% to properly test "cipher state" handling
@@ -980,13 +1058,20 @@ receive_rizzo_duong_beast() ->
 	    end
     end.
 
-state([{data,[{"State", State}]} | _]) ->
+
+state([{data,[{"State", {_StateName, StateData}}]} | _]) -> %% gen_statem
+    StateData;
+state([{data,[{"State", State}]} | _]) -> %% gen_server
     State;
-state([{data,[{"StateData", State}]} | _]) ->
-    State;
+state([{data,[{"StateData", State}]} | _]) -> %% gen_fsm
+     State;
 state([_ | Rest]) ->
     state(Rest).
 
+is_tls_version('dtlsv1.2') ->
+    true;
+is_tls_version('dtlsv1') ->
+    true;
 is_tls_version('tlsv1.2') ->
     true;
 is_tls_version('tlsv1.1') ->
@@ -998,13 +1083,23 @@ is_tls_version('sslv3') ->
 is_tls_version(_) ->
     false.
 
-init_tls_version(Version) ->
+init_tls_version(Version, Config)
+  when Version == 'dtlsv1.2'; Version == 'dtlsv1' ->
+    ssl:stop(),
+    application:load(ssl),
+    application:set_env(ssl, dtls_protocol_version, Version),
+    ssl:start(),
+    [{protocol, dtls}, {protocol_opts, [{protocol, dtls}]}|Config];
+
+init_tls_version(Version, Config) ->
     ssl:stop(),
     application:load(ssl),
     application:set_env(ssl, protocol_version, Version),
-    ssl:start().
+    ssl:start(),
+    [{protocol, tls}|Config].
 
-sufficient_crypto_support('tlsv1.2') ->
+sufficient_crypto_support(Version)
+  when Version == 'tlsv1.2'; Version == 'dtlsv1.2' ->
     CryptoSupport = crypto:supports(),
     proplists:get_bool(sha256, proplists:get_value(hashs, CryptoSupport));
 sufficient_crypto_support(Group) when Group == ciphers_ec;     %% From ssl_basic_SUITE
@@ -1054,6 +1149,9 @@ is_sane_ecc(openssl) ->
 	"OpenSSL 1.0.0" ++ _ ->  % Known bug in openssl
 	    %% manifests as SSL_CHECK_SERVERHELLO_TLSEXT:tls invalid ecpointformat list
 	    false;
+	"OpenSSL 1.0.1l" ++ _ ->  
+	    %% Breaks signature verification 
+	    false;
 	"OpenSSL 0.9.8" ++ _ -> % Does not support ECC
 	    false;
 	"OpenSSL 0.9.7" ++ _ -> % Does not support ECC
@@ -1074,67 +1172,98 @@ is_sane_ecc(crypto) ->
 is_sane_ecc(_) ->
     true.
 
+is_fips(openssl) ->
+    VersionStr = os:cmd("openssl version"),
+    case re:split(VersionStr, "fips") of
+	[_] ->
+	    false;
+	_ ->
+	    true
+    end;
+is_fips(crypto) ->
+    [{_,_, Bin}]  = crypto:info_lib(),
+    case re:split(Bin, <<"fips">>) of
+	[_] ->
+	    false;
+	_ ->
+	    true
+    end;
+is_fips(_) ->
+    false.
+
 cipher_restriction(Config0) ->
+    Version = tls_record:protocol_version(protocol_version(Config0)),
     case is_sane_ecc(openssl) of
 	false ->
 	    Opts = proplists:get_value(server_opts, Config0),
 	    Config1 = proplists:delete(server_opts, Config0),
 	    VerOpts = proplists:get_value(server_verification_opts, Config1),
 	    Config = proplists:delete(server_verification_opts, Config1),
-	    Restricted0 = ssl:cipher_suites() -- ecdsa_suites(),
-            Restricted  = Restricted0 -- ecdh_rsa_suites(),
+	    Restricted0 = ssl:cipher_suites() -- ecdsa_suites(Version),
+            Restricted  = Restricted0 -- ecdh_rsa_suites(Version),
 	    [{server_opts, [{ciphers, Restricted} | Opts]}, {server_verification_opts, [{ciphers, Restricted} | VerOpts] } | Config];
 	true ->
 	    Config0
     end.
 
 check_sane_openssl_version(Version) ->
-    case {Version, os:cmd("openssl version")} of
-	{_, "OpenSSL 1.0.1" ++ _} ->
-	    true;
-	{'tlsv1.2', "OpenSSL 1.0" ++ _} ->
-	    false;
-	{'tlsv1.1', "OpenSSL 1.0" ++ _} ->
-	    false;
-	{'tlsv1.2', "OpenSSL 0" ++ _} ->
-	    false;
-	{'tlsv1.1', "OpenSSL 0" ++ _} ->
-	    false;
-	{_, _} ->
-	    true
+    case supports_ssl_tls_version(Version) of 
+	true ->
+	    case {Version, os:cmd("openssl version")} of
+		{_, "OpenSSL 1.0.2" ++ _} ->
+		    true;
+		{_, "OpenSSL 1.0.1" ++ _} ->
+		    true;
+		{'tlsv1.2', "OpenSSL 1.0" ++ _} ->
+		    false;
+		{'tlsv1.1', "OpenSSL 1.0" ++ _} ->
+		    false;
+		{'tlsv1.2', "OpenSSL 0" ++ _} ->
+		    false;
+		{'tlsv1.1', "OpenSSL 0" ++ _} ->
+		    false;
+		{_, _} ->
+		    true
+	    end;
+	false ->
+	    false
     end.
-
 enough_openssl_crl_support("OpenSSL 0." ++ _) -> false;
 enough_openssl_crl_support(_) -> true.
 
-wait_for_openssl_server() ->
-    receive
-	{Port, {data, Debug}} when is_port(Port) ->
-	    ct:log("~p:~p~nopenssl ~s~n",[?MODULE,?LINE, Debug]),
-	    %% openssl has started make sure
-	    %% it will be in accept. Parsing
-	    %% output is too error prone. (Even
-	    %% more so than sleep!)
-	    ct:sleep(?SLEEP)
+wait_for_openssl_server(Port) ->
+    wait_for_openssl_server(Port, 10).
+wait_for_openssl_server(_, 0) ->
+    exit(failed_to_connect_to_openssl);
+wait_for_openssl_server(Port, N) ->
+    case gen_tcp:connect("localhost", Port, []) of
+	{ok, S} ->
+	    gen_tcp:close(S);
+	_  ->
+	    ct:sleep(?SLEEP),
+	    wait_for_openssl_server(Port, N-1)
     end.
 
 version_flag(tlsv1) ->
-    " -tls1 ";
+    "-tls1";
 version_flag('tlsv1.1') ->
-    " -tls1_1 ";
+    "-tls1_1";
 version_flag('tlsv1.2') ->
-    " -tls1_2 ";
+    "-tls1_2";
 version_flag(sslv3) ->
-    " -ssl3 ".
+    "-ssl3";
+version_flag(sslv2) ->
+    "-ssl2".
 
 filter_suites(Ciphers0) ->
     Version = tls_record:highest_protocol_version([]),
     Supported0 = ssl_cipher:suites(Version)
-	++ ssl_cipher:anonymous_suites()
+	++ ssl_cipher:anonymous_suites(Version)
 	++ ssl_cipher:psk_suites(Version)
-	++ ssl_cipher:srp_suites(),
+	++ ssl_cipher:srp_suites() 
+	++ ssl_cipher:rc4_suites(Version),
     Supported1 = ssl_cipher:filter_suites(Supported0),
-    Supported2 = [ssl:suite_definition(S) || S <- Supported1],
+    Supported2 = [ssl_cipher:erl_suite_definition(S) || S <- Supported1],
     [Cipher || Cipher <- Ciphers0, lists:member(Cipher, Supported2)].
 
 -define(OPENSSL_QUIT, "Q\n").
@@ -1169,3 +1298,84 @@ close_loop(Port, Time, SentClose) ->
 		    ct:log("Timeout~n",[])
 	    end
     end.
+
+portable_open_port(Exe, Args) ->
+    AbsPath = os:find_executable(Exe),
+    ct:pal("open_port({spawn_executable, ~p}, [{args, ~p}, stderr_to_stdout]).", [AbsPath, Args]),
+    open_port({spawn_executable, AbsPath}, 
+	      [{args, Args}, stderr_to_stdout]). 
+
+supports_ssl_tls_version(Version) ->
+    VersionFlag = version_flag(Version),
+    Exe = "openssl",
+    Args = ["s_client", VersionFlag],
+    Port = ssl_test_lib:portable_open_port(Exe, Args),
+    do_supports_ssl_tls_version(Port).
+
+do_supports_ssl_tls_version(Port) ->
+    receive 
+	{Port, {data, "unknown option"  ++ _}} -> 
+	    false;
+	{Port, {data, Data}} ->
+	    case lists:member("error", string:tokens(Data, ":")) of
+		true ->
+		    false;
+		false ->
+		    do_supports_ssl_tls_version(Port)
+	    end
+    after 500 ->
+	    true
+    end.
+
+ssl_options(Option, Config) ->
+    ProtocolOpts = proplists:get_value(protocol_opts, Config, []),
+    Opts = proplists:get_value(Option, Config, []),
+    Opts ++ ProtocolOpts.
+
+protocol_version(Config) ->
+   protocol_version(Config, atom).
+
+protocol_version(Config, tuple) ->
+    case proplists:get_value(protocol, Config) of
+	dtls ->
+	    dtls_record:protocol_version(dtls_record:highest_protocol_version([]));
+	_ ->
+	    tls_record:highest_protocol_version(tls_record:supported_protocol_versions())
+   end;
+
+protocol_version(Config, atom) ->
+    case proplists:get_value(protocol, Config) of
+	dtls ->
+	   dtls_record:protocol_version(protocol_version(Config, tuple));
+	_ ->							 
+           tls_record:protocol_version(protocol_version(Config, tuple))	
+   end.
+
+protocol_options(Config, Options) ->
+    Protocol = proplists:get_value(protocol, Config, tls),
+    {Protocol, Opts} = lists:keyfind(Protocol, 1, Options),
+    Opts.
+
+ct_log_supported_protocol_versions(Config) ->
+    case proplists:get_value(protocol, Config) of
+	dtls ->
+	    ct:log("DTLS version ~p~n ", [dtls_record:supported_protocol_versions()]);
+	_ ->
+	    ct:log("TLS/SSL version ~p~n ", [tls_record:supported_protocol_versions()])
+    end.
+
+clean_env() ->
+    application:unset_env(ssl, protocol_version),
+    application:unset_env(ssl, session_lifetime),
+    application:unset_env(ssl, session_cb),
+    application:unset_env(ssl, session_cb_init_args),
+    application:unset_env(ssl, session_cache_client_max),
+    application:unset_env(ssl, session_cache_server_max),
+    application:unset_env(ssl, ssl_pem_cache_clean),
+    application:unset_env(ssl, alert_timeout).
+
+clean_start() ->
+    ssl:stop(),
+    application:load(ssl),
+    clean_env(),
+    ssl:start().

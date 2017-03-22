@@ -1,18 +1,19 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 1997-2013. All Rights Reserved.
+%% Copyright Ericsson AB 1997-2016. All Rights Reserved.
 %%
-%% The contents of this file are subject to the Erlang Public License,
-%% Version 1.1, (the "License"); you may not use this file except in
-%% compliance with the License. You should have received a copy of the
-%% Erlang Public License along with this software. If not, it can be
-%% retrieved online at http://www.erlang.org/.
+%% Licensed under the Apache License, Version 2.0 (the "License");
+%% you may not use this file except in compliance with the License.
+%% You may obtain a copy of the License at
 %%
-%% Software distributed under the License is distributed on an "AS IS"
-%% basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See
-%% the License for the specific language governing rights and limitations
-%% under the License.
+%%     http://www.apache.org/licenses/LICENSE-2.0
+%%
+%% Unless required by applicable law or agreed to in writing, software
+%% distributed under the License is distributed on an "AS IS" BASIS,
+%% WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+%% See the License for the specific language governing permissions and
+%% limitations under the License.
 %%
 %% %CopyrightEnd%
 %%
@@ -632,20 +633,22 @@ make_hostent(Name, Datas, Aliases, Type) ->
 
 hostent_by_domain(Domain, Type) ->
     ?dbg("hostent_by_domain: ~p~n", [Domain]),
-    hostent_by_domain(stripdot(Domain), [], Type).
+    hostent_by_domain(stripdot(Domain), [], [], Type).
 
-hostent_by_domain(Domain, Aliases, Type) ->
+hostent_by_domain(Domain, Aliases, LAliases, Type) ->
     case lookup_type(Domain, Type) of
 	[] ->
 	    case lookup_cname(Domain) of
 		[] ->  
 		    {error, nxdomain};
 		[CName | _] ->
-		    case lists:member(CName, [Domain | Aliases]) of
+		    LDomain = tolower(Domain),
+		    case lists:member(CName, [LDomain | LAliases]) of
                         true -> 
 			    {error, nxdomain};
                         false ->
-			    hostent_by_domain(CName, [Domain | Aliases], Type)
+			    hostent_by_domain(CName, [Domain | Aliases],
+					      [LDomain | LAliases], Type)
 		    end
 	    end;
 	Addrs ->
@@ -670,24 +673,26 @@ lookup_rr(Domain, Class, Type) ->
 %% match data field directly and cache RRs.
 %%
 res_hostent_by_domain(Domain, Type, Rec) ->
-    res_cache_answer(Rec),
-    RRs = Rec#dns_rec.anlist,
+    RRs = lists:map(fun lower_rr/1, Rec#dns_rec.anlist),
+    res_cache_answer(Rec#dns_rec{anlist = RRs}),
     ?dbg("res_hostent_by_domain: ~p - ~p~n", [Domain, RRs]),
-    res_hostent_by_domain(stripdot(Domain), [], Type, RRs).
+    res_hostent_by_domain(stripdot(Domain), [], [], Type, RRs).
 
-res_hostent_by_domain(Domain, Aliases, Type, RRs) ->
-    case res_lookup_type(Domain, Type, RRs) of
+res_hostent_by_domain(Domain, Aliases, LAliases, Type, RRs) ->
+    LDomain = tolower(Domain),
+    case res_lookup_type(LDomain, Type, RRs) of
 	[] ->
-	    case res_lookup_type(Domain, ?S_CNAME, RRs) of
+	    case res_lookup_type(LDomain, ?S_CNAME, RRs) of
 		[] ->  
 		    {error, nxdomain};
 		[CName | _] ->
-		    case lists:member(CName, [Domain | Aliases]) of
+		    case lists:member(tolower(CName), [LDomain | LAliases]) of
 			true -> 
 			    {error, nxdomain};
 			false ->
 			    res_hostent_by_domain(CName, [Domain | Aliases],
-						  Type, RRs)
+						  [LDomain | LAliases], Type,
+						  RRs)
 		    end
 	    end;
 	Addrs ->
@@ -720,7 +725,8 @@ gethostbyaddr(IP) ->
 %%
 res_gethostbyaddr(IP, Rec) ->
     {ok, {IP1, HType, HLen}} = dnt(IP),
-    res_cache_answer(Rec),
+    RRs = lists:map(fun lower_rr/1, Rec#dns_rec.anlist),
+    res_cache_answer(Rec#dns_rec{anlist = RRs}),
     ent_gethostbyaddr(Rec#dns_rec.anlist, IP1, HType, HLen).
 
 ent_gethostbyaddr(RRs, IP, AddrType, Length) ->
@@ -1200,7 +1206,8 @@ handle_set_file(Option, Fname, TagTm, TagInfo, ParseFun, From,
 	    File = filename:flatten(Fname),
 	    ets:insert(Db, {res_optname(Option), File}),
 	    ets:insert(Db, {TagInfo, undefined}),
-	    ets:insert(Db, {TagTm, 0}),
+	    TimeZero = - (?RES_FILE_UPDATE_TM + 1), % Early enough
+	    ets:insert(Db, {TagTm, TimeZero}),
 	    {reply,ok,State};
 	true ->
 	    File = filename:flatten(Fname),
@@ -1372,13 +1379,12 @@ cache_rr(_Db, Cache, RR) ->
     ets:insert(Cache, RR).
 
 times() ->
-    {Mega,Secs,_} = erlang:now(),
-    Mega*1000000 + Secs.
+    erlang:convert_time_unit(erlang:monotonic_time() - erlang:system_info(start_time),native,seconds).
 
 %% lookup and remove old entries
 
 do_lookup_rr(Domain, Class, Type) ->
-    match_rr(#dns_rr{domain = Domain, class = Class,type = Type,
+    match_rr(#dns_rr{domain = tolower(Domain), class = Class,type = Type,
 		     cnt = '_', tm = '_', ttl = '_',
 		     bm = '_', func = '_', data = '_'}).
 
@@ -1400,6 +1406,11 @@ filter_rr([RR | RRs], Time) ->
     [RR | filter_rr(RRs, Time)];
 filter_rr([], _Time) ->  [].
 
+%% Lower case the domain name before storage.
+%%
+lower_rr(#dns_rr{domain=Domain}=RR) when is_list(Domain) ->
+    RR#dns_rr { domain = tolower(Domain) };
+lower_rr(RR) -> RR.
 
 %%
 %% Case fold upper-case to lower-case according to RFC 4343

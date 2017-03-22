@@ -1,18 +1,19 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 1996-2013. All Rights Reserved.
+%% Copyright Ericsson AB 1996-2016. All Rights Reserved.
 %%
-%% The contents of this file are subject to the Erlang Public License,
-%% Version 1.1, (the "License"); you may not use this file except in
-%% compliance with the License. You should have received a copy of the
-%% Erlang Public License along with this software. If not, it can be
-%% retrieved online at http://www.erlang.org/.
+%% Licensed under the Apache License, Version 2.0 (the "License");
+%% you may not use this file except in compliance with the License.
+%% You may obtain a copy of the License at
 %%
-%% Software distributed under the License is distributed on an "AS IS"
-%% basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See
-%% the License for the specific language governing rights and limitations
-%% under the License.
+%%     http://www.apache.org/licenses/LICENSE-2.0
+%%
+%% Unless required by applicable law or agreed to in writing, software
+%% distributed under the License is distributed on an "AS IS" BASIS,
+%% WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+%% See the License for the specific language governing permissions and
+%% limitations under the License.
 %%
 %% %CopyrightEnd%
 %%
@@ -21,7 +22,7 @@
 %% A simple Emacs-like line editor.
 %% About Latin-1 characters: see the beginning of erl_scan.erl.
 
--export([init/0,start/1,start/2,edit_line/2,prefix_arg/1]).
+-export([init/0,init/1,start/1,start/2,edit_line/2,prefix_arg/1]).
 -export([erase_line/1,erase_inp/1,redraw_line/1]).
 -export([length_before/1,length_after/1,prompt/1]).
 -export([current_line/1, current_chars/1]).
@@ -43,6 +44,20 @@
 
 init() ->
     put(kill_buffer, []).
+
+init(Pid) ->
+    %% copy the kill_buffer from the process Pid
+    CopiedKillBuf =
+	case erlang:process_info(Pid, dictionary) of
+	    {dictionary,Dict} ->
+		case proplists:get_value(kill_buffer, Dict) of
+		    undefined -> [];
+		    Buf       -> Buf
+		end;
+	    undefined ->
+		[]
+	end,
+    put(kill_buffer, CopiedKillBuf).
 
 %% start(Prompt)
 %% edit(Characters, Continuation)
@@ -212,6 +227,8 @@ key_map($F, meta_o) -> end_of_line;
 key_map($\177, none) -> backward_delete_char;
 key_map($\177, meta) -> backward_kill_word;
 key_map($[, meta) -> meta_left_sq_bracket;
+key_map($H, meta_left_sq_bracket) -> beginning_of_line;
+key_map($F, meta_left_sq_bracket) -> end_of_line;
 key_map($D, meta_left_sq_bracket) -> backward_char;
 key_map($C, meta_left_sq_bracket) -> forward_char;
 % support a few <CTRL>+<CURSOR LEFT|RIGHT> combinations...
@@ -222,8 +239,10 @@ key_map($[, meta_meta) -> meta_csi;
 key_map($C, meta_csi) -> forward_word;
 key_map($D, meta_csi) -> backward_word;
 key_map($1, meta_left_sq_bracket) -> {csi, "1"};
+key_map($3, meta_left_sq_bracket) -> {csi, "3"};
 key_map($5, meta_left_sq_bracket) -> {csi, "5"};
 key_map($5, {csi, "1;"}) -> {csi, "1;5"};
+key_map($~, {csi, "3"}) -> forward_delete_char;
 key_map($C, {csi, "5"}) -> forward_word;
 key_map($C, {csi, "1;5"}) -> forward_word;
 key_map($D, {csi, "5"})  -> backward_word;
@@ -390,7 +409,7 @@ do_op(end_of_line, Bef, [C|Aft], Rs) ->
 do_op(end_of_line, Bef, [], Rs) ->
     {{Bef,[]},Rs};
 do_op(ctlu, Bef, Aft, Rs) ->
-    put(kill_buffer, Bef),
+    put(kill_buffer, reverse(Bef)),
     {{[], Aft}, [{delete_chars, -length(Bef)} | Rs]};
 do_op(beep, Bef, Aft, Rs) ->
     {{Bef,Aft},[beep|Rs]};
@@ -446,7 +465,6 @@ word_char(C) when C >= $a, C =< $z -> true;
 word_char(C) when C >= $ß, C =< $ÿ, C =/= $÷ -> true;
 word_char(C) when C >= $0, C =< $9 -> true;
 word_char(C) when C =:= $_ -> true;
-word_char(C) when C =:= $. -> true;    % accept dot-separated names
 word_char(_) -> false.
 
 %% over_white(Chars, InitialStack, InitialCount) ->

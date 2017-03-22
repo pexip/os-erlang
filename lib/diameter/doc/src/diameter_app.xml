@@ -13,20 +13,21 @@
 <header>
 
 <copyright>
-<year>2011</year><year>2013</year>
+<year>2011</year><year>2016</year>
 <holder>Ericsson AB. All Rights Reserved.</holder>
 </copyright>
 <legalnotice>
-The contents of this file are subject to the Erlang Public License,
-Version 1.1, (the "License"); you may not use this file except in
-compliance with the License. You should have received a copy of the
-Erlang Public License along with this software. If not, it can be
-retrieved online at http://www.erlang.org/.
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+ 
+    http://www.apache.org/licenses/LICENSE-2.0
 
-Software distributed under the License is distributed on an "AS IS"
-basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See
-the License for the specific language governing rights and limitations
-under the License.
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
 
 </legalnotice>
 
@@ -89,17 +90,14 @@ is called in response to an incoming Diameter request message.</p>
 
 </list>
 
-</description>
-
-<note>
 <p>
-The arities given for the the callback functions here assume no extra
-arguments.
+The arities for the the callback functions here assume no extra arguments.
 All functions will also be passed any extra arguments configured with
 the callback module itself when calling &mod_start_service;
 and, for the call-specific callbacks, any extra arguments passed to
 &mod_call;.</p>
-</note>
+
+</description>
 
 <!-- ===================================================================== -->
 <!-- ===================================================================== -->
@@ -109,9 +107,8 @@ and, for the call-specific callbacks, any extra arguments passed to
 
 <taglist>
 
-<marker id="capabilities"/>
-
-<tag><c>capabilities() = #diameter_caps{}</c></tag>
+<tag>
+<marker id="capabilities"/><c>capabilities() = #diameter_caps{}</c></tag>
 <item>
 <p>
 A record containing the identities of
@@ -125,9 +122,8 @@ Optional or possibly multiple values are encoded as lists of values,
 mandatory values as the bare value.</p>
 </item>
 
-<marker id="message"/>
-
-<tag><c>message() = &codec_message;</c></tag>
+<tag>
+<marker id="message"/><c>message() = &codec_message;</c></tag>
 <item>
 <p>
 The representation of a Diameter message as passed to
@@ -135,9 +131,8 @@ The representation of a Diameter message as passed to
 
 </item>
 
-<marker id="packet"/>
-
-<tag><c>packet() = &codec_packet;</c></tag>
+<tag>
+<marker id="packet"/><c>packet() = &codec_packet;</c></tag>
 <item>
 <p>
 A container for incoming and outgoing Diameter messages that's passed
@@ -145,25 +140,22 @@ through encode/decode and transport.
 Fields should not be set in return values except as documented.</p>
 </item>
 
-<marker id="peer_ref"/>
-
-<tag><c>peer_ref() = term()</c></tag>
+<tag>
+<marker id="peer_ref"/><c>peer_ref() = term()</c></tag>
 <item>
 <p>
 A term identifying a transport connection with a Diameter peer.</p>
 </item>
 
-<marker id="peer"/>
-
-<tag><c>peer() = {&peer_ref;, &capabilities;}</c></tag>
+<tag>
+<marker id="peer"/><c>peer() = {&peer_ref;, &capabilities;}</c></tag>
 <item>
 <p>
 A tuple representing a Diameter peer connection.</p>
 </item>
 
-<marker id="state"/>
-
-<tag><c>state() = term()</c></tag>
+<tag>
+<marker id="state"/><c>state() = term()</c></tag>
 <item>
 <p>
 The state maintained by the application callback functions

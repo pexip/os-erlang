@@ -5,7 +5,7 @@ section 3.
 
 --- a/lib/tools/emacs/erlang.el
 +++ b/lib/tools/emacs/erlang.el
-@@ -497,8 +497,8 @@
+@@ -507,8 +507,8 @@
  (defvar erlang-man-dirs
    '(("Man - Commands" "/man/man1" t)
      ("Man - Modules" "/man/man3" t)
@@ -16,7 +16,7 @@ section 3.
    "*The man directories displayed in the Erlang menu.
  
  Each item in the list should be a list with three elements, the first
-@@ -1286,23 +1286,22 @@
+@@ -1313,23 +1313,22 @@
  (or (fboundp 'eval-when-compile)
      (defmacro eval-when-compile (&rest rest) nil))
  
@@ -44,16 +44,16 @@ section 3.
  
  ;; defvar some obsolete variables, which we still support for
  ;; backwards compatibility reasons.
-@@ -2025,7 +2024,7 @@
+@@ -2060,7 +2059,7 @@
  
  (defun erlang-man-make-menu-item (file)
    "Create a menu item containing the name of the man page."
 -  (and (string-match ".+/\\([^/]+\\)\\.\\([124-9]\\|3\\(erl\\)?\\)\\(\\.gz\\)?$" file)
 +  (and (string-match ".+/\\([^/]+\\)\\.\\([124-9]\\|3\\(erl\\)\\)\\(\\.gz\\)?$" file)
         (let ((page (substring file (match-beginning 1) (match-end 1))))
- 	 (list (capitalize page)
- 	       (list 'lambda '()
-@@ -2036,7 +2035,7 @@
+          (list (capitalize page)
+                (list 'lambda '()
+@@ -2071,7 +2070,7 @@
  
  (defun erlang-man-get-files (dir)
    "Return files in directory DIR."
@@ -62,24 +62,24 @@ section 3.
  
  
  (defun erlang-man-module (&optional module)
-@@ -2056,7 +2055,7 @@
+@@ -2091,7 +2090,7 @@
    (if (or (null module) (string= module ""))
        (error "No Erlang module name given"))
    (let ((dir-list erlang-man-dirs)
--	(pat (concat "/" (regexp-quote module) "\\.\\([124-9]\\|3\\(erl\\)?\\)\\(\\.gz\\)?$"))
-+	(pat (concat "/" (regexp-quote module) "\\.\\([124-9]\\|3\\(erl\\)\\)\\(\\.gz\\)?$"))
- 	(file nil)
- 	file-list)
+-        (pat (concat "/" (regexp-quote module) "\\.\\([124-9]\\|3\\(erl\\)?\\)\\(\\.gz\\)?$"))
++        (pat (concat "/" (regexp-quote module) "\\.\\(3\\(erl\\)\\)\\(\\.gz\\)?$"))
+         (file nil)
+         file-list)
      (while (and dir-list (null file))
-@@ -2197,9 +2196,9 @@
+@@ -2232,9 +2231,9 @@
      (error nil))
    (if file
        (let ((process-environment (copy-sequence process-environment)))
--	(if (string-match "\\(.*\\)/man[^/]*/\\([^.]+\\)\\.\\([124-9]\\|3\\(erl\\)?\\)\\(\\.gz\\)?$" file)
-+	(if (string-match "\\(.*\\)/man[^/]*/\\([^.]+\\)\\.\\([124-9]\\|3\\(erl\\)\\)\\(\\.gz\\)?$" file)
- 	    (let ((dir (substring file (match-beginning 1) (match-end 1)))
--		  (page (substring file (match-beginning 2) (match-end 2))))
-+		  (page (concat (substring file (match-beginning 2) (match-end 2)) "(" (substring file (match-beginning 3) (match-end 3)) ")")))
- 	      (if (fboundp 'setenv)
- 		  (setenv "MANPATH" dir)
- 		;; Emacs 18
+-        (if (string-match "\\(.*\\)/man[^/]*/\\([^.]+\\)\\.\\([124-9]\\|3\\(erl\\)?\\)\\(\\.gz\\)?$" file)
++        (if (string-match "\\(.*\\)/man[^/]*/\\([^.]+\\)\\.\\([124-9]\\|3\\(erl\\)\\)\\(\\.gz\\)?$" file)
+             (let ((dir (substring file (match-beginning 1) (match-end 1)))
+-                  (page (substring file (match-beginning 2) (match-end 2))))
++                  (page (concat (substring file (match-beginning 2) (match-end 2)) "(" (substring file (match-beginning 3) (match-end 3)) ")")))
+               (if (fboundp 'setenv)
+                   (setenv "MANPATH" dir)
+                 ;; Emacs 18

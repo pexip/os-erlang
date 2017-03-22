@@ -1,18 +1,19 @@
 /*
  * %CopyrightBegin%
  *
- * Copyright Ericsson AB 2004-2014. All Rights Reserved.
+ * Copyright Ericsson AB 2004-2016. All Rights Reserved.
  *
- * The contents of this file are subject to the Erlang Public License,
- * Version 1.1, (the "License"); you may not use this file except in
- * compliance with the License. You should have received a copy of the
- * Erlang Public License along with this software. If not, it can be
- * retrieved online at http://www.erlang.org/.
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
  *
- * Software distributed under the License is distributed on an "AS IS"
- * basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See
- * the License for the specific language governing rights and limitations
- * under the License.
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  *
  * %CopyrightEnd%
  */
@@ -95,6 +96,7 @@
  * gc_bif_interface_0(nbif_name, cbif_name)
  * gc_bif_interface_1(nbif_name, cbif_name)
  * gc_bif_interface_2(nbif_name, cbif_name)
+ * gc_bif_interface_3(nbif_name, cbif_name)
  *
  * A BIF which may do a GC or walk the native stack.
  * May read NSP, NSP_LIMIT, NRA, HP, HP_LIMIT, and FCALLS.
@@ -192,6 +194,7 @@ standard_bif_interface_2(nbif_rethrow, hipe_rethrow)
 standard_bif_interface_3(nbif_find_na_or_make_stub, hipe_find_na_or_make_stub)
 standard_bif_interface_2(nbif_nonclosure_address, hipe_nonclosure_address)
 nocons_nofail_primop_interface_0(nbif_fclearerror_error, hipe_fclearerror_error)
+standard_bif_interface_2(nbif_is_divisible, hipe_is_divisible)
 
 /*
  * Mbox primops with implicit P parameter.
@@ -250,6 +253,8 @@ gc_bif_interface_0(nbif_check_get_msg, hipe_check_get_msg)
 nocons_nofail_primop_interface_0(nbif_emulate_fpe, hipe_emulate_fpe)
 #endif
 
+noproc_primop_interface_1(nbif_emasculate_binary, hipe_emasculate_binary)
+
 /*
  * SMP-specific stuff
  */
@@ -259,27 +264,34 @@ noproc_primop_interface_1(nbif_atomic_inc, hipe_atomic_inc)
 ',)dnl
 
 /*
+ * BIFs that disable GC while trapping are called via a wrapper
+ * to reserve stack space for the "trap frame".
+ * They occasionally need to call the garbage collector in order to make room
+ * for the trap frame on the BEAM stack.
+ */
+gc_bif_interface_1(nbif_term_to_binary_1, hipe_wrapper_term_to_binary_1)
+gc_bif_interface_2(nbif_term_to_binary_2, hipe_wrapper_term_to_binary_2)
+gc_bif_interface_1(nbif_binary_to_term_1, hipe_wrapper_binary_to_term_1)
+gc_bif_interface_2(nbif_binary_to_term_2, hipe_wrapper_binary_to_term_2)
+gc_bif_interface_1(nbif_binary_to_list_1, hipe_wrapper_binary_to_list_1)
+gc_bif_interface_3(nbif_binary_to_list_3, hipe_wrapper_binary_to_list_3)
+gc_bif_interface_1(nbif_bitstring_to_list_1, hipe_wrapper_bitstring_to_list_1)
+gc_bif_interface_1(nbif_list_to_binary_1, hipe_wrapper_list_to_binary_1)
+gc_bif_interface_1(nbif_iolist_to_binary_1, hipe_wrapper_iolist_to_binary_1)
+gc_bif_interface_1(nbif_binary_list_to_bin_1, hipe_wrapper_binary_list_to_bin_1)
+gc_bif_interface_1(nbif_list_to_bitstring_1, hipe_wrapper_list_to_bitstring_1)
+gc_bif_interface_2(nbif_send_2, hipe_wrapper_send_2)
+gc_bif_interface_3(nbif_send_3, hipe_wrapper_send_3)
+gc_bif_interface_2(nbif_ebif_bang_2, hipe_wrapper_ebif_bang_2)
+gc_bif_interface_2(nbif_maps_merge_2, hipe_wrapper_maps_merge_2)
+
+
+/*
  * Standard BIFs.
  * BIF_LIST(ModuleAtom,FunctionAtom,Arity,CFun,Index)
  */
 
-/* BIFs that disable GC while trapping are called via a wrapper
- * to reserve stack space for the "trap frame".
- */
-define(CFUN,`ifelse($1,term_to_binary_1,hipe_wrapper_term_to_binary_1,
-ifelse($1,term_to_binary_2,hipe_wrapper_term_to_binary_2,
-ifelse($1,binary_to_term_1,hipe_wrapper_binary_to_term_1,
-ifelse($1,binary_to_term_2,hipe_wrapper_binary_to_term_2,
-ifelse($1,binary_to_list_1,hipe_wrapper_binary_to_list_1,
-ifelse($1,binary_to_list_3,hipe_wrapper_binary_to_list_3,
-ifelse($1,bitstring_to_list_1,hipe_wrapper_bitstring_to_list_1,
-ifelse($1,list_to_binary_1,hipe_wrapper_list_to_binary_1,
-ifelse($1,iolist_to_binary_1,hipe_wrapper_iolist_to_binary_1,
-ifelse($1,binary_list_to_bin_1,hipe_wrapper_binary_list_to_bin_1,
-ifelse($1,list_to_bitstring_1,hipe_wrapper_list_to_bitstring_1,
-$1)))))))))))')
-
-define(BIF_LIST,`standard_bif_interface_$3(nbif_$4, CFUN($4))')
+define(BIF_LIST,`standard_bif_interface_$3(nbif_$4, $4)')
 include(TARGET/`erl_bif_list.h')
 
 /*

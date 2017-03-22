@@ -125,7 +125,7 @@
 .\" ========================================================================
 .\"
 .IX Title "ERLANG-DEPENDS 1"
-.TH ERLANG-DEPENDS 1 "2014\-10\-05" "1:17.3\-dfsg\-2" "Erlang packages for Debian GNU/Linux"
+.TH ERLANG-DEPENDS 1 "2016\-09\-03" "1:19.0.5\-dfsg\-2" "Erlang packages for Debian GNU/Linux"
 .\" For nroff, turn off justification.  Always turn off hyphenation; it makes
 .\" way too many mistakes in technical documents.
 .if n .ad l
@@ -180,10 +180,8 @@ ${erlang\-snmp:Depends},
 ${erlang\-ssh:Depends},
 ${erlang\-ssl:Depends},
 ${erlang\-syntax-tools:Depends},
-${erlang\-test-server:Depends},
 ${erlang\-tools:Depends},
 ${erlang\-typer:Depends},
-${erlang\-webtool:Depends},
 ${erlang\-wx:Depends},
 ${erlang\-xmerl:Depends}.
 .PP
@@ -210,6 +208,14 @@ Erlang distribution.
 Variables ${erlang\-pman:Depends}, ${erlang\-toolbar:Depends}, ${erlang\-tv:Depends}
 were dropped in version 1:17.3\-dfsg\-2 of erlang\-dev package because the
 pman, toolbar and tv applications were removed from the Erlang distribution.
+.PP
+Variable ${erlang\-webtool:Depends} was dropped in version 1:19.0.4+dfsg\-1
+of erlang\-dev package because the webtool application was removed from the
+Erlang distribution.
+.PP
+Variable ${erlang\-test\-server:Depends} was dropped in version 1:19.0.5+dfsg\-2
+of erlang\-dev package because the test_server application was removed from the
+Erlang distribution.
 .PP
 For compatibility with older versions the variables
 ${erlang\-nox:Depends} and ${erlang\-x11:Depends} also work (even since the

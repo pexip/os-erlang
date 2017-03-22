@@ -1,18 +1,19 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2003-2013. All Rights Reserved.
+%% Copyright Ericsson AB 2003-2016. All Rights Reserved.
 %%
-%% The contents of this file are subject to the Erlang Public License,
-%% Version 1.1, (the "License"); you may not use this file except in
-%% compliance with the License. You should have received a copy of the
-%% Erlang Public License along with this software. If not, it can be
-%% retrieved online at http://www.erlang.org/.
+%% Licensed under the Apache License, Version 2.0 (the "License");
+%% you may not use this file except in compliance with the License.
+%% You may obtain a copy of the License at
 %%
-%% Software distributed under the License is distributed on an "AS IS"
-%% basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See
-%% the License for the specific language governing rights and limitations
-%% under the License.
+%%     http://www.apache.org/licenses/LICENSE-2.0
+%%
+%% Unless required by applicable law or agreed to in writing, software
+%% distributed under the License is distributed on an "AS IS" BASIS,
+%% WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+%% See the License for the specific language governing permissions and
+%% limitations under the License.
 %%
 %% %CopyrightEnd%
 %%
@@ -52,6 +53,7 @@
 -module(ct).
 
 -include("ct.hrl").
+-include("ct_util.hrl").
 
 %% Command line user interface for running tests
 -export([install/1, run/1, run/2, run/3,
@@ -62,9 +64,11 @@
 -export([require/1, require/2,
 	 get_config/1, get_config/2, get_config/3,
 	 reload_config/1,
-	 log/1, log/2, log/3, log/4,
-	 print/1, print/2, print/3, print/4,
-	 pal/1, pal/2, pal/3, pal/4,
+	 escape_chars/1, escape_chars/2,
+	 log/1, log/2, log/3, log/4, log/5,
+	 print/1, print/2, print/3, print/4, print/5,
+	 pal/1, pal/2, pal/3, pal/4, pal/5,
+         set_verbosity/2, get_verbosity/1,
 	 capture_start/0, capture_stop/0, capture_get/0, capture_get/1,
 	 fail/1, fail/2, comment/1, comment/2, make_priv_dir/0,
 	 testcases/2, userdata/2, userdata/3,
@@ -77,6 +81,8 @@
 
 %% Other interface functions
 -export([get_status/0, abort_current_testcase/1,
+	 get_event_mgr_ref/0,
+	 get_testspec_terms/0, get_testspec_terms/1,
 	 encrypt_config_file/2, encrypt_config_file/3,
 	 decrypt_config_file/2, decrypt_config_file/3]).
 
@@ -156,9 +162,9 @@ run(TestDirs) ->
 %%%               {repeat,N} | {duration,DurTime} | {until,StopTime} |
 %%%               {force_stop,ForceStop} | {decrypt,DecryptKeyOrFile} |
 %%%               {refresh_logs,LogDir} | {logopts,LogOpts} | 
-%%%               {verbosity,VLevels} | {basic_html,Bool} | 
-%%%               {ct_hooks, CTHs} | {enable_builtin_hooks,Bool} |
-%%%               {release_shell,Bool}
+%%%               {verbosity,VLevels} | {basic_html,Bool} |
+%%%               {esc_chars,Bool} | {ct_hooks, CTHs} |
+%%%               {enable_builtin_hooks,Bool} | {release_shell,Bool}
 %%%   TestDirs = [string()] | string()
 %%%   Suites = [string()] | [atom()] | string() | atom()
 %%%   Cases = [atom()] | atom()
@@ -277,7 +283,7 @@ step(TestDir,Suite,Case,Opts) ->
 %%% <c>&gt; ct_telnet:cmd(unix_telnet, "ls .").</c><br/>
 %%% <c>{ok,["ls","file1  ...",...]}</c></p>
 start_interactive() ->
-    ct_util:start(interactive),
+    _ = ct_util:start(interactive),
     ok.
 
 %%%-----------------------------------------------------------------
@@ -461,44 +467,132 @@ reload_config(Required)->
     ct_config:reload_config(Required).
 
 %%%-----------------------------------------------------------------
+%%% @spec get_testspec_terms() -> TestSpecTerms | undefined
+%%%      TestSpecTerms = [{Tag,Value}]
+%%%      Value = [term()]
+%%%
+%%% @doc Get a list of all test specification terms used to
+%%% configure and run this test.
+%%%
+get_testspec_terms() ->
+    case ct_util:get_testdata(testspec) of
+	undefined ->
+	    undefined;
+	CurrSpecRec ->
+	    ct_testspec:testspec_rec2list(CurrSpecRec)
+    end.
+
+%%%-----------------------------------------------------------------
+%%% @spec get_testspec_terms(Tags) -> TestSpecTerms | undefined
+%%%      Tags = [Tag] | Tag
+%%%      Tag = atom()
+%%%      TestSpecTerms = [{Tag,Value}] | {Tag,Value}
+%%%      Value = [{Node,term()}] | [term()]
+%%%      Node = atom()
+%%%
+%%% @doc Read one or more terms from the test specification used
+%%% to configure and run this test. Tag is any valid test specification
+%%% tag, such as e.g. <c>label</c>, <c>config</c>, <c>logdir</c>.
+%%% User specific terms are also available to read if the
+%%% <c>allow_user_terms</c> option has been set. Note that all value tuples
+%%% returned, except user terms, will have the node name as first element.
+%%% Note also that in order to read test terms, use <c>Tag = tests</c>
+%%% (rather than <c>suites</c>, <c>groups</c> or <c>cases</c>). Value is
+%%% then the list of *all* tests on the form:
+%%% <c>[{Node,Dir,[{TestSpec,GroupsAndCases1},...]},...], where
+%%% GroupsAndCases = [{Group,[Case]}] | [Case]</c>.
+get_testspec_terms(Tags) ->
+    case ct_util:get_testdata(testspec) of
+	undefined ->
+	    undefined;
+	CurrSpecRec ->
+	    ct_testspec:testspec_rec2list(Tags, CurrSpecRec)
+    end.
+
+
+%%%-----------------------------------------------------------------
+%%% @spec escape_chars(IoList1) -> IoList2 | {error,Reason}
+%%%      IoList1 = iolist()
+%%%      IoList2 = iolist()
+%%%
+%%% @doc Escape special characters to be printed in html log
+%%%
+escape_chars(IoList) ->
+    ct_logs:escape_chars(IoList).
+
+%%%-----------------------------------------------------------------
+%%% @spec escape_chars(Format, Args) -> IoList | {error,Reason}
+%%%      Format = string()
+%%%      Args = list()
+%%%
+%%% @doc Escape special characters to be printed in html log
+%%%
+escape_chars(Format, Args) ->
+    try io_lib:format(Format, Args) of
+	IoList ->
+	    ct_logs:escape_chars(IoList)
+    catch
+	_:Reason ->
+	    {error,Reason}
+    end.
+
+%%%-----------------------------------------------------------------
 %%% @spec log(Format) -> ok
-%%% @equiv log(default,50,Format,[])
+%%% @equiv log(default,50,Format,[],[])
 log(Format) ->
-    log(default,?STD_IMPORTANCE,Format,[]).
+    log(default,?STD_IMPORTANCE,Format,[],[]).
 
 %%%-----------------------------------------------------------------
 %%% @spec log(X1,X2) -> ok
 %%%      X1 = Category | Importance | Format
 %%%      X2 = Format | Args
-%%% @equiv log(Category,Importance,Format,Args)
+%%% @equiv log(Category,Importance,Format,Args,[])
 log(X1,X2) ->
     {Category,Importance,Format,Args} = 
 	if is_atom(X1)    -> {X1,?STD_IMPORTANCE,X2,[]};
 	   is_integer(X1) -> {default,X1,X2,[]};
 	   is_list(X1)    -> {default,?STD_IMPORTANCE,X1,X2}
 	end,
-    log(Category,Importance,Format,Args).
+    log(Category,Importance,Format,Args,[]).
 
 %%%-----------------------------------------------------------------
 %%% @spec log(X1,X2,X3) -> ok
+%%%      X1 = Category | Importance | Format
+%%%      X2 = Importance | Format | Args
+%%%      X3 = Format | Args | Opts
+%%% @equiv log(Category,Importance,Format,Args,Opts)
+log(X1,X2,X3) ->
+    {Category,Importance,Format,Args,Opts} = 
+	if is_atom(X1), is_integer(X2) -> {X1,X2,X3,[],[]};
+	   is_atom(X1), is_list(X2)    -> {X1,?STD_IMPORTANCE,X2,X3,[]};
+	   is_integer(X1)              -> {default,X1,X2,X3,[]};
+	   is_list(X1), is_list(X2)    -> {default,?STD_IMPORTANCE,X1,X2,X3}
+	end,
+    log(Category,Importance,Format,Args,Opts).
+
+%%%-----------------------------------------------------------------
+%%% @spec log(X1,X2,X3,X4) -> ok
 %%%      X1 = Category | Importance
 %%%      X2 = Importance | Format
 %%%      X3 = Format | Args
-%%% @equiv log(Category,Importance,Format,Args)
-log(X1,X2,X3) ->
-    {Category,Importance,Format,Args} = 
-	if is_atom(X1), is_integer(X2) -> {X1,X2,X3,[]};
-	   is_atom(X1), is_list(X2)    -> {X1,?STD_IMPORTANCE,X2,X3};
-	   is_integer(X1)              -> {default,X1,X2,X3}
+%%%      X4 = Args | Opts
+%%% @equiv log(Category,Importance,Format,Args,Opts)
+log(X1,X2,X3,X4) ->
+    {Category,Importance,Format,Args,Opts} = 
+	if is_atom(X1), is_integer(X2) -> {X1,X2,X3,X4,[]};
+	   is_atom(X1), is_list(X2)    -> {X1,?STD_IMPORTANCE,X2,X3,X4};
+	   is_integer(X1)              -> {default,X1,X2,X3,X4}
 	end,
-    log(Category,Importance,Format,Args).
+    log(Category,Importance,Format,Args,Opts).
 
 %%%-----------------------------------------------------------------
-%%% @spec log(Category,Importance,Format,Args) -> ok
+%%% @spec log(Category,Importance,Format,Args,Opts) -> ok
 %%%      Category = atom()
 %%%      Importance = integer()
 %%%      Format = string()
 %%%      Args = list()
+%%%      Opts = [Opt]
+%%%      Opt = {heading,string()} | esc_chars | no_css
 %%%
 %%% @doc Printout from a test case to the log file. 
 %%%
@@ -510,49 +604,67 @@ log(X1,X2,X3) ->
 %%% and default value for <c>Args</c> is <c>[]</c>.</p>
 %%% <p>Please see the User's Guide for details on <c>Category</c>
 %%% and <c>Importance</c>.</p>
-log(Category,Importance,Format,Args) ->
-    ct_logs:tc_log(Category,Importance,Format,Args).
+log(Category,Importance,Format,Args,Opts) ->
+    ct_logs:tc_log(Category,Importance,Format,Args,Opts).
 
 
 %%%-----------------------------------------------------------------
 %%% @spec print(Format) -> ok
-%%% @equiv print(default,50,Format,[])
+%%% @equiv print(default,50,Format,[],[])
 print(Format) ->
-    print(default,?STD_IMPORTANCE,Format,[]).
+    print(default,?STD_IMPORTANCE,Format,[],[]).
 
 %%%-----------------------------------------------------------------
 %%% @spec print(X1,X2) -> ok
 %%%      X1 = Category | Importance | Format
 %%%      X2 = Format | Args
-%%% @equiv print(Category,Importance,Format,Args)
+%%% @equiv print(Category,Importance,Format,Args,[])
 print(X1,X2) ->
     {Category,Importance,Format,Args} = 
 	if is_atom(X1)    -> {X1,?STD_IMPORTANCE,X2,[]};
 	   is_integer(X1) -> {default,X1,X2,[]};
 	   is_list(X1)    -> {default,?STD_IMPORTANCE,X1,X2}
 	end,
-    print(Category,Importance,Format,Args).
+    print(Category,Importance,Format,Args,[]).
 
 %%%-----------------------------------------------------------------
 %%% @spec print(X1,X2,X3) -> ok
+%%%      X1 = Category | Importance | Format
+%%%      X2 = Importance | Format | Args
+%%%      X3 = Format | Args | Opts
+%%% @equiv print(Category,Importance,Format,Args,Opts)
+print(X1,X2,X3) ->
+    {Category,Importance,Format,Args,Opts} = 
+	if is_atom(X1), is_integer(X2) -> {X1,X2,X3,[],[]};
+	   is_atom(X1), is_list(X2)    -> {X1,?STD_IMPORTANCE,X2,X3,[]};
+	   is_integer(X1)              -> {default,X1,X2,X3,[]};
+	   is_list(X1), is_list(X2)    -> {default,?STD_IMPORTANCE,X1,X2,X3}
+	end,
+    print(Category,Importance,Format,Args,Opts).
+
+%%%-----------------------------------------------------------------
+%%% @spec print(X1,X2,X3,X4) -> ok
 %%%      X1 = Category | Importance
 %%%      X2 = Importance | Format
 %%%      X3 = Format | Args
-%%% @equiv print(Category,Importance,Format,Args)
-print(X1,X2,X3) ->
-    {Category,Importance,Format,Args} = 
-	if is_atom(X1), is_integer(X2) -> {X1,X2,X3,[]};
-	   is_atom(X1), is_list(X2)    -> {X1,?STD_IMPORTANCE,X2,X3};
-	   is_integer(X1)              -> {default,X1,X2,X3}
+%%%      X4 = Args | Opts
+%%% @equiv print(Category,Importance,Format,Args,Opts)
+print(X1,X2,X3,X4) ->
+    {Category,Importance,Format,Args,Opts} = 
+	if is_atom(X1), is_integer(X2) -> {X1,X2,X3,X4,[]};
+	   is_atom(X1), is_list(X2)    -> {X1,?STD_IMPORTANCE,X2,X3,X4};
+	   is_integer(X1)              -> {default,X1,X2,X3,X4}
 	end,
-    print(Category,Importance,Format,Args).
+    print(Category,Importance,Format,Args,Opts).
 
 %%%-----------------------------------------------------------------
-%%% @spec print(Category,Importance,Format,Args) -> ok
+%%% @spec print(Category,Importance,Format,Args,Opts) -> ok
 %%%      Category = atom()
 %%%      Importance = integer()
 %%%      Format = string()
 %%%      Args = list()
+%%%      Opts = [Opt]
+%%%      Opt = {heading,string()}
 %%%
 %%% @doc Printout from a test case to the console. 
 %%%
@@ -564,13 +676,13 @@ print(X1,X2,X3) ->
 %%% and default value for <c>Args</c> is <c>[]</c>.</p>
 %%% <p>Please see the User's Guide for details on <c>Category</c>
 %%% and <c>Importance</c>.</p>
-print(Category,Importance,Format,Args) ->
-    ct_logs:tc_print(Category,Importance,Format,Args).
+print(Category,Importance,Format,Args,Opts) ->
+    ct_logs:tc_print(Category,Importance,Format,Args,Opts).
 
 
 %%%-----------------------------------------------------------------
 %%% @spec pal(Format) -> ok
-%%% @equiv pal(default,50,Format,[])
+%%% @equiv pal(default,50,Format,[],[])
 pal(Format) ->
     pal(default,?STD_IMPORTANCE,Format,[]).
 
@@ -578,35 +690,53 @@ pal(Format) ->
 %%% @spec pal(X1,X2) -> ok
 %%%      X1 = Category | Importance | Format
 %%%      X2 = Format | Args
-%%% @equiv pal(Category,Importance,Format,Args)
+%%% @equiv pal(Category,Importance,Format,Args,[])
 pal(X1,X2) ->
     {Category,Importance,Format,Args} = 
 	if is_atom(X1)    -> {X1,?STD_IMPORTANCE,X2,[]};
 	   is_integer(X1) -> {default,X1,X2,[]};
 	   is_list(X1)    -> {default,?STD_IMPORTANCE,X1,X2}
 	end,
-    pal(Category,Importance,Format,Args).
+    pal(Category,Importance,Format,Args,[]).
 
 %%%-----------------------------------------------------------------
 %%% @spec pal(X1,X2,X3) -> ok
+%%%      X1 = Category | Importance | Format
+%%%      X2 = Importance | Format | Args
+%%%      X3 = Format | Args | Opts
+%%% @equiv pal(Category,Importance,Format,Args,Opts)
+pal(X1,X2,X3) ->
+    {Category,Importance,Format,Args,Opts} = 
+	if is_atom(X1), is_integer(X2) -> {X1,X2,X3,[],[]};
+	   is_atom(X1), is_list(X2)    -> {X1,?STD_IMPORTANCE,X2,X3,[]};
+	   is_integer(X1)              -> {default,X1,X2,X3,[]};
+	   is_list(X1), is_list(X2)    -> {default,?STD_IMPORTANCE,X1,X2,X3}
+	end,
+    pal(Category,Importance,Format,Args,Opts).
+
+%%%-----------------------------------------------------------------
+%%% @spec pal(X1,X2,X3,X4) -> ok
 %%%      X1 = Category | Importance
 %%%      X2 = Importance | Format
 %%%      X3 = Format | Args
-%%% @equiv pal(Category,Importance,Format,Args)
-pal(X1,X2,X3) ->
-    {Category,Importance,Format,Args} = 
-	if is_atom(X1), is_integer(X2) -> {X1,X2,X3,[]};
-	   is_atom(X1), is_list(X2)    -> {X1,?STD_IMPORTANCE,X2,X3};
-	   is_integer(X1)              -> {default,X1,X2,X3}
+%%%      X4 = Args | Opts
+%%% @equiv pal(Category,Importance,Format,Args,Opts)
+pal(X1,X2,X3,X4) ->
+    {Category,Importance,Format,Args,Opts} = 
+	if is_atom(X1), is_integer(X2) -> {X1,X2,X3,X4,[]};
+	   is_atom(X1), is_list(X2)    -> {X1,?STD_IMPORTANCE,X2,X3,X4};
+	   is_integer(X1)              -> {default,X1,X2,X3,X4}
 	end,
-    pal(Category,Importance,Format,Args).
+    pal(Category,Importance,Format,Args,Opts).
 
 %%%-----------------------------------------------------------------
-%%% @spec pal(Category,Importance,Format,Args) -> ok
+%%% @spec pal(Category,Importance,Format,Args,Opts) -> ok
 %%%      Category = atom()
 %%%      Importance = integer()
 %%%      Format = string()
 %%%      Args = list()
+%%%      Opts = [Opt]
+%%%      Opt = {heading,string()} | no_css
 %%%
 %%% @doc Print and log from a test case. 
 %%%
@@ -618,8 +748,26 @@ pal(X1,X2,X3) ->
 %%% and default value for <c>Args</c> is <c>[]</c>.</p>
 %%% <p>Please see the User's Guide for details on <c>Category</c>
 %%% and <c>Importance</c>.</p>
-pal(Category,Importance,Format,Args) ->
-    ct_logs:tc_pal(Category,Importance,Format,Args).
+pal(Category,Importance,Format,Args,Opts) ->
+    ct_logs:tc_pal(Category,Importance,Format,Args,Opts).
+
+%%%-----------------------------------------------------------------
+%%% @spec set_verbosity(Category, Level) -> ok
+%%%      Category = default | atom()
+%%%      Level = integer()
+%%%
+%%% @doc Set the verbosity level for a category
+set_verbosity(Category, Level) ->
+    ct_util:set_verbosity({Category,Level}).
+
+%%%-----------------------------------------------------------------
+%%% @spec get_verbosity(Category) -> Level | undefined
+%%%      Category = default | atom()
+%%%      Level = integer()
+%%%
+%%% @doc Read the verbosity level for a category
+get_verbosity(Category) ->
+    ct_util:get_verbosity(Category).
 
 %%%-----------------------------------------------------------------
 %%% @spec capture_start() -> ok
@@ -682,7 +830,7 @@ capture_get([]) ->
     test_server:capture_get().
 
 %%%-----------------------------------------------------------------
-%%% @spec fail(Reason) -> void()
+%%% @spec fail(Reason) -> ok
 %%%      Reason = term()
 %%%
 %%% @doc Terminate a test case with the given error
@@ -700,7 +848,7 @@ fail(Reason) ->
     end.
 
 %%%-----------------------------------------------------------------
-%%% @spec fail(Format, Args) -> void()
+%%% @spec fail(Format, Args) -> ok
 %%%      Format = string()
 %%%      Args = list()
 %%%
@@ -726,7 +874,7 @@ fail(Format, Args) ->
     end.
 
 %%%-----------------------------------------------------------------
-%%% @spec comment(Comment) -> void()
+%%% @spec comment(Comment) -> ok
 %%%      Comment = term()
 %%%
 %%% @doc Print the given <c>Comment</c> in the comment field in
@@ -749,7 +897,7 @@ comment(Comment) ->
     send_html_comment(lists:flatten(Formatted)).
 
 %%%-----------------------------------------------------------------
-%%% @spec comment(Format, Args) -> void()
+%%% @spec comment(Format, Args) -> ok
 %%%      Format = string()
 %%%      Args = list()
 %%%
@@ -1003,6 +1151,18 @@ get_testdata(Key) ->
 %%%      in the test case log.</p>
 abort_current_testcase(Reason) ->
     test_server_ctrl:abort_current_testcase(Reason).
+
+%%%-----------------------------------------------------------------
+%%% @spec get_event_mgr_ref() -> EvMgrRef
+%%%       EvMgrRef = atom()
+%%%
+%%% @doc <p>Call this function in order to get a reference to the
+%%%         CT event manager. The reference can be used to e.g. add
+%%%         a user specific event handler while tests are running.
+%%%         Example:
+%%%         <c>gen_event:add_handler(ct:get_event_mgr_ref(), my_ev_h, [])</c></p>
+get_event_mgr_ref() ->
+    ?CT_EVMGR_REF.
 
 %%%-----------------------------------------------------------------
 %%% @spec encrypt_config_file(SrcFileName, EncryptFileName) -> 

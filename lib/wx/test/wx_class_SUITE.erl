@@ -1,18 +1,19 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2008-2014. All Rights Reserved.
+%% Copyright Ericsson AB 2008-2016. All Rights Reserved.
 %%
-%% The contents of this file are subject to the Erlang Public License,
-%% Version 1.1, (the "License"); you may not use this file except in
-%% compliance with the License. You should have received a copy of the
-%% Erlang Public License along with this software. If not, it can be
-%% retrieved online at http://www.erlang.org/.
+%% Licensed under the Apache License, Version 2.0 (the "License");
+%% you may not use this file except in compliance with the License.
+%% You may obtain a copy of the License at
 %%
-%% Software distributed under the License is distributed on an "AS IS"
-%% basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See
-%% the License for the specific language governing rights and limitations
-%% under the License.
+%%     http://www.apache.org/licenses/LICENSE-2.0
+%%
+%% Unless required by applicable law or agreed to in writing, software
+%% distributed under the License is distributed on an "AS IS" BASIS,
+%% WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+%% See the License for the specific language governing permissions and
+%% limitations under the License.
 %%
 %% %CopyrightEnd%
 %%%-------------------------------------------------------------------
@@ -45,12 +46,12 @@ end_per_testcase(Func,Config) ->
     wx_test_lib:end_per_testcase(Func,Config).
 
 %% SUITE specification
-suite() -> [{ct_hooks,[ts_install_cth]}].
+suite() -> [{ct_hooks,[ts_install_cth]}, {timetrap,{minutes,2}}].
 
 all() ->
     [calendarCtrl, treeCtrl, notebook, staticBoxSizer,
      clipboard, helpFrame, htmlWindow, listCtrlSort, listCtrlVirtual,
-     radioBox, systemSettings, taskBarIcon, toolbar, popup].
+     radioBox, systemSettings, taskBarIcon, toolbar, popup, modal].
 
 groups() ->
     [].
@@ -71,7 +72,7 @@ calendarCtrl(Config) ->
     Panel = wxPanel:new(Frame),
     Sz = wxBoxSizer:new(?wxVERTICAL),
 
-    {YMD={_,_,Day},_} = DateTime = calendar:now_to_datetime(erlang:now()),
+    {YMD={_,_,Day},_} = DateTime = calendar:now_to_datetime(os:timestamp()),
     Cal = ?mt(wxCalendarCtrl, wxCalendarCtrl:new(Panel, ?wxID_ANY,
 						 [{date,DateTime}
 						 ])),
@@ -231,8 +232,15 @@ staticBoxSizer(Config) ->
 
 
 clipboard(TestInfo) when is_atom(TestInfo) -> wx_test_lib:tc_info(TestInfo);
-clipboard(_Config) ->
-    wx:new(),
+clipboard(Config) ->
+    Wx = wx:new(),
+    Frame = wxFrame:new(Wx, ?wxID_ANY, "Main Frame"),
+    Ctrl = wxTextCtrl:new(Frame, ?wxID_ANY, [{size, {600,400}}, {style, ?wxTE_MULTILINE}]),
+    wxTextCtrl:connect(Ctrl, command_text_copy, [{skip, true}]),
+    wxTextCtrl:connect(Ctrl, command_text_cut, [{skip, true}]),
+    wxTextCtrl:connect(Ctrl, command_text_paste, [{skip, true}]),
+    wxWindow:show(Frame),
+
     CB = ?mt(wxClipboard, wxClipboard:get()),
     wxClipboard:usePrimarySelection(CB),
     ?m(false, wx:is_null(CB)),
@@ -271,7 +279,8 @@ clipboard(_Config) ->
     ?log("Flushing ~n",[]),
     wxClipboard:flush(CB),
     ?log("Stopping ~n",[]),
-    ok.
+    wx_test_lib:wx_destroy(Frame,Config).
+
 
 helpFrame(TestInfo) when is_atom(TestInfo) -> wx_test_lib:tc_info(TestInfo);
 helpFrame(Config) ->
@@ -279,10 +288,13 @@ helpFrame(Config) ->
     MFrame = wx:batch(fun() ->
 			      MFrame = wxFrame:new(Wx, ?wxID_ANY, "Main Frame"),
 			      wxPanel:new(MFrame, [{size, {600,400}}]),
+			      wxFrame:connect(MFrame, show),
 			      wxWindow:show(MFrame),
 			      MFrame
 		      end),
-    timer:sleep(9),
+    receive #wx{event=#wxShow{}} -> ok
+    after 1000 -> exit(show_timeout)
+    end,
 
     {X0, Y0} = wxWindow:getScreenPosition(MFrame),
     {X, Y, W,H} = wxWindow:getScreenRect(MFrame),
@@ -374,13 +386,26 @@ listCtrlSort(Config) ->
     io:format("Sorted ~p ~n",[Time]),
 
     Item = wxListItem:new(),
+
+    %% Test that wx-asserts are sent to error logger
+    %% Force an assert on 3.0 (when debug compiled which it is by default)
+    wxListItem:setId(Item, 200),
+    case os:type() of
+	{win32, _} ->
+	    wxListItem:setColumn(Item, 3),
+	    io:format("Got ~p ~n", [wxListCtrl:insertItem(LC, Item)]),
+	    wxListItem:setColumn(Item, 0);
+	_ -> %% Uses generic listctrl
+	    %% we can't use the code above on linux with wx-2.8.8 because it segfaults.
+	    io:format("Got ~p ~n", [wxListCtrl:getItem(LC, Item)])
+    end,
+
     wxListItem:setMask(Item, ?wxLIST_MASK_TEXT),
     _List = wx:map(fun(Int) ->
 			   wxListItem:setId(Item, Int),
 			   ?m(true, wxListCtrl:getItem(LC, Item)),
 			   io:format("~p: ~s~n",[Int, wxListItem:getText(Item)])
 		   end, lists:seq(0,10)),
-    wxListItem:destroy(Item),
 
     wx_test_lib:wx_destroy(Frame,Config).
 
@@ -433,15 +458,16 @@ radioBox(Config) ->
     Frame = wxFrame:new(Wx, ?wxID_ANY, "Frame"),
 
     TrSortRadioBox = wxRadioBox:new(Frame, ?wxID_ANY, "Sort by:",
-				    {100, 100},{100, 100}, ["Timestamp"]),
+				    {100, 100},{100, 100},
+				    ["Timestamp", "Session", "FooBar"]),
 
     io:format("TrSortRadioBox ~p ~n", [TrSortRadioBox]),
-    %% If I uncomment any of these lines, it will crash
-
-    io:format("~p~n", [catch wxControlWithItems:setClientData(TrSortRadioBox, 0, timestamp)]),
-    %?m(_, wxListBox:append(TrSortRadioBox, "Session Id", session_id)),
-    %?m(_, wxListBox:insert(TrSortRadioBox, "Session Id", 0, session_id)),
-
+    wxRadioBox:setSelection(TrSortRadioBox, 2),
+    wxRadioBox:setItemToolTip(TrSortRadioBox, 2, "Test"),
+    TT0 = ?mt(wxToolTip,wxRadioBox:getItemToolTip(TrSortRadioBox, 0)),
+    TT1 = ?mt(wxToolTip,wxRadioBox:getItemToolTip(TrSortRadioBox, 2)),
+    ?m(true, wx:is_null(TT0)),
+    ?m("Test", wxToolTip:getTip(TT1)),
     wxWindow:show(Frame),
     wx_test_lib:wx_destroy(Frame,Config).
 
@@ -500,18 +526,22 @@ toolbar(Config) ->
     Wx = wx:new(),
     Frame = wxFrame:new(Wx, ?wxID_ANY, "Frame"),
     TB = wxFrame:createToolBar(Frame),
-    wxToolBar:addTool(TB, 747, "PressMe", wxArtProvider:getBitmap("wxART_COPY", [{size, {16,16}}]),
+    BM1 = wxArtProvider:getBitmap("wxART_COPY", [{size, {16,16}}, {client, "wxART_TOOLBAR"}]),
+    BM2 = wxArtProvider:getBitmap("wxART_TICK_MARK", [{size, {16,16}}, {client, "wxART_TOOLBAR"}]),
+    wxToolBar:addTool(TB, 747, "PressMe", BM1,
 		      [{shortHelp, "Press Me"}]),
-
+    catch wxToolBar:addStretchableSpace(TB),  %% wxWidgets 3.0 only
     Add = fun(#wx{}, _) ->
-		  wxToolBar:addTool(TB, -1, "Added", wxArtProvider:getBitmap("wxART_TICK_MARK", [{size, {16,16}}]),
-				    [{shortHelp, "Test 2 popup text"}])
+		  wxToolBar:addTool(TB, -1, "Added", BM2,
+				    [{shortHelp, "Test 2 popup text"}]),
+		  catch wxToolBar:addStretchableSpace(TB), %% wxWidgets 3.0 only
+		  wxToolBar:realize(TB)
 	  end,
 
+    wxToolBar:realize(TB),
     wxFrame:connect(Frame, command_menu_selected, [{callback, Add}, {id, 747}]),
     wxFrame:show(Frame),
     wx_test_lib:wx_destroy(Frame,Config).
-
 
 popup(TestInfo) when is_atom(TestInfo) -> wx_test_lib:tc_info(TestInfo);
 popup(Config) ->
@@ -522,7 +552,7 @@ popup(Config) ->
 		      [{shortHelp, "Press Me"}]),
 
     Log = fun(#wx{id=Id, event=Ev}, Obj) ->
-		  io:format("Got ~p from ~p~n", [Id, Ev]),
+		  io:format("Got ~p from ~p~n", [Ev, Id]),
 		  wxEvent:skip(Obj)
 	  end,
     CreatePopup = fun() ->
@@ -545,7 +575,11 @@ popup(Config) ->
 			  Pop
 		  end,
     wxFrame:connect(Frame, command_menu_selected, [{id, 747}]),
+    wxFrame:connect(Frame, show),
     wxFrame:show(Frame),
+    receive #wx{event=#wxShow{}} -> ok
+    after 1000 -> exit(show_timeout)
+    end,
 
     Pop = CreatePopup(),
     Scale = case wx_test_lib:user_available(Config) of
@@ -558,3 +592,99 @@ popup(Config) ->
 	    wxPopupTransientWindow:dismiss(Pop)
     end,
     wx_test_lib:wx_destroy(Frame,Config).
+
+locale(TestInfo) when is_atom(TestInfo) -> wx_test_lib:tc_info(TestInfo);
+locale(_Config) ->
+    wx:new(),
+    io:format("SystemEncoding: ~p~n",[wxLocale:getSystemEncoding()]),
+    io:format("SystemEncodingName: ~ts~n",[wxLocale:getSystemEncodingName()]),
+    io:format("SystemLanguage: ~p~n",[wxLocale:getSystemLanguage()]),
+    io:format("SystemLanguageName: ~p~n",[wxLocale:getLanguageName(wxLocale:getSystemLanguage())]),
+    lang_env(),
+    LC = wxLocale:new(),
+    %% wxLocale:addCatalog(LC, "wxstd"),
+    io:format("Swedish: ~p~n",[wxLocale:getLanguageName(?wxLANGUAGE_SWEDISH)]),
+    R0 = wxLocale:init(LC, [{language, ?wxLANGUAGE_SWEDISH}, {flags, 0}]),
+    io:format("initiated ~p~n",[R0]),
+    lang_env(),
+    ok.
+%% wx_test_lib:wx_destroy(Frame,Config).
+
+lang_env() ->
+    Env0 = os:getenv(),
+    Env = [[R,"\n"]||R <- Env0],
+    %%io:format("~p~n",[lists:sort(Env)]),
+    Opts = [global, multiline, {capture, all, list}],
+    format_env(re:run(Env, "LC_ALL.*", Opts)),
+    format_env(re:run(Env, "^LANG.*=.*$", Opts)),
+    ok.
+format_env({match, List}) ->
+    [io:format("  ~ts~n",[L]) || L <- List];
+format_env(nomatch) -> ok.
+
+%%  Add a testcase that tests that we can recurse in showModal
+%%  because it hangs in observer if object are not destroyed correctly
+%%  when popping the stack
+
+modal(Config) ->
+    Wx = wx:new(),
+    case {?wxMAJOR_VERSION, ?wxMINOR_VERSION, ?wxRELEASE_NUMBER} of
+	{2, Min, Rel} when Min < 8 orelse (Min =:= 8 andalso Rel < 11) ->
+	    {skip, "old wxWidgets version"};
+	_ ->
+	    Frame = wxFrame:new(Wx, -1, "Test Modal windows"),
+	    wxFrame:show(Frame),
+	    Env = wx:get_env(),
+	    Tester = self(),
+	    ets:new(test_state, [named_table, public]),
+	    Upd = wxUpdateUIEvent:getUpdateInterval(),
+	    wxUpdateUIEvent:setUpdateInterval(500),
+	    _Pid = spawn(fun() ->
+				 wx:set_env(Env),
+				 modal_dialog(Frame, 1, Tester)
+			 end),
+	    %% need to sleep so we know that the window is stuck in
+	    %% the ShowModal event loop and not in an earlier event loop
+	    %% wx2.8 invokes the event loop from more calls than wx-3
+	    M1 = receive {dialog, W1, 1} -> timer:sleep(1200), ets:insert(test_state, {W1, ready}), W1 end,
+	    M2 = receive {dialog, W2, 2} -> timer:sleep(1200), ets:insert(test_state, {W2, ready}), W2 end,
+
+	    receive done -> ok end,
+	    receive {dialog_done, M2, 2} -> M2 end,
+	    receive {dialog_done, M1, 1} -> M1 end,
+
+	    wxUpdateUIEvent:setUpdateInterval(Upd),
+	    wx_test_lib:wx_destroy(Frame,Config)
+    end.
+
+modal_dialog(Parent, Level, Tester) when Level < 3 ->
+    M1 = wxTextEntryDialog:new(Parent, "Dialog " ++ integer_to_list(Level)),
+    io:format("Creating dialog ~p ~p~n",[Level, M1]),
+    wxDialog:connect(M1, show, [{callback, fun(#wx{event=Ev},_) ->
+						   case Ev of
+						       #wxShow{show=true} ->
+							   Tester ! {dialog, M1, Level};
+						       _ -> ignore
+						   end
+					   end}]),
+    DoOnce = fun(_,_) ->
+		     case ets:take(test_state, M1) of
+			 [] -> ignore;
+			 [_] -> modal_dialog(M1, Level+1, Tester)
+		     end
+	     end,
+    wxDialog:connect(M1, update_ui, [{callback, DoOnce}]),
+    ?wxID_OK = wxDialog:showModal(M1),
+    wxDialog:destroy(M1),
+    case Level > 1 of
+	true ->
+	    io:format("~p: End dialog ~p ~p~n",[?LINE, Level-1, Parent]),
+	    wxDialog:endModal(Parent, ?wxID_OK);
+	false -> ok
+    end,
+    Tester ! {dialog_done, M1, Level},
+    ok;
+modal_dialog(Parent, Level, Tester) ->
+    io:format("~p: End dialog ~p ~p~n",[?LINE, Level-1, Parent]),
+    wxDialog:endModal(Parent, ?wxID_OK),
+    Tester ! done.

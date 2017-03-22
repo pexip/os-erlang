@@ -1,18 +1,19 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2008-2013. All Rights Reserved.
+%% Copyright Ericsson AB 2008-2016. All Rights Reserved.
 %%
-%% The contents of this file are subject to the Erlang Public License,
-%% Version 1.1, (the "License"); you may not use this file except in
-%% compliance with the License. You should have received a copy of the
-%% Erlang Public License along with this software. If not, it can be
-%% retrieved online at http://www.erlang.org/.
+%% Licensed under the Apache License, Version 2.0 (the "License");
+%% you may not use this file except in compliance with the License.
+%% You may obtain a copy of the License at
 %%
-%% Software distributed under the License is distributed on an "AS IS"
-%% basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See
-%% the License for the specific language governing rights and limitations
-%% under the License.
+%%     http://www.apache.org/licenses/LICENSE-2.0
+%%
+%% Unless required by applicable law or agreed to in writing, software
+%% distributed under the License is distributed on an "AS IS" BASIS,
+%% WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+%% See the License for the specific language governing permissions and
+%% limitations under the License.
 %%
 %% %CopyrightEnd%
 %% This file is generated DO NOT EDIT
@@ -58,7 +59,7 @@ canUpdate(#wx_ref{type=WinT,ref=WinRef}) ->
   <<WinRef:32/?UI>>).
 
 %% @doc See <a href="http://www.wxwidgets.org/manuals/2.8.12/wx_wxupdateuievent.html#wxupdateuieventcheck">external documentation</a>.
--spec check(This, Check) -> ok when
+-spec check(This, Check) -> 'ok' when
 	This::wxUpdateUIEvent(), Check::boolean().
 check(#wx_ref{type=ThisT,ref=ThisRef},Check)
  when is_boolean(Check) ->
@@ -67,7 +68,7 @@ check(#wx_ref{type=ThisT,ref=ThisRef},Check)
   <<ThisRef:32/?UI,(wxe_util:from_bool(Check)):32/?UI>>).
 
 %% @doc See <a href="http://www.wxwidgets.org/manuals/2.8.12/wx_wxupdateuievent.html#wxupdateuieventenable">external documentation</a>.
--spec enable(This, Enable) -> ok when
+-spec enable(This, Enable) -> 'ok' when
 	This::wxUpdateUIEvent(), Enable::boolean().
 enable(#wx_ref{type=ThisT,ref=ThisRef},Enable)
  when is_boolean(Enable) ->
@@ -76,7 +77,7 @@ enable(#wx_ref{type=ThisT,ref=ThisRef},Enable)
   <<ThisRef:32/?UI,(wxe_util:from_bool(Enable)):32/?UI>>).
 
 %% @doc See <a href="http://www.wxwidgets.org/manuals/2.8.12/wx_wxupdateuievent.html#wxupdateuieventshow">external documentation</a>.
--spec show(This, Show) -> ok when
+-spec show(This, Show) -> 'ok' when
 	This::wxUpdateUIEvent(), Show::boolean().
 show(#wx_ref{type=ThisT,ref=ThisRef},Show)
  when is_boolean(Show) ->
@@ -162,14 +163,14 @@ getUpdateInterval() ->
   <<>>).
 
 %% @doc See <a href="http://www.wxwidgets.org/manuals/2.8.12/wx_wxupdateuievent.html#wxupdateuieventresetupdatetime">external documentation</a>.
--spec resetUpdateTime() -> ok.
+-spec resetUpdateTime() -> 'ok'.
 resetUpdateTime() ->
   wxe_util:cast(?wxUpdateUIEvent_ResetUpdateTime,
   <<>>).
 
 %% @doc See <a href="http://www.wxwidgets.org/manuals/2.8.12/wx_wxupdateuievent.html#wxupdateuieventsetmode">external documentation</a>.
 %%<br /> Mode = ?wxUPDATE_UI_PROCESS_ALL | ?wxUPDATE_UI_PROCESS_SPECIFIED
--spec setMode(Mode) -> ok when
+-spec setMode(Mode) -> 'ok' when
 	Mode::wx:wx_enum().
 setMode(Mode)
  when is_integer(Mode) ->
@@ -177,17 +178,17 @@ setMode(Mode)
   <<Mode:32/?UI>>).
 
 %% @doc See <a href="http://www.wxwidgets.org/manuals/2.8.12/wx_wxupdateuievent.html#wxupdateuieventsettext">external documentation</a>.
--spec setText(This, Text) -> ok when
+-spec setText(This, Text) -> 'ok' when
 	This::wxUpdateUIEvent(), Text::unicode:chardata().
 setText(#wx_ref{type=ThisT,ref=ThisRef},Text)
- when is_list(Text) ->
+ when ?is_chardata(Text) ->
   ?CLASS(ThisT,wxUpdateUIEvent),
   Text_UC = unicode:characters_to_binary([Text,0]),
   wxe_util:cast(?wxUpdateUIEvent_SetText,
   <<ThisRef:32/?UI,(byte_size(Text_UC)):32/?UI,(Text_UC)/binary, 0:(((8- ((0+byte_size(Text_UC)) band 16#7)) band 16#7))/unit:8>>).
 
 %% @doc See <a href="http://www.wxwidgets.org/manuals/2.8.12/wx_wxupdateuievent.html#wxupdateuieventsetupdateinterval">external documentation</a>.
--spec setUpdateInterval(UpdateInterval) -> ok when
+-spec setUpdateInterval(UpdateInterval) -> 'ok' when
 	UpdateInterval::integer().
 setUpdateInterval(UpdateInterval)
  when is_integer(UpdateInterval) ->

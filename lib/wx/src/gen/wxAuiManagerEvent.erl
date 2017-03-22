@@ -1,25 +1,26 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2009-2013. All Rights Reserved.
+%% Copyright Ericsson AB 2009-2016. All Rights Reserved.
 %%
-%% The contents of this file are subject to the Erlang Public License,
-%% Version 1.1, (the "License"); you may not use this file except in
-%% compliance with the License. You should have received a copy of the
-%% Erlang Public License along with this software. If not, it can be
-%% retrieved online at http://www.erlang.org/.
+%% Licensed under the Apache License, Version 2.0 (the "License");
+%% you may not use this file except in compliance with the License.
+%% You may obtain a copy of the License at
 %%
-%% Software distributed under the License is distributed on an "AS IS"
-%% basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See
-%% the License for the specific language governing rights and limitations
-%% under the License.
+%%     http://www.apache.org/licenses/LICENSE-2.0
+%%
+%% Unless required by applicable law or agreed to in writing, software
+%% distributed under the License is distributed on an "AS IS" BASIS,
+%% WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+%% See the License for the specific language governing permissions and
+%% limitations under the License.
 %%
 %% %CopyrightEnd%
 %% This file is generated DO NOT EDIT
 
 %% @doc See external documentation: <a href="http://www.wxwidgets.org/manuals/2.8.12/wx_wxauimanagerevent.html">wxAuiManagerEvent</a>.
 %% <dl><dt>Use {@link wxEvtHandler:connect/3.} with EventType:</dt>
-%% <dd><em>aui_pane_button</em>, <em>aui_pane_close</em>, <em>aui_pane_maximize</em>, <em>aui_pane_restore</em>, <em>aui_render</em>, <em>aui_find_manager</em></dd></dl>
+%% <dd><em>aui_pane_button</em>, <em>aui_pane_close</em>, <em>aui_pane_maximize</em>, <em>aui_pane_restore</em>, <em>aui_pane_activated</em>, <em>aui_render</em>, <em>aui_find_manager</em></dd></dl>
 %% See also the message variant {@link wxEvtHandler:wxAuiManager(). #wxAuiManager{}} event record type.
 %%
 %% <p>This class is derived (and can use functions) from:
@@ -45,7 +46,7 @@ parent_class(_Class) -> erlang:error({badtype, ?MODULE}).
 
 -type wxAuiManagerEvent() :: wx:wx_object().
 %% @doc See <a href="http://www.wxwidgets.org/manuals/2.8.12/wx_wxauimanagerevent.html#wxauimanagereventsetmanager">external documentation</a>.
--spec setManager(This, Mgr) -> ok when
+-spec setManager(This, Mgr) -> 'ok' when
 	This::wxAuiManagerEvent(), Mgr::wxAuiManager:wxAuiManager().
 setManager(#wx_ref{type=ThisT,ref=ThisRef},#wx_ref{type=MgrT,ref=MgrRef}) ->
   ?CLASS(ThisT,wxAuiManagerEvent),
@@ -62,7 +63,7 @@ getManager(#wx_ref{type=ThisT,ref=ThisRef}) ->
   <<ThisRef:32/?UI>>).
 
 %% @doc See <a href="http://www.wxwidgets.org/manuals/2.8.12/wx_wxauimanagerevent.html#wxauimanagereventsetpane">external documentation</a>.
--spec setPane(This, P) -> ok when
+-spec setPane(This, P) -> 'ok' when
 	This::wxAuiManagerEvent(), P::wxAuiPaneInfo:wxAuiPaneInfo().
 setPane(#wx_ref{type=ThisT,ref=ThisRef},#wx_ref{type=PT,ref=PRef}) ->
   ?CLASS(ThisT,wxAuiManagerEvent),
@@ -79,7 +80,7 @@ getPane(#wx_ref{type=ThisT,ref=ThisRef}) ->
   <<ThisRef:32/?UI>>).
 
 %% @doc See <a href="http://www.wxwidgets.org/manuals/2.8.12/wx_wxauimanagerevent.html#wxauimanagereventsetbutton">external documentation</a>.
--spec setButton(This, B) -> ok when
+-spec setButton(This, B) -> 'ok' when
 	This::wxAuiManagerEvent(), B::integer().
 setButton(#wx_ref{type=ThisT,ref=ThisRef},B)
  when is_integer(B) ->
@@ -96,7 +97,7 @@ getButton(#wx_ref{type=ThisT,ref=ThisRef}) ->
   <<ThisRef:32/?UI>>).
 
 %% @doc See <a href="http://www.wxwidgets.org/manuals/2.8.12/wx_wxauimanagerevent.html#wxauimanagereventsetdc">external documentation</a>.
--spec setDC(This, Pdc) -> ok when
+-spec setDC(This, Pdc) -> 'ok' when
 	This::wxAuiManagerEvent(), Pdc::wxDC:wxDC().
 setDC(#wx_ref{type=ThisT,ref=ThisRef},#wx_ref{type=PdcT,ref=PdcRef}) ->
   ?CLASS(ThisT,wxAuiManagerEvent),
@@ -113,7 +114,7 @@ getDC(#wx_ref{type=ThisT,ref=ThisRef}) ->
   <<ThisRef:32/?UI>>).
 
 %% @equiv veto(This, [])
--spec veto(This) -> ok when
+-spec veto(This) -> 'ok' when
 	This::wxAuiManagerEvent().
 
 veto(This)
@@ -121,9 +122,9 @@ veto(This)
   veto(This, []).
 
 %% @doc See <a href="http://www.wxwidgets.org/manuals/2.8.12/wx_wxauimanagerevent.html#wxauimanagereventveto">external documentation</a>.
--spec veto(This, [Option]) -> ok when
+-spec veto(This, [Option]) -> 'ok' when
 	This::wxAuiManagerEvent(),
-	Option :: {veto, boolean()}.
+	Option :: {'veto', boolean()}.
 veto(#wx_ref{type=ThisT,ref=ThisRef}, Options)
  when is_list(Options) ->
   ?CLASS(ThisT,wxAuiManagerEvent),
@@ -142,7 +143,7 @@ getVeto(#wx_ref{type=ThisT,ref=ThisRef}) ->
   <<ThisRef:32/?UI>>).
 
 %% @doc See <a href="http://www.wxwidgets.org/manuals/2.8.12/wx_wxauimanagerevent.html#wxauimanagereventsetcanveto">external documentation</a>.
--spec setCanVeto(This, Can_veto) -> ok when
+-spec setCanVeto(This, Can_veto) -> 'ok' when
 	This::wxAuiManagerEvent(), Can_veto::boolean().
 setCanVeto(#wx_ref{type=ThisT,ref=ThisRef},Can_veto)
  when is_boolean(Can_veto) ->

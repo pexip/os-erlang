@@ -1,18 +1,19 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2008-2013. All Rights Reserved.
+%% Copyright Ericsson AB 2008-2016. All Rights Reserved.
 %%
-%% The contents of this file are subject to the Erlang Public License,
-%% Version 1.1, (the "License"); you may not use this file except in
-%% compliance with the License. You should have received a copy of the
-%% Erlang Public License along with this software. If not, it can be
-%% retrieved online at http://www.erlang.org/.
+%% Licensed under the Apache License, Version 2.0 (the "License");
+%% you may not use this file except in compliance with the License.
+%% You may obtain a copy of the License at
 %%
-%% Software distributed under the License is distributed on an "AS IS"
-%% basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See
-%% the License for the specific language governing rights and limitations
-%% under the License.
+%%     http://www.apache.org/licenses/LICENSE-2.0
+%%
+%% Unless required by applicable law or agreed to in writing, software
+%% distributed under the License is distributed on an "AS IS" BASIS,
+%% WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+%% See the License for the specific language governing permissions and
+%% limitations under the License.
 %%
 %% %CopyrightEnd%
 %% This file is generated DO NOT EDIT
@@ -186,7 +187,7 @@ isPreview(#wx_ref{type=ThisT,ref=ThisRef}) ->
   <<ThisRef:32/?UI>>).
 
 %% @doc See <a href="http://www.wxwidgets.org/manuals/2.8.12/wx_wxprintout.html#wxprintoutfitthissizetopaper">external documentation</a>.
--spec fitThisSizeToPaper(This, ImageSize) -> ok when
+-spec fitThisSizeToPaper(This, ImageSize) -> 'ok' when
 	This::wxPrintout(), ImageSize::{W::integer(), H::integer()}.
 fitThisSizeToPaper(#wx_ref{type=ThisT,ref=ThisRef},{ImageSizeW,ImageSizeH})
  when is_integer(ImageSizeW),is_integer(ImageSizeH) ->
@@ -195,7 +196,7 @@ fitThisSizeToPaper(#wx_ref{type=ThisT,ref=ThisRef},{ImageSizeW,ImageSizeH})
   <<ThisRef:32/?UI,ImageSizeW:32/?UI,ImageSizeH:32/?UI>>).
 
 %% @doc See <a href="http://www.wxwidgets.org/manuals/2.8.12/wx_wxprintout.html#wxprintoutfitthissizetopage">external documentation</a>.
--spec fitThisSizeToPage(This, ImageSize) -> ok when
+-spec fitThisSizeToPage(This, ImageSize) -> 'ok' when
 	This::wxPrintout(), ImageSize::{W::integer(), H::integer()}.
 fitThisSizeToPage(#wx_ref{type=ThisT,ref=ThisRef},{ImageSizeW,ImageSizeH})
  when is_integer(ImageSizeW),is_integer(ImageSizeH) ->
@@ -204,7 +205,7 @@ fitThisSizeToPage(#wx_ref{type=ThisT,ref=ThisRef},{ImageSizeW,ImageSizeH})
   <<ThisRef:32/?UI,ImageSizeW:32/?UI,ImageSizeH:32/?UI>>).
 
 %% @doc See <a href="http://www.wxwidgets.org/manuals/2.8.12/wx_wxprintout.html#wxprintoutfitthissizetopagemargins">external documentation</a>.
--spec fitThisSizeToPageMargins(This, ImageSize, PageSetupData) -> ok when
+-spec fitThisSizeToPageMargins(This, ImageSize, PageSetupData) -> 'ok' when
 	This::wxPrintout(), ImageSize::{W::integer(), H::integer()}, PageSetupData::wxPageSetupDialogData:wxPageSetupDialogData().
 fitThisSizeToPageMargins(#wx_ref{type=ThisT,ref=ThisRef},{ImageSizeW,ImageSizeH},#wx_ref{type=PageSetupDataT,ref=PageSetupDataRef})
  when is_integer(ImageSizeW),is_integer(ImageSizeH) ->
@@ -214,7 +215,7 @@ fitThisSizeToPageMargins(#wx_ref{type=ThisT,ref=ThisRef},{ImageSizeW,ImageSizeH}
   <<ThisRef:32/?UI,ImageSizeW:32/?UI,ImageSizeH:32/?UI,PageSetupDataRef:32/?UI>>).
 
 %% @doc See <a href="http://www.wxwidgets.org/manuals/2.8.12/wx_wxprintout.html#wxprintoutmapscreensizetopaper">external documentation</a>.
--spec mapScreenSizeToPaper(This) -> ok when
+-spec mapScreenSizeToPaper(This) -> 'ok' when
 	This::wxPrintout().
 mapScreenSizeToPaper(#wx_ref{type=ThisT,ref=ThisRef}) ->
   ?CLASS(ThisT,wxPrintout),
@@ -222,7 +223,7 @@ mapScreenSizeToPaper(#wx_ref{type=ThisT,ref=ThisRef}) ->
   <<ThisRef:32/?UI>>).
 
 %% @doc See <a href="http://www.wxwidgets.org/manuals/2.8.12/wx_wxprintout.html#wxprintoutmapscreensizetopage">external documentation</a>.
--spec mapScreenSizeToPage(This) -> ok when
+-spec mapScreenSizeToPage(This) -> 'ok' when
 	This::wxPrintout().
 mapScreenSizeToPage(#wx_ref{type=ThisT,ref=ThisRef}) ->
   ?CLASS(ThisT,wxPrintout),
@@ -230,7 +231,7 @@ mapScreenSizeToPage(#wx_ref{type=ThisT,ref=ThisRef}) ->
   <<ThisRef:32/?UI>>).
 
 %% @doc See <a href="http://www.wxwidgets.org/manuals/2.8.12/wx_wxprintout.html#wxprintoutmapscreensizetopagemargins">external documentation</a>.
--spec mapScreenSizeToPageMargins(This, PageSetupData) -> ok when
+-spec mapScreenSizeToPageMargins(This, PageSetupData) -> 'ok' when
 	This::wxPrintout(), PageSetupData::wxPageSetupDialogData:wxPageSetupDialogData().
 mapScreenSizeToPageMargins(#wx_ref{type=ThisT,ref=ThisRef},#wx_ref{type=PageSetupDataT,ref=PageSetupDataRef}) ->
   ?CLASS(ThisT,wxPrintout),
@@ -239,7 +240,7 @@ mapScreenSizeToPageMargins(#wx_ref{type=ThisT,ref=ThisRef},#wx_ref{type=PageSetu
   <<ThisRef:32/?UI,PageSetupDataRef:32/?UI>>).
 
 %% @doc See <a href="http://www.wxwidgets.org/manuals/2.8.12/wx_wxprintout.html#wxprintoutmapscreensizetodevice">external documentation</a>.
--spec mapScreenSizeToDevice(This) -> ok when
+-spec mapScreenSizeToDevice(This) -> 'ok' when
 	This::wxPrintout().
 mapScreenSizeToDevice(#wx_ref{type=ThisT,ref=ThisRef}) ->
   ?CLASS(ThisT,wxPrintout),
@@ -272,7 +273,7 @@ getLogicalPageMarginsRect(#wx_ref{type=ThisT,ref=ThisRef},#wx_ref{type=PageSetup
   <<ThisRef:32/?UI,PageSetupDataRef:32/?UI>>).
 
 %% @doc See <a href="http://www.wxwidgets.org/manuals/2.8.12/wx_wxprintout.html#wxprintoutsetlogicalorigin">external documentation</a>.
--spec setLogicalOrigin(This, X, Y) -> ok when
+-spec setLogicalOrigin(This, X, Y) -> 'ok' when
 	This::wxPrintout(), X::integer(), Y::integer().
 setLogicalOrigin(#wx_ref{type=ThisT,ref=ThisRef},X,Y)
  when is_integer(X),is_integer(Y) ->
@@ -281,7 +282,7 @@ setLogicalOrigin(#wx_ref{type=ThisT,ref=ThisRef},X,Y)
   <<ThisRef:32/?UI,X:32/?UI,Y:32/?UI>>).
 
 %% @doc See <a href="http://www.wxwidgets.org/manuals/2.8.12/wx_wxprintout.html#wxprintoutoffsetlogicalorigin">external documentation</a>.
--spec offsetLogicalOrigin(This, Xoff, Yoff) -> ok when
+-spec offsetLogicalOrigin(This, Xoff, Yoff) -> 'ok' when
 	This::wxPrintout(), Xoff::integer(), Yoff::integer().
 offsetLogicalOrigin(#wx_ref{type=ThisT,ref=ThisRef},Xoff,Yoff)
  when is_integer(Xoff),is_integer(Yoff) ->
@@ -290,7 +291,7 @@ offsetLogicalOrigin(#wx_ref{type=ThisT,ref=ThisRef},Xoff,Yoff)
   <<ThisRef:32/?UI,Xoff:32/?UI,Yoff:32/?UI>>).
 
 %% @doc Destroys this object, do not use object again
--spec destroy(This::wxPrintout()) -> ok.
+-spec destroy(This::wxPrintout()) -> 'ok'.
 destroy(Obj=#wx_ref{type=Type}) ->
   ?CLASS(Type,wxPrintout),
   wxe_util:destroy(?DESTROY_OBJECT,Obj),

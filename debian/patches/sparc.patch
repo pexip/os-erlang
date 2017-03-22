@@ -7,7 +7,7 @@ sparc.patch by Jurij Smakov <jurij@wooyd.org>
 
 --- a/erts/configure.in
 +++ b/erts/configure.in
-@@ -662,7 +662,7 @@
+@@ -608,7 +608,7 @@
  fi
  
  case $chk_arch_ in
@@ -18,27 +18,22 @@ sparc.patch by Jurij Smakov <jurij@wooyd.org>
      i86pc)	ARCH=x86;;
 --- a/erts/emulator/beam/beam_emu.c
 +++ b/erts/emulator/beam/beam_emu.c
-@@ -989,16 +989,6 @@
+@@ -1086,19 +1086,11 @@
   * in registers.
   */
  
 -#if defined(__GNUC__) && defined(sparc) && !defined(DEBUG)
--#  define REG_x0 asm("%l0")
 -#  define REG_xregs asm("%l1")
 -#  define REG_htop asm("%l2")
 -#  define REG_stop asm("%l3")
 -#  define REG_I asm("%l4")
 -#  define REG_fcalls asm("%l5")
--#  define REG_tmp_arg1 asm("%l6")
--#  define REG_tmp_arg2 asm("%l7")
 -#else
- #  define REG_x0
  #  define REG_xregs
  #  define REG_htop
-@@ -1007,7 +997,6 @@
+ #  define REG_stop
+ #  define REG_I
  #  define REG_fcalls
- #  define REG_tmp_arg1
- #  define REG_tmp_arg2
 -#endif
  
  #ifdef USE_VM_PROBES

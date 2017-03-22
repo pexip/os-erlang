@@ -1,18 +1,19 @@
 /*
  * %CopyrightBegin%
  *
- * Copyright Ericsson AB 1999-2013. All Rights Reserved.
+ * Copyright Ericsson AB 1999-2016. All Rights Reserved.
  *
- * The contents of this file are subject to the Erlang Public License,
- * Version 1.1, (the "License"); you may not use this file except in
- * compliance with the License. You should have received a copy of the
- * Erlang Public License along with this software. If not, it can be
- * retrieved online at http://www.erlang.org/.
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
  *
- * Software distributed under the License is distributed on an "AS IS"
- * basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See
- * the License for the specific language governing rights and limitations
- * under the License.
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  *
  * %CopyrightEnd%
  */
@@ -88,22 +89,22 @@ BIF_RETTYPE not_1(BIF_ALIST_1)
 
 BIF_RETTYPE sgt_2(BIF_ALIST_2)
 {
-    BIF_RET(cmp_gt(BIF_ARG_1, BIF_ARG_2) ? am_true : am_false);
+    BIF_RET(CMP_GT(BIF_ARG_1, BIF_ARG_2) ? am_true : am_false);
 }
 
 BIF_RETTYPE sge_2(BIF_ALIST_2)
 {
-    BIF_RET(cmp_ge(BIF_ARG_1, BIF_ARG_2) ? am_true : am_false);
+    BIF_RET(CMP_GE(BIF_ARG_1, BIF_ARG_2) ? am_true : am_false);
 }
 
 BIF_RETTYPE slt_2(BIF_ALIST_2)
 {
-    BIF_RET(cmp_lt(BIF_ARG_1, BIF_ARG_2) ? am_true : am_false);
+    BIF_RET(CMP_LT(BIF_ARG_1, BIF_ARG_2) ? am_true : am_false);
 }
 
 BIF_RETTYPE sle_2(BIF_ALIST_2)
 {
-    BIF_RET(cmp_le(BIF_ARG_1, BIF_ARG_2) ? am_true : am_false);
+    BIF_RET(CMP_LE(BIF_ARG_1, BIF_ARG_2) ? am_true : am_false);
 }
 
 BIF_RETTYPE seq_2(BIF_ALIST_2)
@@ -113,7 +114,7 @@ BIF_RETTYPE seq_2(BIF_ALIST_2)
 
 BIF_RETTYPE seqeq_2(BIF_ALIST_2)
 {
-    BIF_RET(cmp_eq(BIF_ARG_1, BIF_ARG_2) ? am_true : am_false);
+    BIF_RET(CMP_EQ(BIF_ARG_1, BIF_ARG_2) ? am_true : am_false);
 }
 
 BIF_RETTYPE sneq_2(BIF_ALIST_2)
@@ -123,7 +124,7 @@ BIF_RETTYPE sneq_2(BIF_ALIST_2)
 
 BIF_RETTYPE sneqeq_2(BIF_ALIST_2)
 {
-    BIF_RET(cmp_ne(BIF_ARG_1, BIF_ARG_2) ? am_true : am_false);
+    BIF_RET(CMP_NE(BIF_ARG_1, BIF_ARG_2) ? am_true : am_false);
 }
 
 BIF_RETTYPE is_atom_1(BIF_ALIST_1)
@@ -257,7 +258,7 @@ Eterm erl_is_function(Process* p, Eterm arg1, Eterm arg2)
 	    BIF_RET(am_true);
 	}
     } else if (is_export(arg1)) {
-	Export* exp = (Export *) EXPAND_POINTER((export_val(arg1))[1]);
+	Export* exp = (Export *) (export_val(arg1)[1]);
 
 	if (exp->code[2] == (Uint) arity) {
 	    BIF_RET(am_true);

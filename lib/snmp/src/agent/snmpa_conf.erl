@@ -1,18 +1,19 @@
 %%
 %% %CopyrightBegin%
 %% 
-%% Copyright Ericsson AB 2006-2014. All Rights Reserved.
+%% Copyright Ericsson AB 2006-2016. All Rights Reserved.
 %% 
-%% The contents of this file are subject to the Erlang Public License,
-%% Version 1.1, (the "License"); you may not use this file except in
-%% compliance with the License. You should have received a copy of the
-%% Erlang Public License along with this software. If not, it can be
-%% retrieved online at http://www.erlang.org/.
-%% 
-%% Software distributed under the License is distributed on an "AS IS"
-%% basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See
-%% the License for the specific language governing rights and limitations
-%% under the License.
+%% Licensed under the Apache License, Version 2.0 (the "License");
+%% you may not use this file except in compliance with the License.
+%% You may obtain a copy of the License at
+%%
+%%     http://www.apache.org/licenses/LICENSE-2.0
+%%
+%% Unless required by applicable law or agreed to in writing, software
+%% distributed under the License is distributed on an "AS IS" BASIS,
+%% WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+%% See the License for the specific language governing permissions and
+%% limitations under the License.
 %% 
 %% %CopyrightEnd%
 %%
@@ -153,7 +154,7 @@ do_write_agent_conf(Fd, {intAgentMaxPacketSize = Tag, Val} ) ->
 do_write_agent_conf(Fd, {snmpEngineMaxMessageSize = Tag, Val} ) ->
     io:format(Fd, "{~w, ~w}.~n", [Tag, Val]);
 do_write_agent_conf(Fd, {snmpEngineID = Tag, Val} ) ->
-    io:format(Fd, "{~w, \"~s\"}.~n", [Tag, Val]);
+    io:format(Fd, "{~w, ~p}.~n", [Tag, Val]);
 do_write_agent_conf(_Fd, Crap) ->
     error({bad_agent_config, Crap}).
 
@@ -757,9 +758,9 @@ do_write_usm_conf(
    PrivP, PrivKeyC, OwnPrivKeyC,
    Public, AuthKey, PrivKey}) ->
     io:format(Fd, "{", []),
-    io:format(Fd, "\"~s\", ", [EngineID]),
-    io:format(Fd, "\"~s\", ", [UserName]),
-    io:format(Fd, "\"~s\", ", [SecName]),
+    io:format(Fd, "~p, ", [EngineID]),
+    io:format(Fd, "~p, ", [UserName]),
+    io:format(Fd, "~p, ", [SecName]),
     io:format(Fd, "~w, ",     [Clone]),
     io:format(Fd, "~w, ",     [AuthP]),
     do_write_usm2(Fd, AuthKeyC, ", "),
@@ -858,15 +859,15 @@ do_write_vacm_conf(
   {vacmSecurityToGroup,
    SecModel, SecName, GroupName}) ->
     io:format(
-      Fd, "{vacmSecurityToGroup, ~w, \"~s\", \"~s\"}.~n",
+      Fd, "{vacmSecurityToGroup, ~w, ~p, ~p}.~n",
       [SecModel, SecName, GroupName]);
 do_write_vacm_conf(
   Fd,
   {vacmAccess,
    GroupName, Prefix, SecModel, SecLevel, Match, RV, WV, NV}) ->
     io:format(
-      Fd, "{vacmAccess, \"~s\", \"~s\", ~w, ~w, ~w, "
-      "\"~s\", \"~s\", \"~s\"}.~n",
+      Fd, "{vacmAccess, ~p, ~p, ~w, ~w, ~w, "
+      "~p, ~p, ~p}.~n",
       [GroupName, Prefix, SecModel, SecLevel,
        Match, RV, WV, NV]);
 do_write_vacm_conf(
@@ -874,7 +875,7 @@ do_write_vacm_conf(
   {vacmViewTreeFamily,
    ViewIndex, ViewSubtree, ViewStatus, ViewMask}) ->
     io:format(
-      Fd, "{vacmViewTreeFamily, \"~s\", ~w, ~w, ~w}.~n",
+      Fd, "{vacmViewTreeFamily, ~p, ~w, ~w, ~w}.~n",
       [ViewIndex, ViewSubtree, ViewStatus, ViewMask]);
 do_write_vacm_conf(_Fd, Crap) ->
     error({bad_vacm_config, Crap}).

@@ -1,18 +1,19 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 1996-2014. All Rights Reserved.
+%% Copyright Ericsson AB 1996-2016. All Rights Reserved.
 %%
-%% The contents of this file are subject to the Erlang Public License,
-%% Version 1.1, (the "License"); you may not use this file except in
-%% compliance with the License. You should have received a copy of the
-%% Erlang Public License along with this software. If not, it can be
-%% retrieved online at http://www.erlang.org/.
+%% Licensed under the Apache License, Version 2.0 (the "License");
+%% you may not use this file except in compliance with the License.
+%% You may obtain a copy of the License at
 %%
-%% Software distributed under the License is distributed on an "AS IS"
-%% basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See
-%% the License for the specific language governing rights and limitations
-%% under the License.
+%%     http://www.apache.org/licenses/LICENSE-2.0
+%%
+%% Unless required by applicable law or agreed to in writing, software
+%% distributed under the License is distributed on an "AS IS" BASIS,
+%% WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+%% See the License for the specific language governing permissions and
+%% limitations under the License.
 %%
 %% %CopyrightEnd%
 %%
@@ -371,7 +372,7 @@ info(Tab) ->
       Item :: 'access' | 'auto_save' | 'bchunk_format'
             | 'hash' | 'file_size' | 'filename' | 'keypos' | 'memory'
             | 'no_keys' | 'no_objects' | 'no_slots' | 'owner' | 'ram_file'
-            | 'safe_fixed' | 'size' | 'type' | 'version',
+            | 'safe_fixed' | 'safe_fixed_monotonic_time' | 'size' | 'type' | 'version',
       Value :: term().
 
 info(Tab, owner) ->
@@ -1123,7 +1124,9 @@ repl({delayed_write, {Delay,Size} = C}, Defs)
     Defs#open_args{delayed_write = C};
 repl({estimated_no_objects, I}, Defs)  ->
     repl({min_no_slots, I}, Defs);
-repl({file, File}, Defs) ->
+repl({file, File}, Defs) when is_list(File) ->
+    Defs#open_args{file = File};
+repl({file, File}, Defs) when is_atom(File) ->
     Defs#open_args{file = to_list(File)};
 repl({keypos, P}, Defs) when is_integer(P), P > 0 ->
     Defs#open_args{keypos =P};
@@ -1288,7 +1291,15 @@ init(Parent, Server) ->
     open_file_loop(#head{parent = Parent, server = Server}).
 
 open_file_loop(Head) ->
-    open_file_loop(Head, 0).
+    %% The Dets server pretends the file is open before
+    %% internal_open() has been called, which means that unless the
+    %% internal_open message is applied first, other processes can
+    %% find the pid by calling dets_server:get_pid() and do things
+    %% before Head has been initialized properly.
+    receive
+        ?DETS_CALL(From, {internal_open, _Ref, _Args}=Op) ->
+            do_apply_op(Op, From, Head, 0)
+    end.
 
 open_file_loop(Head, N) when element(1, Head#head.update_mode) =:= error ->
     open_file_loop2(Head, N);
@@ -1963,7 +1974,9 @@ do_safe_fixtable(Head, Pid, true) ->
     case Head#head.fixed of 
 	false -> 
 	    link(Pid),
-	    Fixed = {erlang:now(), [{Pid, 1}]},
+	    MonTime = erlang:monotonic_time(),
+	    TimeOffset = erlang:time_offset(),
+	    Fixed = {{MonTime, TimeOffset}, [{Pid, 1}]},
 	    Ftab = dets_utils:get_freelists(Head),
 	    Head#head{fixed = Fixed, freelists = {Ftab, Ftab}};
 	{TimeStamp, Counters} ->
@@ -2090,7 +2103,22 @@ finfo(H, no_keys) ->
 finfo(H, no_slots) -> {H, (H#head.mod):no_slots(H)};
 finfo(H, pid) -> {H, self()};
 finfo(H, ram_file) -> {H, H#head.ram_file};
-finfo(H, safe_fixed) -> {H, H#head.fixed};
+finfo(H, safe_fixed) ->
+    {H,
+     case H#head.fixed of
+	 false ->
+	     false;
+	 {{FixMonTime, TimeOffset}, RefList} ->
+	     {make_timestamp(FixMonTime, TimeOffset), RefList}
+     end};
+finfo(H, safe_fixed_monotonic_time) ->
+    {H,
+     case H#head.fixed of
+	 false ->
+	     false;
+	 {{FixMonTime, _TimeOffset}, RefList} ->
+	     {FixMonTime, RefList}
+     end};
 finfo(H, size) -> 
     case catch write_cache(H) of
 	{H2, []} ->
@@ -2839,17 +2867,22 @@ fsck_try(Fd, Tab, FH, Fname, SlotNumbers, Version) ->
 
 tempfile(Fname) ->
     Tmp = lists:concat([Fname, ".TMP"]),
-    tempfile(Tmp, 10).
-
-tempfile(Tmp, 0) ->
-    Tmp;
-tempfile(Tmp, N) ->
     case file:delete(Tmp) of
-        {error, eacces} -> % 'dets_process_died' happened anyway... (W-nd-ws)
-            timer:sleep(1000),
-            tempfile(Tmp, N-1);
-        _ ->
-            Tmp
+        {error, _Reason} -> % typically enoent
+            ok;
+        ok ->
+            assure_no_file(Tmp)
+    end,
+    Tmp.
+
+assure_no_file(File) ->
+    case file:read_file_info(File) of
+        {ok, _FileInfo} ->
+            %% Wait for some other process to close the file:
+            timer:sleep(100),
+            assure_no_file(File);
+        {error, _} ->
+            ok
     end.
 
 %% -> {ok, NewHead} | {try_again, integer()} | Error
@@ -3083,14 +3116,14 @@ update_cache(Head, ToAdd) ->
 	    {Head1, Found, []};
 	Cache#cache.wrtime =:= undefined ->
 	    %% Empty cache. Schedule a delayed write.
-	    Now = now(), Me = self(),
+	    Now = time_now(), Me = self(),
 	    Call = ?DETS_CALL(Me, {delayed_write, Now}),
 	    erlang:send_after(Cache#cache.delay, Me, Call),
 	    {Head1#head{cache = NewCache#cache{wrtime = Now}}, Found, []};
 	Size0 =:= 0 ->
 	    %% Empty cache that has been written after the
 	    %% currently scheduled delayed write.
-	    {Head1#head{cache = NewCache#cache{wrtime = now()}}, Found, []};
+	    {Head1#head{cache = NewCache#cache{wrtime = time_now()}}, Found, []};
 	true ->
 	    %% Cache is not empty, delayed write has been scheduled.
 	    {Head1, Found, []}
@@ -3153,11 +3186,7 @@ delayed_write(Head, WrTime) ->
 		    Head#head{cache = NewCache};
 		true ->
 		    %% Yes, schedule a new delayed write.
-		    {MS1,S1,M1} = WrTime,
-		    {MS2,S2,M2} = LastWrTime,
-		    WrT = M1+1000000*(S1+1000000*MS1),
-		    LastWrT = M2+1000000*(S2+1000000*MS2),
-		    When = round((LastWrT - WrT)/1000), Me = self(),
+		    When = round((LastWrTime - WrTime)/1000), Me = self(),
 		    Call = ?DETS_CALL(Me, {delayed_write, LastWrTime}),
 		    erlang:send_after(When, Me, Call),
 		    Head
@@ -3268,6 +3297,19 @@ err(Error) ->
 	undefined  ->
 	    Error
     end.
+
+-compile({inline, [time_now/0]}).
+time_now() ->
+    erlang:monotonic_time(1000000).
+
+make_timestamp(MonTime, TimeOffset) ->
+    ErlangSystemTime = erlang:convert_time_unit(MonTime+TimeOffset,
+						native,
+						micro_seconds),
+    MegaSecs = ErlangSystemTime div 1000000000000,
+    Secs = ErlangSystemTime div 1000000 - MegaSecs*1000000,
+    MicroSecs = ErlangSystemTime rem 1000000,
+    {MegaSecs, Secs, MicroSecs}.
 
 %%%%%%%%%%%%%%%%%  DEBUG functions %%%%%%%%%%%%%%%%
 

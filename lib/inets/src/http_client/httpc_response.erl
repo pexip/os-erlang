@@ -1,18 +1,19 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2004-2013. All Rights Reserved.
+%% Copyright Ericsson AB 2004-2016. All Rights Reserved.
 %%
-%% The contents of this file are subject to the Erlang Public License,
-%% Version 1.1, (the "License"); you may not use this file except in
-%% compliance with the License. You should have received a copy of the
-%% Erlang Public License along with this software. If not, it can be
-%% retrieved online at http://www.erlang.org/.
+%% Licensed under the Apache License, Version 2.0 (the "License");
+%% you may not use this file except in compliance with the License.
+%% You may obtain a copy of the License at
 %%
-%% Software distributed under the License is distributed on an "AS IS"
-%% basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See
-%% the License for the specific language governing rights and limitations
-%% under the License.
+%%     http://www.apache.org/licenses/LICENSE-2.0
+%%
+%% Unless required by applicable law or agreed to in writing, software
+%% distributed under the License is distributed on an "AS IS" BASIS,
+%% WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+%% See the License for the specific language governing permissions and
+%% limitations under the License.
 %%
 %% %CopyrightEnd%
 %%
@@ -109,27 +110,30 @@ result(Response = {{_, 300, _}, _, _},
     redirect(Response, Request);
 
 result(Response = {{_, Code, _}, _, _}, 
-       Request = #request{settings = 
-			  #http_options{autoredirect = true},
-			  method = head}) when (Code =:= 301) orelse
-					       (Code =:= 302) orelse
-					       (Code =:= 303) orelse
-					       (Code =:= 307) ->
+       Request = #request{settings =
+              #http_options{autoredirect = true},
+              method = post}) when (Code =:= 301) orelse
+                           (Code =:= 302) orelse
+                           (Code =:= 303) ->
+    redirect(Response, Request#request{method = get});
+result(Response = {{_, Code, _}, _, _}, 
+       Request = #request{settings =
+              #http_options{autoredirect = true},
+              method = post}) when (Code =:= 307) ->
     redirect(Response, Request);
 result(Response = {{_, Code, _}, _, _}, 
        Request = #request{settings = 
 			  #http_options{autoredirect = true},
-			  method = get}) when (Code =:= 301) orelse 
-					      (Code =:= 302) orelse 
-					      (Code =:= 303) orelse 
-					      (Code =:= 307) ->
-    redirect(Response, Request);
-result(Response = {{_, 303, _}, _, _},
-       Request = #request{settings =
-			  #http_options{autoredirect = true},
-			  method = post}) ->
-    redirect(Response, Request#request{method = get});
-
+			  method = Method}) when (Code =:= 301) orelse
+					       (Code =:= 302) orelse
+					       (Code =:= 303) orelse
+					       (Code =:= 307) ->
+    case lists:member(Method, [get, head, options, trace]) of
+    true ->
+        redirect(Response, Request);
+    false ->
+        transparent(Response, Request)
+    end;
 
 result(Response = {{_,503,_}, _, _}, Request) ->
     status_service_unavailable(Response, Request);
@@ -327,7 +331,7 @@ status_service_unavailable(Response = {_, Headers, _}, Request) ->
 	undefined ->
 	    status_server_error_50x(Response, Request);
 	Time when (length(Time) < 3) -> % Wait only 99 s or less 
-	    NewTime = list_to_integer(Time) * 100, % time in ms
+	    NewTime = list_to_integer(Time) * 1000, % time in ms
 	    {_, Data} =  format_response(Response),
 	    {retry, {NewTime, Request}, Data};
 	_ ->

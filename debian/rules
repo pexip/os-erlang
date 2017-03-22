@@ -16,7 +16,6 @@ export HOME := $(ROOT_DIR)/debian
 -include ${ROOT_DIR}/lib/jinterface/vsn.mk
 -include ${ROOT_DIR}/lib/ic/vsn.mk
 -include ${ROOT_DIR}/lib/tools/vsn.mk
--include ${ROOT_DIR}/lib/webtool/vsn.mk
 -include ${ROOT_DIR}/lib/common_test/vsn.mk
 -include ${ROOT_DIR}/lib/snmp/vsn.mk
 -include ${ROOT_DIR}/lib/hipe/vsn.mk
@@ -77,7 +76,7 @@ GEN_OPT_FLGS=-O2 -fno-strict-aliasing
 TYPE=
 endif
 
-JAVA_OPTIONS=-source 1.5 -target 1.5
+JAVA_OPTIONS=-Xlint -source 1.7 -target 1.7
 
 JOBS=4
 
@@ -103,6 +102,7 @@ clean:
 	for i in `find ${ROOT_DIR} -name 'config.sub~'` ; do \
 	    mv $$i $${i%%\~} ; \
 	done
+	rm -f lib/configure.in
 	#
 	# Remove files, which were generated from templates
 	for i in debian/*.in debian/scripts/*.in ; do \
@@ -163,11 +163,8 @@ automake-stamp:
 	done
 	#
 	# Regenerate configure scripts using autoconf
-	for i in `find ${ROOT_DIR} -not \( -wholename '*/.pc' -prune \) \
-				    -a -name 'configure.in' -printf "%h\n"`; do \
-	    echo "autoconf'ing $${i}"; \
-	    (cd $${i} && autoconf) \
-	done
+	./otp_build autoconf
+	#
 	touch automake-stamp
 
 configure-hipe: configure-hipe-stamp
@@ -194,9 +191,11 @@ configure-hipe-stamp: automake-stamp
 		    --enable-sctp \
 		    $(CLOCK_GETTIME_OPT) \
 		    --enable-dynamic-ssl-lib \
+		    --with-ssl-rpath=no \
 		    --enable-ethread-pre-pentium4-compatibility \
 		    --enable-shared-zlib \
-		    --without-ssl-zlib
+		    --without-ssl-zlib \
+		    --disable-silent-rules
 	#
 	touch configure-hipe-stamp
 
@@ -224,9 +223,11 @@ configure-stnd-stamp: automake-stamp
 		    --enable-sctp \
 		    $(CLOCK_GETTIME_OPT) \
 		    --enable-dynamic-ssl-lib \
+		    --with-ssl-rpath=no \
 		    --enable-ethread-pre-pentium4-compatibility \
 		    --enable-shared-zlib \
-		    --without-ssl-zlib
+		    --without-ssl-zlib \
+		    --disable-silent-rules
 	#
 	touch configure-stnd-stamp
 
@@ -299,13 +300,13 @@ manpages-stamp: $(INSTALL_RULE)
 	dh_testdir
 	target=$$(basename $$(find make -type d |grep /)) ; \
 	PATH=$(ROOT_DIR)/bin:$$PATH ; \
-	for m in lib/diameter lib/snmp lib/dialyzer lib/erl_interface lib/common_test lib/webtool erts ; do \
+	for m in lib/diameter lib/snmp lib/dialyzer lib/erl_interface lib/common_test erts ; do \
 	    ${MAKE} -j ${JOBS} -C $$m/doc/src man ERL_TOP=$(ROOT_DIR) TARGET=$$target ; \
 	done
 	#
 	install -d $(MAN_DIR)/man1 $(MAN_DIR)/man3 ; \
 	install lib/dialyzer/doc/man3/*.3 $(MAN_DIR)/man3 ; \
-	for m in lib/diameter lib/snmp lib/erl_interface lib/common_test lib/webtool erts ; do \
+	for m in lib/diameter lib/snmp lib/erl_interface lib/common_test erts ; do \
 	    install $$m/doc/man1/*.1 $(MAN_DIR)/man1 ; \
 	done
 	#
@@ -313,9 +314,6 @@ manpages-stamp: $(INSTALL_RULE)
 	#
 	touch manpages-stamp
 
-# CC_R_FLAG and LD_R_FLAG are empty because Debian doesn't recommend
-# RPATH definition in binaries
-# CC_R_OPT is used in percept
 build-hipe: build-hipe-stamp
 build-hipe-stamp: configure-hipe-stamp
 	dh_testdir
@@ -377,7 +375,6 @@ build-stamp: $(INSTALL_RULE)
 	     	-e's/@EI_VSN@/$(EI_VSN)/g' \
 	     	-e's/@JINTERFACE_VSN@/$(JINTERFACE_VSN)/g' \
 	     	-e's/@IC_VSN@/$(IC_VSN)/g' \
-		-e's/@WEBTOOL_VSN@/$(WEBTOOL_VSN)/g' \
 		-e's/@COMMON_TEST_VSN@/$(COMMON_TEST_VSN)/g' \
 		-e's/@SNMP_VSN@/$(SNMP_VSN)/g' \
 		-e's/@DIAMETER_VSN@/$(DIAMETER_VSN)/g' \
@@ -504,22 +501,23 @@ binary-erlang-base-hipe: build-stamp
 
 binary: binary-indep binary-arch
 
-REL=17.3
-RELDIR=$(REL)
-DEB_REL=$(REL)-dfsg
+REL=19.2.1
+DEB_REL=$(REL)+dfsg
 
 get-orig-source:
 	CURDIR=`pwd` && TMPDIR=`mktemp -d /tmp/erlang.XXXXXX` && \
 	cd $$TMPDIR && \
-	wget -O - http://www.erlang.org/download/otp_src_$(REL).tar.gz | tar -zx && \
-	(cd otp_src_$(RELDIR) && \
+	wget -O - https://github.com/erlang/otp/archive/OTP-$(REL).tar.gz | tar -zx && \
+	(cd otp-OTP-$(REL) && \
 	 if ./otp_build save_bootstrap ; then \
 	    for f in `cat prebuilt.files` ; do rm -f $$f ; done \
 	 fi) && \
-	rm -rvf otp_src_$(RELDIR)/lib/*/doc/standard/ && \
-	rm -rvf otp_src_$(RELDIR)/lib/*/doc/archive/ && \
-	rm -rvf otp_src_$(RELDIR)/lib/common_test/priv/*.js && \
-	tar -Jcf $$CURDIR/erlang_$(DEB_REL).orig.tar.xz otp_src_$(RELDIR) && \
+	(cd otp-OTP-$(REL)/erts && autoheader) && \
+	(cd otp-OTP-$(REL)/lib/erl_interface && autoheader) && \
+	rm -rvf otp-OTP-$(REL)/lib/*/doc/standard/ && \
+	rm -rvf otp-OTP-$(REL)/lib/*/doc/archive/ && \
+	rm -rvf otp-OTP-$(REL)/lib/common_test/priv/*.js && \
+	tar -Jcf $$CURDIR/erlang_$(DEB_REL).orig.tar.xz otp-OTP-$(REL) && \
 	rm -rf $$TMPDIR
 
 .PHONY: clean automake install build build-arch build-indep

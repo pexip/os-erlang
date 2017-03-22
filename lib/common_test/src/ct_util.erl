@@ -1,18 +1,19 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2003-2013. All Rights Reserved.
+%% Copyright Ericsson AB 2003-2016. All Rights Reserved.
 %%
-%% The contents of this file are subject to the Erlang Public License,
-%% Version 1.1, (the "License"); you may not use this file except in
-%% compliance with the License. You should have received a copy of the
-%% Erlang Public License along with this software. If not, it can be
-%% retrieved online at http://www.erlang.org/.
+%% Licensed under the Apache License, Version 2.0 (the "License");
+%% you may not use this file except in compliance with the License.
+%% You may obtain a copy of the License at
 %%
-%% Software distributed under the License is distributed on an "AS IS"
-%% basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See
-%% the License for the specific language governing rights and limitations
-%% under the License.
+%%     http://www.apache.org/licenses/LICENSE-2.0
+%%
+%% Unless required by applicable law or agreed to in writing, software
+%% distributed under the License is distributed on an "AS IS" BASIS,
+%% WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+%% See the License for the specific language governing permissions and
+%% limitations under the License.
 %%
 %% %CopyrightEnd%
 %%
@@ -130,14 +131,14 @@ do_start(Parent, Mode, LogDir, Verbosity) ->
     create_table(?suite_table,#suite_data.key),
 
     create_table(?verbosity_table,1),
-    [ets:insert(?verbosity_table,{Cat,Lvl}) || {Cat,Lvl} <- Verbosity],
+    _ = [ets:insert(?verbosity_table,{Cat,Lvl}) || {Cat,Lvl} <- Verbosity],
 
     {ok,StartDir} = file:get_cwd(),
     case file:set_cwd(LogDir) of
 	ok -> ok;
 	E -> exit(E)
     end,
-    DoExit = fun(Reason) -> file:set_cwd(StartDir), exit(Reason) end,
+    DoExit = fun(Reason) -> ok = file:set_cwd(StartDir), exit(Reason) end,
     Opts = case read_opts() of
 	       {ok,Opts1} ->
 		   Opts1;
@@ -168,7 +169,7 @@ do_start(Parent, Mode, LogDir, Verbosity) ->
     end,
 
     %% add user event handlers
-    case lists:keysearch(event_handler,1,Opts) of
+    _ = case lists:keysearch(event_handler,1,Opts) of
 	{value,{_,Handlers}} ->
 	    Add = fun({H,Args}) ->
 			  case catch gen_event:add_handler(?CT_EVMGR_REF,H,Args) of
@@ -187,6 +188,8 @@ do_start(Parent, Mode, LogDir, Verbosity) ->
 	    ok
     end,
 
+    ct_default_gl:start_link(group_leader()),
+
     {StartTime,TestLogDir} = ct_logs:init(Mode, Verbosity),
 
     ct_event:notify(#event{name=test_start,
@@ -194,7 +197,7 @@ do_start(Parent, Mode, LogDir, Verbosity) ->
 			   data={StartTime,
 				 lists:flatten(TestLogDir)}}),
     %% Initialize ct_hooks
-    try ct_hooks:init(Opts) of
+    _ = try ct_hooks:init(Opts) of
 	ok ->
 	    Parent ! {self(),started};
 	{fail,CTHReason} ->
@@ -227,7 +230,8 @@ create_table(TableName,KeyPos) ->
     create_table(TableName,set,KeyPos).
 create_table(TableName,Type,KeyPos) ->
     catch ets:delete(TableName),
-    ets:new(TableName,[Type,named_table,public,{keypos,KeyPos}]).
+    _ = ets:new(TableName,[Type,named_table,public,{keypos,KeyPos}]),
+    ok.
 
 read_opts() ->
     case file:consult(ct_run:variables_file_name("./")) of
@@ -458,6 +462,7 @@ loop(Mode,TestData,StartDir) ->
 		    error:badarg -> []
 		end,
 	    ct_hooks:terminate(Callbacks),
+
 	    close_connections(ets:tab2list(?conn_table)),
 	    ets:delete(?conn_table),
 	    ets:delete(?board_table),
@@ -471,7 +476,8 @@ loop(Mode,TestData,StartDir) ->
 	    ct_logs:close(Info, StartDir),
 	    ct_event:stop(),
 	    ct_config:stop(),
-	    file:set_cwd(StartDir),
+	    ct_default_gl:stop(),
+	    ok = file:set_cwd(StartDir),
 	    return(From, Info);
 	{Ref, _Msg} when is_reference(Ref) ->
 	    %% This clause is used when doing cast operations.
@@ -484,6 +490,8 @@ loop(Mode,TestData,StartDir) ->
 	{'EXIT',Pid,Reason} ->
 	    case ets:lookup(?conn_table,Pid) of
 		[#conn{address=A,callback=CB}] ->
+		    ErrorStr = io_lib:format("~tp", [Reason]),
+		    ErrorHtml = ct_logs:escape_chars(ErrorStr),
 		    %% A connection crashed - remove the connection but don't die
 		    ct_logs:tc_log_async(ct_error_notify,
 					 ?MAX_IMPORTANCE,
@@ -491,8 +499,8 @@ loop(Mode,TestData,StartDir) ->
 					 "Connection process died: "
 					 "Pid: ~w, Address: ~p, "
 					 "Callback: ~w\n"
-					 "Reason: ~p\n\n",
-					 [Pid,A,CB,Reason]),
+					 "Reason: ~ts\n\n",
+					 [Pid,A,CB,ErrorHtml]),
 		    catch CB:close(Pid),
 		    %% in case CB:close failed to do this:
 		    unregister_connection(Pid),
@@ -501,7 +509,7 @@ loop(Mode,TestData,StartDir) ->
 		    %% Let process crash in case of error, this shouldn't happen!
 		    io:format("\n\nct_util_server got EXIT "
 			      "from ~w: ~p\n\n", [Pid,Reason]),
-		    file:set_cwd(StartDir),
+		    ok = file:set_cwd(StartDir),
 		    exit(Reason)
 	    end
     end.
@@ -921,7 +929,8 @@ warn_duplicates(Suites) ->
 		    [] ->
 			ok;
 		    _ ->
-			io:format(user,"~nWARNING! Deprecated function: ~w:sequences/0.~n"
+			io:format(?def_gl,
+				  "~nWARNING! Deprecated function: ~w:sequences/0.~n"
 				  "         Use group with sequence property instead.~n",[Mod])
 		end
 	end,
@@ -975,12 +984,12 @@ get_profile_data(Profile, Key, StartDir) ->
 	end,
     case Result of
 	{error,enoent} when Profile /= default ->
-	    io:format(user, "~nERROR! Missing profile file ~p~n", [File]),
+	    io:format(?def_gl, "~nERROR! Missing profile file ~p~n", [File]),
 	    undefined;
 	{error,enoent} when Profile == default ->
 	    undefined;
 	{error,Reason} ->
-	    io:format(user,"~nERROR! Error in profile file ~p: ~p~n",
+	    io:format(?def_gl,"~nERROR! Error in profile file ~p: ~p~n",
 		      [WhichFile,Reason]),
 	    undefined;
 	{ok,Data} ->
@@ -990,7 +999,7 @@ get_profile_data(Profile, Key, StartDir) ->
 			_ when is_list(Data) ->
 			    Data;
 			_ ->
-			    io:format(user,
+			    io:format(?def_gl,
 				      "~nERROR! Invalid profile data in ~p~n",
 				      [WhichFile]),
 			    []
@@ -1031,10 +1040,12 @@ call(Msg, Timeout) ->
     end.
 
 return({To,Ref},Result) ->
-    To ! {Ref, Result}.
+    To ! {Ref, Result},
+    ok.
 
 cast(Msg) ->
-    ct_util_server ! {Msg, {ct_util_server, make_ref()}}.
+    ct_util_server ! {Msg, {ct_util_server, make_ref()}},
+    ok.
 
 seconds(T) ->
     test_server:seconds(T).
@@ -1070,15 +1081,15 @@ abs_name2([],Acc) ->
 open_url(iexplore, Args, URL) ->
     {ok,R} = win32reg:open([read]),
     ok = win32reg:change_key(R,"applications\\iexplore.exe\\shell\\open\\command"),
-    case win32reg:values(R) of
+    _ = case win32reg:values(R) of
 	{ok, Paths} ->
 	    Path = proplists:get_value(default, Paths),
 	    [Cmd | _] = string:tokens(Path, "%"),
 	    Cmd1 = Cmd ++ " " ++ Args ++ " " ++ URL,
-	    io:format(user, "~nOpening ~ts with command:~n  ~ts~n", [URL,Cmd1]),
+	    io:format(?def_gl, "~nOpening ~ts with command:~n  ~ts~n", [URL,Cmd1]),
 	    open_port({spawn,Cmd1}, []);
 	_ ->
-	    io:format("~nNo path to iexplore.exe~n",[])
+	    io:format(?def_gl, "~nNo path to iexplore.exe~n",[])
     end,
     win32reg:close(R),
     ok;
@@ -1088,6 +1099,6 @@ open_url(Prog, Args, URL) ->
 		 is_list(Prog) -> Prog
 	      end,
     Cmd = ProgStr ++ " " ++ Args ++ " " ++ URL,
-    io:format(user, "~nOpening ~ts with command:~n  ~ts~n", [URL,Cmd]),
+    io:format(?def_gl, "~nOpening ~ts with command:~n  ~ts~n", [URL,Cmd]),
     open_port({spawn,Cmd},[]),
     ok.

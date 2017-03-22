@@ -1,18 +1,19 @@
 /*
  * %CopyrightBegin%
  *
- * Copyright Ericsson AB 1996-2014. All Rights Reserved.
+ * Copyright Ericsson AB 1996-2016. All Rights Reserved.
  *
- * The contents of this file are subject to the Erlang Public License,
- * Version 1.1, (the "License"); you may not use this file except in
- * compliance with the License. You should have received a copy of the
- * Erlang Public License along with this software. If not, it can be
- * retrieved online at http://www.erlang.org/.
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
  *
- * Software distributed under the License is distributed on an "AS IS"
- * basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See
- * the License for the specific language governing rights and limitations
- * under the License.
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  *
  * %CopyrightEnd%
  */
@@ -34,13 +35,15 @@
 #include "register.h"
 #include "erl_fun.h"
 #include "erl_node_tables.h"
-#include "benchmark.h"
 #include "erl_process.h"
 #include "erl_sys_driver.h"
 #include "erl_debug.h"
 #include "error.h"
 #include "erl_utils.h"
 #include "erl_port.h"
+#include "erl_gc.h"
+
+struct enif_func_t;
 
 struct enif_environment_t /* ErlNifEnv */
 {
@@ -51,14 +54,29 @@ struct enif_environment_t /* ErlNifEnv */
     ErlHeapFragment* heap_frag;
     int fpe_was_unmasked;
     struct enif_tmp_obj_t* tmp_obj_list;
+    int exception_thrown; /* boolean */
+    Process *tracee;
+    int exiting; /* boolean (dirty nifs might return in exiting state) */
 };
 extern void erts_pre_nif(struct enif_environment_t*, Process*,
-			 struct erl_module_nif*);
+			 struct erl_module_nif*, Process* tracee);
 extern void erts_post_nif(struct enif_environment_t* env);
+#ifdef ERTS_DIRTY_SCHEDULERS
+extern void erts_pre_dirty_nif(ErtsSchedulerData *,
+			       struct enif_environment_t*, Process*,
+			       struct erl_module_nif*);
+extern void erts_post_dirty_nif(struct enif_environment_t* env);
+#endif
 extern Eterm erts_nif_taints(Process* p);
-extern void erts_print_nif_taints(int to, void* to_arg);
+extern void erts_print_nif_taints(fmtfn_t to, void* to_arg);
 void erts_unload_nif(struct erl_module_nif* nif);
 extern void erl_nif_init(void);
+extern int erts_nif_get_funcs(struct erl_module_nif*,
+                              struct enif_func_t **funcs);
+extern Eterm erts_nif_call_function(Process *p, Process *tracee,
+                                    struct erl_module_nif*,
+                                    struct enif_func_t *,
+                                    int argc, Eterm *argv);
 
 /* Driver handle (wrapper for old plain handle) */
 #define ERL_DE_OK      0
@@ -160,6 +178,7 @@ struct erts_driver_t_ {
     void (*ready_async)(ErlDrvData drv_data, ErlDrvThreadData thread_data); /* Might be NULL */ 
     void (*process_exit)(ErlDrvData drv_data, ErlDrvMonitor *monitor);
     void (*stop_select)(ErlDrvEvent event, void*); /* Might be NULL */
+    void (*emergency_close)(ErlDrvData drv_data);  /* Might be NULL */
 };
 
 extern erts_driver_t *driver_list;
@@ -227,8 +246,22 @@ typedef struct {
     ERTS_INTERNAL_BINARY_FIELDS
     SWord orig_size;
     void (*destructor)(Binary *);
-    char magic_bin_data[1];
+    union {
+        struct {
+            ERTS_BINARY_STRUCT_ALIGNMENT
+            char data[1];
+        } aligned;
+        struct {
+            char data[1];
+        } unaligned;
+    } u;
 } ErtsMagicBinary;
+
+#ifdef ARCH_32
+#define ERTS_MAGIC_BIN_BYTES_TO_ALIGN 4
+#else
+#define ERTS_MAGIC_BIN_BYTES_TO_ALIGN 0
+#endif
 
 typedef union {
     Binary binary;
@@ -249,15 +282,30 @@ typedef union {
 #define ERTS_MAGIC_BIN_DESTRUCTOR(BP) \
   ((ErtsBinary *) (BP))->magic_binary.destructor
 #define ERTS_MAGIC_BIN_DATA(BP) \
-  ((void *) ((ErtsBinary *) (BP))->magic_binary.magic_bin_data)
-#define ERTS_MAGIC_BIN_DATA_SIZE(BP) \
-  ((BP)->orig_size - sizeof(void (*)(Binary *)))
+  ((void *) ((ErtsBinary *) (BP))->magic_binary.u.aligned.data)
+#define ERTS_MAGIC_DATA_OFFSET \
+  (offsetof(ErtsMagicBinary,u.aligned.data) - offsetof(Binary,orig_bytes))
 #define ERTS_MAGIC_BIN_ORIG_SIZE(Sz) \
-  (sizeof(void (*)(Binary *)) + (Sz))
+  (ERTS_MAGIC_DATA_OFFSET + (Sz))
 #define ERTS_MAGIC_BIN_SIZE(Sz) \
-  (offsetof(ErtsMagicBinary,magic_bin_data) + (Sz))
-#define ERTS_MAGIC_BIN_FROM_DATA(DATA) \
-  ((ErtsBinary*)((char*)(DATA) - offsetof(ErtsMagicBinary,magic_bin_data)))
+  (offsetof(ErtsMagicBinary,u.aligned.data) + (Sz))
+
+/* On 32-bit arch these macro variants will save memory
+   by not forcing 8-byte alignment for the magic payload.
+*/
+#define ERTS_MAGIC_BIN_UNALIGNED_DATA(BP) \
+  ((void *) ((ErtsBinary *) (BP))->magic_binary.u.unaligned.data)
+#define ERTS_MAGIC_UNALIGNED_DATA_OFFSET \
+  (offsetof(ErtsMagicBinary,u.unaligned.data) - offsetof(Binary,orig_bytes))
+#define ERTS_MAGIC_BIN_UNALIGNED_DATA_SIZE(BP) \
+  ((BP)->orig_size - ERTS_MAGIC_UNALIGNED_DATA_OFFSET)
+#define ERTS_MAGIC_BIN_UNALIGNED_ORIG_SIZE(Sz) \
+  (ERTS_MAGIC_UNALIGNED_DATA_OFFSET + (Sz))
+#define ERTS_MAGIC_BIN_UNALIGNED_SIZE(Sz) \
+  (offsetof(ErtsMagicBinary,u.unaligned.data) + (Sz))
+#define ERTS_MAGIC_BIN_FROM_UNALIGNED_DATA(DATA) \
+  ((ErtsBinary*)((char*)(DATA) - offsetof(ErtsMagicBinary,u.unaligned.data)))
+
 
 #define Binary2ErlDrvBinary(B) (&((ErtsBinary *) (B))->driver.binary)
 #define ErlDrvBinary2Binary(D) ((Binary *) \
@@ -277,9 +325,6 @@ typedef union {
 typedef struct proc_bin {
     Eterm thing_word;		/* Subtag REFC_BINARY_SUBTAG. */
     Uint size;			/* Binary size in bytes. */
-#if HALFWORD_HEAP
-    void* dummy_ptr_padding__;
-#endif
     struct erl_off_heap_header *next;
     Binary *val;		/* Pointer to Binary structure. */
     byte *bytes;		/* Pointer to the actual data bytes. */
@@ -346,13 +391,11 @@ extern Uint display_items;	/* no of items to display in traces etc */
 extern int erts_backtrace_depth;
 extern erts_smp_atomic32_t erts_max_gen_gcs;
 
-extern int erts_disable_tolerant_timeofday;
-
 extern int bif_reductions;      /* reductions + fcalls (when doing call_bif) */
 extern int stackdump_on_exit;
 
 /*
- * Here is an implementation of a lightweiht stack.
+ * Here is an implementation of a lightweight stack.
  *
  * Use it like this:
  *
@@ -370,16 +413,17 @@ extern int stackdump_on_exit;
  * DESTROY_ESTACK(Stack)
  */
 
-typedef struct {
+typedef struct ErtsEStack_ {
     Eterm* start;
     Eterm* sp;
     Eterm* end;
+    Eterm* edefault;
     ErtsAlcType_t alloc_type;
 }ErtsEStack;
 
 #define DEF_ESTACK_SIZE (16)
 
-void erl_grow_estack(ErtsEStack*, Eterm* def_stack);
+void erl_grow_estack(ErtsEStack*, Uint need);
 #define ESTK_CONCAT(a,b) a##b
 #define ESTK_DEF_STACK(s) ESTK_CONCAT(s,_default_estack)
 
@@ -389,22 +433,23 @@ void erl_grow_estack(ErtsEStack*, Eterm* def_stack);
         ESTK_DEF_STACK(s),  /* start */ 		\
         ESTK_DEF_STACK(s),  /* sp */			\
         ESTK_DEF_STACK(s) + DEF_ESTACK_SIZE, /* end */	\
+        ESTK_DEF_STACK(s),  /* default */		\
         ERTS_ALC_T_ESTACK /* alloc_type */		\
     }
 
 #define ESTACK_CHANGE_ALLOCATOR(s,t)					\
 do {									\
-    if (s.start != ESTK_DEF_STACK(s)) {					\
-	erl_exit(1, "Internal error - trying to change allocator "	\
+    if ((s).start != ESTK_DEF_STACK(s)) {				\
+	erts_exit(ERTS_ERROR_EXIT, "Internal error - trying to change allocator "	\
 		 "type of active estack\n");				\
     }									\
-    s.alloc_type = (t);							\
+    (s).alloc_type = (t);						\
  } while (0)
 
 #define DESTROY_ESTACK(s)				\
 do {							\
-    if (s.start != ESTK_DEF_STACK(s)) {			\
-	erts_free(s.alloc_type, s.start); 		\
+    if ((s).start != ESTK_DEF_STACK(s)) {		\
+	erts_free((s).alloc_type, (s).start); 		\
     }							\
 } while(0)
 
@@ -415,16 +460,17 @@ do {							\
  */
 #define ESTACK_SAVE(s,dst)\
 do {\
-    if (s.start == ESTK_DEF_STACK(s)) {\
+    if ((s).start == ESTK_DEF_STACK(s)) {\
 	UWord _wsz = ESTACK_COUNT(s);\
-	(dst)->start = erts_alloc(s.alloc_type,\
+	(dst)->start = erts_alloc((s).alloc_type,\
 				  DEF_ESTACK_SIZE * sizeof(Eterm));\
-	memcpy((dst)->start, s.start,_wsz*sizeof(Eterm));\
+	memcpy((dst)->start, (s).start,_wsz*sizeof(Eterm));\
 	(dst)->sp = (dst)->start + _wsz;\
 	(dst)->end = (dst)->start + DEF_ESTACK_SIZE;\
-	(dst)->alloc_type = s.alloc_type;\
+        (dst)->edefault = NULL;\
+	(dst)->alloc_type = (s).alloc_type;\
     } else\
-        *(dst) = s;\
+        *(dst) = (s);\
  } while (0)
 
 #define DESTROY_SAVED_ESTACK(estack)\
@@ -443,89 +489,138 @@ do {\
  */
 #define ESTACK_RESTORE(s, src)			\
 do {						\
-    ASSERT(s.start == ESTK_DEF_STACK(s));	\
-    s = *(src);  /* struct copy */		\
+    ASSERT((s).start == ESTK_DEF_STACK(s));	\
+    (s) = *(src);  /* struct copy */		\
     (src)->start = NULL;			\
-    ASSERT(s.sp >= s.start);			\
-    ASSERT(s.sp <= s.end);			\
+    ASSERT((s).sp >= (s).start);		\
+    ASSERT((s).sp <= (s).end);			\
 } while (0)
 
-#define ESTACK_IS_STATIC(s) (s.start == ESTK_DEF_STACK(s)))
+#define ESTACK_IS_STATIC(s) ((s).start == ESTK_DEF_STACK(s))
 
-#define ESTACK_PUSH(s, x)				\
-do {							\
-    if (s.sp == s.end) {				\
-	erl_grow_estack(&s, ESTK_DEF_STACK(s)); 	\
-    }							\
-    *s.sp++ = (x);					\
+#define ESTACK_PUSH(s, x)			\
+do {						\
+    if ((s).sp == (s).end) {			\
+	erl_grow_estack(&(s), 1); 		\
+    }						\
+    *(s).sp++ = (x);				\
 } while(0)
 
 #define ESTACK_PUSH2(s, x, y)			\
 do {						\
-    if (s.sp > s.end - 2) {			\
-	erl_grow_estack(&s, ESTK_DEF_STACK(s)); \
+    if ((s).sp > (s).end - 2) {			\
+	erl_grow_estack(&(s), 2);		\
     }						\
-    *s.sp++ = (x);				\
-    *s.sp++ = (y);				\
+    *(s).sp++ = (x);				\
+    *(s).sp++ = (y);				\
 } while(0)
 
 #define ESTACK_PUSH3(s, x, y, z)		\
 do {						\
-    if (s.sp > s.end - 3) {			\
-	erl_grow_estack(&s, ESTK_DEF_STACK(s)); \
+    if ((s).sp > (s).end - 3) {			\
+	erl_grow_estack(&s, 3); 		\
     }						\
-    *s.sp++ = (x);				\
-    *s.sp++ = (y);				\
-    *s.sp++ = (z);				\
+    *(s).sp++ = (x);				\
+    *(s).sp++ = (y);				\
+    *(s).sp++ = (z);				\
 } while(0)
 
-#define ESTACK_COUNT(s) (s.sp - s.start)
-#define ESTACK_ISEMPTY(s) (s.sp == s.start)
-#define ESTACK_POP(s) (*(--s.sp))
+#define ESTACK_PUSH4(s, E1, E2, E3, E4)		\
+do {						\
+    if ((s).sp > (s).end - 4) {			\
+	erl_grow_estack(&s, 4);                 \
+    }						\
+    *(s).sp++ = (E1);				\
+    *(s).sp++ = (E2);				\
+    *(s).sp++ = (E3);				\
+    *(s).sp++ = (E4);				\
+} while(0)
+
+#define ESTACK_RESERVE(s, push_cnt)             \
+do {					        \
+    if ((s).sp > (s).end - (push_cnt)) {	\
+	erl_grow_estack(&(s), (push_cnt));	\
+    }					        \
+} while(0)
+
+/* Must be preceded by ESTACK_RESERVE */
+#define ESTACK_FAST_PUSH(s, x)				\
+do {							\
+    ASSERT((s).sp < (s).end);                           \
+    *s.sp++ = (x);					\
+} while(0)
+
+#define ESTACK_COUNT(s) ((s).sp - (s).start)
+#define ESTACK_ISEMPTY(s) ((s).sp == (s).start)
+#define ESTACK_POP(s) (*(--(s).sp))
 
 
 /*
  * WSTACK: same as ESTACK but with UWord instead of Eterm
  */
 
-typedef struct {
+typedef struct ErtsWStack_ {
     UWord* wstart;
     UWord* wsp;
     UWord* wend;
+    UWord* wdefault;
     ErtsAlcType_t alloc_type;
 }ErtsWStack;
 
 #define DEF_WSTACK_SIZE (16)
 
-void erl_grow_wstack(ErtsWStack*, UWord* def_stack);
+void erl_grow_wstack(ErtsWStack*, Uint need);
 #define WSTK_CONCAT(a,b) a##b
 #define WSTK_DEF_STACK(s) WSTK_CONCAT(s,_default_wstack)
 
-#define DECLARE_WSTACK(s)				\
+#define WSTACK_DECLARE(s)				\
     UWord WSTK_DEF_STACK(s)[DEF_WSTACK_SIZE];		\
     ErtsWStack s = {					\
         WSTK_DEF_STACK(s),  /* wstart */ 		\
         WSTK_DEF_STACK(s),  /* wsp */			\
         WSTK_DEF_STACK(s) + DEF_WSTACK_SIZE, /* wend */	\
+        WSTK_DEF_STACK(s),  /* wdflt */ 		\
         ERTS_ALC_T_ESTACK /* alloc_type */		\
     }
+#define DECLARE_WSTACK WSTACK_DECLARE
+
+typedef struct ErtsDynamicWStack_ {
+    UWord default_stack[DEF_WSTACK_SIZE];
+    ErtsWStack ws;
+}ErtsDynamicWStack;
+
+#define WSTACK_INIT(dwsp, ALC_TYPE)                               \
+do {	 	                                                  \
+    (dwsp)->ws.wstart   = (dwsp)->default_stack;                  \
+    (dwsp)->ws.wsp      = (dwsp)->default_stack;                  \
+    (dwsp)->ws.wend     = (dwsp)->default_stack + DEF_WSTACK_SIZE;\
+    (dwsp)->ws.wdefault = (dwsp)->default_stack;                  \
+    (dwsp)->ws.alloc_type = ALC_TYPE;                             \
+} while (0)
 
 #define WSTACK_CHANGE_ALLOCATOR(s,t)					\
 do {									\
     if (s.wstart != WSTK_DEF_STACK(s)) {				\
-	erl_exit(1, "Internal error - trying to change allocator "	\
+	erts_exit(ERTS_ERROR_EXIT, "Internal error - trying to change allocator "	\
 		 "type of active wstack\n");				\
     }									\
     s.alloc_type = (t);							\
  } while (0)
 
-#define DESTROY_WSTACK(s)				\
+#define WSTACK_DESTROY(s)				\
 do {							\
-    if (s.wstart != WSTK_DEF_STACK(s)) {		\
+    if (s.wstart != s.wdefault) {		        \
 	erts_free(s.alloc_type, s.wstart); 		\
     }							\
 } while(0)
+#define DESTROY_WSTACK WSTACK_DESTROY
 
+#define WSTACK_DEBUG(s) \
+    do { \
+	fprintf(stderr, "wstack size   = %ld\r\n", s.wsp - s.wstart); \
+	fprintf(stderr, "wstack wstart = %p\r\n", s.wstart); \
+	fprintf(stderr, "wstack wsp    = %p\r\n", s.wsp); \
+    } while(0)
 
 /*
  * Do not free the stack after this, it may have pointers into what
@@ -540,6 +635,7 @@ do {\
 	memcpy((dst)->wstart, s.wstart,_wsz*sizeof(UWord));\
 	(dst)->wsp = (dst)->wstart + _wsz;\
 	(dst)->wend = (dst)->wstart + DEF_WSTACK_SIZE;\
+        (dst)->wdefault = NULL;\
 	(dst)->alloc_type = s.alloc_type;\
     } else\
         *(dst) = s;\
@@ -568,12 +664,12 @@ do {						\
     ASSERT(s.wsp <= s.wend);			\
 } while (0)
 
-#define WSTACK_IS_STATIC(s) (s.wstart == WSTK_DEF_STACK(s)))
+#define WSTACK_IS_STATIC(s) (s.wstart == WSTK_DEF_STACK(s))
 
 #define WSTACK_PUSH(s, x)				\
 do {							\
     if (s.wsp == s.wend) {				\
-	erl_grow_wstack(&s, WSTK_DEF_STACK(s)); 	\
+	erl_grow_wstack(&s, 1); 	                \
     }							\
     *s.wsp++ = (x);					\
 } while(0)
@@ -581,7 +677,7 @@ do {							\
 #define WSTACK_PUSH2(s, x, y)			\
 do {						\
     if (s.wsp > s.wend - 2) {			\
-	erl_grow_wstack(&s, WSTK_DEF_STACK(s)); \
+	erl_grow_wstack(&s, 2);                 \
     }						\
     *s.wsp++ = (x);				\
     *s.wsp++ = (y);				\
@@ -589,24 +685,274 @@ do {						\
 
 #define WSTACK_PUSH3(s, x, y, z)		\
 do {						\
-    if (s.wsp > s.wend - 3) {	\
-	erl_grow_wstack(&s, WSTK_DEF_STACK(s)); \
+    if (s.wsp > s.wend - 3) {	                \
+	erl_grow_wstack(&s, 3);                 \
     }						\
     *s.wsp++ = (x);				\
     *s.wsp++ = (y);				\
     *s.wsp++ = (z);				\
 } while(0)
 
+#define WSTACK_PUSH4(s, A1, A2, A3, A4)		\
+do {						\
+    if (s.wsp > s.wend - 4) {	                \
+	erl_grow_wstack(&s, 4);                 \
+    }						\
+    *s.wsp++ = (A1);				\
+    *s.wsp++ = (A2);				\
+    *s.wsp++ = (A3);				\
+    *s.wsp++ = (A4);				\
+} while(0)
+
+#define WSTACK_PUSH5(s, A1, A2, A3, A4, A5)     \
+do {						\
+    if (s.wsp > s.wend - 5) {	                \
+	erl_grow_wstack(&s, 5);                 \
+    }						\
+    *s.wsp++ = (A1);				\
+    *s.wsp++ = (A2);				\
+    *s.wsp++ = (A3);				\
+    *s.wsp++ = (A4);				\
+    *s.wsp++ = (A5);				\
+} while(0)
+
+#define WSTACK_PUSH6(s, A1, A2, A3, A4, A5, A6) \
+do {						\
+    if (s.wsp > s.wend - 6) {	                \
+	erl_grow_wstack(&s, 6);                 \
+    }						\
+    *s.wsp++ = (A1);				\
+    *s.wsp++ = (A2);				\
+    *s.wsp++ = (A3);				\
+    *s.wsp++ = (A4);				\
+    *s.wsp++ = (A5);				\
+    *s.wsp++ = (A6);				\
+} while(0)
+
+#define WSTACK_RESERVE(s, push_cnt)             \
+do {						\
+    if (s.wsp > s.wend - (push_cnt)) { 	        \
+	erl_grow_wstack(&s, (push_cnt));        \
+    }                                           \
+} while(0)
+
+/* Must be preceded by WSTACK_RESERVE */
+#define WSTACK_FAST_PUSH(s, x)                  \
+do {						\
+    ASSERT(s.wsp < s.wend);                     \
+    *s.wsp++ = (x);                             \
+} while(0)
+
 #define WSTACK_COUNT(s) (s.wsp - s.wstart)
 #define WSTACK_ISEMPTY(s) (s.wsp == s.wstart)
-#define WSTACK_POP(s) (*(--s.wsp))
+#define WSTACK_POP(s) ((ASSERT(s.wsp > s.wstart)),*(--s.wsp))
 
+#define WSTACK_ROLLBACK(s, count) (ASSERT(WSTACK_COUNT(s) >= (count)), \
+                                   s.wsp = s.wstart + (count))
+
+/* PSTACK - Stack of any type.
+ * Usage:
+ * {
+ * #define PSTACK_TYPE MyType
+ *    PSTACK_DECLARE(s,16);
+ *    MyType *sp = PSTACK_PUSH(s);
+ *
+ *    sp->x = ....
+ *    sp->y = ....
+ *    sp = PSTACK_PUSH(s);
+ *    ...
+ *    sp = PSTACK_POP(s);
+ *    if (PSTACK_IS_EMPTY(s)) {
+ *        // sp is invalid when stack is empty after pop
+ *    }
+ *
+ *    PSTACK_DESTROY(s);
+ * }
+ */
+
+
+typedef struct ErtsPStack_ {
+    byte* pstart;
+    byte* psp;
+    byte* pend;
+    ErtsAlcType_t alloc_type;
+}ErtsPStack;
+
+void erl_grow_pstack(ErtsPStack* s, void* default_pstack, unsigned need_bytes);
+#define PSTK_CONCAT(a,b) a##b
+#define PSTK_DEF_STACK(s) PSTK_CONCAT(s,_default_pstack)
+
+#define PSTACK_DECLARE(s, DEF_PSTACK_SIZE) \
+PSTACK_TYPE PSTK_DEF_STACK(s)[DEF_PSTACK_SIZE];                            \
+ErtsPStack s = { (byte*)PSTK_DEF_STACK(s), /* pstart */                    \
+                 (byte*)(PSTK_DEF_STACK(s) - 1), /* psp */                 \
+                 (byte*)(PSTK_DEF_STACK(s) + (DEF_PSTACK_SIZE)), /* pend */\
+                 ERTS_ALC_T_ESTACK   /* alloc_type */                      \
+}
+
+#define PSTACK_CHANGE_ALLOCATOR(s,t)					\
+do {									\
+    if (s.pstart != (byte*)PSTK_DEF_STACK(s)) {				\
+	erts_exit(ERTS_ERROR_EXIT, "Internal error - trying to change allocator "	\
+		 "type of active pstack\n");				\
+    }									\
+    s.alloc_type = (t);							\
+ } while (0)
+
+#define PSTACK_DESTROY(s)				\
+do {							\
+    if (s.pstart != (byte*)PSTK_DEF_STACK(s)) {		\
+	erts_free(s.alloc_type, s.pstart); 		\
+    }							\
+} while(0)
+
+#define PSTACK_IS_EMPTY(s) (s.psp < s.pstart)
+
+#define PSTACK_COUNT(s) (((PSTACK_TYPE*)s.psp + 1) - (PSTACK_TYPE*)s.pstart)
+
+#define PSTACK_TOP(s) (ASSERT(!PSTACK_IS_EMPTY(s)), (PSTACK_TYPE*)(s.psp))
+
+#define PSTACK_PUSH(s) 		                                           \
+    (s.psp += sizeof(PSTACK_TYPE),                                         \
+     ((s.psp == s.pend) ? erl_grow_pstack(&s, PSTK_DEF_STACK(s),           \
+                                          sizeof(PSTACK_TYPE)) : (void)0), \
+     ((PSTACK_TYPE*) s.psp))
+
+#define PSTACK_POP(s) ((PSTACK_TYPE*) (s.psp -= sizeof(PSTACK_TYPE)))
+
+/*
+ * Do not free the stack after this, it may have pointers into what
+ * was saved in 'dst'.
+ */
+#define PSTACK_SAVE(s,dst)\
+do {\
+    if (s.pstart == (byte*)PSTK_DEF_STACK(s)) {\
+	UWord _pbytes = PSTACK_COUNT(s) * sizeof(PSTACK_TYPE);\
+	(dst)->pstart = erts_alloc(s.alloc_type,\
+				   sizeof(PSTK_DEF_STACK(s)));\
+	sys_memcpy((dst)->pstart, s.pstart, _pbytes);\
+	(dst)->psp = (dst)->pstart + _pbytes - sizeof(PSTACK_TYPE);\
+	(dst)->pend = (dst)->pstart + sizeof(PSTK_DEF_STACK(s));\
+	(dst)->alloc_type = s.alloc_type;\
+    } else\
+        *(dst) = s;\
+ } while (0)
+
+/*
+ * Use on empty stack, only the allocator can be changed before this.
+ * The src stack is reset to NULL.
+ */
+#define PSTACK_RESTORE(s, src)			        \
+do {						        \
+    ASSERT(s.pstart == (byte*)PSTK_DEF_STACK(s));	\
+    s = *(src);  /* struct copy */		        \
+    (src)->pstart = NULL;			        \
+    ASSERT(s.psp >= (s.pstart - sizeof(PSTACK_TYPE)));  \
+    ASSERT(s.psp < s.pend);			        \
+} while (0)
+
+#define PSTACK_DESTROY_SAVED(pstack)\
+do {\
+    if ((pstack)->pstart) {\
+	erts_free((pstack)->alloc_type, (pstack)->pstart);\
+	(pstack)->pstart = NULL;\
+    }\
+} while(0)
+
+
+/*
+ *  An implementation of lightweight unbounded queues,
+ *  using a circular dynamic array.
+ *  It does not include support for change_allocator.
+ *
+ *  Use it like this:
+ *
+ *  DECLARE_EQUEUE(Queue)	(At the start of a block)
+ *  ...
+ *  EQUEUE_PUT(Queue, Term)
+ *  ...
+ *  if (EQUEUE_ISEMPTY(Queue)) {
+ *     Queue is empty
+ *  } else {
+ *     Term = EQUEUE_GET(Stack);
+ *     Process popped Term here
+ *  }
+ *  ...
+ *  DESTROY_EQUEUE(Queue)
+ */
+
+typedef struct {
+    Eterm* start;
+    Eterm* front;
+    Eterm* back;
+    int possibly_empty;
+    Eterm* end;
+    ErtsAlcType_t alloc_type;
+} ErtsEQueue;
+
+#define DEF_EQUEUE_SIZE (16)
+
+void erl_grow_equeue(ErtsEQueue*, Eterm* def_queue);
+#define EQUE_CONCAT(a,b) a##b
+#define EQUE_DEF_QUEUE(q) EQUE_CONCAT(q,_default_equeue)
+
+#define DECLARE_EQUEUE(q)				\
+    UWord EQUE_DEF_QUEUE(q)[DEF_EQUEUE_SIZE];     	\
+    ErtsEQueue q = {					\
+        EQUE_DEF_QUEUE(q), /* start */			\
+        EQUE_DEF_QUEUE(q), /* front */			\
+        EQUE_DEF_QUEUE(q), /* back */			\
+        1,                 /* possibly_empty */		\
+        EQUE_DEF_QUEUE(q) + DEF_EQUEUE_SIZE, /* end */	\
+        ERTS_ALC_T_ESTACK  /* alloc_type */		\
+    }
+
+#define DESTROY_EQUEUE(q)				\
+do {							\
+    if (q.start != EQUE_DEF_QUEUE(q)) {			\
+      erts_free(q.alloc_type, q.start);			\
+    }							\
+} while(0)
+
+#define EQUEUE_PUT_UNCHECKED(q, x)			\
+do {							\
+    q.possibly_empty = 0;				\
+    *(q.back) = (x);                    		\
+    if (++(q.back) == q.end) {				\
+	q.back = q.start;				\
+    }							\
+} while(0)
+
+#define EQUEUE_PUT(q, x)				\
+do {							\
+    if (q.back == q.front && !q.possibly_empty) {	\
+        erl_grow_equeue(&q, EQUE_DEF_QUEUE(q));		\
+    }							\
+    EQUEUE_PUT_UNCHECKED(q, x);				\
+} while(0)
+
+#define EQUEUE_ISEMPTY(q) (q.back == q.front && q.possibly_empty)
+
+ERTS_GLB_INLINE Eterm erts_equeue_get(ErtsEQueue *q);
+
+#if ERTS_GLB_INLINE_INCL_FUNC_DEF
+ERTS_GLB_INLINE Eterm erts_equeue_get(ErtsEQueue *q) {
+    Eterm x;
+    q->possibly_empty = 1;
+    x = *(q->front);
+    if (++(q->front) == q->end) {
+        q->front = q->start;
+    }
+    return x;
+}
+#endif
+#define EQUEUE_GET(q) erts_equeue_get(&(q));
 
 /* binary.c */
 
 void erts_emasculate_writable_binary(ProcBin* pb);
 Eterm erts_new_heap_binary(Process *p, byte *buf, int len, byte** datap);
-Eterm erts_new_mso_binary(Process*, byte*, int);
+Eterm erts_new_mso_binary(Process*, byte*, Uint);
 Eterm new_binary(Process*, byte*, Uint);
 Eterm erts_realloc_binary(Eterm bin, size_t size);
 
@@ -622,9 +968,6 @@ erts_bld_port_info(Eterm **hpp,
 void erts_bif_info_init(void);
 
 /* bif.c */
-Eterm erts_make_ref(Process *);
-Eterm erts_make_ref_in_buffer(Eterm buffer[REF_THING_SIZE]);
-void erts_make_ref_in_array(Uint32 ref[ERTS_MAX_REF_NUMBERS]);
 
 ERTS_GLB_INLINE Eterm
 erts_proc_store_ref(Process *c_p, Uint32 ref[ERTS_MAX_REF_NUMBERS]);
@@ -657,8 +1000,34 @@ Eterm erl_send(Process *p, Eterm to, Eterm msg);
 Eterm erl_is_function(Process* p, Eterm arg1, Eterm arg2);
 
 /* beam_bif_load.c */
-Eterm erts_check_process_code(Process *c_p, Eterm module, int allow_gc, int *redsp);
+#define ERTS_CPC_ALLOW_GC      (1 << 0)
+#define ERTS_CPC_ALL           ERTS_CPC_ALLOW_GC
+Eterm erts_check_process_code(Process *c_p, Eterm module, Uint flags, int *redsp, int fcalls);
+#ifdef ERTS_NEW_PURGE_STRATEGY
+Eterm erts_proc_copy_literal_area(Process *c_p, int *redsp, int fcalls, int gc_allowed);
+#endif
 
+typedef struct ErtsLiteralArea_ {
+    struct erl_off_heap_header *off_heap;
+    Eterm *end;
+    Eterm start[1]; /* beginning of area */
+} ErtsLiteralArea;
+
+#define ERTS_LITERAL_AREA_ALLOC_SIZE(N) \
+    (sizeof(ErtsLiteralArea) + sizeof(Eterm)*((N) - 1))
+
+extern erts_smp_atomic_t erts_copy_literal_area__;
+#define ERTS_COPY_LITERAL_AREA()					\
+    ((ErtsLiteralArea *) erts_smp_atomic_read_nob(&erts_copy_literal_area__))
+
+#ifdef ERTS_NEW_PURGE_STRATEGY
+extern Process *erts_literal_area_collector;
+#endif
+#ifdef ERTS_DIRTY_SCHEDULERS
+extern Process *erts_dirty_process_code_checker;
+#endif
+
+extern Process *erts_code_purger;
 
 /* beam_load.c */
 typedef struct {
@@ -670,6 +1039,7 @@ typedef struct {
 
 Binary* erts_alloc_loader_state(void);
 Eterm erts_module_for_prepared_code(Binary* magic);
+Eterm erts_has_code_on_load(Binary* magic);
 Eterm erts_prepare_loading(Binary* loader_state,  Process *c_p,
 			   Eterm group_leader, Eterm* modp,
 			   byte* code, Uint size);
@@ -688,7 +1058,7 @@ Eterm erts_make_stub_module(Process* p, Eterm Mod, Eterm Beam, Eterm Info);
 
 /* beam_ranges.c */
 void erts_init_ranges(void);
-void erts_start_staging_ranges(void);
+void erts_start_staging_ranges(int num_new);
 void erts_end_staging_ranges(int commit);
 void erts_update_ranges(BeamInstr* code, Uint size);
 void erts_remove_from_ranges(BeamInstr* code);
@@ -699,53 +1069,100 @@ void erts_lookup_function_info(FunctionInfo* fi, BeamInstr* pc, int full_info);
 void init_break_handler(void);
 void erts_set_ignore_break(void);
 void erts_replace_intr(void);
-void process_info(int, void *);
-void print_process_info(int, void *, Process*);
-void info(int, void *);
-void loaded(int, void *);
+void process_info(fmtfn_t, void *);
+void print_process_info(fmtfn_t, void *, Process*);
+void info(fmtfn_t, void *);
+void loaded(fmtfn_t, void *);
+
+/* erl_arith.c */
+double erts_get_positive_zero_float(void);
 
 /* config.c */
 
-__decl_noreturn void __noreturn erl_exit(int n, char*, ...);
-__decl_noreturn void __noreturn erl_exit_flush_async(int n, char*, ...);
+__decl_noreturn void __noreturn erts_exit_epilogue(void);
+__decl_noreturn void __noreturn erts_exit(int n, char*, ...);
+__decl_noreturn void __noreturn erts_flush_async_exit(int n, char*, ...);
 void erl_error(char*, va_list);
 
-/* copy.c */
-Eterm copy_object(Eterm, Process*);
+/* This controls whether sharing-preserving copy is used by Erlang */
 
-#if HALFWORD_HEAP
-Uint size_object_rel(Eterm, Eterm*);
-#  define size_object(A) size_object_rel(A,NULL)
-
-Eterm copy_struct_rel(Eterm, Uint, Eterm**, ErlOffHeap*, Eterm* src_base, Eterm* dst_base);
-#  define copy_struct(OBJ,SZ,HPP,OH) copy_struct_rel(OBJ,SZ,HPP,OH, NULL,NULL)
-
-Eterm copy_shallow_rel(Eterm*, Uint, Eterm**, ErlOffHeap*, Eterm* src_base);
-#  define copy_shallow(A,B,C,D) copy_shallow_rel(A,B,C,D,NULL)
-
-#else /* !HALFWORD_HEAP */
-
-Uint size_object(Eterm);
-#  define size_object_rel(A,B) size_object(A)
-
-Eterm copy_struct(Eterm, Uint, Eterm**, ErlOffHeap*);
-#  define copy_struct_rel(OBJ,SZ,HPP,OH, SB,DB) copy_struct(OBJ,SZ,HPP,OH)
-
-Eterm copy_shallow(Eterm*, Uint, Eterm**, ErlOffHeap*);
-#  define copy_shallow_rel(A,B,C,D, BASE) copy_shallow(A,B,C,D)
-
+#ifdef SHCOPY
+#define SHCOPY_SEND
+#define SHCOPY_SPAWN
 #endif
 
+/* The persistent state while the sharing-preserving copier works */
 
-void move_multi_frags(Eterm** hpp, ErlOffHeap*, ErlHeapFragment* first,
-		      Eterm* refs, unsigned nrefs);
+typedef struct {
+    Eterm  queue_default[DEF_EQUEUE_SIZE];
+    Eterm* queue_start;
+    Eterm* queue_end;
+    ErtsAlcType_t queue_alloc_type;
+    UWord  bitstore_default[DEF_WSTACK_SIZE];
+    UWord* bitstore_start;
+    ErtsAlcType_t bitstore_alloc_type;
+    Eterm  shtable_default[DEF_ESTACK_SIZE];
+    Eterm* shtable_start;
+    ErtsAlcType_t shtable_alloc_type;
+    Uint literal_size;
+    Eterm *range_ptr;
+    Uint  range_sz;
+} erts_shcopy_t;
+
+#define INITIALIZE_SHCOPY(info)                         \
+do {                                                    \
+    ErtsLiteralArea *larea__ = ERTS_COPY_LITERAL_AREA();\
+    info.queue_start = info.queue_default;              \
+    info.bitstore_start = info.bitstore_default;        \
+    info.shtable_start = info.shtable_default;          \
+    info.literal_size = 0;                              \
+    if (larea__) {					\
+	info.range_ptr = &larea__->start[0];		\
+	info.range_sz = larea__->end - info.range_ptr;	\
+    }							\
+    else {						\
+	info.range_ptr = NULL;				\
+	info.range_sz = 0;				\
+    }							\
+} while(0)
+
+#define DESTROY_SHCOPY(info)                                            \
+do {                                                                    \
+    if (info.queue_start != info.queue_default) {                       \
+        erts_free(info.queue_alloc_type, info.queue_start);             \
+    }                                                                   \
+    if (info.bitstore_start != info.bitstore_default) {                 \
+        erts_free(info.bitstore_alloc_type, info.bitstore_start);       \
+    }                                                                   \
+    if (info.shtable_start != info.shtable_default) {                   \
+        erts_free(info.shtable_alloc_type, info.shtable_start);         \
+    }                                                                   \
+} while(0)
+
+/* copy.c */
+Eterm copy_object_x(Eterm, Process*, Uint);
+#define copy_object(Term, Proc) copy_object_x(Term,Proc,0)
+
+Uint size_object(Eterm);
+Uint copy_shared_calculate(Eterm, erts_shcopy_t*);
+Eterm copy_shared_perform(Eterm, Uint, erts_shcopy_t*, Eterm**, ErlOffHeap*);
+
+Uint size_shared(Eterm);
+
+Eterm copy_struct_x(Eterm, Uint, Eterm**, ErlOffHeap*, Uint* bsz);
+#define copy_struct(Obj,Sz,HPP,OH) \
+    copy_struct_x(Obj,Sz,HPP,OH,NULL)
+Eterm copy_shallow(Eterm*, Uint, Eterm**, ErlOffHeap*);
+
+void erts_move_multi_frags(Eterm** hpp, ErlOffHeap*, ErlHeapFragment* first,
+			   Eterm* refs, unsigned nrefs, int literals);
 
 /* Utilities */
 extern void erts_delete_nodes_monitors(Process *, ErtsProcLocks);
 extern Eterm erts_monitor_nodes(Process *, Eterm, Eterm);
 extern Eterm erts_processes_monitoring_nodes(Process *);
 extern int erts_do_net_exits(DistEntry*, Eterm);
-extern int distribution_info(int, void *);
+extern int distribution_info(fmtfn_t, void *);
 extern int is_node_name_atom(Eterm a);
 
 extern int erts_net_message(Port *, DistEntry *,
@@ -764,6 +1181,7 @@ void print_pass_through(int, byte*, int);
 int catchlevel(Process*);
 void init_emulator(void);
 void process_main(void);
+void erts_dirty_process_main(ErtsSchedulerData *);
 Eterm build_stacktrace(Process* c_p, Eterm exc);
 Eterm expand_error_value(Process* c_p, Uint freason, Eterm Value);
 void erts_save_stacktrace(Process* p, struct StackTrace* s, int depth);
@@ -791,6 +1209,9 @@ extern ErtsModifiedTimings erts_modified_timings[];
 extern int erts_no_line_info;
 extern Eterm erts_error_logger_warnings;
 extern int erts_initialized;
+#if defined(USE_THREADS) && !defined(ERTS_SMP)
+extern erts_tid_t erts_main_thread;
+#endif
 extern int erts_compat_rel;
 extern int erts_use_sender_punish;
 void erts_short_init(void);
@@ -809,23 +1230,6 @@ void MD5Init(MD5_CTX *);
 void MD5Update(MD5_CTX *, unsigned char *, unsigned int);
 void MD5Final(unsigned char [16], MD5_CTX *);
 
-/* ggc.c */
-
-void erts_gc_info(ErtsGCInfo *gcip);
-void erts_init_gc(void);
-int erts_garbage_collect(Process*, int, Eterm*, int);
-void erts_garbage_collect_hibernate(Process* p);
-Eterm erts_gc_after_bif_call(Process* p, Eterm result, Eterm* regs, Uint arity);
-void erts_garbage_collect_literals(Process* p, Eterm* literals,
-				   Uint lit_size,
-				   struct erl_off_heap_header* oh);
-Uint erts_next_heap_size(Uint, Uint);
-Eterm erts_heap_sizes(Process* p);
-
-void erts_offset_off_heap(ErlOffHeap *, Sint, Eterm*, Eterm*);
-void erts_offset_heap_ptr(Eterm*, Uint, Sint, Eterm*, Eterm*);
-void erts_offset_heap(Eterm*, Uint, Sint, Eterm*, Eterm*);
-void erts_free_heap_frags(Process* p);
 
 /* io.c */
 
@@ -852,6 +1256,7 @@ Uint erts_port_ioq_size(Port *pp);
 void erts_stale_drv_select(Eterm, ErlDrvPort, ErlDrvEvent, int, int);
 
 Port *erts_get_heart_port(void);
+void erts_emergency_close_ports(void);
 
 #if defined(ERTS_SMP) && defined(ERTS_ENABLE_LOCK_COUNT)
 void erts_lcnt_enable_io_lock_count(int enable);
@@ -905,6 +1310,9 @@ Sint erts_binary_set_loop_limit(Sint limit);
 /* external.c */
 void erts_init_external(void);
 
+/* erl_map.c */
+void erts_init_map(void);
+
 /* erl_unicode.c */
 void erts_init_unicode(void);
 Sint erts_unicode_set_loop_limit(Sint limit);
@@ -943,11 +1351,11 @@ int erts_utf8_to_latin1(byte* dest, const byte* source, int slen);
 #define ERTS_UTF8_ANALYZE_MORE 3
 #define ERTS_UTF8_OK_MAX_CHARS 4
 
-void bin_write(int, void*, byte*, size_t);
-int intlist_to_buf(Eterm, char*, int); /* most callers pass plain char*'s */
+void bin_write(fmtfn_t, void*, byte*, size_t);
+Sint intlist_to_buf(Eterm, char*, Sint); /* most callers pass plain char*'s */
 
 struct Sint_buf {
-#if defined(ARCH_64) && !HALFWORD_HEAP
+#if defined(ARCH_64)
     char s[22];
 #else
     char s[12];
@@ -1017,7 +1425,7 @@ ErlDrvSizeT erts_iolist_to_buf(Eterm, char*, ErlDrvSizeT);
 ErlDrvSizeT erts_iolist_to_buf_yielding(ErtsIOList2BufState *);
 int erts_iolist_size_yielding(ErtsIOListState *state);
 int erts_iolist_size(Eterm, ErlDrvSizeT *);
-int is_string(Eterm);
+Sint is_string(Eterm);
 void erl_at_exit(void (*) (void*), void*);
 Eterm collect_memory(Process *);
 void dump_memory_to_fd(int);
@@ -1059,9 +1467,32 @@ Eterm erts_gc_binary_part_2(Process* p, Eterm* reg, Uint live);
 
 Uint erts_current_reductions(Process* current, Process *p);
 
-int erts_print_system_version(int to, void *arg, Process *c_p);
+int erts_print_system_version(fmtfn_t to, void *arg, Process *c_p);
 
 int erts_hibernate(Process* c_p, Eterm module, Eterm function, Eterm args, Eterm* reg);
+
+ERTS_GLB_FORCE_INLINE int erts_is_literal(Eterm tptr, Eterm *ptr);
+
+#if ERTS_GLB_INLINE_INCL_FUNC_DEF
+
+ERTS_GLB_FORCE_INLINE int erts_is_literal(Eterm tptr, Eterm *ptr)
+{
+    ASSERT(is_boxed(tptr) || is_list(tptr));
+    ASSERT(ptr == ptr_val(tptr));
+
+#if defined(ERTS_HAVE_IS_IN_LITERAL_RANGE)
+    return erts_is_in_literal_range(ptr);
+#elif defined(TAG_LITERAL_PTR)
+    return is_literal_ptr(tptr);
+#else
+#  error Not able to detect literals...
+#endif
+
+}
+
+#endif
+
+Eterm erts_msacc_request(Process *c_p, int action, Eterm *threads);
 
 /*
 ** Call_trace uses this API for the parameter matching functions
@@ -1083,9 +1514,19 @@ do {								\
 
 #define MatchSetGetSource(MPSP) erts_match_set_get_source(MPSP)
 
-extern Binary *erts_match_set_compile(Process *p, Eterm matchexpr);
+extern Binary *erts_match_set_compile(Process *p, Eterm matchexpr, Eterm MFA);
 Eterm erts_match_set_lint(Process *p, Eterm matchexpr); 
 extern void erts_match_set_release_result(Process* p);
+ERTS_GLB_INLINE void erts_match_set_release_result_trace(Process* p, Eterm);
+
+#if ERTS_GLB_INLINE_INCL_FUNC_DEF
+ERTS_GLB_INLINE
+void erts_match_set_release_result_trace(Process* p, Eterm pam_result)
+{
+    if (is_not_immed(pam_result))
+        erts_match_set_release_result(p);
+}
+#endif /* ERTS_GLB_INLINE_INCL_FUNC_DEF */
 
 enum erts_pam_run_flags {
     ERTS_PAM_TMP_RESULT=1,
@@ -1093,10 +1534,12 @@ enum erts_pam_run_flags {
     ERTS_PAM_CONTIGUOUS_TUPLE=4,
     ERTS_PAM_IGNORE_TRACE_SILENT=8
 };
-extern Eterm erts_match_set_run(Process *p, Binary *mpsp, 
-				Eterm *args, int num_args,
-				enum erts_pam_run_flags in_flags,
-				Uint32 *return_flags);
+extern Eterm erts_match_set_run_trace(Process *p,
+                                      Process *self,
+                                      Binary *mpsp,
+                                      Eterm *args, int num_args,
+                                      enum erts_pam_run_flags in_flags,
+                                      Uint32 *return_flags);
 extern Eterm erts_match_set_get_source(Binary *mpsp);
 extern void erts_match_prog_foreach_offheap(Binary *b,
 					    void (*)(ErlOffHeap *, void *),
@@ -1111,189 +1554,21 @@ extern void erts_match_prog_foreach_offheap(Binary *b,
 
 extern erts_driver_t vanilla_driver;
 extern erts_driver_t spawn_driver;
+extern erts_driver_t forker_driver;
 extern erts_driver_t fd_driver;
 
 int erts_beam_jump_table(void);
 
-/* Should maybe be placed in erl_message.h, but then we get an include mess. */
-ERTS_GLB_INLINE Eterm *
-erts_alloc_message_heap_state(Uint size,
-			      ErlHeapFragment **bpp,
-			      ErlOffHeap **ohpp,
-			      Process *receiver,
-			      ErtsProcLocks *receiver_locks,
-			      erts_aint32_t *statep);
-
-ERTS_GLB_INLINE Eterm *
-erts_alloc_message_heap(Uint size,
-			ErlHeapFragment **bpp,
-			ErlOffHeap **ohpp,
-			Process *receiver,
-			ErtsProcLocks *receiver_locks);
-
-#if ERTS_GLB_INLINE_INCL_FUNC_DEF
-
-/*
- * NOTE: erts_alloc_message_heap() releases msg q and status
- *       lock on receiver without ensuring that other locks are
- *       held. User is responsible to ensure that the receiver
- *       pointer cannot become invalid until after message has
- *       been passed. This is normal done either by increasing
- *       reference count on process (preferred) or by holding
- *       main or link lock over the whole message passing
- *       operation.
- */
-
-ERTS_GLB_INLINE Eterm *
-erts_alloc_message_heap_state(Uint size,
-			      ErlHeapFragment **bpp,
-			      ErlOffHeap **ohpp,
-			      Process *receiver,
-			      ErtsProcLocks *receiver_locks,
-			      erts_aint32_t *statep)
-{
-    Eterm *hp;
-    erts_aint32_t state;
-#ifdef ERTS_SMP
-    int locked_main = 0;
-    state = erts_smp_atomic32_read_acqb(&receiver->state);
-    if (statep)
-	*statep = state;
-    if (state & (ERTS_PSFLG_EXITING|ERTS_PSFLG_PENDING_EXIT))
-	goto allocate_in_mbuf;
-#endif
-
-    if (size > (Uint) INT_MAX)
-	erl_exit(ERTS_ABORT_EXIT, "HUGE size (%beu)\n", size);
-
-    if (
-#if defined(ERTS_SMP)
-	*receiver_locks & ERTS_PROC_LOCK_MAIN
-#else
-	1
-#endif
-	) {
-#ifdef ERTS_SMP
-    try_allocate_on_heap:
-#endif
-	state = erts_smp_atomic32_read_nob(&receiver->state);
-	if (statep)
-	    *statep = state;
-	if ((state & (ERTS_PSFLG_EXITING|ERTS_PSFLG_PENDING_EXIT))
-	    || (receiver->flags & F_DISABLE_GC)
-	    || HEAP_LIMIT(receiver) - HEAP_TOP(receiver) <= size) {
-	    /*
-	     * The heap is either potentially in an inconsistent
-	     * state, or not large enough.
-	     */
-#ifdef ERTS_SMP
-	    if (locked_main) {
-		*receiver_locks &= ~ERTS_PROC_LOCK_MAIN;
-		erts_smp_proc_unlock(receiver, ERTS_PROC_LOCK_MAIN);
-	    }
-#endif
-	    goto allocate_in_mbuf;
-	}
-	hp = HEAP_TOP(receiver);
-	HEAP_TOP(receiver) = hp + size;
-	*bpp = NULL;
-	*ohpp = &MSO(receiver);
-    }
-#ifdef ERTS_SMP
-    else if (erts_smp_proc_trylock(receiver, ERTS_PROC_LOCK_MAIN) == 0) {
-	locked_main = 1;
-	*receiver_locks |= ERTS_PROC_LOCK_MAIN;
-	goto try_allocate_on_heap;
-    }
-#endif
-    else {
-	ErlHeapFragment *bp;
-    allocate_in_mbuf:
-	bp = new_message_buffer(size);
-	hp = bp->mem;
-	*bpp = bp;
-	*ohpp = &bp->off_heap;
-    }
-
-    return hp;
-}
-
-ERTS_GLB_INLINE Eterm *
-erts_alloc_message_heap(Uint size,
-			ErlHeapFragment **bpp,
-			ErlOffHeap **ohpp,
-			Process *receiver,
-			ErtsProcLocks *receiver_locks)
-{
-    return erts_alloc_message_heap_state(size, bpp, ohpp, receiver,
-					 receiver_locks, NULL);
-}
-
-#endif /* #if ERTS_GLB_INLINE_INCL_FUNC_DEF */
-
-#if !HEAP_ON_C_STACK
-#  if defined(DEBUG)
-#    define DeclareTmpHeap(VariableName,Size,Process) \
-       Eterm *VariableName = erts_debug_allocate_tmp_heap(Size,Process)
-#    define DeclareTypedTmpHeap(Type,VariableName,Process)		\
-      Type *VariableName = (Type *) erts_debug_allocate_tmp_heap(sizeof(Type)/sizeof(Eterm),Process)
-#    define DeclareTmpHeapNoproc(VariableName,Size) \
-       Eterm *VariableName = erts_debug_allocate_tmp_heap(Size,NULL)
-#    define UseTmpHeap(Size,Proc) \
-       do { \
-         erts_debug_use_tmp_heap((Size),(Proc)); \
-       } while (0)
-#    define UnUseTmpHeap(Size,Proc) \
-       do { \
-         erts_debug_unuse_tmp_heap((Size),(Proc)); \
-       } while (0)
-#    define UseTmpHeapNoproc(Size) \
-       do { \
-         erts_debug_use_tmp_heap(Size,NULL); \
-       } while (0)
-#    define UnUseTmpHeapNoproc(Size) \
-       do { \
-         erts_debug_unuse_tmp_heap(Size,NULL); \
-       } while (0)
-#  else
-#    define DeclareTmpHeap(VariableName,Size,Process) \
-       Eterm *VariableName = (ERTS_PROC_GET_SCHDATA(Process)->tmp_heap)+(ERTS_PROC_GET_SCHDATA(Process)->num_tmp_heap_used)
-#    define DeclareTypedTmpHeap(Type,VariableName,Process)		\
-      Type *VariableName = (Type *) (ERTS_PROC_GET_SCHDATA(Process)->tmp_heap)+(ERTS_PROC_GET_SCHDATA(Process)->num_tmp_heap_used)
-#    define DeclareTmpHeapNoproc(VariableName,Size) \
-       Eterm *VariableName = (erts_get_scheduler_data()->tmp_heap)+(erts_get_scheduler_data()->num_tmp_heap_used)
-#    define UseTmpHeap(Size,Proc) \
-       do { \
-         ERTS_PROC_GET_SCHDATA(Proc)->num_tmp_heap_used += (Size); \
-       } while (0)
-#    define UnUseTmpHeap(Size,Proc) \
-       do { \
-         ERTS_PROC_GET_SCHDATA(Proc)->num_tmp_heap_used -= (Size); \
-       } while (0)
-#    define UseTmpHeapNoproc(Size) \
-       do { \
-         erts_get_scheduler_data()->num_tmp_heap_used += (Size); \
-       } while (0)
-#    define UnUseTmpHeapNoproc(Size) \
-       do { \
-         erts_get_scheduler_data()->num_tmp_heap_used -= (Size); \
-       } while (0)
-
-
-#  endif
-
-#else
-#  define DeclareTmpHeap(VariableName,Size,Process) \
+#define DeclareTmpHeap(VariableName,Size,Process) \
      Eterm VariableName[Size]
-#  define DeclareTypedTmpHeap(Type,VariableName,Process)	\
+#define DeclareTypedTmpHeap(Type,VariableName,Process)	\
      Type VariableName[1]
-#  define DeclareTmpHeapNoproc(VariableName,Size) \
+#define DeclareTmpHeapNoproc(VariableName,Size) \
      Eterm VariableName[Size]
-#  define UseTmpHeap(Size,Proc) /* Nothing */
-#  define UnUseTmpHeap(Size,Proc) /* Nothing */
-#  define UseTmpHeapNoproc(Size) /* Nothing */
-#  define UnUseTmpHeapNoproc(Size) /* Nothing */
-#endif /* HEAP_ON_C_STACK */
+#define UseTmpHeap(Size,Proc) /* Nothing */
+#define UnUseTmpHeap(Size,Proc) /* Nothing */
+#define UseTmpHeapNoproc(Size) /* Nothing */
+#define UnUseTmpHeapNoproc(Size) /* Nothing */
 
 ERTS_GLB_INLINE void dtrace_pid_str(Eterm pid, char *process_buf);
 ERTS_GLB_INLINE void dtrace_proc_str(Process *process, char *process_buf);
@@ -1309,10 +1584,15 @@ ERTS_GLB_INLINE void dtrace_fun_decode(Process *process,
 ERTS_GLB_INLINE void
 dtrace_pid_str(Eterm pid, char *process_buf)
 {
-    erts_snprintf(process_buf, DTRACE_TERM_BUF_SIZE, "<%lu.%lu.%lu>",
-                  pid_channel_no(pid),
-                  pid_number(pid),
-                  pid_serial(pid));
+    if (is_pid(pid))
+        erts_snprintf(process_buf, DTRACE_TERM_BUF_SIZE, "<%lu.%lu.%lu>",
+                      pid_channel_no(pid),
+                      pid_number(pid),
+                      pid_serial(pid));
+    else if (is_port(pid))
+        erts_snprintf(process_buf, DTRACE_TERM_BUF_SIZE, "#Port<%lu.%lu>",
+                      port_channel_no(pid),
+                      port_number(pid));
 }
 
 ERTS_GLB_INLINE void
@@ -1324,9 +1604,7 @@ dtrace_proc_str(Process *process, char *process_buf)
 ERTS_GLB_INLINE void
 dtrace_port_str(Port *port, char *port_buf)
 {
-    erts_snprintf(port_buf, DTRACE_TERM_BUF_SIZE, "#Port<%lu.%lu>",
-                  port_channel_no(port->common.id),
-                  port_number(port->common.id));
+    dtrace_pid_str(port->common.id, port_buf);
 }
 
 ERTS_GLB_INLINE void
@@ -1341,6 +1619,7 @@ dtrace_fun_decode(Process *process,
     erts_snprintf(mfa_buf, DTRACE_TERM_BUF_SIZE, "%T:%T/%d",
                   module, function, arity);
 }
+
 #endif /* #if ERTS_GLB_INLINE_INCL_FUNC_DEF */
 
 #endif /* !__GLOBAL_H__ */

@@ -1,18 +1,19 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2008-2014. All Rights Reserved.
+%% Copyright Ericsson AB 2008-2016. All Rights Reserved.
 %%
-%% The contents of this file are subject to the Erlang Public License,
-%% Version 1.1, (the "License"); you may not use this file except in
-%% compliance with the License. You should have received a copy of the
-%% Erlang Public License along with this software. If not, it can be
-%% retrieved online at http://www.erlang.org/.
+%% Licensed under the Apache License, Version 2.0 (the "License");
+%% you may not use this file except in compliance with the License.
+%% You may obtain a copy of the License at
 %%
-%% Software distributed under the License is distributed on an "AS IS"
-%% basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See
-%% the License for the specific language governing rights and limitations
-%% under the License.
+%%     http://www.apache.org/licenses/LICENSE-2.0
+%%
+%% Unless required by applicable law or agreed to in writing, software
+%% distributed under the License is distributed on an "AS IS" BASIS,
+%% WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+%% See the License for the specific language governing permissions and
+%% limitations under the License.
 %%
 %% %CopyrightEnd%
 %%
@@ -270,33 +271,31 @@ parse_attr1([{{attr,_}, #xmlElement{content=C, attributes=Attrs}}|R], AttrList0,
 	#param{where=nowhere} ->
 	    parse_attr1(R,AttrList0,Opts,Res);
 	_ ->
-	    case keysearch(prot, #xmlAttribute.name, Attrs) of
-		{value, #xmlAttribute{value = "public"}} ->
-		    {Acc,AttrList} = attr_acc(Param0, AttrList0),
-		    parse_attr1(R,AttrList,Opts,
-				[Param0#param{in=false,prot=public,acc=Acc}|Res]);
-		{value, #xmlAttribute{value = "protected"}} ->
-		    {Acc,AttrList} = attr_acc(Param0, AttrList0),
-		    parse_attr1(R,AttrList,Opts,
-				[Param0#param{in=false,prot=protected,acc=Acc}|Res]);
-		{value, #xmlAttribute{value = "private"}} ->
-		    {Acc,AttrList} = attr_acc(Param0, AttrList0),
-		    parse_attr1(R,AttrList,Opts,
-				[Param0#param{in=false,prot=private,acc=Acc}|Res])
-	    end
+	    {value, #xmlAttribute{value=Type}} =
+                keysearch(prot, #xmlAttribute.name, Attrs),
+            {Param,AttrList} = attr_acc(Param0, list_to_atom(Type), AttrList0),
+            parse_attr1(R,AttrList,Opts,[Param|Res])
     end;
 parse_attr1([{_Id,_}|R],AttrList,Info, Res) ->
     parse_attr1(R,AttrList,Info, Res);
 parse_attr1([],Left,_, Res) ->
     {reverse(Res), Left}.
 
-attr_acc(#param{name=N}, List) ->
+attr_acc(#param{name=N}=P, Type, List) ->
     Name = list_to_atom(N),
     case get_value(Name, List, undefined) of
-	undefined -> {undefined, List};
-	Val -> {Val, lists:keydelete(Name,1,List)}
+	undefined -> {P#param{in=false,prot=Type,acc=undefined}, List};
+	Val when is_list(Val), is_integer(hd(Val)) ->
+            %% Function String
+            {P#param{in=false,prot=Type,acc=Val}, lists:keydelete(Name,1,List)};
+        OptList when is_list(OptList) ->
+            Param = foldl(fun handle_param_opt/2,P,OptList),
+            {Param#param{in=false,prot=Type,acc=undefined},
+             lists:keydelete(Name,1,List)};
+        Val ->
+            {P#param{in=false,prot=Type,acc=Val}, lists:keydelete(Name,1,List)}
     end.
-	        
+
 load_members(FileName, Class, Defs, Tab, Type,Opts) ->
     File = filename:join(["wx_xml",FileName ++ ".xml"]),
     put({loaded, FileName}, true),
@@ -704,6 +703,8 @@ parse_type2(["unsigned"|R],Info,Opts,T=#type{mod=Mod}) ->
     parse_type2(R,Info,Opts,T#type{mod=[unsigned|Mod]});
 parse_type2(["int"|R],Info,Opts,  T) -> 
     parse_type2(R,Info,Opts,T#type{name=int,base=int});
+parse_type2(["wxByte"|R],Info,Opts,  T) ->
+    parse_type2(R,Info,Opts,T#type{name=int,base=int});
 parse_type2(["char"|R],Info,Opts,  T) -> 
     parse_type2(R,Info,Opts,T#type{name="char",base=int});
 parse_type2([N="size_t"|R], Info, Opts,  T) -> 
@@ -770,14 +771,19 @@ parse_type2([N="wxGridCellCoordsArray"|R],Info,Opts,T) ->
     parse_type2(R,Info,Opts,T#type{name=N,base={comp,"wxGridCellCoords",
 						[{int,"R"},{int,"C"}]},
 				   single=array});
+parse_type2([N="wxAuiPaneInfoArray"|R],Info,Opts,T) ->
+    parse_type2(R,Info,Opts,T#type{name=N,base={class,"wxAuiPaneInfo"},
+				   single=array});
+
 parse_type2([N="wxRect"|R],Info,Opts,T) -> 
     parse_type2(R,Info,Opts,T#type{name=N,base={comp,N,[{int,"X"},{int,"Y"},
 							{int,"W"},{int,"H"}]}});
 parse_type2([N="wxColour"|R],Info,Opts,T) -> 
     parse_type2(R,Info,Opts,T#type{name=N,
 				   base={comp,N,[{int,"R"},{int,"G"},{int,"B"},{int,"A"}]}});
-parse_type2([N="wxColor"|R],Info,Opts,T) -> 
-    parse_type2(R,Info,Opts,T#type{name="wxColour",
+parse_type2(["wxColor"|R],Info,Opts,T) ->
+    N = "wxColour",
+    parse_type2(R,Info,Opts,T#type{name=N,
 				   base={comp,N,[{int,"R"},{int,"G"},{int,"B"},{int,"A"}]}});
 
 parse_type2([N="wxPoint2DDouble"|R],Info,Opts,T) -> 
@@ -1195,7 +1201,7 @@ translate_constants(Enums, NotConsts0, Skip0) ->
 
 create_consts([{{enum, Name},Enum = #enum{vals=Vals}}|R], Skip, NotConsts, Acc0) ->
     CC = fun(What, Acc) ->
-		 create_const(What, Skip, NotConsts, Acc)
+		 create_const(What, Name, Skip, NotConsts, Acc)
 	 end,
     Acc = case Vals of
 	      undefined -> 
@@ -1209,17 +1215,17 @@ create_consts([{{enum, Name},Enum = #enum{vals=Vals}}|R], Skip, NotConsts, Acc0)
     create_consts(R, Skip, NotConsts, Acc);
 create_consts([],_,_,Acc) -> Acc.
 
-create_const({Name, Val}, Skip, NotConsts, Acc) ->
+create_const({Name, Val}, EnumName, Skip, NotConsts, Acc) ->
     case gb_sets:is_member(Name, Skip) of
 	true -> Acc;
 	false ->
-	    case gb_sets:is_member(Name, NotConsts) of
+	    case gb_sets:is_member(Name, NotConsts) orelse
+		gb_sets:is_member(EnumName, NotConsts)
+	    of
 		true ->
 		    [#const{name=Name,val=next_id(const),is_const=false}|Acc];
 		false ->
 		    [#const{name=Name,val=Val,is_const=true}|Acc]
-%% 		false ->
-%% 		    [#const{name=Name,val=Val}|Acc]
 	    end
     end.
 
@@ -1367,7 +1373,7 @@ extract_enum3([#xmlElement{name=initializer,content=Cs}|_],_Id,[{Name,_}|Acc]) -
     try
 	case Val0 of
 	    ["0x" ++ Val1] ->
-		Val = http_util:hexlist_to_integer(Val1),
+		Val = list_to_integer(Val1, 16),
 		{[{Name, Val}|Acc], Val+1};
 	    ["1", "<<", Shift] ->
 		Val = 1 bsl list_to_integer(Shift),
@@ -1423,7 +1429,7 @@ extract_def([#xmlElement{name=param}|_],Name,_) ->
 extract_def([#xmlElement{name=initializer,content=Cs}|_R],N,Skip) ->
     Val0 = extract_def2(Cs),
     case Val0 of
-	"0x" ++ Val1 -> {N, http_util:hexlist_to_integer(Val1)};
+	"0x" ++ Val1 -> {N, list_to_integer(Val1, 16)};
 	_ ->
 	    try
 		Val = list_to_integer(Val0),
@@ -1445,7 +1451,7 @@ extract_def(_,N,_) ->
     throw(N).
 
 extract_def2([#xmlText{value=Val}|R]) ->
-    strip_comment(string:strip(Val)) ++ extract_def2(R);
+    string:strip(strip_comment(Val)) ++ extract_def2(R);
 extract_def2([#xmlElement{content=Cs}|R]) ->
     extract_def2(Cs) ++ extract_def2(R);
 extract_def2([]) -> [].

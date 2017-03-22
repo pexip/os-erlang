@@ -2,16 +2,17 @@
 %% 
 %% Copyright Ericsson AB 2013. All Rights Reserved.
 %% 
-%% The contents of this file are subject to the Erlang Public License,
-%% Version 1.1, (the "License"); you may not use this file except in
-%% compliance with the License. You should have received a copy of the
-%% Erlang Public License along with this software. If not, it can be
-%% retrieved online at http://www.erlang.org/.
-%% 
-%% Software distributed under the License is distributed on an "AS IS"
-%% basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See
-%% the License for the specific language governing rights and limitations
-%% under the License.
+%% Licensed under the Apache License, Version 2.0 (the "License");
+%% you may not use this file except in compliance with the License.
+%% You may obtain a copy of the License at
+%%
+%%     http://www.apache.org/licenses/LICENSE-2.0
+%%
+%% Unless required by applicable law or agreed to in writing, software
+%% distributed under the License is distributed on an "AS IS" BASIS,
+%% WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+%% See the License for the specific language governing permissions and
+%% limitations under the License.
 %% 
 %% %CopyrightEnd%
 %%
@@ -27,31 +28,26 @@
 -behaviour(gen_server).
 
 %% API
--export([
-	report/0,
+-export([report/0,
 	from_file/1,
-	to_file/1
-    ]).
--export([
-	start/0, stop/0,
-	load_report/0, load_report/2,
-	applications/0, applications/1,
-	application/1, application/2,
-	environment/0, environment/1,
-	module/1, module/2,
-	modules/1,
-	sanity_check/0
-    ]).
+	to_file/1]).
+
+-export([start/0, stop/0,
+         load_report/0, load_report/2,
+         applications/0, applications/1,
+         application/1, application/2,
+         environment/0, environment/1,
+         module/1, module/2,
+         modules/1,
+         sanity_check/0]).
 
 %% gen_server callbacks
--export([
-	init/1,
-	handle_call/3,
-	handle_cast/2,
-	handle_info/2,
-	terminate/2,
-	code_change/3
-    ]).
+-export([init/1,
+         handle_call/3,
+         handle_cast/2,
+         handle_info/2,
+         terminate/2,
+         code_change/3]).
 
 -define(SERVER, ?MODULE).
 
@@ -69,14 +65,15 @@
 start() ->
     gen_server:start({local, ?SERVER}, ?MODULE, [], []).
 
+
 stop() ->
-    gen_server:call(?SERVER, stop).
+    gen_server:call(?SERVER, stop, infinity).
 
 load_report() -> load_report(data, report()).
 
 load_report(file, File)   -> load_report(data, from_file(File));
 load_report(data, Report) ->
-    start(), gen_server:call(?SERVER, {load_report, Report}).
+    ok = start_internal(), gen_server:call(?SERVER, {load_report, Report}, infinity).
 
 report() -> [
 	{init_arguments,    init:get_arguments()},
@@ -119,22 +116,22 @@ from_file(File) ->
 
 applications() -> applications([]).
 applications(Opts) when is_list(Opts) ->
-    gen_server:call(?SERVER, {applications, Opts}).
+    gen_server:call(?SERVER, {applications, Opts}, infinity).
 
 application(App) when is_atom(App) -> application(App, []).
 application(App, Opts) when is_atom(App), is_list(Opts) ->
-    gen_server:call(?SERVER, {application, App, Opts}).
+    gen_server:call(?SERVER, {application, App, Opts}, infinity).
 
 environment() -> environment([]).
 environment(Opts) when is_list(Opts) ->
-    gen_server:call(?SERVER, {environment, Opts}).
+    gen_server:call(?SERVER, {environment, Opts}, infinity).
 
 module(M) when is_atom(M) -> module(M, []).
 module(M, Opts) when is_atom(M), is_list(Opts) ->
-    gen_server:call(?SERVER, {module, M, Opts}).
+    gen_server:call(?SERVER, {module, M, Opts}, infinity).
 
 modules(Opt) when is_atom(Opt) ->
-    gen_server:call(?SERVER, {modules, Opt}).
+    gen_server:call(?SERVER, {modules, Opt}, infinity).
 
 
 -spec sanity_check() -> ok | {failed, Failures} when
@@ -223,6 +220,13 @@ code_change(_OldVsn, State, _Extra) ->
 %%===================================================================
 %% Internal functions
 %%===================================================================
+
+start_internal() ->
+    case start() of
+        {ok,_} -> ok;
+        {error, {already_started,_}} -> ok;
+        Error -> Error
+    end.
 
 %% handle report values
 
@@ -371,6 +375,7 @@ erlang_system_info() ->
 	    logical_processors_online,
 	    logical_processors_available,
 	    driver_version,
+	    nif_version,
 	    emu_args,
 	    ethread_info,
 	    beam_jump_table,
@@ -576,10 +581,7 @@ get_beam_name() ->
 	false -> "";
 	true -> ".smp"
     end,
-    Beam = case os:getenv("EMU") of
-	false -> "beam";
-	Value -> Value
-    end,
+    Beam = os:getenv("EMU", "beam"),
     Beam ++ Type ++ Flavor.
 
 %% Check runtime dependencies...

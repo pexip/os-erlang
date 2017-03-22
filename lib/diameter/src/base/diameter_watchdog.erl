@@ -1,18 +1,19 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2010-2014. All Rights Reserved.
+%% Copyright Ericsson AB 2010-2016. All Rights Reserved.
 %%
-%% The contents of this file are subject to the Erlang Public License,
-%% Version 1.1, (the "License"); you may not use this file except in
-%% compliance with the License. You should have received a copy of the
-%% Erlang Public License along with this software. If not, it can be
-%% retrieved online at http://www.erlang.org/.
+%% Licensed under the Apache License, Version 2.0 (the "License");
+%% you may not use this file except in compliance with the License.
+%% You may obtain a copy of the License at
 %%
-%% Software distributed under the License is distributed on an "AS IS"
-%% basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See
-%% the License for the specific language governing rights and limitations
-%% under the License.
+%%     http://www.apache.org/licenses/LICENSE-2.0
+%%
+%% Unless required by applicable law or agreed to in writing, software
+%% distributed under the License is distributed on an "AS IS" BASIS,
+%% WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+%% See the License for the specific language governing permissions and
+%% limitations under the License.
 %%
 %% %CopyrightEnd%
 %%
@@ -65,7 +66,9 @@
          %% end PCB
          parent = self() :: pid(),              %% service process
          transport       :: pid() | undefined,  %% peer_fsm process
-         tref :: reference(),     %% reference for current watchdog timer
+         tref :: reference()      %% reference for current watchdog timer
+               | integer()        %% monotonic time
+               | undefined,
          dictionary :: module(),  %% common dictionary
          receive_data :: term(),
                  %% term passed into diameter_service with incoming message
@@ -93,7 +96,7 @@ start({_,_} = Type, T) ->
     Ack = make_ref(),
     {ok, Pid} = diameter_watchdog_sup:start_child({Ack, Type, self(), T}),
     try
-        {erlang:monitor(process, Pid), Pid}
+        {monitor(process, Pid), Pid}
     after
         send(Pid, Ack)
     end.
@@ -120,17 +123,18 @@ i({Ack, T, Pid, {RecvData,
                  #diameter_service{applications = Apps,
                                    capabilities = Caps}
                  = Svc}}) ->
-    erlang:monitor(process, Pid),
+    monitor(process, Pid),
     wait(Ack, Pid),
-    random:seed(now()),
-    putr(restart, {T, Opts, Svc}),  %% save seeing it in trace
-    putr(dwr, dwr(Caps)),           %%
+    putr(restart, {T, Opts, Svc, SvcOpts}),  %% save seeing it in trace
+    putr(dwr, dwr(Caps)),                    %%
     {_,_} = Mask = proplists:get_value(sequence, SvcOpts),
     Restrict = proplists:get_value(restrict_connections, SvcOpts),
     Nodes = restrict_nodes(Restrict),
     Dict0 = common_dictionary(Apps),
+    diameter_codec:setopts([{common_dictionary, Dict0},
+                            {string_decode, false}]),
     #watchdog{parent = Pid,
-              transport = start(T, Opts, Mask, Nodes, Dict0, Svc),
+              transport = start(T, Opts, SvcOpts, Nodes, Dict0, Svc),
               tw = proplists:get_value(watchdog_timer,
                                        Opts,
                                        ?DEFAULT_TW_INIT),
@@ -165,11 +169,11 @@ config({okay, N}, Rec)
   when ?IS_NATURAL(N) ->
     Rec#config{okay = N}.
 
-%% start/5
+%% start/6
 
-start(T, Opts, Mask, Nodes, Dict0, Svc) ->
+start(T, Opts, SvcOpts, Nodes, Dict0, Svc) ->
     {_MRef, Pid}
-        = diameter_peer_fsm:start(T, Opts, {Mask, Nodes, Dict0, Svc}),
+        = diameter_peer_fsm:start(T, Opts, {SvcOpts, Nodes, Dict0, Svc}),
     Pid.
 
 %% common_dictionary/1
@@ -242,10 +246,15 @@ handle_info(T, #watchdog{} = State) ->
             event(T, State, S),  %%   before 'watchdog'
             {noreply, S};
         stop ->
-            ?LOG(stop, T),
+            ?LOG(stop, truncate(T)),
             event(T, State, State#watchdog{status = down}),
             {stop, {shutdown, T}, State}
     end.
+
+truncate({'DOWN' = T, _, process, Pid, _}) ->
+    {T, Pid};
+truncate(T) ->
+    T.
 
 close({'DOWN', _, process, TPid, {shutdown, Reason}},
       #watchdog{transport = TPid,
@@ -255,11 +264,15 @@ close({'DOWN', _, process, TPid, {shutdown, Reason}},
 close(_, _) ->
     ok.
 
-event(_, #watchdog{status = T}, #watchdog{status = T}) ->
+event(_,
+      #watchdog{status = From, transport = F},
+      #watchdog{status = To, transport = T})
+  when F == undefined, T == undefined;  %% transport not started
+       From == initial, To == down;     %% never really left INITIAL
+       From == To ->                    %% no state transition
     ok;
-
-event(_, #watchdog{transport = undefined}, #watchdog{transport = undefined}) ->
-    ok;
+%% Note that there is no INITIAL -> DOWN transition in RFC 3539: ours
+%% is just a consequence of stop.
 
 event(Msg,
       #watchdog{status = From, transport = F, parent = Pid},
@@ -315,7 +328,7 @@ code_change(_, State, _) ->
 %% expiry; or another watchdog is saying the same after reestablishing
 %% a connection previously had by this one.
 transition(close, #watchdog{}) ->
-    {{accept, _}, _, _} = getr(restart), %% assert
+    {accept, _} = role(), %% assert
     stop;
 
 %% Service is asking for the peer to be taken down gracefully.
@@ -328,8 +341,9 @@ transition({shutdown = T, Pid, Reason}, #watchdog{parent = Pid,
     send(TPid, {T, self(), Reason}),
     S#watchdog{shutdown = true};
 
-%% Transport is telling us that DPA has been sent in response to DPR:
-%% its death should lead to ours.
+%% Transport is telling us that DPA has been sent in response to DPR,
+%% or that DPR has been explicitly sent: transport death should lead
+%% to ours.
 transition({'DPR', TPid}, #watchdog{transport = TPid} = S) ->
     S#watchdog{shutdown = true};
 
@@ -364,7 +378,7 @@ transition({open, TPid, Hosts, _} = Open,
                      restrict = {_,R},
                      config = #config{suspect = OS}}
            = S) ->
-    case okay(getr(restart), Hosts, R) of
+    case okay(role(), Hosts, R) of
         okay ->
             set_watchdog(S#watchdog{status = okay,
                                     num_dwa = OS});
@@ -411,44 +425,45 @@ transition({'DOWN', _, process, TPid, _Reason},
     stop;
 
 %% ... or not.
-transition({'DOWN', _, process, TPid, _Reason},
+transition({'DOWN', _, process, TPid, _Reason} = D,
            #watchdog{transport = TPid,
                      status = T,
                      restrict = {_,R}}
            = S0) ->
     S = S0#watchdog{pending = false,
                     transport = undefined},
-    {{M,_}, _, _} = getr(restart),
+    {M,_} = role(),
 
     %% Close an accepting watchdog immediately if there's no
     %% restriction on the number of connections to the same peer: the
-    %% state machine never enters state REOPEN in this case. The
-    %% 'close' message (instead of stop) is so as not to bypass the
-    %% sending of messages to the service process in handle_info/2.
+    %% state machine never enters state REOPEN in this case.
 
-    if T /= initial, M == accept, not R ->
-            send(self(), close),
-            S#watchdog{status = down};
-       T /= initial ->
-            set_watchdog(S#watchdog{status = down});
-       M == connect ->
-            set_watchdog(S);
-       M == accept ->
-            send(self(), close),
-            S
+    if T == initial;
+       M == accept, not R ->
+            close(D, S0),
+            stop;
+       true ->
+            set_watchdog(S#watchdog{status = down})
     end;
 
 %% Incoming message.
-transition({recv, TPid, Name, Pkt}, #watchdog{transport = TPid} = S) ->
-    recv(Name, Pkt, S);
+transition({recv, TPid, Name, PktT}, #watchdog{transport = TPid} = S) ->
+    try
+        incoming(Name, PktT, S)
+    catch
+        #watchdog{dictionary = Dict0, receive_data = T} = NS ->
+            diameter_traffic:receive_message(TPid, PktT, Dict0, T),
+            NS
+    end;
 
 %% Current watchdog has timed out.
 transition({timeout, TRef, tw}, #watchdog{tref = TRef} = S) ->
-    set_watchdog(timeout(S));
+    set_watchdog(0, timeout(S));
 
-%% Timer was canceled after message was already sent.
-transition({timeout, _, tw}, #watchdog{}) ->
-    ok;
+%% Message has arrived since the timer was started: subtract time
+%% already elapsed from new timer.
+transition({timeout, _, tw}, #watchdog{tref = T0} = S) ->
+    set_watchdog(diameter_lib:micro_diff(T0) div 1000, S);
 
 %% State query.
 transition({state, Pid}, #watchdog{status = S}) ->
@@ -491,7 +506,7 @@ encode(dwa, Dict0, #diameter_packet{header = H, transport_data = TD}
 
 %% okay/3
 
-okay({{accept, Ref}, _, _}, Hosts, Restrict) ->
+okay({accept, Ref}, Hosts, Restrict) ->
     T = {?MODULE, connection, Ref, Hosts},
     diameter_reg:add(T),
     if Restrict ->
@@ -502,7 +517,7 @@ okay({{accept, Ref}, _, _}, Hosts, Restrict) ->
 %% Register before matching so that at least one of two registering
 %% processes will match the other.
 
-okay({{connect, _}, _, _}, _, _) ->
+okay({connect, _}, _, _) ->
     okay.
 
 %% okay/2
@@ -517,24 +532,38 @@ okay(C) ->
     [_|_] = [send(P, close) || {_,P} <- C, self() /= P],
     reopen.
 
+%% role/0
+
+role() ->
+    element(1, getr(restart)).
+
 %% set_watchdog/1
 
-set_watchdog(#watchdog{tw = TwInit,
-                       tref = TRef}
-             = S) ->
-    cancel(TRef),
-    S#watchdog{tref = erlang:start_timer(tw(TwInit), self(), tw)};
-set_watchdog(stop = No) ->
-    No.
+%% Timer not yet set.
+set_watchdog(#watchdog{tref = undefined} = S) ->
+    set_watchdog(0, S);
 
-cancel(undefined) ->
-    ok;
-cancel(TRef) ->
-    erlang:cancel_timer(TRef).
+%% Timer already set: start at new one only at expiry.
+set_watchdog(#watchdog{} = S) ->
+    S#watchdog{tref = diameter_lib:now()}.
+
+%% set_watchdog/2
+
+set_watchdog(_, stop = No) ->
+    No;
+
+set_watchdog(Ms, #watchdog{tw = TwInit} = S) ->
+    S#watchdog{tref = erlang:start_timer(tw(TwInit, Ms), self(), tw)}.
+
+%% A callback could return anything, so ensure the result isn't
+%% negative. Don't prevent abuse, even though the smallest valid
+%% timeout is 4000.
+tw(TwInit, Ms) ->
+    max(tw(TwInit) - Ms, 0).
 
 tw(T)
   when is_integer(T), T >= 6000 ->
-    T - 2000 + (random:uniform(4001) - 1); %% RFC3539 jitter of +/- 2 sec.
+    T - 2000 + (rand:uniform(4001) - 1); %% RFC3539 jitter of +/- 2 sec.
 tw({M,F,A}) ->
     apply(M,F,A).
 
@@ -551,58 +580,74 @@ send_watchdog(#watchdog{pending = false,
     ?LOG(send, 'DWR'),
     S#watchdog{pending = true}.
 
-%% Dont' count encode errors since we don't expect any on DWR/DWA.
+%% Don't count encode errors since we don't expect any on DWR/DWA.
+
+%% incoming/3
+
+incoming(Name, {Pkt, NPid}, S) ->
+    NS = recv(Name, Pkt, S),
+    NPid ! {diameter, discard},
+    NS;
+
+incoming(Name, Pkt, S) ->
+    recv(Name, Pkt, S).
 
 %% recv/3
 
 recv(Name, Pkt, S) ->
-    try rcv(Name, S) of
+    try rcv(Name, Pkt, rcv(Name, S)) of
         #watchdog{} = NS ->
-            rcv(Name, Pkt, S),
-            NS
+            throw(NS)
     catch
-        {?MODULE, throwaway, #watchdog{} = NS} ->
+        #watchdog{} = NS ->  %% throwaway
             NS
     end.
 
 %% rcv/3
 
 rcv('DWR', Pkt, #watchdog{transport = TPid,
-                          dictionary = Dict0}) ->
+                          dictionary = Dict0}
+                = S) ->
     ?LOG(recv, 'DWR'),
     DPkt = diameter_codec:decode(Dict0, Pkt),
     diameter_traffic:incr(recv, DPkt, TPid, Dict0),
     diameter_traffic:incr_error(recv, DPkt, TPid, Dict0),
-    EPkt = encode(dwa, Dict0, Pkt),
+    #diameter_packet{header = H,
+                     transport_data = T,
+                     bin = Bin}
+        = EPkt
+        = encode(dwa, Dict0, Pkt),
     diameter_traffic:incr(send, EPkt, TPid, Dict0),
     diameter_traffic:incr_rc(send, EPkt, TPid, Dict0),
 
-    send(TPid, {send, EPkt}),
-    ?LOG(send, 'DWA');
+    %% Strip potentially large message terms.
+    send(TPid, {send, #diameter_packet{header = H,
+                                       transport_data = T,
+                                       bin = Bin}}),
+    ?LOG(send, 'DWA'),
+    throw(S);
 
 rcv('DWA', Pkt, #watchdog{transport = TPid,
-                          dictionary = Dict0}) ->
+                          dictionary = Dict0}
+                = S) ->
     ?LOG(recv, 'DWA'),
     diameter_traffic:incr(recv, Pkt, TPid, Dict0),
     diameter_traffic:incr_rc(recv,
                              diameter_codec:decode(Dict0, Pkt),
                              TPid,
-                             Dict0);
+                             Dict0),
+    throw(S);
 
-rcv(N, _, _)
+rcv(N, _, S)
   when N == 'CER';
        N == 'CEA';
-       N == 'DPR';
-       N == 'DPA' ->
-    false;
+       N == 'DPR' ->
+    throw(S);
+%% DPR can be sent explicitly with diameter:call/4. Only the
+%% corresponding DPAs arrive here.
 
-rcv(_, Pkt, #watchdog{transport = TPid,
-                      dictionary = Dict0,
-                      receive_data = T}) ->
-    diameter_traffic:receive_message(TPid, Pkt, Dict0, T).
-
-throwaway(S) ->
-    throw({?MODULE, throwaway, S}).
+rcv(_, _, S)->
+    S.
 
 %% rcv/2
 %%
@@ -619,20 +664,20 @@ throwaway(S) ->
 %%   INITIAL       Receive non-DWA      Throwaway()          INITIAL
 
 rcv('DWA', #watchdog{status = initial} = S) ->
-    throwaway(S#watchdog{pending = false});
+    throw(S#watchdog{pending = false});
 
 rcv(_, #watchdog{status = initial} = S) ->
-    throwaway(S);
+    throw(S);
 
 %%   DOWN          Receive DWA          Pending = FALSE
 %%                                      Throwaway()          DOWN
 %%   DOWN          Receive non-DWA      Throwaway()          DOWN
 
 rcv('DWA', #watchdog{status = down} = S) ->
-    throwaway(S#watchdog{pending = false});
+    throw(S#watchdog{pending = false});
 
 rcv(_, #watchdog{status = down} = S) ->
-    throwaway(S);
+    throw(S);
 
 %%   OKAY          Receive DWA          Pending = FALSE
 %%                                      SetWatchdog()        OKAY
@@ -688,7 +733,7 @@ rcv('DWR', #watchdog{status = reopen} = S) ->
     S;  %% ensure DWA: the RFC isn't explicit about answering
 
 rcv(_, #watchdog{status = reopen} = S) ->
-    throwaway(S).
+    throw(S).
 
 %% timeout/1
 %%
@@ -795,26 +840,25 @@ restart(S) ->  %% reconnect has won race with timeout
 %% state down rather then initial when receiving notification of an
 %% open connection.
 
-restart({{connect, _} = T, Opts, Svc},
+restart({{connect, _} = T, Opts, Svc, SvcOpts},
         #watchdog{parent = Pid,
-                  sequence = Mask,
                   restrict = {R,_},
                   dictionary = Dict0}
         = S) ->
     send(Pid, {reconnect, self()}),
     Nodes = restrict_nodes(R),
-    S#watchdog{transport = start(T, Opts, Mask, Nodes, Dict0, Svc),
+    S#watchdog{transport = start(T, Opts, SvcOpts, Nodes, Dict0, Svc),
                restrict = {R, lists:member(node(), Nodes)}};
 
 %% No restriction on the number of connections to the same peer: just
 %% die. Note that a state machine never enters state REOPEN in this
 %% case.
-restart({{accept, _}, _, _}, #watchdog{restrict = {_, false}}) ->
-    stop;  %% 'DOWN' was in old code: 'close' was not sent
+restart({{accept, _}, _, _, _}, #watchdog{restrict = {_, false}}) ->
+    stop;
 
 %% Otherwise hang around until told to die, either by the service or
 %% by another watchdog.
-restart({{accept, _}, _, _}, S) ->
+restart({{accept, _}, _, _, _}, S) ->
     S.
 
 %% Don't currently use Opts/Svc in the accept case.

@@ -2,18 +2,19 @@
 %%
 %% %CopyrightBegin%
 %% 
-%% Copyright Ericsson AB 2001-2011. All Rights Reserved.
+%% Copyright Ericsson AB 2001-2016. All Rights Reserved.
 %% 
-%% The contents of this file are subject to the Erlang Public License,
-%% Version 1.1, (the "License"); you may not use this file except in
-%% compliance with the License. You should have received a copy of the
-%% Erlang Public License along with this software. If not, it can be
-%% retrieved online at http://www.erlang.org/.
-%% 
-%% Software distributed under the License is distributed on an "AS IS"
-%% basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See
-%% the License for the specific language governing rights and limitations
-%% under the License.
+%% Licensed under the Apache License, Version 2.0 (the "License");
+%% you may not use this file except in compliance with the License.
+%% You may obtain a copy of the License at
+%%
+%%     http://www.apache.org/licenses/LICENSE-2.0
+%%
+%% Unless required by applicable law or agreed to in writing, software
+%% distributed under the License is distributed on an "AS IS" BASIS,
+%% WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+%% See the License for the specific language governing permissions and
+%% limitations under the License.
 %% 
 %% %CopyrightEnd%
 %%
@@ -365,7 +366,7 @@
 
 -export([subst_uses_llvm/2]).
 
--export_type([alub_cond/0]).
+-export_type([alub_cond/0, rtl/0]).
 
 %%
 %% RTL
@@ -383,6 +384,7 @@
 	      label_range,  %% {Min,Max} First and last name used for labels
 	      info=[]       %% A keylist with arbitrary information.
 	     }).
+-opaque rtl() :: #rtl{}.
 
 mk_rtl(Fun, ArgList, Closure, Leaf, Code, Data, VarRange, LabelRange) ->
   #rtl{'fun'=Fun, arglist=ArgList, code=Code, 
@@ -413,11 +415,13 @@ rtl_info_update(Rtl, Info) -> Rtl#rtl{info=Info}.
 %% move
 %%
 
-mk_move(Dst, Src) -> #move{dst=Dst, src=Src}.
+mk_move(Dst, Src) ->
+  false = is_fpreg(Dst), false = is_fpreg(Src),
+  #move{dst=Dst, src=Src}.
 move_dst(#move{dst=Dst}) -> Dst.
-move_dst_update(M, NewDst) -> M#move{dst=NewDst}.
+move_dst_update(M, NewDst) -> false = is_fpreg(NewDst), M#move{dst=NewDst}.
 move_src(#move{src=Src}) -> Src.
-move_src_update(M, NewSrc) -> M#move{src=NewSrc}.
+move_src_update(M, NewSrc) -> false = is_fpreg(NewSrc), M#move{src=NewSrc}.
 %% is_move(#move{}) -> true;
 %% is_move(_) -> false.
 
@@ -469,7 +473,11 @@ phi_remove_pred(Phi, Pred) ->
   case NewArgList of
     [Arg] -> %% the phi should be turned into a move instruction
       {_Label,Var} = Arg,
-      mk_move(phi_dst(Phi), Var);
+      Dst = phi_dst(Phi),
+      case {is_fpreg(Dst), is_fpreg(Var)} of
+	{true, true} -> mk_fmove(Dst, Var);
+	{false, false} -> mk_move(Dst, Var)
+      end;
   %%    io:format("~nPhi (~w) turned into move (~w) when removing pred ~w~n",[Phi,Move,Pred]),
     [_|_] ->
       Phi#phi{arglist=NewArgList}
@@ -836,11 +844,11 @@ fp_unop_op(#fp_unop{op=Op}) -> Op.
 %% fmove
 %%
 
-mk_fmove(X, Y) -> #fmove{dst=X, src=Y}.
+mk_fmove(X, Y) -> true = is_fpreg(X), true = is_fpreg(Y), #fmove{dst=X, src=Y}.
 fmove_dst(#fmove{dst=Dst}) -> Dst.
-fmove_dst_update(M, NewDst) -> M#fmove{dst=NewDst}.
+fmove_dst_update(M, NewDst) -> true = is_fpreg(NewDst), M#fmove{dst=NewDst}.
 fmove_src(#fmove{src=Src}) -> Src.
-fmove_src_update(M, NewSrc) -> M#fmove{src=NewSrc}.
+fmove_src_update(M, NewSrc) -> true = is_fpreg(NewSrc), M#fmove{src=NewSrc}.
 
 %%
 %% fconv

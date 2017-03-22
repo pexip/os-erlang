@@ -1,18 +1,19 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2007-2014. All Rights Reserved.
+%% Copyright Ericsson AB 2007-2016. All Rights Reserved.
 %%
-%% The contents of this file are subject to the Erlang Public License,
-%% Version 1.1, (the "License"); you may not use this file except in
-%% compliance with the License. You should have received a copy of the
-%% Erlang Public License along with this software. If not, it can be
-%% retrieved online at http://www.erlang.org/.
+%% Licensed under the Apache License, Version 2.0 (the "License");
+%% you may not use this file except in compliance with the License.
+%% You may obtain a copy of the License at
 %%
-%% Software distributed under the License is distributed on an "AS IS"
-%% basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See
-%% the License for the specific language governing rights and limitations
-%% under the License.
+%%     http://www.apache.org/licenses/LICENSE-2.0
+%%
+%% Unless required by applicable law or agreed to in writing, software
+%% distributed under the License is distributed on an "AS IS" BASIS,
+%% WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+%% See the License for the specific language governing permissions and
+%% limitations under the License.
 %%
 %% %CopyrightEnd%
 %%
@@ -30,7 +31,17 @@
 
 -export([master_secret/4, finished/5, certificate_verify/3, mac_hash/7,
 	 setup_keys/8, suites/1, prf/5,
-	 ecc_curves/1, oid_to_enum/1, enum_to_oid/1]).
+	 ecc_curves/1, ecc_curves/2, oid_to_enum/1, enum_to_oid/1, 
+	 default_signature_algs/1, signature_algs/2]).
+
+-type named_curve() :: sect571r1 | sect571k1 | secp521r1 | brainpoolP512r1 |
+                       sect409k1 | sect409r1 | brainpoolP384r1 | secp384r1 |
+                       sect283k1 | sect283r1 | brainpoolP256r1 | secp256k1 | secp256r1 |
+                       sect239k1 | sect233k1 | sect233r1 | secp224k1 | secp224r1 |
+                       sect193r1 | sect193r2 | secp192k1 | secp192r1 | sect163k1 |
+                       sect163r1 | sect163r2 | secp160k1 | secp160r1 | secp160r2.
+-type curves() :: [named_curve()].
+-export_type([curves/0, named_curve/0]).
 
 %%====================================================================
 %% Internal application API
@@ -207,38 +218,99 @@ suites(Minor) when Minor == 1; Minor == 2 ->
       ?TLS_DHE_DSS_WITH_AES_128_CBC_SHA,
       ?TLS_ECDH_ECDSA_WITH_AES_128_CBC_SHA,
       ?TLS_ECDH_RSA_WITH_AES_128_CBC_SHA,
-      ?TLS_RSA_WITH_AES_128_CBC_SHA,
-
-      ?TLS_ECDHE_ECDSA_WITH_RC4_128_SHA,
-      ?TLS_ECDHE_RSA_WITH_RC4_128_SHA,
-      ?TLS_RSA_WITH_RC4_128_SHA,
-      ?TLS_RSA_WITH_RC4_128_MD5,
-      ?TLS_DHE_RSA_WITH_DES_CBC_SHA,
-      ?TLS_ECDH_ECDSA_WITH_RC4_128_SHA,
-      ?TLS_ECDH_RSA_WITH_RC4_128_SHA,
-
-      ?TLS_RSA_WITH_DES_CBC_SHA
+      ?TLS_RSA_WITH_AES_128_CBC_SHA
     ];
 suites(3) ->
     [
+     ?TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256,
+     ?TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256,
+
+     ?TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384,
+     ?TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,
      ?TLS_ECDHE_ECDSA_WITH_AES_256_CBC_SHA384,
      ?TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA384,
+     ?TLS_ECDH_ECDSA_WITH_AES_256_GCM_SHA384,
+     ?TLS_ECDH_RSA_WITH_AES_256_GCM_SHA384,
      ?TLS_ECDH_ECDSA_WITH_AES_256_CBC_SHA384,
      ?TLS_ECDH_RSA_WITH_AES_256_CBC_SHA384,
 
+     ?TLS_DHE_RSA_WITH_CHACHA20_POLY1305_SHA256,
+     ?TLS_DHE_RSA_WITH_AES_256_GCM_SHA384,
+     ?TLS_DHE_DSS_WITH_AES_256_GCM_SHA384,
      ?TLS_DHE_RSA_WITH_AES_256_CBC_SHA256,
      ?TLS_DHE_DSS_WITH_AES_256_CBC_SHA256,
+     ?TLS_RSA_WITH_AES_256_GCM_SHA384,
      ?TLS_RSA_WITH_AES_256_CBC_SHA256,
 
+     ?TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256,
+     ?TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,
      ?TLS_ECDHE_ECDSA_WITH_AES_128_CBC_SHA256,
      ?TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA256,
+     ?TLS_ECDH_ECDSA_WITH_AES_128_GCM_SHA256,
+     ?TLS_ECDH_RSA_WITH_AES_128_GCM_SHA256,
      ?TLS_ECDH_ECDSA_WITH_AES_128_CBC_SHA256,
      ?TLS_ECDH_RSA_WITH_AES_128_CBC_SHA256,
 
+     ?TLS_DHE_RSA_WITH_AES_128_GCM_SHA256,
+     ?TLS_DHE_DSS_WITH_AES_128_GCM_SHA256,
      ?TLS_DHE_RSA_WITH_AES_128_CBC_SHA256,
      ?TLS_DHE_DSS_WITH_AES_128_CBC_SHA256,
+     ?TLS_RSA_WITH_AES_128_GCM_SHA256,
      ?TLS_RSA_WITH_AES_128_CBC_SHA256
+
+     %% not supported
+     %% ?TLS_DH_RSA_WITH_AES_256_GCM_SHA384,
+     %% ?TLS_DH_DSS_WITH_AES_256_GCM_SHA384,
+     %% ?TLS_DH_RSA_WITH_AES_128_GCM_SHA256,
+     %% ?TLS_DH_DSS_WITH_AES_128_GCM_SHA256
     ] ++ suites(2).
+
+
+
+signature_algs({3, 3}, HashSigns) ->
+    CryptoSupports =  crypto:supports(),
+    Hashes = proplists:get_value(hashs, CryptoSupports),
+    PubKeys = proplists:get_value(public_keys, CryptoSupports),
+    Supported = lists:foldl(fun({Hash, dsa = Sign} = Alg, Acc) ->
+				    case proplists:get_bool(dss, PubKeys) 
+					andalso proplists:get_bool(Hash, Hashes)
+					andalso is_pair(Hash, Sign, Hashes)
+				    of
+					true ->
+					    [Alg | Acc];
+					false ->
+					    Acc
+				    end;
+			       ({Hash, Sign} = Alg, Acc) -> 
+				    case proplists:get_bool(Sign, PubKeys) 
+					andalso proplists:get_bool(Hash, Hashes) 
+					andalso is_pair(Hash, Sign, Hashes)
+				    of
+					true ->
+					    [Alg | Acc];
+					false ->
+					    Acc
+				    end
+			    end, [], HashSigns),
+    lists:reverse(Supported).
+
+default_signature_algs({3, 3} = Version) ->
+    Default = [%% SHA2
+	       {sha512, ecdsa},
+	       {sha512, rsa},
+	       {sha384, ecdsa},
+	       {sha384, rsa},
+	       {sha256, ecdsa},
+	       {sha256, rsa},
+	       {sha224, ecdsa},
+	       {sha224, rsa},
+	       %% SHA
+	       {sha, ecdsa},
+	       {sha, rsa},
+	       {sha, dsa}],
+    signature_algs(Version, Default);
+default_signature_algs(_) ->
+    undefined.
 
 %%--------------------------------------------------------------------
 %%% Internal functions
@@ -324,14 +396,32 @@ finished_label(client) ->
 finished_label(server) ->
     <<"server finished">>.
 
+is_pair(sha, dsa, _) ->
+    true;
+is_pair(_, dsa, _) ->
+    false;
+is_pair(Hash, ecdsa, Hashs) ->
+    AtLeastSha = Hashs -- [md2,md4,md5],
+    lists:member(Hash, AtLeastSha);
+is_pair(Hash, rsa, Hashs) ->
+    AtLeastMd5 = Hashs -- [md2,md4],
+    lists:member(Hash, AtLeastMd5).
+
 %% list ECC curves in prefered order
-ecc_curves(_Minor) ->
-    TLSCurves = [sect571r1,sect571k1,secp521r1,brainpoolP512r1,
-		 sect409k1,sect409r1,brainpoolP384r1,secp384r1,
-		 sect283k1,sect283r1,brainpoolP256r1,secp256k1,secp256r1,
-		 sect239k1,sect233k1,sect233r1,secp224k1,secp224r1,
-		 sect193r1,sect193r2,secp192k1,secp192r1,sect163k1,
-		 sect163r1,sect163r2,secp160k1,secp160r1,secp160r2],
+-spec ecc_curves(1..3 | all) -> [named_curve()].
+ecc_curves(all) ->
+    [sect571r1,sect571k1,secp521r1,brainpoolP512r1,
+     sect409k1,sect409r1,brainpoolP384r1,secp384r1,
+     sect283k1,sect283r1,brainpoolP256r1,secp256k1,secp256r1,
+     sect239k1,sect233k1,sect233r1,secp224k1,secp224r1,
+     sect193r1,sect193r2,secp192k1,secp192r1,sect163k1,
+     sect163r1,sect163r2,secp160k1,secp160r1,secp160r2];
+ecc_curves(Minor) ->
+    TLSCurves = ecc_curves(all),
+    ecc_curves(Minor, TLSCurves).
+
+-spec ecc_curves(1..3, [named_curve()]) -> [named_curve()].
+ecc_curves(_Minor, TLSCurves) ->
     CryptoCurves = crypto:ec_curves(),
     lists:foldr(fun(Curve, Curves) ->
 			case proplists:get_bool(Curve, CryptoCurves) of
@@ -339,6 +429,7 @@ ecc_curves(_Minor) ->
 			    false -> Curves
 			end
 		end, [], TLSCurves).
+
 
 %% ECC curves from draft-ietf-tls-ecc-12.txt (Oct. 17, 2005)
 oid_to_enum(?sect163k1) -> 1;

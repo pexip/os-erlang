@@ -1,18 +1,19 @@
 %%
 %% %CopyrightBegin%
 %% 
-%% Copyright Ericsson AB 2004-2014. All Rights Reserved.
+%% Copyright Ericsson AB 2004-2016. All Rights Reserved.
 %% 
-%% The contents of this file are subject to the Erlang Public License,
-%% Version 1.1, (the "License"); you may not use this file except in
-%% compliance with the License. You should have received a copy of the
-%% Erlang Public License along with this software. If not, it can be
-%% retrieved online at http://www.erlang.org/.
-%% 
-%% Software distributed under the License is distributed on an "AS IS"
-%% basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See
-%% the License for the specific language governing rights and limitations
-%% under the License.
+%% Licensed under the Apache License, Version 2.0 (the "License");
+%% you may not use this file except in compliance with the License.
+%% You may obtain a copy of the License at
+%%
+%%     http://www.apache.org/licenses/LICENSE-2.0
+%%
+%% Unless required by applicable law or agreed to in writing, software
+%% distributed under the License is distributed on an "AS IS" BASIS,
+%% WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+%% See the License for the specific language governing permissions and
+%% limitations under the License.
 %% 
 %% %CopyrightEnd%
 %%
@@ -37,6 +38,7 @@
 -include_lib("common_test/include/ct.hrl").
 
 all() -> [{group, messages},
+	  client_sends_info_timing,
 	  {group, client_server}
 	 ].
 
@@ -56,7 +58,7 @@ init_per_suite(Config) ->
 %%% One group in this suite happens to support only QuickCheck, so skip it
 %%% if we run proper.
 init_per_group(client_server, Config) ->
-    case ?config(property_test_tool,Config) of
+    case proplists:get_value(property_test_tool,Config) of
 	eqc -> Config;
 	X -> {skip, lists:concat([X," is not supported"])}
     end;
@@ -103,5 +105,11 @@ client_server_parallel(Config) ->
 client_server_parallel_multi(Config) ->
     ct_property_test:quickcheck(
       ssh_eqc_client_server:prop_parallel_multi(Config),
+      Config
+     ).
+
+client_sends_info_timing(Config) ->
+    ct_property_test:quickcheck(
+      ssh_eqc_client_info_timing:prop_seq(Config),
       Config
      ).

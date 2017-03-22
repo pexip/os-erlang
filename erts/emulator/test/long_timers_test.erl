@@ -1,18 +1,19 @@
 %%
 %% %CopyrightBegin%
 %% 
-%% Copyright Ericsson AB 2006-2010. All Rights Reserved.
+%% Copyright Ericsson AB 2006-2016. All Rights Reserved.
 %% 
-%% The contents of this file are subject to the Erlang Public License,
-%% Version 1.1, (the "License"); you may not use this file except in
-%% compliance with the License. You should have received a copy of the
-%% Erlang Public License along with this software. If not, it can be
-%% retrieved online at http://www.erlang.org/.
-%% 
-%% Software distributed under the License is distributed on an "AS IS"
-%% basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See
-%% the License for the specific language governing rights and limitations
-%% under the License.
+%% Licensed under the Apache License, Version 2.0 (the "License");
+%% you may not use this file except in compliance with the License.
+%% You may obtain a copy of the License at
+%%
+%%     http://www.apache.org/licenses/LICENSE-2.0
+%%
+%% Unless required by applicable law or agreed to in writing, software
+%% distributed under the License is distributed on an "AS IS" BASIS,
+%% WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+%% See the License for the specific language governing permissions and
+%% limitations under the License.
 %% 
 %% %CopyrightEnd%
 %%
@@ -26,10 +27,15 @@
 %%% Created : 21 Aug 2006 by Rickard Green <rickard.s.green@ericsson.com>
 %%%-------------------------------------------------------------------
 
+-define(HIGH_CPU_INFO, "Ignored due to high CPU utilization.").
+-define(MISSING_CPU_INFO, "Ignored due to missing CPU utilization information.").
 
 -define(MAX_TIMEOUT, 60). % Minutes
--define(MAX_LATE, 10*1000). % Milliseconds
+-define(MAX_LATE_MS, 1000). % Milliseconds
 -define(REG_NAME, '___LONG___TIMERS___TEST___SERVER___').
+
+-define(HIGH_UTIL, 96.0).
+-define(UTIL_INTERVAL, 10000).
 
 -define(DRV_NAME, timer_driver).
 
@@ -71,75 +77,206 @@ check_result() ->
     receive
 	{'DOWN', Mon, process, _, Reason} ->
 	    {?REG_NAME, 'DOWN', Reason};
-	{result, ?REG_NAME, TORs, Start, End} ->
+	{result, ?REG_NAME, TORs, Start, End, UtilData} ->
 	    erlang:demonitor(Mon),
 	    receive {'DOWN', Mon, _, _, _} -> ok after 0 -> ok end,
 	    stop_node(Node),
-	    check(TORs, (timer:now_diff(End, Start) div 1000) - ?MAX_LATE, ok)
+	    Res = check(TORs, Start, End, UtilData, ms((End - Start) - max_late()), ok),
+	    io:format("Start = ~p~n End = ~p~n UtilData = ~p~n", [Start, End, UtilData]),
+	    Res
     end.
+
+res(New, Old) when New == failed; Old == failed ->
+    failed;
+res(New, Old) when New == missing_cpu_info; Old == missing_cpu_info ->
+    missing_cpu_info;
+res(New, Old) when New == high_cpu; Old == high_cpu ->
+    high_cpu;
+res(New, _Old) ->
+    New.
 
 check([#timeout_rec{timeout = Timeout,
 		    type = Type,
 		    timeout_diff = undefined} | TORs],
+      Start,
+      End,
+      UtilData,
       NeedRes,
-      _Ok) when Timeout < NeedRes ->
-    io:format("~p timeout = ~p failed! No timeout.~n",
-	      [Type, Timeout]),
-    check(TORs, NeedRes, failed);
+      Ok) when Timeout < NeedRes ->
+    {NewOk, HCPU} = case had_high_cpu_util(Start,
+					   Timeout,
+					   End - Timeout*1000,
+					   UtilData) of
+			yes -> {res(high_cpu, Ok), ?HIGH_CPU_INFO};
+			no -> {res(failed, Ok), ""};
+			missing -> {res(missing_cpu_info, Ok), "FAILED", ?MISSING_CPU_INFO}
+		    end,
+    io:format("~p timeout = ~p ms FAILED! No timeout. ~s~n",
+	      [Type, Timeout, HCPU]),
+    check(TORs, Start, End, UtilData, NeedRes, NewOk);
 check([#timeout_rec{timeout_diff = undefined} | TORs],
+      Start,
+      End,
+      UtilData,
       NeedRes,
       Ok) ->
-    check(TORs, NeedRes, Ok);
+    check(TORs, Start, End, UtilData, NeedRes, Ok);
 check([#timeout_rec{timeout = Timeout,
 		    type = Type,
 		    timeout_diff = {error, Reason}} | TORs],
+      Start,
+      End,
+      UtilData,
       NeedRes,
       _Ok) ->
-    io:format("~p timeout = ~p failed! exit reason ~p~n",
+    io:format("~p timeout = ~p ms FAILED! exit reason ~p~n",
 	      [Type, Timeout, Reason]),
-    check(TORs, NeedRes, failed);
+    check(TORs, Start, End, UtilData, NeedRes, failed);
 check([#timeout_rec{timeout = Timeout,
 		    type = Type,
 		    timeout_diff = TimeoutDiff} | TORs],
+      Start,
+      End,
+      UtilData,
       NeedRes,
       Ok) ->
-    case (0 =< TimeoutDiff) and (TimeoutDiff =< ?MAX_LATE) of
-	true ->
-	    io:format("~p timeout = ~p succeded! timeout diff = ~p.~n",
-		      [Type, Timeout, TimeoutDiff]),
-	    check(TORs, NeedRes, Ok);
-	false ->
-	    io:format("~p timeout = ~p failed! timeout diff = ~p.~n",
-		      [Type, Timeout, TimeoutDiff]),
-	    check(TORs, NeedRes, failed)
-    end;
-check([], _NeedRes, Ok) ->
+    {NewOk, SuccessStr, HCPU} = case {(0 =< TimeoutDiff),
+				     (TimeoutDiff =< max_late())} of
+				    {true, true} ->
+					{res(ok, Ok), "succeeded", ""};
+				    {false, _} ->
+					{res(failed, Ok), "FAILED", ""};
+				    _ ->
+					case had_high_cpu_util(Start,
+							       Timeout,
+							       TimeoutDiff,
+							       UtilData) of
+					    yes -> {res(high_cpu, Ok), "FAILED", ?HIGH_CPU_INFO};
+					    no -> {res(failed, Ok), "FAILED", ""};
+					    missing -> {res(missing_cpu_info, Ok), "FAILED", ?MISSING_CPU_INFO}
+					end
+			  end,
+    io:format("~s timeout = ~s ms ~s! timeout diff = ~s. ~s~n",
+	      [type_str(Type),
+	       time_str(Timeout),
+	       SuccessStr,
+	       time_str(TimeoutDiff, 1000000),
+	       HCPU]),
+    check(TORs, Start, End, UtilData, NeedRes, NewOk);
+check([],_Start,_End,_UtilData,_NeedRes, Ok) ->
     Ok.
 
+% TargetTimeout in ms, other in us.
+had_high_cpu_util(StartTime,
+		  TargetTimeout,
+		  TimeoutDiff,
+		  UtilData) ->
+    TargetTo = StartTime + TargetTimeout*1000,
+    ActTo = TargetTo + TimeoutDiff,
+    hcpu(ActTo, TargetTo, UtilData).
+
+hcpu(_ActTo, _TargetTo, [{UT, 0} | _] = UD) ->
+    missing; %% Util is the integer zero when not supported...
+%% UT2 =:= UT1
+hcpu(ActTo, TargetTo, [{UT, _}, {UT, _} | _] = UD) ->
+    hcpu(ActTo, TargetTo, tl(UD));
+%% UT2 > UT1 > ActTo > TargetTo
+hcpu(ActTo, TargetTo, [{_UT2, _}, {UT1, _} | _] = UD) when UT1 > ActTo ->
+    hcpu(ActTo, TargetTo, tl(UD));
+%% UT2 >= ActTo > TargetTo >= UT1
+hcpu(ActTo, TargetTo,
+     [{UT2, U}, {UT1, _} | _]) when UT2 >= ActTo,
+				    TargetTo >= UT1 ->
+    case U >= (((ActTo - TargetTo) / (UT2 - UT1))
+	       * (?HIGH_UTIL/100.0)) of
+	true -> yes;
+	false -> no
+    end;
+%% UT2 >= ActTo >= UT1 > TargetTo
+hcpu(ActTo, TargetTo,
+     [{UT2, U}, {UT1, _} | _] = UD) when UT2 >= ActTo,
+					 ActTo >= UT1,
+					 UT1 > TargetTo ->
+    case U >= (((ActTo - UT1) / (UT2 - UT1))
+	       * (?HIGH_UTIL/100.0)) of
+	true -> hcpu(ActTo, TargetTo, tl(UD));
+	false -> no
+    end;
+%% ActTo > UT2 >= TargetTo >= UT1
+hcpu(ActTo, TargetTo,
+     [{UT2, U}, {UT1, _} | _]) when ActTo > UT2,
+				    TargetTo >= UT1 ->
+    case U >= (((UT2 - TargetTo) / (UT2 - UT1))
+	       * (?HIGH_UTIL/100.0)) of
+	true -> yes;
+	false -> no
+    end;
+%% ActTo > UT2 > UT1 > TargetTo
+hcpu(ActTo, TargetTo,
+     [{UT2, U}, {UT1, _} | _] = UD) when ActTo > UT2,
+					 UT1 > TargetTo ->
+    case U >= ?HIGH_UTIL of
+	true -> hcpu(ActTo, TargetTo, tl(UD));
+	false -> no
+    end.
+
+type_str(receive_after) -> "receive ... after";
+type_str(bif_timer) -> "BIF timer";
+type_str(driver) -> "driver".
+
+time_str(Time, Unit) ->
+    lists:flatten([time_str(Time), " ", unit_str(Unit)]).
+
+time_str(Time) ->
+    lists:reverse(conv_time_str(lists:reverse(integer_to_list(Time)))).
+
+conv_time_str([X,Y,Z,C|Cs]) when C /= $- ->
+    [X,Y,Z,$`|conv_time_str([C|Cs])];
+conv_time_str(Cs) ->
+    Cs.
+
+unit_str(1) -> "s";
+unit_str(1000) -> "ms";
+unit_str(1000000) -> "us";
+unit_str(1000000000) -> "ns";
+unit_str(Res) when is_integer(Res) -> ["/ ", integer_to_list(Res), " s"];
+unit_str(Res) -> Res.
+
+to_diff(Timeout, Start, Stop) ->
+    %% 'Timeout' in milli seconds
+    %% 'Start', 'Stop', and result in micro seconds
+    (Stop - Start) - Timeout*1000.
+
+ms(Time) ->
+    erlang:convert_time_unit(Time, microsecond, millisecond).
+
+max_late() ->
+    erlang:convert_time_unit(?MAX_LATE_MS, millisecond, microsecond).
+
 receive_after(Timeout) ->
-    Start = now(),
+    Start = erlang:monotonic_time(microsecond),
     receive
 	{get_result, ?REG_NAME} ->
 	    ?REG_NAME ! #timeout_rec{pid = self(),
 				     type = receive_after,
 				     timeout = Timeout}
     after Timeout ->
-	    Stop = now(),
+	    Stop = erlang:monotonic_time(microsecond),
 	    receive
 		{get_result, ?REG_NAME} ->
-	    	    TimeoutDiff = ((timer:now_diff(Stop, Start) div 1000)
-				   - Timeout),
 		    ?REG_NAME ! #timeout_rec{pid = self(),
 					     type = receive_after,
 					     timeout = Timeout,
-					     timeout_diff = TimeoutDiff}
+					     timeout_diff = to_diff(Timeout,
+								    Start,
+								    Stop)}
 	    end
     end.
 
 driver(Timeout) ->
     Port = open_port({spawn, ?DRV_NAME},[]),
     link(Port),
-    Start = now(),
+    Start = erlang:monotonic_time(microsecond),
     erlang:port_command(Port, <<?START_TIMER, Timeout:32>>),
     receive
 	{get_result, ?REG_NAME} ->
@@ -147,49 +284,58 @@ driver(Timeout) ->
 				     type = driver,
 				     timeout = Timeout};
 	{Port,{data,[?TIMER]}} ->
-	    Stop = now(),
+	    Stop = erlang:monotonic_time(microsecond),
 	    unlink(Port),
 	    true = erlang:port_close(Port),
 	    receive
 		{get_result, ?REG_NAME} ->
-	    	    TimeoutDiff = ((timer:now_diff(Stop, Start) div 1000)
-				   - Timeout),
 		    ?REG_NAME ! #timeout_rec{pid = self(),
 					     type = driver,
 					     timeout = Timeout,
-					     timeout_diff = TimeoutDiff}
+					     timeout_diff = to_diff(Timeout,
+								    Start,
+								    Stop)}
 	    end
     end.
 
 bif_timer(Timeout) ->
+    Start = erlang:monotonic_time(microsecond),
     Tmr = erlang:start_timer(Timeout, self(), ok),
-    Start = now(),
     receive
 	{get_result, ?REG_NAME} ->
 	    ?REG_NAME ! #timeout_rec{pid = self(),
 				     type = bif_timer,
 				     timeout = Timeout};
 	{timeout, Tmr, ok} ->
-	    Stop = now(),
+	    Stop = erlang:monotonic_time(microsecond),
 	    receive
 		{get_result, ?REG_NAME} ->
-	    	    TimeoutDiff = ((timer:now_diff(Stop, Start) div 1000)
-				   - Timeout),
 		    ?REG_NAME ! #timeout_rec{pid = self(),
 					     type = bif_timer,
 					     timeout = Timeout,
-					     timeout_diff = TimeoutDiff}
+					     timeout_diff = to_diff(Timeout,
+								    Start,
+								    Stop)}
 	    end
     end.
 
 test(Starter, DrvDir, StartDone) ->
+    process_flag(priority, high),
     erl_ddll:start(),
     ok = load_driver(DrvDir, ?DRV_NAME),
     process_flag(trap_exit, true),
     register(?REG_NAME, self()),
     {group_leader, GL} = process_info(whereis(net_kernel),group_leader),
     group_leader(GL, self()),
-    Start = now(),
+    try
+	application:start(sasl),
+	application:start(os_mon)
+    catch
+	_ : _ ->
+	    ok
+    end,
+    UtilData = new_util(),
+    Start = erlang:monotonic_time(microsecond),
     TORs = lists:map(fun (Min) ->
 			     TO = Min*60*1000,
 			     [#timeout_rec{pid = spawn_opt(
@@ -217,16 +363,27 @@ test(Starter, DrvDir, StartDone) ->
 		     lists:seq(1, ?MAX_TIMEOUT)),
     FlatTORs = lists:flatten(TORs),
     Starter ! StartDone,
-    test_loop(FlatTORs, Start).
+    test_loop(FlatTORs, Start, UtilData).
 
-test_loop(TORs, Start) ->
+new_util() ->
+    new_util([]).
+
+new_util(UtilData) ->
+    Util = cpu_sup:util(),
+    Time = erlang:monotonic_time(microsecond),
+    [{Time, Util} | UtilData].
+
+test_loop(TORs, Start, UtilData) ->
     receive
 	{get_result, ?REG_NAME, Pid} ->
-	    End = now(),
-	    Pid ! {result, ?REG_NAME, get_test_results(TORs), Start, End},
+	    End = erlang:monotonic_time(microsecond),
+	    EndUtilData = new_util(UtilData),
+	    Pid ! {result, ?REG_NAME, get_test_results(TORs), Start, End, EndUtilData},
 	    erl_ddll:unload_driver(?DRV_NAME),
 	    erl_ddll:stop(),
 	    exit(bye)
+    after ?UTIL_INTERVAL ->
+	    test_loop(TORs, Start, new_util(UtilData))
     end.
 
 get_test_results(TORs) ->

@@ -1,18 +1,19 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2009-2014. All Rights Reserved.
+%% Copyright Ericsson AB 2009-2016. All Rights Reserved.
 %%
-%% The contents of this file are subject to the Erlang Public License,
-%% Version 1.1, (the "License"); you may not use this file except in
-%% compliance with the License. You should have received a copy of the
-%% Erlang Public License along with this software. If not, it can be
-%% retrieved online at http://www.erlang.org/.
+%% Licensed under the Apache License, Version 2.0 (the "License");
+%% you may not use this file except in compliance with the License.
+%% You may obtain a copy of the License at
 %%
-%% Software distributed under the License is distributed on an "AS IS"
-%% basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See
-%% the License for the specific language governing rights and limitations
-%% under the License.
+%%     http://www.apache.org/licenses/LICENSE-2.0
+%%
+%% Unless required by applicable law or agreed to in writing, software
+%% distributed under the License is distributed on an "AS IS" BASIS,
+%% WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+%% See the License for the specific language governing permissions and
+%% limitations under the License.
 %%
 %% %CopyrightEnd%
 %%
@@ -117,9 +118,9 @@ init([Parent, Id, Options0]) ->
     wxTextCtrl:connect(Dir, char, [{callback, IsTab}]),
 
     Top  = wxBoxSizer:new(?wxHORIZONTAL),
-    wxSizer:add(Top, Back, [{border, 2},{flag,?wxALL bor ?wxEXPAND}]),
-    wxSizer:add(Top, Forw, [{border, 2},{flag,?wxALL bor ?wxEXPAND}]),
-    wxSizer:add(Top, Up,   [{border, 2},{flag,?wxALL bor ?wxEXPAND}]),    
+    _ = wxSizer:add(Top, Back, [{border, 2},{flag,?wxALL bor ?wxEXPAND}]),
+    _ = wxSizer:add(Top, Forw, [{border, 2},{flag,?wxALL bor ?wxEXPAND}]),
+    _ = wxSizer:add(Top, Up,   [{border, 2},{flag,?wxALL bor ?wxEXPAND}]),    
 
     %% List Ctrl
     {Art, IconMap} = create_icons(ExtraIcons),
@@ -153,13 +154,13 @@ init([Parent, Id, Options0]) ->
     
     %% OK done
     Box  = wxBoxSizer:new(?wxVERTICAL),
-    wxSizer:add(Box, Top,  [{border, 2}, {flag,?wxALL bor ?wxEXPAND}]),
-    wxSizer:add(Box, Dir,  [{border, 2}, {flag,?wxALL bor ?wxEXPAND}]),
-    wxSizer:add(Box, LC,   [{border, 2}, {flag,?wxALL bor ?wxEXPAND}, {proportion, 1}]),
-    wxSizer:add(Box, Bott, [{border, 2}, {flag,?wxALL bor ?wxEXPAND}]),
+    _ = wxSizer:add(Box, Top,  [{border, 2}, {flag,?wxALL bor ?wxEXPAND}]),
+    _ = wxSizer:add(Box, Dir,  [{border, 2}, {flag,?wxALL bor ?wxEXPAND}]),
+    _ = wxSizer:add(Box, LC,   [{border, 2}, {flag,?wxALL bor ?wxEXPAND}, {proportion, 1}]),
+    _ = wxSizer:add(Box, Bott, [{border, 2}, {flag,?wxALL bor ?wxEXPAND}]),
     
     wxWindow:setSizer(Dlg, Box),
-    wxSizer:fit(Box, Dlg),
+    _ = wxSizer:fit(Box, Dlg),
     wxSizer:setSizeHints(Box,Dlg),
     State = #state{win=Dlg, 
 		   back=Back, forward=Forw, up=Up,

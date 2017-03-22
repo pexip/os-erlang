@@ -1,18 +1,19 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2009-2011. All Rights Reserved.
+%% Copyright Ericsson AB 2009-2016. All Rights Reserved.
 %%
-%% The contents of this file are subject to the Erlang Public License,
-%% Version 1.1, (the "License"); you may not use this file except in
-%% compliance with the License. You should have received a copy of the
-%% Erlang Public License along with this software. If not, it can be
-%% retrieved online at http://www.erlang.org/.
+%% Licensed under the Apache License, Version 2.0 (the "License");
+%% you may not use this file except in compliance with the License.
+%% You may obtain a copy of the License at
 %%
-%% Software distributed under the License is distributed on an "AS IS"
-%% basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See
-%% the License for the specific language governing rights and limitations
-%% under the License.
+%%     http://www.apache.org/licenses/LICENSE-2.0
+%%
+%% Unless required by applicable law or agreed to in writing, software
+%% distributed under the License is distributed on an "AS IS" BASIS,
+%% WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+%% See the License for the specific language governing permissions and
+%% limitations under the License.
 %%
 %% %CopyrightEnd%
 %%
@@ -220,8 +221,7 @@ test_events(repeat_cs_and_grs) ->
       {?eh,test_stats,{1,1,{0,0}}},
       [{?eh,tc_done,{repeat_1_SUITE,{init_per_group,gr_fail_result,[]},ok}},
        {?eh,test_stats,{2,1,{0,0}}},
-       {?eh,tc_done,{repeat_1_SUITE,{end_per_group,gr_fail_result,[]},
-		     {return_group_result,failed}}}],
+       {?eh,tc_done,{repeat_1_SUITE,{end_per_group,gr_fail_result,[]},ok}}],
       {?eh,test_stats,{3,1,{0,0}}},
       [{?eh,tc_done,{repeat_1_SUITE,{init_per_group,gr_fail_init,[]},
 		     {failed,{error,fails_on_purpose}}}},
@@ -242,8 +242,7 @@ test_events(repeat_cs_and_grs) ->
       {?eh,test_stats,{5,2,{0,1}}},
       [{?eh,tc_done,{repeat_1_SUITE,{init_per_group,gr_fail_result,[]},ok}},
        {?eh,test_stats,{6,2,{0,1}}},
-       {?eh,tc_done,{repeat_1_SUITE,{end_per_group,gr_fail_result,[]},
-		     {return_group_result,failed}}}],
+       {?eh,tc_done,{repeat_1_SUITE,{end_per_group,gr_fail_result,[]},ok}}],
       {?eh,test_stats,{7,2,{0,1}}},
       [{?eh,tc_done,{repeat_1_SUITE,{init_per_group,gr_fail_init,[]},
 		     {failed,{error,fails_on_purpose}}}},
@@ -289,8 +288,7 @@ test_events(repeat_seq) ->
 		      {init_per_group,gr_fail_result,[]},ok}},
 	{?eh,test_stats,{4,2,{0,2}}},
 	{?eh,tc_done,{repeat_1_SUITE,
-		      {end_per_group,gr_fail_result,[]},
-		      {return_group_result,failed}}}],
+		      {end_per_group,gr_fail_result,[]},ok}}],
        {?eh,tc_auto_skip,{repeat_1_SUITE,{tc_ok_2,repeat_seq_2},
 			  {group_result,gr_fail_result,failed}}},
        {?eh,test_stats,{4,2,{0,3}}},
@@ -402,8 +400,7 @@ test_events(repeat_gr_until_any_ok) ->
        [{?eh,tc_done,{repeat_1_SUITE,
 		      {init_per_group,gr_fail_result,[]},ok}},
 	{?eh,tc_done,{repeat_1_SUITE,
-		      {end_per_group,gr_fail_result,[]},
-		      {return_group_result,failed}}}],
+		      {end_per_group,gr_fail_result,[]},ok}}],
        {?eh,tc_done,{repeat_1_SUITE,tc_fail_1,
 		     {failed,{error,{{badmatch,2},'_'}}}}},
        {?eh,test_stats,{1,1,{0,0}}},
@@ -418,8 +415,7 @@ test_events(repeat_gr_until_any_ok) ->
        [{?eh,tc_done,{repeat_1_SUITE,
 		      {init_per_group,gr_fail_result_then_ok,[]},ok}},
 	{?eh,tc_done,{repeat_1_SUITE,
-		      {end_per_group,gr_fail_result_then_ok,[]},
-		      {return_group_result,failed}}}],
+		      {end_per_group,gr_fail_result_then_ok,[]},ok}}],
        {?eh,tc_done,{repeat_1_SUITE,
 		     {end_per_group,repeat_gr_until_any_ok_1,
 		      [{repeat_until_any_ok,3}]},ok}}],
@@ -441,8 +437,7 @@ test_events(repeat_gr_until_any_ok) ->
 		     {init_per_group,repeat_gr_until_any_ok_2,
 		      [{repeat_until_any_ok,3}]},ok}},
        [{?eh,tc_done,{repeat_1_SUITE,
-		      {end_per_group,gr_fail_result,[]},
-		      {return_group_result,failed}}}],
+		      {end_per_group,gr_fail_result,[]},ok}}],
        {?eh,tc_done,{repeat_1_SUITE,tc_fail_1,
 		     {failed,{error,{{badmatch,2},'_'}}}}},
        {?eh,test_stats,{5,5,{0,2}}},
@@ -675,8 +670,7 @@ test_events(repeat_gr_until_any_fail) ->
           {repeat_1_SUITE,{end_per_group,gr_ok_then_fail_result,[]}}},
       {?eh,tc_done,
           {repeat_1_SUITE,
-              {end_per_group,gr_ok_then_fail_result,[]},
-              {return_group_result,failed}}}],
+              {end_per_group,gr_ok_then_fail_result,[]},ok}}],
      {?eh,tc_start,{repeat_1_SUITE,tc_ok_2}},
      {?eh,tc_done,{repeat_1_SUITE,tc_ok_2,ok}},
      {?eh,test_stats,{8,0,{0,0}}},
@@ -938,8 +932,7 @@ test_events(repeat_gr_until_all_ok) ->
 	{?eh,tc_done,{repeat_1_SUITE,tc_ok_1,ok}},
 	{?eh,test_stats,{3,1,{0,0}}},
 	{?eh,tc_done,{repeat_1_SUITE,
-		      {end_per_group,gr_fail_result_then_ok,[]},
-		      {return_group_result,failed}}}],
+		      {end_per_group,gr_fail_result_then_ok,[]},ok}}],
        {?eh,tc_done,{repeat_1_SUITE,
 		     {end_per_group,repeat_gr_until_all_ok_1,
 		      [{repeat_until_all_ok,3}]},ok}}],
@@ -1113,8 +1106,7 @@ test_events(repeat_gr_until_all_fail) ->
 				      gr_ok_then_fail_result,[]},ok}},
 	{?eh,test_stats,{3,3,{0,2}}},
 	{?eh,tc_done,{repeat_1_SUITE,
-		      {end_per_group,gr_ok_then_fail_result,[]},
-		      {return_group_result,failed}}}],
+		      {end_per_group,gr_ok_then_fail_result,[]},ok}}],
        {?eh,tc_done,{repeat_1_SUITE,
 		     {end_per_group,repeat_gr_until_all_fail_1,
 		      [{repeat_until_all_fail,2}]},ok}}],
@@ -1148,8 +1140,7 @@ test_events(repeat_gr_until_all_fail) ->
 		     {init_per_group,repeat_gr_until_all_fail_3,
 		      [{repeat_until_all_fail,3}]},ok}},
        [{?eh,tc_done,{repeat_1_SUITE,
-		      {end_per_group,gr_fail_result,[]},
-		      {return_group_result,failed}}}],
+		      {end_per_group,gr_fail_result,[]},ok}}],
        {?eh,tc_done,{repeat_1_SUITE,tc_ok_then_fail_1,ok}},
        {?eh,test_stats,{6,5,{0,3}}},
        {?eh,tc_done,{repeat_1_SUITE,
@@ -1159,8 +1150,7 @@ test_events(repeat_gr_until_all_fail) ->
 		     {init_per_group,repeat_gr_until_all_fail_3,
 		      [{repeat_until_all_fail,2}]},ok}},
        [{?eh,tc_done,{repeat_1_SUITE,
-		      {end_per_group,gr_fail_result,[]},
-		      {return_group_result,failed}}}],
+		      {end_per_group,gr_fail_result,[]},ok}}],
        {?eh,tc_done,{repeat_1_SUITE,tc_ok_then_fail_1,
 		     {failed,{error,failing_this_time}}}},
        {?eh,test_stats,{7,6,{0,3}}},
@@ -1263,8 +1253,7 @@ test_events(repeat_seq_until_any_fail) ->
 		     {init_per_group,repeat_seq_until_any_fail_4,
 		      [{repeat_until_any_fail,2},sequence]},ok}},
        [{?eh,tc_done,{repeat_1_SUITE,
-		      {end_per_group,gr_ok_then_fail_result,[]},
-		      {return_group_result,failed}}}],
+		      {end_per_group,gr_ok_then_fail_result,[]},ok}}],
        {?eh,tc_auto_skip,{repeat_1_SUITE,{tc_ok_1,gr_ok_1},
 			  {group_result,gr_ok_then_fail_result,failed}}},
        {?eh,test_stats,{19,1,{0,3}}},
@@ -1473,8 +1462,7 @@ test_events(repeat_shuffled_seq_until_any_fail) ->
 	[{?eh,tc_start,{repeat_1_SUITE,
 			{end_per_group,gr_ok_then_fail_result,[]}}},
 	 {?eh,tc_done,{repeat_1_SUITE,
-		       {end_per_group,gr_ok_then_fail_result,[]},
-		       {return_group_result,failed}}}],
+		       {end_per_group,gr_ok_then_fail_result,[]},ok}}],
 	{?eh,tc_start,{repeat_1_SUITE,
 		       {end_per_group,repeat_shuffled_seq_until_any_fail_4,
 			[{shuffle,repeated},{repeat_until_any_fail,2},sequence]}}},

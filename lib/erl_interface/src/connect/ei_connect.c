@@ -1,18 +1,19 @@
 /*
  * %CopyrightBegin%
  *
- * Copyright Ericsson AB 2000-2014. All Rights Reserved.
+ * Copyright Ericsson AB 2000-2016. All Rights Reserved.
  *
- * The contents of this file are subject to the Erlang Public License,
- * Version 1.1, (the "License"); you may not use this file except in
- * compliance with the License. You should have received a copy of the
- * Erlang Public License along with this software. If not, it can be
- * retrieved online at http://www.erlang.org/.
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
  *
- * Software distributed under the License is distributed on an "AS IS"
- * basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See
- * the License for the specific language governing rights and limitations
- * under the License.
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  *
  * %CopyrightEnd%
  */
@@ -422,7 +423,7 @@ int ei_connect_xinit(ei_cnode* ec, const char *thishostname,
     }
 #endif /* _REENTRANT */
 
-    ec->creation = creation;
+    ec->creation = creation & 0x3; /* 2 bits */
     
     if (cookie) {
 	if (strlen(cookie) >= sizeof(ec->ei_connect_cookie)) { 
@@ -461,7 +462,7 @@ int ei_connect_xinit(ei_cnode* ec, const char *thishostname,
     strcpy(ec->self.node,thisnodename);
     ec->self.num = 0;
     ec->self.serial = 0;
-    ec->self.creation = creation;
+    ec->self.creation = creation & 0x3; /* 2 bits */
 
     if ((dbglevel = getenv("EI_TRACELEVEL")) != NULL ||
 	(dbglevel = getenv("ERL_DEBUG_DIST")) != NULL)
@@ -1341,7 +1342,8 @@ static int send_name_or_challenge(int fd, char *nodename,
                 | DFLAG_NEW_FLOATS
 		| DFLAG_SMALL_ATOM_TAGS
 		| DFLAG_UTF8_ATOMS
-		| DFLAG_MAP_TAG));
+		| DFLAG_MAP_TAG
+		| DFLAG_BIG_CREATION));
     if (f_chall)
 	put32be(s, challenge);
     memcpy(s, nodename, strlen(nodename));
@@ -1706,28 +1708,36 @@ error:
 
 static int get_home(char *buf, int size)
 {
-    char* homedrive;
-    char* homepath;
-    
 #ifdef __WIN32__
-    homedrive = getenv("HOMEDRIVE");
-    homepath = getenv("HOMEPATH");
-#else
-    homedrive = "";
-    homepath = getenv("HOME");
-#endif
+    char* homedrive = getenv("HOMEDRIVE");
+    char* homepath = getenv("HOMEPATH");
     
-    if (!homedrive || !homepath) {
-	buf[0] = '.';
-	buf[1] = '\0';
-	return 1;
-    } else if (strlen(homedrive)+strlen(homepath) < size-1) {
+    if (homedrive && homepath) {
+	if (strlen(homedrive)+strlen(homepath) >= size)
+	    return 0;
 	strcpy(buf, homedrive);
 	strcat(buf, homepath);
 	return 1;
     }
-    
-    return 0;
+    else {
+	int len = GetWindowsDirectory(buf, size);
+	if (len) {
+	    return (len < size);
+	}
+    }
+#else
+    char* homepath = getenv("HOME");
+    if (homepath) {
+	if (strlen(homepath) >= size)
+	    return 0;
+	strcpy(buf, homepath);
+	return 1;
+    }
+#endif
+
+    buf[0] = '.';
+    buf[1] = '\0';
+    return 1;
 }
 
 

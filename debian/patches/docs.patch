@@ -5,7 +5,7 @@ Last-modified: Thu, 09 Dec 2010 10:45:56 +0300
 
 --- a/lib/erl_docgen/priv/xsl/db_man.xsl
 +++ b/lib/erl_docgen/priv/xsl/db_man.xsl
-@@ -516,7 +516,7 @@
+@@ -517,7 +517,7 @@
          <xsl:text>&#10;.RS 2</xsl:text>
          <xsl:text>&#10;.LP&#10;</xsl:text>
          <xsl:value-of select="$content"/>
@@ -14,7 +14,7 @@ Last-modified: Thu, 09 Dec 2010 10:45:56 +0300
        </xsl:otherwise>
      </xsl:choose>
    </xsl:template>
-@@ -824,7 +824,7 @@
+@@ -853,7 +853,7 @@
    <xsl:template match="desc">
      <xsl:text>&#10;.RS</xsl:text>
      <xsl:apply-templates/>
@@ -25,7 +25,7 @@ Last-modified: Thu, 09 Dec 2010 10:45:56 +0300
  
 --- a/lib/megaco/doc/src/Makefile
 +++ b/lib/megaco/doc/src/Makefile
-@@ -169,8 +169,6 @@
+@@ -170,8 +170,6 @@
  	$(INSTALL_DATA) $(INFO_FILE) "$(RELSYSDIR)"
  	$(INSTALL_DIR) "$(RELEASE_PATH)/man/man3"
  	$(INSTALL_DATA) $(MAN3DIR)/* "$(RELEASE_PATH)/man/man3"
@@ -36,45 +36,32 @@ Last-modified: Thu, 09 Dec 2010 10:45:56 +0300
  
 --- a/lib/stdlib/doc/src/re.xml
 +++ b/lib/stdlib/doc/src/re.xml
-@@ -372,7 +372,7 @@
-       metacharacter should not match before it. Setting this without
-       <c>multiline</c> (at compile time) causes circumflex never to
-       match. This option only affects the behavior of the circumflex
--      metacharacter. It does not affect \A.</item>
-+      metacharacter. It does not affect \\A.</item>
- 
-       <tag><c>noteol</c></tag>
- 
-@@ -381,8 +381,8 @@
-       match it nor (except in multiline mode) a newline immediately
-       before it. Setting this without <c>multiline</c> (at compile time)
-       causes dollar never to match. This option affects only the
--      behavior of the dollar metacharacter. It does not affect \Z or
--      \z.</item>
-+      behavior of the dollar metacharacter. It does not affect \\Z or
-+      \\z.</item>
- 
-       <tag><c>report_errors</c></tag>
- 
+@@ -573,7 +573,7 @@
+               to match before it. Setting this without <c>multiline</c> (at
+               compile time) causes circumflex never to match. This option only
+               affects the behavior of the circumflex metacharacter. It does not
+-              affect \A.</p>
++              affect \\A.</p>
+           </item>
+           <tag><c>noteol</c></tag>
+           <item>
+@@ -582,7 +582,7 @@
+               in multiline mode) a newline immediately before it. Setting this
+               without <c>multiline</c> (at compile time) causes dollar never to
+               match. This option affects only the behavior of the dollar
+-              metacharacter. It does not affect \Z or \z.</p>
++              metacharacter. It does not affect \\Z or \\z.</p>
+           </item>
+           <tag><c>report_errors</c></tag>
+           <item>
 --- a/lib/tools/Makefile
 +++ b/lib/tools/Makefile
-@@ -23,7 +23,7 @@
+@@ -24,7 +24,7 @@
  # Macros
  # ----------------------------------------------------
  
--SUB_DIRECTORIES = c_src src doc/src examples priv emacs
-+SUB_DIRECTORIES = c_src src examples priv emacs doc/src
+-SUB_DIRECTORIES = c_src src doc/src examples emacs
++SUB_DIRECTORIES = c_src src examples emacs doc/src
  
  include vsn.mk
  VSN = $(TOOLS_VSN)
---- a/system/doc/top/Makefile
-+++ b/system/doc/top/Makefile
-@@ -34,7 +34,7 @@
- 
- GIF_FILES = 
- 
--INFO_FILES = ../../README ../../COPYRIGHT PR.template
-+INFO_FILES = ../../COPYRIGHT PR.template
- 
- TOPDOCDIR=.
- 

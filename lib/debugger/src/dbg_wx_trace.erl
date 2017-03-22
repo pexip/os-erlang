@@ -1,18 +1,19 @@
 %%
 %% %CopyrightBegin%
 %% 
-%% Copyright Ericsson AB 2008-2014. All Rights Reserved.
+%% Copyright Ericsson AB 2008-2016. All Rights Reserved.
 %% 
-%% The contents of this file are subject to the Erlang Public License,
-%% Version 1.1, (the "License"); you may not use this file except in
-%% compliance with the License. You should have received a copy of the
-%% Erlang Public License along with this software. If not, it can be
-%% retrieved online at http://www.erlang.org/.
-%% 
-%% Software distributed under the License is distributed on an "AS IS"
-%% basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See
-%% the License for the specific language governing rights and limitations
-%% under the License.
+%% Licensed under the Apache License, Version 2.0 (the "License");
+%% you may not use this file except in compliance with the License.
+%% You may obtain a copy of the License at
+%%
+%%     http://www.apache.org/licenses/LICENSE-2.0
+%%
+%% Unless required by applicable law or agreed to in writing, software
+%% distributed under the License is distributed on an "AS IS" BASIS,
+%% WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+%% See the License for the specific language governing permissions and
+%% limitations under the License.
 %% 
 %% %CopyrightEnd%
 %%
@@ -72,6 +73,10 @@ start(Pid, TraceWin, BackTrace) ->
 
 start(Pid, TraceWin, BackTrace, Strings) ->
     case whereis(dbg_wx_mon) of
+        undefined ->
+            Parent = wx:new(),
+            Env = wx:get_env(),
+            start(Pid, Env, Parent, TraceWin, BackTrace, Strings);
 	Monitor when is_pid(Monitor) ->
 	    Monitor ! {?MODULE, self(), get_env},
 	    receive
@@ -140,7 +145,7 @@ init(Pid, Parent, Meta, TraceWin, BackTrace, Strings) ->
 
     int:meta(Meta, trace, State3#state.trace),
 
-    gui_enable_updown(stack_trace, {1,1}),
+    gui_enable_updown(State3#state.stack_trace, {1,1}),
     gui_enable_btrace(false, false),
     dbg_wx_trace_win:display(Win,idle),
 
@@ -316,7 +321,7 @@ gui_cmd('Kill', State) ->
     exit(State#state.pid, kill),
     State;
 gui_cmd('Messages', State) ->
-    case int:meta(State#state.meta, messages) of
+    _ = case int:meta(State#state.meta, messages) of
 	[] ->
 	    dbg_wx_trace_win:eval_output(State#state.win,"< No Messages!\n", bold);
 	Messages ->
@@ -806,18 +811,21 @@ gui_show_module(Win, Mod, Line, Mod, _Pid, How) ->
     dbg_wx_trace_win:mark_line(Win, Line, How);
 gui_show_module(Win, Mod, Line, _Cm, Pid, How) ->
     Win2 = case dbg_wx_trace_win:is_shown(Win, Mod) of
-	       {true, Win3} -> Win3;
+	       %% {true, Win3} -> Win3;
 	       false -> gui_load_module(Win, Mod, Pid)
 	   end,
     dbg_wx_trace_win:mark_line(Win2, Line, How).
 
 gui_load_module(Win, Mod, _Pid) ->
     dbg_wx_trace_win:display(Win,{text, "Loading module..."}),
-    %% Contents = int:contents(Mod, Pid),
-    {ok, Contents} = dbg_iserver:call({raw_contents, Mod, any}),
-    Win2 = dbg_wx_trace_win:show_code(Win, Mod, Contents),
-    dbg_wx_trace_win:display(Win,{text, ""}),
-    Win2.
+    case dbg_iserver:call({raw_contents, Mod, any}) of
+	{ok, Contents} ->
+	    Win2 = dbg_wx_trace_win:show_code(Win, Mod, Contents),
+	    dbg_wx_trace_win:display(Win,{text, ""}),
+	    Win2;
+	not_found ->
+	    dbg_wx_trace_win:show_no_code(Win)
+    end.
 
 gui_update_bindings(Win,Meta) ->
     Bs = int:meta(Meta, bindings, nostack),

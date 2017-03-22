@@ -4,20 +4,21 @@
 <chapter>
   <header>
     <copyright>
-      <year>1996</year><year>2014</year>
+      <year>1996</year><year>2016</year>
       <holder>Ericsson AB. All Rights Reserved.</holder>
     </copyright>
     <legalnotice>
-      The contents of this file are subject to the Erlang Public License,
-      Version 1.1, (the "License"); you may not use this file except in
-      compliance with the License. You should have received a copy of the
-      Erlang Public License along with this software. If not, it can be
-      retrieved online at http://www.erlang.org/.
-    
-      Software distributed under the License is distributed on an "AS IS"
-      basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See
-      the License for the specific language governing rights and limitations
-      under the License.
+      Licensed under the Apache License, Version 2.0 (the "License");
+      you may not use this file except in compliance with the License.
+      You may obtain a copy of the License at
+ 
+          http://www.apache.org/licenses/LICENSE-2.0
+
+      Unless required by applicable law or agreed to in writing, software
+      distributed under the License is distributed on an "AS IS" BASIS,
+      WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+      See the License for the specific language governing permissions and
+      limitations under the License.
     
     </legalnotice>
 
@@ -31,6 +32,204 @@
     <rev></rev>
     <file>notes.xml</file>
   </header>
+
+
+  <section><title>SNMP 5.2.4</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+	    <p> Correct bugs when path to mib or idl spec files
+	    contains UTF-8 characters. </p>
+          <p>
+	    Own Id: OTP-13718 Aux Id: ERL-179 </p>
+        </item>
+      </list>
+    </section>
+
+
+    <section><title>Improvements and New Features</title>
+      <list>
+        <item>
+          <p>
+	    Solves snmp config string handling as reported by ERL-164
+	    and solved by PR-1100</p>
+          <p>
+	    Own Id: OTP-13706</p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>SNMP 5.2.3</title>
+
+    <section><title>Improvements and New Features</title>
+      <list>
+        <item>
+          <p>
+	    Internal changes</p>
+          <p>
+	    Own Id: OTP-13551</p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>SNMP 5.2.2</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+          <p>
+	    Snmp agent now properly handles <c>vacmViewTreeFamily</c>
+	    masks.</p>
+          <p>
+	    Own Id: OTP-13264</p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>SNMP 5.2.1</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+          <p>
+	    Small documentation fixes</p>
+          <p>
+	    Own Id: OTP-13017</p>
+        </item>
+      </list>
+    </section>
+
+
+    <section><title>Improvements and New Features</title>
+      <list>
+        <item>
+          <p>
+	    Update configuration check of imask ( list of ones and
+	    zeros) to allow the empty list.</p>
+          <p>
+	    Own Id: OTP-13101</p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>SNMP 5.2</title>
+
+    <section><title>Improvements and New Features</title>
+      <list>
+        <item>
+	    <p> The runtime dependencies in the application resource
+	    file have been updated. </p>
+          <p>
+	    Own Id: OTP-12762</p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>SNMP 5.1.2</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+          <p>
+	    A bug in the SNMP Agent has been corrected; when opening
+	    a port using the command line argument -snmpa_fd the Port
+	    should be 0 when calling gen_udp:open.</p>
+          <p>
+	    A bug in the SNMP manager has been corrected; it should
+	    not look at the -snmp_fd command line argument, but
+	    instead at -snmpm_fd.</p>
+          <p>
+	    Own Id: OTP-12669 Aux Id: seq12841 </p>
+        </item>
+      </list>
+    </section>
+
+
+    <section><title>Improvements and New Features</title>
+      <list>
+        <item>
+          <p>
+	    Improved cryptocraphic capability.</p>
+          <p>
+	    Own Id: OTP-12452</p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section>
+    <title>SNMP Development Toolkit 5.1.1</title>
+    <p>Version 5.1.1 supports code replacement in runtime from/to
+    version 5.1. </p>
+
+    <section>
+      <title>Improvements and new features</title>
+<!--
+      <p>-</p>
+-->
+
+      <list type="bulleted">
+        <item>
+          <p>[compiler] Refinement of type Opaque was not allowed. </p>
+          <p>MIB constructs such as '<c>SYNTAX Opaque (SIZE(0..65535))</c>' 
+	  was previously not allowed, 
+	  see the standard <c>ALARM-MIB</c> for eaxmple. </p>
+          <p>Own Id: OTP-12066</p>
+          <p>Aux Id: Seq 12669</p>
+        </item>
+
+      </list>
+
+    </section>
+
+    <section>
+      <title>Fixed Bugs and Malfunctions</title>
+      <p>-</p>
+
+<!--
+      <list type="bulleted">
+        <item>
+          <p>[agent] 
+	  see <seealso marker="snmpa#load_mibs">load_mibs</seealso> and 
+	  <seealso marker="snmpa#unload_mibs">unload_mibs</seealso>. </p>
+          <p>Own Id: OTP-11216</p>
+        </item>
+
+      </list>
+-->
+
+    </section>
+
+    <section>
+      <title>Incompatibilities</title>
+      <p>-</p>
+
+<!--
+      <list type="bulleted">
+        <item>
+          <p>[manager] The old Addr-and-Port based API functions, previously
+	  long deprecated and marked for deletion in R16B, has now been
+	  removed. </p>
+          <p>Own Id: OTP-10027</p>
+        </item>
+
+      </list>
+-->
+    </section>
+  </section> <!-- 5.1.1 -->
+
 
 
   <section><title>SNMP 5.1</title>

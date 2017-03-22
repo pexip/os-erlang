@@ -21,7 +21,7 @@ recv(Packet, Fun, Chan) ->
   #{id := Can_id, data := Can_data} = P = decode(Packet),
   Fun(P).
 
--spec decode(<<_:64,_:_*8>>) -> #{id => <<_:11>>,timestamp => char()}.
+-spec decode(<<_:64,_:_*8>>) -> #{id => <<_:11>>,timestamp => char(),_ => _}.
 decode(<<_:12, Len:4, Timestamp:16, 0:3, Id:11/bitstring, 0:18,
 	 Data:Len/binary, _/binary>>) ->
   #{id => Id, data => Data, timestamp => Timestamp}.
@@ -39,3 +39,15 @@ t2() -> ok.
 
 update(#{ id := Id, val := Val } = M, X) when is_integer(Id) ->
     M#{ val := [Val,X] }.
+
+t3() ->
+    foo(#{greger => 3, #{arne=>anka} => 45}, 1).
+
+foo(#{} = M, b) -> %% Error
+    M#{alfa => 42, beta := 1337}.
+
+t4() ->
+    case #{} of
+        #{} -> ok;
+        Mod -> Mod:function(#{literal => map}, another_arg) %% Error
+    end.

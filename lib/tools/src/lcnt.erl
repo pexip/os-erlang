@@ -1,18 +1,19 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2010-2013. All Rights Reserved.
+%% Copyright Ericsson AB 2010-2016. All Rights Reserved.
 %%
-%% The contents of this file are subject to the Erlang Public License,
-%% Version 1.1, (the "License"); you may not use this file except in
-%% compliance with the License. You should have received a copy of the
-%% Erlang Public License along with this software. If not, it can be
-%% retrieved online at http://www.erlang.org/.
+%% Licensed under the Apache License, Version 2.0 (the "License");
+%% you may not use this file except in compliance with the License.
+%% You may obtain a copy of the License at
 %%
-%% Software distributed under the License is distributed on an "AS IS"
-%% basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See
-%% the License for the specific language governing rights and limitations
-%% under the License.
+%%     http://www.apache.org/licenses/LICENSE-2.0
+%%
+%% Unless required by applicable law or agreed to in writing, software
+%% distributed under the License is distributed on an "AS IS" BASIS,
+%% WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+%% See the License for the specific language governing permissions and
+%% limitations under the License.
 %%
 %% %CopyrightEnd%
 %%
@@ -22,67 +23,57 @@
 -author("Björn-Egil Dahlberg").
 
 %% gen_server callbacks
--export([
-	init/1,
-	handle_call/3,
-	handle_cast/2,
-	handle_info/2,
-	terminate/2,
-	code_change/3
-	]).
+-export([init/1,
+         handle_call/3,
+         handle_cast/2,
+         handle_info/2,
+         terminate/2,
+         code_change/3]).
 
 %% start/stop
--export([
-	start/0,
-	stop/0
-	]).
+-export([start/0,
+         stop/0]).
 
 %% erts_debug:lock_counters api
--export([
-	rt_collect/0,
-	rt_collect/1,
-	rt_clear/0,
-	rt_clear/1,
-	rt_opt/1,
-	rt_opt/2
-    ]).
+-export([rt_collect/0,
+         rt_collect/1,
+         rt_clear/0,
+         rt_clear/1,
+         rt_opt/1,
+         rt_opt/2]).
 
 
 %% gen_server call api
--export([
-	raw/0,
-	collect/0,
-	collect/1,
-	clear/0,
-	clear/1,
-	conflicts/0,
-	conflicts/1,
-	locations/0,
-	locations/1,
-	inspect/1,
-	inspect/2,
-	histogram/1,
-	histogram/2,
-	information/0,
-	swap_pid_keys/0,
-	% set options
-	set/1,
-	set/2,
+-export([raw/0,
+         collect/0,
+         collect/1,
+         clear/0,
+         clear/1,
+         conflicts/0,
+         conflicts/1,
+         locations/0,
+         locations/1,
+         inspect/1,
+         inspect/2,
+         histogram/1,
+         histogram/2,
+         information/0,
+         swap_pid_keys/0,
+         % set options
+         set/1,
+         set/2,
 
-	load/1,
-	save/1
-	]).
+         load/1,
+         save/1]).
 
 %% convenience
--export([
-	apply/3,
-	apply/2,
-	apply/1,
-	all_conflicts/0,
-	all_conflicts/1,
-	pid/2, pid/3,
-	port/1, port/2
-    ]).
+-export([apply/3,
+         apply/2,
+         apply/1,
+         all_conflicts/0,
+         all_conflicts/1,
+         pid/2, pid/3,
+         port/1, port/2]).
 
 -define(version, "1.0").
 
@@ -93,12 +84,12 @@
 
 -record(stats, {
 	file  :: atom(),
-	line  :: non_neg_integer(),
+	line  :: non_neg_integer() | 'undefined',
 	tries :: non_neg_integer(),
 	colls :: non_neg_integer(),
 	time  :: non_neg_integer(), % us
 	nt    :: non_neg_integer(), % #timings collected
-	hist  :: tuple()            % histogram
+	hist  :: tuple() | 'undefined'  % histogram
     }).
 
 -record(lock, {
@@ -133,6 +124,13 @@
 start()  -> gen_server:start({local, ?MODULE}, ?MODULE, [], []).
 stop()   -> gen_server:call(?MODULE, stop, infinity).
 init([]) -> {ok, #state{ locks = [], duration = 0 } }.
+
+start_internal() ->
+    case start() of
+        {ok,_} -> ok;
+        {error, {already_started,_}} -> ok;
+        Error -> Error
+    end.
 
 %% -------------------------------------------------------------------- %%
 %%
@@ -183,7 +181,7 @@ raw()                -> call(raw).
 set(Option, Value)   -> call({set, Option, Value}).
 set({Option, Value}) -> call({set, Option, Value}).
 save(Filename)       -> call({save, Filename}).
-load(Filename)       -> start(), call({load, Filename}).
+load(Filename)       -> ok = start_internal(), call({load, Filename}).
 
 call(Msg) -> gen_server:call(?MODULE, Msg, infinity).
 
@@ -194,7 +192,7 @@ call(Msg) -> gen_server:call(?MODULE, Msg, infinity).
 %% -------------------------------------------------------------------- %%
 
 apply(M,F,As) when is_atom(M), is_atom(F), is_list(As) ->
-    lcnt:start(),
+    ok = start_internal(),
     Opt = lcnt:rt_opt({copy_save, true}),
     lcnt:clear(),
     Res = erlang:apply(M,F,As),
@@ -206,7 +204,7 @@ apply(Fun) when is_function(Fun) ->
     lcnt:apply(Fun, []).
 
 apply(Fun, As) when is_function(Fun) ->
-    lcnt:start(),
+    ok = start_internal(),
     Opt = lcnt:rt_opt({copy_save, true}),
     lcnt:clear(),
     Res = erlang:apply(Fun, As),
@@ -305,7 +303,7 @@ handle_call({inspect, Lockname, InOpts}, _From, #state{ duration=Duration, locks
 	{true, true} -> locks_ids(Filtered);
 	_            -> []
     end,
-    Combos =  combine_classes(Filtered, proplists:get_value(combine, Opts)),
+    Combos = combine_classes(Filtered, proplists:get_value(combine, Opts)),
     case proplists:get_value(locations, Opts) of
 	true ->
 	    lists:foreach(fun
@@ -329,9 +327,8 @@ handle_call({inspect, Lockname, InOpts}, _From, #state{ duration=Duration, locks
 			end
 		end, Combos);
 	_ ->
-	    Print1 = locks2print(Combos, Duration),
-	    Print2 = filter_print(Print1, Opts),
-	    print_lock_information(Print2, proplists:get_value(print, Opts))
+	    Print = filter_print(locks2print(Combos, Duration), Opts),
+	    print_lock_information(Print, proplists:get_value(print, Opts))
     end,
     {reply, ok, State};
 
@@ -357,8 +354,7 @@ handle_call({histogram, Lockname, InOpts}, _From, #state{ duration=Duration, loc
 			{thresholds, [{tries, -1}, {colls, -1}, {time, -1}]}], Opts),
 		Prints = locks2print([L], Duration),
 		print_lock_information(Prints, proplists:get_value(print, Opts1)),
-		print_full_histogram(SumStats#stats.hist),
-		io:format("~n")
+		print_full_histogram(SumStats#stats.hist)
 	end, Combos),
 
     {reply, ok, State};
@@ -509,19 +505,22 @@ filter_locks(Locks, Lockname) ->
 % 4. max length of locks
 
 filter_print(PLs, Opts) ->
-    TLs = threshold_locks(PLs, proplists:get_value(thresholds, Opts, [])),
-    SLs =      sort_locks(TLs, proplists:get_value(sort,       Opts, time)),
-    CLs =       cut_locks(SLs, proplists:get_value(max_locks,  Opts, none)),
-	    reverse_locks(CLs, not proplists:get_value(reverse,Opts, false)).
+    TLs = threshold_locks(PLs, proplists:get_value(thresholds,  Opts, [])),
+    SLs =      sort_locks(TLs, proplists:get_value(sort,        Opts, time)),
+    CLs =       cut_locks(SLs, proplists:get_value(max_locks,   Opts, none)),
+	    reverse_locks(CLs, proplists:get_value(reverse, Opts, false)).
 
-sort_locks(Locks, name)  -> lists:keysort(#print.name, Locks);
-sort_locks(Locks, id)    -> lists:keysort(#print.id, Locks);
-sort_locks(Locks, type)  -> lists:keysort(#print.type, Locks);
-sort_locks(Locks, tries) -> lists:keysort(#print.tries, Locks);
-sort_locks(Locks, colls) -> lists:keysort(#print.colls, Locks);
-sort_locks(Locks, ratio) -> lists:keysort(#print.cr, Locks);
-sort_locks(Locks, time)  -> lists:keysort(#print.time, Locks);
+sort_locks(Locks, name)  -> reverse_sort_locks(#print.name,  Locks);
+sort_locks(Locks, id)    -> reverse_sort_locks(#print.id,    Locks);
+sort_locks(Locks, type)  -> reverse_sort_locks(#print.type,  Locks);
+sort_locks(Locks, tries) -> reverse_sort_locks(#print.tries, Locks);
+sort_locks(Locks, colls) -> reverse_sort_locks(#print.colls, Locks);
+sort_locks(Locks, ratio) -> reverse_sort_locks(#print.cr,    Locks);
+sort_locks(Locks, time)  -> reverse_sort_locks(#print.time,  Locks);
 sort_locks(Locks, _)     -> sort_locks(Locks, time).
+
+reverse_sort_locks(Ix, Locks) ->
+    lists:reverse(lists:keysort(Ix, Locks)).
 
 % cut locks not above certain thresholds
 threshold_locks(Locks, Thresholds) ->
@@ -647,15 +646,19 @@ format_histogram(Tup) when is_tuple(Tup) ->
 	_ -> string_histogram([case V of 0 -> 0; _ -> V/Max end || V <- Vs])
     end.
 
-string_histogram([0|Vs]) ->
-    [$\s|string_histogram(Vs)];
-string_histogram([V|Vs]) when V > 0.66 ->
-    [$X|string_histogram(Vs)];
-string_histogram([V|Vs]) when V > 0.33 ->
-    [$x|string_histogram(Vs)];
-string_histogram([_|Vs]) ->
-    [$.|string_histogram(Vs)];
-string_histogram([]) -> [].
+string_histogram(Vs) ->
+    [$||histogram_values_to_string(Vs,$|)].
+
+histogram_values_to_string([0|Vs],End) ->
+    [$\s|histogram_values_to_string(Vs,End)];
+histogram_values_to_string([V|Vs],End) when V > 0.66 ->
+    [$X|histogram_values_to_string(Vs,End)];
+histogram_values_to_string([V|Vs],End) when V > 0.33 ->
+    [$x|histogram_values_to_string(Vs,End)];
+histogram_values_to_string([_|Vs],End) ->
+    [$.|histogram_values_to_string(Vs,End)];
+histogram_values_to_string([],End) ->
+    [End].
 
 %% state making
 
@@ -751,7 +754,7 @@ list2lock([F|Fs], Ls) ->
 
 stats2stats([]) -> [];
 stats2stats([Stat|Stats]) ->
-    Sz = tuple_size(#stats{}),
+    Sz = record_info(size, stats),
     [stat2stat(Stat,Sz)|stats2stats(Stats)].
 
 stat2stat(Stat,Sz) when tuple_size(Stat) =:= Sz -> Stat;
@@ -778,7 +781,7 @@ auto_print_width(Locks, Print) ->
 		    ({print,print}, Out) -> [print|Out];
 		    ({Str, Len}, Out)    -> [erlang:min(erlang:max(length(s(Str))+1,Len),80)|Out]
 		end, [], lists:zip(tuple_to_list(L), tuple_to_list(Max)))))
-	end, #print{ id = 4, type = 5, entry = 5, name = 6, tries = 8, colls = 13, cr = 16, time = 11, dtr = 14, hist=20 },
+	end, #print{ id=4, type=5, entry=5, name=6, tries=8, colls=13, cr=16, time=11, dtr=14, hist=20 },
 	Locks),
     % Setup the offsets for later pruning
     Offsets = [
@@ -820,7 +823,7 @@ print_header(Opts) ->
 	cr    = "collisions [%]",
 	time  = "time [us]",
 	dtr   = "duration [%]",
-	hist  = "histogram"
+	hist  = "histogram [log2(us)]"
     },
     Divider = #print{
 	name  = lists:duplicate(1 + length(Header#print.name),  45),
@@ -863,9 +866,9 @@ format_lock(L, [Opt|Opts]) ->
 	{time, W}      -> [{space,  W, s(L#print.time) } | format_lock(L, Opts)];
 	duration       -> [{space, 20, s(L#print.dtr)  } | format_lock(L, Opts)];
 	{duration, W}  -> [{space,  W, s(L#print.dtr)  } | format_lock(L, Opts)];
-	histogram      -> [{space,  0, s(L#print.hist) } | format_lock(L, Opts)];
-	{histogram, W} -> [{space,  W, s(L#print.hist) } | format_lock(L, Opts)];
-	_              ->                                  format_lock(L, Opts)
+	histogram      -> [{space, 20, s(L#print.hist) } | format_lock(L, Opts)];
+	{histogram, W} -> [{left,  W - length(s(L#print.hist)) - 1, s(L#print.hist)} | format_lock(L, Opts)];
+	_              -> format_lock(L, Opts)
     end.
 
 print_state_information(#state{locks = Locks} = State) ->
@@ -926,7 +929,7 @@ s(T)                  -> term2string(T).
 strings(Strings) -> strings(Strings, []).
 strings([], Out) -> Out;
 strings([{space,  N,      S} | Ss], Out) -> strings(Ss, Out ++ term2string(term2string("~~~ws", [N]), [S]));
-strings([{format, Format, S} | Ss], Out) -> strings(Ss, Out ++ term2string(Format, [S]));
+strings([{left,   N,      S} | Ss], Out) -> strings(Ss, Out ++ term2string(term2string(" ~~s~~~ws", [N]), [S,""]));
 strings([S|Ss], Out) -> strings(Ss, Out ++ term2string("~ts", [S])).
 
 

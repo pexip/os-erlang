@@ -1,18 +1,19 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2011-2014. All Rights Reserved.
+%% Copyright Ericsson AB 2011-2016. All Rights Reserved.
 %%
-%% The contents of this file are subject to the Erlang Public License,
-%% Version 1.1, (the "License"); you may not use this file except in
-%% compliance with the License. You should have received a copy of the
-%% Erlang Public License along with this software. If not, it can be
-%% retrieved online at http://www.erlang.org/.
+%% Licensed under the Apache License, Version 2.0 (the "License");
+%% you may not use this file except in compliance with the License.
+%% You may obtain a copy of the License at
 %%
-%% Software distributed under the License is distributed on an "AS IS"
-%% basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See
-%% the License for the specific language governing rights and limitations
-%% under the License.
+%%     http://www.apache.org/licenses/LICENSE-2.0
+%%
+%% Unless required by applicable law or agreed to in writing, software
+%% distributed under the License is distributed on an "AS IS" BASIS,
+%% WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+%% See the License for the specific language governing permissions and
+%% limitations under the License.
 %%
 %% %CopyrightEnd%
 %%
@@ -29,7 +30,8 @@
 %% Common Test interface functions -----------------------------------
 %%--------------------------------------------------------------------
 
-suite() -> [{ct_hooks,[ts_install_cth]}].
+suite() -> 
+    [].
 
 all() -> 
     [
@@ -198,7 +200,7 @@ pbdkdf2(Config) when is_list(Config) ->
 old_enc() ->
     [{doc,"Tests encode/decode RSA key encrypted with different ciphers using old PEM encryption scheme"}].
 old_enc(Config) when is_list(Config) ->
-    Datadir = ?config(data_dir, Config),
+    Datadir = proplists:get_value(data_dir, Config),
     %% key generated with ssh-keygen -N hello_aes -f old_aes_128_cbc_enc_key.pem
     {ok, PemAesCbc} = file:read_file(filename:join(Datadir, "old_aes_128_cbc_enc_key.pem")),
     
@@ -217,7 +219,12 @@ pbes2() ->
 pbes2(Config) when is_list(Config) ->
     decode_encode_key_file("pbes2_des_cbc_enc_key.pem", "password", "DES-CBC", Config),
     decode_encode_key_file("pbes2_des_ede3_cbc_enc_key.pem", "password", "DES-EDE3-CBC", Config),   
-    decode_encode_key_file("pbes2_rc2_cbc_enc_key.pem", "password", "RC2-CBC", Config).
+    case lists:member(rc2_cbc, proplists:get_value(ciphers, crypto:supports())) of
+	true ->
+	    decode_encode_key_file("pbes2_rc2_cbc_enc_key.pem", "password", "RC2-CBC", Config);
+	false ->
+	    ok
+    end.
 
 check_key_info(#'PrivateKeyInfo'{privateKeyAlgorithm =
 				     #'PrivateKeyInfo_privateKeyAlgorithm'{algorithm = ?rsaEncryption},
@@ -225,7 +232,7 @@ check_key_info(#'PrivateKeyInfo'{privateKeyAlgorithm =
     #'RSAPrivateKey'{} = public_key:der_decode('RSAPrivateKey', iolist_to_binary(Key)).
 
 decode_encode_key_file(File, Password, Cipher, Config) ->
-    Datadir = ?config(data_dir, Config),
+    Datadir = proplists:get_value(data_dir, Config),
     {ok, PemKey} = file:read_file(filename:join(Datadir, File)),
     
     PemEntry = public_key:pem_decode(PemKey),
