@@ -13,3 +13,4 @@ wx3.0-constants.patch
 sslv3disable.patch
 ssltlspoodle.patch
 beamload.patch
+cve-2016-10253.patch

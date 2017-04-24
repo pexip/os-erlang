@@ -1,3 +1,12 @@
+erlang (1:17.3-dfsg-4+deb8u1) stable-proposed-updates; urgency=medium
+
+  * Applied a patch from the PCRE upstream which fixes CVE-2016-10253
+    vulnerability (heap overflow while compiling certain regular expressions).
+    The patch is taken from https://github.com/erlang/otp/pull/1108 and
+    modified to match the original patch by PCRE developers (closes: #858313).
+
+ -- Sergei Golovan <sgolovan@debian.org>  Mon, 24 Apr 2017 09:13:29 +0300
+
 erlang (1:17.3-dfsg-4) unstable; urgency=medium
 
   * Added a patch from upstream which fixes TLS POODLE vulnerability in
