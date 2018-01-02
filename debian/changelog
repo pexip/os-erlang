@@ -1,3 +1,17 @@
+erlang (1:17.3-dfsg-4+deb8u2pexip1) pexip; urgency=medium
+
+  * New upstream release
+
+ -- John-Mark Bell <jmb@pexip.com>  Tue, 02 Jan 2018 14:32:38 +0000
+
+erlang (1:17.3-dfsg-4+deb8u2) jessie-security; urgency=high
+
+  * Applied a patch from the upstream which fixes CVE-2017-1000385
+    vulnerability (TLS server vunlerable to Adaptive Chosen Ciphertext attack
+    allowing plaintext recovery ot MITM attack).
+
+ -- Sergei Golovan <sgolovan@debian.org>  Wed, 06 Dec 2017 09:50:47 +0300
+
 erlang (1:17.3-dfsg-4+deb8u1pexip1) pexip; urgency=medium
 
   * New upstream release

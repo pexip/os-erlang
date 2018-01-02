@@ -14,5 +14,6 @@ sslv3disable.patch
 ssltlspoodle.patch
 beamload.patch
 cve-2016-10253.patch
+cve-2017-1000385.patch
 crypto.patch
 init.patch
