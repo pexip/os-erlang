@@ -4,6 +4,26 @@
 
 -include_lib("common_test/include/ct.hrl").
 
+%% telnet control characters
+-define(SE,	240).
+-define(NOP,	241).
+-define(DM,	242).
+-define(BRK,	243).
+-define(IP,	244).
+-define(AO,	245).
+-define(AYT,	246).
+-define(EC,	247).
+-define(EL,	248).
+-define(GA,	249).
+-define(SB,	250).
+-define(WILL,	251).
+-define(WONT,	252).
+-define(DO,	253).
+-define(DONT,	254).
+-define(IAC,	255).
+
+-define(SHORT_TIME,2000).
+
 %%--------------------------------------------------------------------
 %% TEST SERVER CALLBACK FUNCTIONS
 %%--------------------------------------------------------------------
@@ -20,10 +40,12 @@ all() ->
      expect,
      expect_repeat,
      expect_sequence,
+     expect_wait_until_prompt,
      expect_error_prompt,
      expect_error_timeout1,
      expect_error_timeout2,
      expect_error_timeout3,
+     total_timeout_less_than_idle,
      no_prompt_check,
      no_prompt_check_repeat,
      no_prompt_check_sequence,
@@ -34,7 +56,9 @@ all() ->
      ignore_prompt_timeout,
      large_string,
      server_speaks,
-     server_disconnects
+     server_disconnects,
+     newline_ayt,
+     newline_break
     ].
 
 groups() ->
@@ -58,6 +82,8 @@ end_per_group(_GroupName, Config) ->
 expect(_) ->
     {ok, Handle} = ct_telnet:open(telnet_server_conn1),
     ok = ct_telnet:send(Handle, "echo ayt"),
+    {ok,["ayt"]} = ct_telnet:expect(Handle, "ayt"),
+    ok = ct_telnet:send(Handle, "echo ayt"),
     {ok,["ayt"]} = ct_telnet:expect(Handle, ["ayt"]),
     ok = ct_telnet:close(Handle),
     ok.
@@ -80,6 +106,21 @@ expect_sequence(_) ->
     ok = ct_telnet:close(Handle),
     ok.
 
+%% Check that expect can wait for delayed prompt
+expect_wait_until_prompt(_) ->
+    {ok, Handle} = ct_telnet:open(telnet_server_conn1),
+    Timeouts = [{idle_timeout,5000},{total_timeout,7000}],
+
+    ok = ct_telnet:send(Handle, "echo_delayed_prompt 3000 xxx"),
+    {ok,["xxx"]} =
+	ct_telnet:expect(Handle, "xxx",
+			 [wait_for_prompt|Timeouts]),
+    ok = ct_telnet:send(Handle, "echo_delayed_prompt 3000 yyy zzz"),
+    {ok,[["yyy"],["zzz"]]} =
+	ct_telnet:expect(Handle, ["yyy","zzz"],
+			 [{wait_for_prompt,"> "}|Timeouts]),
+    ok.
+
 %% Check that expect returns when a prompt is found, even if pattern
 %% is not matched.
 expect_error_prompt(_) ->
@@ -95,7 +136,7 @@ expect_error_prompt(_) ->
 expect_error_timeout1(_) ->
     {ok, Handle} = ct_telnet:open(telnet_server_conn1),
     ok = ct_telnet:send(Handle, "echo_no_prompt xxx"),
-    {error,timeout} = ct_telnet:expect(Handle, ["xxx"], [{timeout,1000}]),
+    {error,timeout} = ct_telnet:expect(Handle, ["xxx"], [{timeout,?SHORT_TIME}]),
     ok = ct_telnet:close(Handle),
     ok.
 
@@ -112,9 +153,32 @@ expect_error_timeout2(_) ->
 expect_error_timeout3(_) ->
     {ok, Handle} = ct_telnet:open(telnet_server_conn1),
     ok = ct_telnet:send(Handle, "echo_loop 5000 xxx"),
+
+    T0 = now(),
     {error,timeout} = ct_telnet:expect(Handle, ["yyy"],
 				       [{idle_timeout,infinity},
-					{total_timeout,3000}]),
+					{total_timeout,2001}]),
+    Diff = trunc(timer:now_diff(now(),T0)/1000),
+    {_,true} = {Diff, (Diff >= 2000) and (Diff =< 4000)},
+
+    ok = ct_telnet:send(Handle, "echo ayt"),
+    {ok,["ayt"]} = ct_telnet:expect(Handle, ["ayt"]),
+    ok = ct_telnet:close(Handle),
+    ok.
+    
+%% OTP-12335: If total_timeout < idle_timeout, expect will never timeout
+%% until after idle_timeout, which is incorrect.
+total_timeout_less_than_idle(_) ->
+    {ok, Handle} = ct_telnet:open(telnet_server_conn1),
+    ok = ct_telnet:send(Handle, "echo_no_prompt xxx"),
+
+    T0 = now(),
+    {error,timeout} = ct_telnet:expect(Handle, ["yyy"],
+				       [{idle_timeout,5000},
+					{total_timeout,2001}]),
+    Diff = trunc(timer:now_diff(now(),T0)/1000),
+    {_,true} = {Diff, (Diff >= 2000) and (Diff =< 4000)},
+
     ok = ct_telnet:send(Handle, "echo ayt"),
     {ok,["ayt"]} = ct_telnet:expect(Handle, ["ayt"]),
     ok = ct_telnet:close(Handle),
@@ -158,16 +222,16 @@ ignore_prompt_timeout(_) ->
     {ok, Handle} = ct_telnet:open(telnet_server_conn1),
     ok = ct_telnet:send(Handle, "echo xxx"),
     {error,timeout} = ct_telnet:expect(Handle, ["yyy"], [ignore_prompt,
-							 {timeout,1000}]),
+							 {timeout,?SHORT_TIME}]),
     ok = ct_telnet:send(Handle, "echo xxx"), % sends prompt and newline
     {ok,["xxx"]} = ct_telnet:expect(Handle, ["xxx"], [ignore_prompt,
-						      {timeout,1000}]),
+						      {timeout,?SHORT_TIME}]),
     ok = ct_telnet:send(Handle, "echo_no_prompt xxx\n"), % no prompt, but newline
     {ok,["xxx"]} = ct_telnet:expect(Handle, ["xxx"], [ignore_prompt,
-						      {timeout,1000}]),
+						      {timeout,?SHORT_TIME}]),
     ok = ct_telnet:send(Handle, "echo_no_prompt xxx"), % no prompt, no newline
     {error,timeout} = ct_telnet:expect(Handle, ["xxx"], [ignore_prompt,
-							 {timeout,1000}]),
+							 {timeout,?SHORT_TIME}]),
     ok = ct_telnet:close(Handle),
     ok.
 
@@ -213,7 +277,7 @@ no_prompt_check_timeout(_) ->
     {ok, Handle} = ct_telnet:open(telnet_server_conn1),
     ok = ct_telnet:send(Handle, "echo xxx"),
     {error,timeout} = ct_telnet:expect(Handle, ["yyy"], [no_prompt_check,
-							 {timeout,1000}]),
+							 {timeout,?SHORT_TIME}]),
     ok = ct_telnet:close(Handle),
     ok.
 
@@ -237,15 +301,26 @@ large_string(_) ->
     %% yield the same result as the single request case.
 
     ok = ct_telnet:send(Handle, "echo_sep "++BigString),
-    timer:sleep(1000),
+    ct:sleep(1000),
     {ok,Data1} = ct_telnet:get_data(Handle),
     ct:log("[GET DATA #1] Received ~w chars: ~s",
 	   [length(lists:flatten(Data1)),Data1]),
     VerifyStr = [C || C <- lists:flatten(Data1), C/=$ , C/=$\r, C/=$\n, C/=$>],
 
     ok = ct_telnet:send(Handle, "echo_sep "++BigString),
-    timer:sleep(50),
-    {ok,Data2} = ct_telnet:get_data(Handle),
+    %% On some slow machines, 50 ms might not be enough to get the
+    %% first packet of data. We will therefore keep trying for a
+    %% second before we give up this...
+    F = fun RepeatUntilData(N) ->
+		ct:sleep(50),
+		case ct_telnet:get_data(Handle) of
+		    {ok,[]} when N>1 ->
+			RepeatUntilData(N-1);
+		    Other ->
+			Other
+		end
+	end,
+    {ok,Data2} = F(20),
     ct:log("[GET DATA #2] Received ~w chars: ~s", [length(lists:flatten(Data2)),Data2]),
     VerifyStr = [C || C <- lists:flatten(Data2), C/=$ , C/=$\r, C/=$\n, C/=$>],
 
@@ -254,19 +329,33 @@ large_string(_) ->
 
 %% The server says things. Manually check that it gets printed correctly
 %% in the general IO log.
+%%
+%% In this test case we simulate data sent spontaneously from the
+%% server. We use ct_telnet_client:send_data instead of ct_telnet:send
+%% to avoid flushing of buffers in the client, and we use
+%% echo_no_prompt since the server would normally not send a prompt in
+%% this case.
 server_speaks(_) ->
     {ok, Handle} = ct_telnet:open(telnet_server_conn1),
-    ok = ct_telnet:send(Handle, "echo_no_prompt This is the first message\r\n"),
-    ok = ct_telnet:send(Handle, "echo_no_prompt This is the second message\r\n"),
-    %% let ct_telnet_client get an idle timeout
-    timer:sleep(15000),
-    ok = ct_telnet:send(Handle, "echo_no_prompt This is the third message\r\n"),
-    {ok,_} = ct_telnet:expect(Handle, ["the"], [no_prompt_check]),
+
+    Backdoor = ct_gen_conn:get_conn_pid(Handle),
+    ok = ct_telnet_client:send_data(Backdoor,
+				    "echo_no_prompt This is the first message"),
+    ok = ct_telnet_client:send_data(Backdoor,
+				    "echo_no_prompt This is the second message"),
+    %% Let ct_telnet_client get an idle timeout. This should print the
+    %% two messages to the log. Note that the buffers are not flushed here!
+    ct:sleep(15000),
+    ok = ct_telnet_client:send_data(Backdoor,
+				    "echo_no_prompt This is the third message"),
+    {ok,_} = ct_telnet:expect(Handle, ["first.*second.*third"],
+			      [no_prompt_check, sequence]),
     {error,timeout} = ct_telnet:expect(Handle, ["the"], [no_prompt_check,
-							 {timeout,1000}]),
-    ok = ct_telnet:send(Handle, "echo_no_prompt This is the fourth message\r\n"),
+							 {timeout,?SHORT_TIME}]),
+    ok = ct_telnet_client:send_data(Backdoor,
+				    "echo_no_prompt This is the fourth message"),
     %% give the server time to respond
-    timer:sleep(2000),
+    ct:sleep(2000),
     %% closing the connection should print last message in log
     ok = ct_telnet:close(Handle),
     ok.  
@@ -278,10 +367,29 @@ server_disconnects(_) ->
     ok = ct_telnet:send(Handle, "disconnect_after 1500"),
     %% wait until the get_data operation (triggered by send/2) times out
     %% before sending the msg
-    timer:sleep(500),
-    ok = ct_telnet:send(Handle, "echo_no_prompt This is the message\r\n"),
+    ct:sleep(500),
+    ok = ct_telnet:send(Handle, "echo_no_prompt This is the message"),
     %% when the server closes the connection, the last message should be
     %% printed in the log
-    timer:sleep(3000),
+    ct:sleep(3000),
     _ = ct_telnet:close(Handle),
+    ok.
+
+%% Test option {newline,false} to send telnet command sequence.
+newline_ayt(_) ->
+    {ok, Handle} = ct_telnet:open(telnet_server_conn1),
+    ok = ct_telnet:send(Handle, [?IAC,?AYT], [{newline,false}]),
+    {ok,["yes"]} = ct_telnet:expect(Handle, ["yes"]),
+    ok = ct_telnet:close(Handle),
+    ok.
+
+%% Test option {newline,false} to send telnet command sequence.
+newline_break(_) ->
+    {ok, Handle} = ct_telnet:open(telnet_server_conn1),
+    ok = ct_telnet:send(Handle, [?IAC,?BRK], [{newline,false}]),
+    %% '#' is the prompt in break mode
+    {ok,["# "]} = ct_telnet:expect(Handle, ["# "], [no_prompt_check]),
+    {ok,R} = ct_telnet:cmd(Handle, "q", [{newline,false}]),
+    "> " = lists:flatten(R),
+    ok = ct_telnet:close(Handle),
     ok.

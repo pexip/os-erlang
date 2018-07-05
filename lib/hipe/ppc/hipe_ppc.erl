@@ -2,18 +2,19 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2004-2011. All Rights Reserved.
+%% Copyright Ericsson AB 2004-2016. All Rights Reserved.
 %%
-%% The contents of this file are subject to the Erlang Public License,
-%% Version 1.1, (the "License"); you may not use this file except in
-%% compliance with the License. You should have received a copy of the
-%% Erlang Public License along with this software. If not, it can be
-%% retrieved online at http://www.erlang.org/.
+%% Licensed under the Apache License, Version 2.0 (the "License");
+%% you may not use this file except in compliance with the License.
+%% You may obtain a copy of the License at
 %%
-%% Software distributed under the License is distributed on an "AS IS"
-%% basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See
-%% the License for the specific language governing rights and limitations
-%% under the License.
+%%     http://www.apache.org/licenses/LICENSE-2.0
+%%
+%% Unless required by applicable law or agreed to in writing, software
+%% distributed under the License is distributed on an "AS IS" BASIS,
+%% WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+%% See the License for the specific language governing permissions and
+%% limitations under the License.
 %%
 %% %CopyrightEnd%
 %%
@@ -166,8 +167,10 @@ temp_is_precoloured(#ppc_temp{reg=Reg,type=Type}) ->
     _ -> hipe_ppc_registers:is_precoloured_gpr(Reg)
   end.
 
-mk_simm16(Value) -> #ppc_simm16{value=Value}.
-mk_uimm16(Value) -> #ppc_uimm16{value=Value}.
+mk_simm16(Value) when Value >= -(1 bsl 15), Value < (1 bsl 15) ->
+  #ppc_simm16{value=Value}.
+mk_uimm16(Value) when Value >= 0, Value < (1 bsl 16) ->
+  #ppc_uimm16{value=Value}.
 
 mk_mfa(M, F, A) -> #ppc_mfa{m=M, f=F, a=A}.
 
@@ -239,7 +242,11 @@ mk_li(Dst, Value, Tail) ->   % Dst can be R0
      Value =< 16#7FFFFFFF ->
       mk_li32(Dst, R0, Value, Tail);
      true ->
-      Highest = (Value bsr 48),              % Value@highest
+      Highest = case (Value bsr 48) of       % Value@highest
+		  TopBitSet when TopBitSet >= (1 bsl 15) ->
+		    TopBitSet - (1 bsl 16);  % encoder needs it to be negative
+		  FitsSimm16 -> FitsSimm16
+		end,
       Higher = (Value bsr 32) band 16#FFFF,  % Value@higher
       High = (Value bsr 16) band 16#FFFF,    % Value@h
       Low = Value band 16#FFFF,              % Value@l

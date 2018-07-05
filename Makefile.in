@@ -3,16 +3,17 @@
 #
 # Copyright Ericsson AB 1998-2013. All Rights Reserved.
 #
-# The contents of this file are subject to the Erlang Public License,
-# Version 1.1, (the "License"); you may not use this file except in
-# compliance with the License. You should have received a copy of the
-# Erlang Public License along with this software. If not, it can be
-# retrieved online at http://www.erlang.org/.
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
 #
-# Software distributed under the License is distributed on an "AS IS"
-# basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See
-# the License for the specific language governing rights and limitations
-# under the License.
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
 #
 # %CopyrightEnd%
 
@@ -669,8 +670,6 @@ tertiary_bootstrap_copy:
 	$(V_at)if test ! -d $(BOOTSTRAP_ROOT)/bootstrap/lib/wx ; then mkdir $(BOOTSTRAP_ROOT)/bootstrap/lib/wx ; fi
 	$(V_at)if test ! -d $(BOOTSTRAP_ROOT)/bootstrap/lib/wx/ebin ; then mkdir $(BOOTSTRAP_ROOT)/bootstrap/lib/wx/ebin ; fi
 	$(V_at)if test ! -d $(BOOTSTRAP_ROOT)/bootstrap/lib/wx/include ; then mkdir $(BOOTSTRAP_ROOT)/bootstrap/lib/wx/include ; fi
-	$(V_at)if test ! -d $(BOOTSTRAP_ROOT)/bootstrap/lib/test_server ; then mkdir $(BOOTSTRAP_ROOT)/bootstrap/lib/test_server ; fi
-	$(V_at)if test ! -d $(BOOTSTRAP_ROOT)/bootstrap/lib/test_server/include ; then mkdir $(BOOTSTRAP_ROOT)/bootstrap/lib/test_server/include ; fi
 	$(V_at)if test ! -d $(BOOTSTRAP_ROOT)/bootstrap/lib/common_test ; then mkdir $(BOOTSTRAP_ROOT)/bootstrap/lib/common_test ; fi
 	$(V_at)if test ! -d $(BOOTSTRAP_ROOT)/bootstrap/lib/common_test/include ; then mkdir $(BOOTSTRAP_ROOT)/bootstrap/lib/common_test/include ; fi
 	$(V_at)for x in lib/ic/ebin/*.beam; do \
@@ -751,17 +750,6 @@ tertiary_bootstrap_copy:
 	done
 
 #	copy test includes to be able to compile tests with bootstrap compiler
-	$(V_at)for x in lib/test_server/include/*.hrl; do \
-		BN=`basename $$x`; \
-		TF=$(BOOTSTRAP_ROOT)/bootstrap/lib/test_server/include/$$BN; \
-		test -f  $$TF && \
-		test '!' -z "`find $$x -newer $$TF -print`" && \
-			cp $$x $$TF; \
-		test '!' -f $$TF && \
-			cp $$x $$TF; \
-		true; \
-	done
-
 	$(V_at)for x in lib/common_test/include/*.hrl; do \
 		BN=`basename $$x`; \
 		TF=$(BOOTSTRAP_ROOT)/bootstrap/lib/common_test/include/$$BN; \
@@ -965,7 +953,7 @@ primary_bootstrap_copy:
 
 # To remove modules left by the bootstrap building, but leave (restore)
 # the modules in kernel which are needed for an emulator build
-KERNEL_PRELOAD    = otp_ring0 init erl_prim_loader prim_inet prim_file zlib prim_zip erlang
+KERNEL_PRELOAD    = otp_ring0 init erl_prim_loader prim_inet prim_file zlib prim_zip erlang erts_code_purger
 KERNEL_PRELOAD_BEAMS=$(KERNEL_PRELOAD:%=$(BOOTSTRAP_TOP)/lib/kernel/ebin/%.beam)
 
 start_scripts:
@@ -986,7 +974,7 @@ local_setup:
 # ---------------------------------------------------------------------
 
 TEST_DIRS := \
-	lib/test_server \
+	lib/common_test/test_server \
 	$(wildcard lib/*/test) \
 	erts/test \
 	erts/epmd/test \

@@ -1,18 +1,19 @@
 %%
 %% %CopyrightBegin%
 %% 
-%% Copyright Ericsson AB 2001-2014. All Rights Reserved.
+%% Copyright Ericsson AB 2001-2016. All Rights Reserved.
 %% 
-%% The contents of this file are subject to the Erlang Public License,
-%% Version 1.1, (the "License"); you may not use this file except in
-%% compliance with the License. You should have received a copy of the
-%% Erlang Public License along with this software. If not, it can be
-%% retrieved online at http://www.erlang.org/.
+%% Licensed under the Apache License, Version 2.0 (the "License");
+%% you may not use this file except in compliance with the License.
+%% You may obtain a copy of the License at
 %%
-%% Software distributed under the License is distributed on an "AS IS"
-%% basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See
-%% the License for the specific language governing rights and limitations
-%% under the License.
+%%     http://www.apache.org/licenses/LICENSE-2.0
+%%
+%% Unless required by applicable law or agreed to in writing, software
+%% distributed under the License is distributed on an "AS IS" BASIS,
+%% WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+%% See the License for the specific language governing permissions and
+%% limitations under the License.
 %%
 %% %CopyrightEnd%
 %%
@@ -95,10 +96,10 @@ verify_request(SocketType, Host, Port, TranspOpts, Node, RequestStr, Options, Ti
     try inets_test_lib:connect_bin(SocketType, Host, Port, TranspOpts) of
 	{ok, Socket} ->
 	    ok = inets_test_lib:send(SocketType, Socket, RequestStr),
-	    State = case inets_regexp:match(RequestStr, "printenv") of
+	    State = case re:run(RequestStr, "printenv", [{capture, none}]) of
 			nomatch ->
 			    #state{};
-			_ ->
+			match ->
 			    #state{print = true}
 		    end,
 	    
@@ -234,11 +235,17 @@ validate(RequestStr, #state{status_line = {Version, StatusCode, _},
 	_ ->
 	    ok
     end,
-    do_validate(http_response:header_list(Headers), Options, N, P),
-    check_body(RequestStr, StatusCode, 
-	       Headers#http_response_h.'content-type',
-	       list_to_integer(Headers#http_response_h.'content-length'),
-	       Body).
+    HList = http_response:header_list(Headers),
+    do_validate(HList, Options, N, P),
+    case lists:keysearch("warning", 1, HList) of
+	{value, _} ->
+	    ok;
+	_ ->
+	    check_body(RequestStr, StatusCode, 
+		       Headers#http_response_h.'content-type',
+		       list_to_integer(Headers#http_response_h.'content-length'),
+		       Body)
+    end.
 
 %--------------------------------------------------------------------
 %% Internal functions
@@ -293,9 +300,9 @@ do_validate(Header, [{header, HeaderField, Value}|Rest],N,P) ->
 	{value, {LowerHeaderField, Value}} ->
 	    ok;
 	false ->
-	    ct:fail({wrong_header_field_value, LowerHeaderField, Header});
+	    ct:fail({wrong_header_field_value, LowerHeaderField, Header, Value});
 	_ ->
-	    ct:fail({wrong_header_field_value, LowerHeaderField, Header})
+	    ct:fail({wrong_header_field_value, LowerHeaderField, Header, Value})
     end,
     do_validate(Header, Rest, N, P);
 do_validate(Header,[{no_header, HeaderField}|Rest],N,P) ->
@@ -310,10 +317,10 @@ do_validate(Header, [_Unknown | Rest], N, P) ->
     do_validate(Header, Rest, N, P).
 
 is_expect(RequestStr) ->
-    case inets_regexp:match(RequestStr, "xpect:100-continue") of
-	{match, _, _}->
+    case re:run(RequestStr, "xpect:100-continue", [{capture, none}]) of
+	match->
 	    true;
-	_ ->
+	nomatch ->
 	    false
     end.
 

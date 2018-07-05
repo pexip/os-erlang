@@ -2,18 +2,19 @@
 %%
 %% %CopyrightBegin%
 %% 
-%% Copyright Ericsson AB 2007-2014. All Rights Reserved.
+%% Copyright Ericsson AB 2007-2015. All Rights Reserved.
 %% 
-%% The contents of this file are subject to the Erlang Public License,
-%% Version 1.1, (the "License"); you may not use this file except in
-%% compliance with the License. You should have received a copy of the
-%% Erlang Public License along with this software. If not, it can be
-%% retrieved online at http://www.erlang.org/.
-%% 
-%% Software distributed under the License is distributed on an "AS IS"
-%% basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See
-%% the License for the specific language governing rights and limitations
-%% under the License.
+%% Licensed under the Apache License, Version 2.0 (the "License");
+%% you may not use this file except in compliance with the License.
+%% You may obtain a copy of the License at
+%%
+%%     http://www.apache.org/licenses/LICENSE-2.0
+%%
+%% Unless required by applicable law or agreed to in writing, software
+%% distributed under the License is distributed on an "AS IS" BASIS,
+%% WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+%% See the License for the specific language governing permissions and
+%% limitations under the License.
 %% 
 %% %CopyrightEnd%
 %%
@@ -313,7 +314,7 @@ node_create(Label, Pred, Succ) ->
 %% tree - the tree of nodes, with labels as keys and node records as values
 
 -record(nodes, {
-  domtree	                   :: hipe_dominators:domTree(),
+  domtree       = none             :: 'none' | hipe_dominators:domTree(),
   labels 	= none             :: 'none' | [icode_lbl()],
   postorder 	= none             :: 'none' | [icode_lbl()],            
   start_label	= none             :: 'none' | icode_lbl(),
@@ -389,7 +390,7 @@ update_del_red_test_set(Update) ->
 %%-----------------------------------------------------------------------------
 %% Main function called from the hipe_main module
 
--spec struct_reuse(#cfg{}) -> #cfg{}.
+-spec struct_reuse(cfg()) -> cfg().
 
 struct_reuse(CFG) ->
   %% debug_init_case_count(?SR_INSTR_TYPE),

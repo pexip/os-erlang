@@ -1,18 +1,19 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2008-2013. All Rights Reserved.
+%% Copyright Ericsson AB 2008-2016. All Rights Reserved.
 %%
-%% The contents of this file are subject to the Erlang Public License,
-%% Version 1.1, (the "License"); you may not use this file except in
-%% compliance with the License. You should have received a copy of the
-%% Erlang Public License along with this software. If not, it can be
-%% retrieved online at http://www.erlang.org/.
+%% Licensed under the Apache License, Version 2.0 (the "License");
+%% you may not use this file except in compliance with the License.
+%% You may obtain a copy of the License at
 %%
-%% Software distributed under the License is distributed on an "AS IS"
-%% basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See
-%% the License for the specific language governing rights and limitations
-%% under the License.
+%%     http://www.apache.org/licenses/LICENSE-2.0
+%%
+%% Unless required by applicable law or agreed to in writing, software
+%% distributed under the License is distributed on an "AS IS" BASIS,
+%% WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+%% See the License for the specific language governing permissions and
+%% limitations under the License.
 %%
 %% %CopyrightEnd%
 %% This file is generated DO NOT EDIT
@@ -51,7 +52,7 @@ new(#wx_ref{type=DataT,ref=DataRef}) ->
   <<DataRef:32/?UI>>).
 
 %% @doc See <a href="http://www.wxwidgets.org/manuals/2.8.12/wx_wxfontdata.html#wxfontdataenableeffects">external documentation</a>.
--spec enableEffects(This, Flag) -> ok when
+-spec enableEffects(This, Flag) -> 'ok' when
 	This::wxFontData(), Flag::boolean().
 enableEffects(#wx_ref{type=ThisT,ref=ThisRef},Flag)
  when is_boolean(Flag) ->
@@ -108,7 +109,7 @@ getShowHelp(#wx_ref{type=ThisT,ref=ThisRef}) ->
   <<ThisRef:32/?UI>>).
 
 %% @doc See <a href="http://www.wxwidgets.org/manuals/2.8.12/wx_wxfontdata.html#wxfontdatasetallowsymbols">external documentation</a>.
--spec setAllowSymbols(This, Flag) -> ok when
+-spec setAllowSymbols(This, Flag) -> 'ok' when
 	This::wxFontData(), Flag::boolean().
 setAllowSymbols(#wx_ref{type=ThisT,ref=ThisRef},Flag)
  when is_boolean(Flag) ->
@@ -117,7 +118,7 @@ setAllowSymbols(#wx_ref{type=ThisT,ref=ThisRef},Flag)
   <<ThisRef:32/?UI,(wxe_util:from_bool(Flag)):32/?UI>>).
 
 %% @doc See <a href="http://www.wxwidgets.org/manuals/2.8.12/wx_wxfontdata.html#wxfontdatasetchosenfont">external documentation</a>.
--spec setChosenFont(This, Font) -> ok when
+-spec setChosenFont(This, Font) -> 'ok' when
 	This::wxFontData(), Font::wxFont:wxFont().
 setChosenFont(#wx_ref{type=ThisT,ref=ThisRef},#wx_ref{type=FontT,ref=FontRef}) ->
   ?CLASS(ThisT,wxFontData),
@@ -126,7 +127,7 @@ setChosenFont(#wx_ref{type=ThisT,ref=ThisRef},#wx_ref{type=FontT,ref=FontRef}) -
   <<ThisRef:32/?UI,FontRef:32/?UI>>).
 
 %% @doc See <a href="http://www.wxwidgets.org/manuals/2.8.12/wx_wxfontdata.html#wxfontdatasetcolour">external documentation</a>.
--spec setColour(This, Colour) -> ok when
+-spec setColour(This, Colour) -> 'ok' when
 	This::wxFontData(), Colour::wx:wx_colour().
 setColour(#wx_ref{type=ThisT,ref=ThisRef},Colour)
  when tuple_size(Colour) =:= 3; tuple_size(Colour) =:= 4 ->
@@ -135,7 +136,7 @@ setColour(#wx_ref{type=ThisT,ref=ThisRef},Colour)
   <<ThisRef:32/?UI,(wxe_util:colour_bin(Colour)):16/binary>>).
 
 %% @doc See <a href="http://www.wxwidgets.org/manuals/2.8.12/wx_wxfontdata.html#wxfontdatasetinitialfont">external documentation</a>.
--spec setInitialFont(This, Font) -> ok when
+-spec setInitialFont(This, Font) -> 'ok' when
 	This::wxFontData(), Font::wxFont:wxFont().
 setInitialFont(#wx_ref{type=ThisT,ref=ThisRef},#wx_ref{type=FontT,ref=FontRef}) ->
   ?CLASS(ThisT,wxFontData),
@@ -144,7 +145,7 @@ setInitialFont(#wx_ref{type=ThisT,ref=ThisRef},#wx_ref{type=FontT,ref=FontRef}) 
   <<ThisRef:32/?UI,FontRef:32/?UI>>).
 
 %% @doc See <a href="http://www.wxwidgets.org/manuals/2.8.12/wx_wxfontdata.html#wxfontdatasetrange">external documentation</a>.
--spec setRange(This, MinRange, MaxRange) -> ok when
+-spec setRange(This, MinRange, MaxRange) -> 'ok' when
 	This::wxFontData(), MinRange::integer(), MaxRange::integer().
 setRange(#wx_ref{type=ThisT,ref=ThisRef},MinRange,MaxRange)
  when is_integer(MinRange),is_integer(MaxRange) ->
@@ -153,7 +154,7 @@ setRange(#wx_ref{type=ThisT,ref=ThisRef},MinRange,MaxRange)
   <<ThisRef:32/?UI,MinRange:32/?UI,MaxRange:32/?UI>>).
 
 %% @doc See <a href="http://www.wxwidgets.org/manuals/2.8.12/wx_wxfontdata.html#wxfontdatasetshowhelp">external documentation</a>.
--spec setShowHelp(This, Flag) -> ok when
+-spec setShowHelp(This, Flag) -> 'ok' when
 	This::wxFontData(), Flag::boolean().
 setShowHelp(#wx_ref{type=ThisT,ref=ThisRef},Flag)
  when is_boolean(Flag) ->
@@ -162,7 +163,7 @@ setShowHelp(#wx_ref{type=ThisT,ref=ThisRef},Flag)
   <<ThisRef:32/?UI,(wxe_util:from_bool(Flag)):32/?UI>>).
 
 %% @doc Destroys this object, do not use object again
--spec destroy(This::wxFontData()) -> ok.
+-spec destroy(This::wxFontData()) -> 'ok'.
 destroy(Obj=#wx_ref{type=Type}) ->
   ?CLASS(Type,wxFontData),
   wxe_util:destroy(?DESTROY_OBJECT,Obj),

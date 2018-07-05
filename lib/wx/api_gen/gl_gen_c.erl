@@ -1,18 +1,19 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2008-2013. All Rights Reserved.
+%% Copyright Ericsson AB 2008-2016. All Rights Reserved.
 %%
-%% The contents of this file are subject to the Erlang Public License,
-%% Version 1.1, (the "License"); you may not use this file except in
-%% compliance with the License. You should have received a copy of the
-%% Erlang Public License along with this software. If not, it can be
-%% retrieved online at http://www.erlang.org/.
+%% Licensed under the Apache License, Version 2.0 (the "License");
+%% you may not use this file except in compliance with the License.
+%% You may obtain a copy of the License at
 %%
-%% Software distributed under the License is distributed on an "AS IS"
-%% basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See
-%% the License for the specific language governing rights and limitations
-%% under the License.
+%%     http://www.apache.org/licenses/LICENSE-2.0
+%%
+%% Unless required by applicable law or agreed to in writing, software
+%% distributed under the License is distributed on an "AS IS" BASIS,
+%% WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+%% See the License for the specific language governing permissions and
+%% limitations under the License.
 %%
 %% %CopyrightEnd%
 %%
@@ -122,20 +123,14 @@ declare_var(A=#arg{name=N,in=false,type=#type{name=T,base=B,single={list,Sz}}})
   when is_number(Sz) -> 
     w(" ~s ~s[~p] = {~s};~n", [T,N,Sz,args(fun zero/1,",",lists:duplicate(Sz,B))]),
     A;
-declare_var(A=#arg{name=N,in=false,type=#type{name=T,base=string,size={Max,_}, single=Single}}) -> 
+declare_var(A=#arg{name=N,in=false,type=#type{name=T,base=string,size={Max,_}}}) ->
     case is_integer(Max) of
-	true -> 
+	true ->
 	    w(" ~s ~s[~p];~n", [T,N,Max]);
 	false ->
-	    %% w(" ~s ~s[*~s];~n", [T,N,Max]),
-	    w(" ~s *~s;~n", [T,N]), 
+	    w(" ~s *~s;~n", [T,N]),
 	    w(" ~s = (~s *) driver_alloc(sizeof(~s) * *~s);~n", [N,T,T,Max]),
-	    store_free(N)		
-	    %% case Single of
-	    %% 	{list, _, _} -> 
-	    %% 	    w(" ~s *~s_p = ~s;~n", [T,N,N]);
-	    %% 	_ -> ok
-	    %% end	    
+	    store_free(N)
     end,
     A;
 declare_var(A=#arg{name=N,in=false,type=#type{base=binary,size={MaxSz, _}}}) -> 
@@ -162,9 +157,9 @@ declare_var(A=#arg{name=N,in=false,
 		   type=#type{name=T,base=B,by_val=false,single=true}}) -> 
     w(" ~s ~s[1] = {~s};~n", [T,N,zero(B)]),
     A;
-declare_var(A=#arg{where=c, type=#type{name=T}, alt={size,Var}}) -> 
+declare_var(A=#arg{where=c, type=#type{name=T}, alt={size,Var}}) ->
     w(" ~s ~s_size = bins_sz[~p];~n", [T, Var, get(bin_count)]),
-    A;    
+    A;
 declare_var(A=#arg{where=_}) -> 
     A.
 
@@ -193,9 +188,16 @@ decode_arg(P=#arg{where=erl},A) -> {P,A};
 decode_arg(P=#arg{where=c},A)   -> {P,A};
 decode_arg(P=#arg{in=false},A)  -> {P,A};
 
-decode_arg(P=#arg{name=Name,type=#type{name=Type,base=binary}},A0) ->
+decode_arg(P=#arg{name=Name,alt=Alt,type=#type{name=Type,base=binary}},A0) ->
     w(" ~s *~s = (~s *) bins[~p];~n", [Type,Name,Type,next_id(bin_count)]),
-    {P, A0};
+    case Alt of
+        list_binary ->
+            A = align(4, A0),
+            w(" int * ~sLen = (int *) bp; bp += 4; (void) ~sLen;~n", [Name, Name]),
+            {P, A};
+        _ ->
+            {P, A0}
+    end;
 decode_arg(P=#arg{name=Name,type=#type{name=Type,base=memory}},A0) ->
     w(" ~s *~s = (~s *) bins[~p];~n", [Type,Name,Type,next_id(bin_count)]),
     {P, A0};
@@ -216,7 +218,7 @@ decode_arg(P=#arg{name=Name,type=#type{size=Sz,single=list,name=Type}},A0) ->
     A = align(max([Sz,4]),A0),
     w(" int * ~sLen = (int *) bp; bp += ~p;~n",    [Name, max([4,Sz])]),
     w(" ~s * ~s = (~s *) bp; ", [Type,Name,Type]),
-    w(" bp += (8-((*~sLen*~p+~p)%8))%8;~n", [Name,Sz,A]),
+    w(" bp += *~sLen*~p + (8-((*~sLen*~p+~p)%8))%8;~n", [Name,Sz,Name,Sz,A]),
     {P, 0};
 decode_arg(P=#arg{name=Name,type=#type{size=TSz,name=Type,single={tuple,undefined}}},A0) ->
     A = align(TSz,A0),

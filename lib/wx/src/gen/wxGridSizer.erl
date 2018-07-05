@@ -1,18 +1,19 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2008-2013. All Rights Reserved.
+%% Copyright Ericsson AB 2008-2016. All Rights Reserved.
 %%
-%% The contents of this file are subject to the Erlang Public License,
-%% Version 1.1, (the "License"); you may not use this file except in
-%% compliance with the License. You should have received a copy of the
-%% Erlang Public License along with this software. If not, it can be
-%% retrieved online at http://www.erlang.org/.
+%% Licensed under the Apache License, Version 2.0 (the "License");
+%% you may not use this file except in compliance with the License.
+%% You may obtain a copy of the License at
 %%
-%% Software distributed under the License is distributed on an "AS IS"
-%% basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See
-%% the License for the specific language governing rights and limitations
-%% under the License.
+%%     http://www.apache.org/licenses/LICENSE-2.0
+%%
+%% Unless required by applicable law or agreed to in writing, software
+%% distributed under the License is distributed on an "AS IS" BASIS,
+%% WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+%% See the License for the specific language governing permissions and
+%% limitations under the License.
 %%
 %% %CopyrightEnd%
 %% This file is generated DO NOT EDIT
@@ -58,8 +59,8 @@ new(Cols)
 %% @doc See <a href="http://www.wxwidgets.org/manuals/2.8.12/wx_wxgridsizer.html#wxgridsizerwxgridsizer">external documentation</a>.
 -spec new(Cols, [Option]) -> wxGridSizer() when
 	Cols::integer(),
-	Option :: {vgap, integer()}
-		 | {hgap, integer()}.
+	Option :: {'vgap', integer()}
+		 | {'hgap', integer()}.
 new(Cols, Options)
  when is_integer(Cols),is_list(Options) ->
   MOpts = fun({vgap, Vgap}, Acc) -> [<<1:32/?UI,Vgap:32/?UI>>|Acc];
@@ -110,7 +111,7 @@ getVGap(#wx_ref{type=ThisT,ref=ThisRef}) ->
   <<ThisRef:32/?UI>>).
 
 %% @doc See <a href="http://www.wxwidgets.org/manuals/2.8.12/wx_wxgridsizer.html#wxgridsizersetcols">external documentation</a>.
--spec setCols(This, Cols) -> ok when
+-spec setCols(This, Cols) -> 'ok' when
 	This::wxGridSizer(), Cols::integer().
 setCols(#wx_ref{type=ThisT,ref=ThisRef},Cols)
  when is_integer(Cols) ->
@@ -119,7 +120,7 @@ setCols(#wx_ref{type=ThisT,ref=ThisRef},Cols)
   <<ThisRef:32/?UI,Cols:32/?UI>>).
 
 %% @doc See <a href="http://www.wxwidgets.org/manuals/2.8.12/wx_wxgridsizer.html#wxgridsizersethgap">external documentation</a>.
--spec setHGap(This, Gap) -> ok when
+-spec setHGap(This, Gap) -> 'ok' when
 	This::wxGridSizer(), Gap::integer().
 setHGap(#wx_ref{type=ThisT,ref=ThisRef},Gap)
  when is_integer(Gap) ->
@@ -128,7 +129,7 @@ setHGap(#wx_ref{type=ThisT,ref=ThisRef},Gap)
   <<ThisRef:32/?UI,Gap:32/?UI>>).
 
 %% @doc See <a href="http://www.wxwidgets.org/manuals/2.8.12/wx_wxgridsizer.html#wxgridsizersetrows">external documentation</a>.
--spec setRows(This, Rows) -> ok when
+-spec setRows(This, Rows) -> 'ok' when
 	This::wxGridSizer(), Rows::integer().
 setRows(#wx_ref{type=ThisT,ref=ThisRef},Rows)
  when is_integer(Rows) ->
@@ -137,7 +138,7 @@ setRows(#wx_ref{type=ThisT,ref=ThisRef},Rows)
   <<ThisRef:32/?UI,Rows:32/?UI>>).
 
 %% @doc See <a href="http://www.wxwidgets.org/manuals/2.8.12/wx_wxgridsizer.html#wxgridsizersetvgap">external documentation</a>.
--spec setVGap(This, Gap) -> ok when
+-spec setVGap(This, Gap) -> 'ok' when
 	This::wxGridSizer(), Gap::integer().
 setVGap(#wx_ref{type=ThisT,ref=ThisRef},Gap)
  when is_integer(Gap) ->
@@ -146,7 +147,7 @@ setVGap(#wx_ref{type=ThisT,ref=ThisRef},Gap)
   <<ThisRef:32/?UI,Gap:32/?UI>>).
 
 %% @doc Destroys this object, do not use object again
--spec destroy(This::wxGridSizer()) -> ok.
+-spec destroy(This::wxGridSizer()) -> 'ok'.
 destroy(Obj=#wx_ref{type=Type}) ->
   ?CLASS(Type,wxGridSizer),
   wxe_util:destroy(?DESTROY_OBJECT,Obj),

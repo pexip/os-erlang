@@ -1,24 +1,24 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2010-2014. All Rights Reserved.
+%% Copyright Ericsson AB 2010-2016. All Rights Reserved.
 %%
-%% The contents of this file are subject to the Erlang Public License,
-%% Version 1.1, (the "License"); you may not use this file except in
-%% compliance with the License. You should have received a copy of the
-%% Erlang Public License along with this software. If not, it can be
-%% retrieved online at http://www.erlang.org/.
+%% Licensed under the Apache License, Version 2.0 (the "License");
+%% you may not use this file except in compliance with the License.
+%% You may obtain a copy of the License at
 %%
-%% Software distributed under the License is distributed on an "AS IS"
-%% basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See
-%% the License for the specific language governing rights and limitations
-%% under the License.
+%%     http://www.apache.org/licenses/LICENSE-2.0
+%%
+%% Unless required by applicable law or agreed to in writing, software
+%% distributed under the License is distributed on an "AS IS" BASIS,
+%% WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+%% See the License for the specific language governing permissions and
+%% limitations under the License.
 %%
 %% %CopyrightEnd%
 %%
 
 -module(diameter_sctp).
-
 -behaviour(gen_server).
 
 %% interface
@@ -37,7 +37,8 @@
          code_change/3,
          terminate/2]).
 
--export([info/1]).  %% service_info callback
+-export([listener/1,%% diameter_sync callback
+         info/1]).  %% service_info callback
 
 -export([ports/0,
          ports/1]).
@@ -60,10 +61,6 @@
 %% Remote addresses to accept connections from.
 -define(DEFAULT_ACCEPT, []).  %% any
 
-%% How long a listener with no associations lives before offing
-%% itself.
--define(LISTENER_TIMEOUT, 30000).
-
 %% How long to wait for a transport process to attach after
 %% association establishment.
 -define(ACCEPT_TIMEOUT, 5000).
@@ -83,38 +80,43 @@
 
 %% Accepting/connecting transport process state.
 -record(transport,
-        {parent  :: pid(),
+        {parent  :: pid() | undefined,
          mode :: {accept, pid()}
                | accept
                | {connect, {[inet:ip_address()], uint(), list()}}
                         %% {RAs, RP, Errors}
                | connect,
-         socket   :: gen_sctp:sctp_socket(),
+         socket   :: gen_sctp:sctp_socket() | undefined,
          assoc_id :: gen_sctp:assoc_id(),  %% association identifier
-         peer     :: {[inet:ip_address()], uint()}, %% {RAs, RP}
-         streams  :: {uint(), uint()},     %% {InStream, OutStream} counts
+         peer     :: {[inet:ip_address()], uint()} %% {RAs, RP}
+                   | undefined,
+         streams  :: {uint(), uint()}      %% {InStream, OutStream} counts
+                   | undefined,
          os = 0   :: uint()}).             %% next output stream
 
 %% Listener process state.
 -record(listener,
         {ref       :: reference(),
          socket    :: gen_sctp:sctp_socket(),
-         count = 0 :: uint(),
-         tmap = ets:new(?MODULE, []) :: ets:tid(),
-             %% {MRef, Pid|AssocId}, {AssocId, Pid}
-         pending = {0, ets:new(?MODULE, [ordered_set])},
-         tref      :: reference(),
+         service = false :: false | pid(), %% service process
+         pending = {0, queue:new()},
          accept    :: [match()]}).
-%% Field tmap is used to map an incoming message or event to the
-%% relevent transport process. Field pending implements a queue of
-%% transport processes to which an association has been assigned (at
-%% comm_up and written into tmap) but for which diameter hasn't yet
-%% spawned a transport process: a short-lived state of affairs as a
-%% new transport is spawned as a consequence of a peer being taken up,
-%% transport processes being spawned by the listener on demand. In
-%% case diameter starts a transport before comm_up on a new
-%% association, pending is set to an improper list with the spawned
-%% transport as head and the queue as tail.
+%% Field pending implements two queues: the first of transport-to-be
+%% processes to which an association has been assigned but for which
+%% diameter hasn't yet spawned a transport process, a short-lived
+%% state of affairs as a new transport is spawned as a consequence of
+%% a peer being taken up, transport processes being spawned by the
+%% listener on demand; the second of started transport processes that
+%% have not yet been assigned an association.
+%%
+%% When diameter calls start/3, the transport process is either taken
+%% from the first queue or spawned and placed in the second queue
+%% until an association is established. When an association is
+%% established, a controlling process is either taken from the second
+%% queue or spawned and placed in the first queue. Thus, there are
+%% only elements in one queue at a time, so share an ets table queue
+%% and tag it with a positive length if it contains the first queue, a
+%% negative length if it contains the second queue.
 
 %% ---------------------------------------------------------------------------
 %% # start/3
@@ -127,11 +129,14 @@
    -> {ok, pid(), [inet:ip_address()]}
  when Ref :: diameter:transport_ref().
 
-start(T, #diameter_service{capabilities = Caps}, Opts)
+start(T, Svc, Opts)
   when is_list(Opts) ->
+    #diameter_service{capabilities = Caps,
+                      pid = SPid}
+        = Svc,
     diameter_sctp_sup:start(),  %% start supervisors on demand
     Addrs = Caps#diameter_caps.host_ip_address,
-    s(T, Addrs, lists:map(fun ip/1, Opts)).
+    s(T, Addrs, SPid, lists:map(fun ip/1, Opts)).
 
 ip({ifaddr, A}) ->
     {ip, A};
@@ -139,21 +144,25 @@ ip(T) ->
     T.
 
 %% A listener spawns transports either as a consequence of this call
-%% when there is not yet an association to associate with it, or at
-%% comm_up on a new association in which case the call retrieves a
-%% transport from the pending queue.
-s({accept, Ref} = A, Addrs, Opts) ->
-    {LPid, LAs} = listener(Ref, {Opts, Addrs}),
-    try gen_server:call(LPid, {A, self()}, infinity) of
-        {ok, TPid} -> {ok, TPid, LAs}
+%% when there is not yet an association to assign it, or at comm_up on
+%% a new association in which case the call retrieves a transport from
+%% the pending queue.
+s({accept, Ref} = A, Addrs, SPid, Opts) ->
+    {ok, LPid, LAs} = listener(Ref, {Opts, Addrs}),
+    try gen_server:call(LPid, {A, self(), SPid}, infinity) of
+        {ok, TPid} ->
+            {ok, TPid, LAs};
+        No ->
+            {error, No}
     catch
-        exit: Reason -> {error, Reason}
+        exit: Reason ->
+            {error, Reason}
     end;
 %% This implementation is due to there being no accept call in
 %% gen_sctp in order to be able to accept a new association only
 %% *after* an accepting transport has been spawned.
 
-s({connect = C, Ref}, Addrs, Opts) ->
+s({connect = C, Ref}, Addrs, _SPid, Opts) ->
     diameter_sctp_sup:start_child({C, self(), Opts, Addrs, Ref}).
 
 %% start_link/1
@@ -209,14 +218,15 @@ init(T) ->
 
 %% A process owning a listening socket.
 i({listen, Ref, {Opts, Addrs}}) ->
+    [_] = diameter_config:subscribe(Ref, transport), %% assert existence
     {[Matches], Rest} = proplists:split(Opts, [accept]),
     {LAs, Sock} = AS = open(Addrs, Rest, ?DEFAULT_PORT),
-    proc_lib:init_ack({ok, self(), LAs}),
     ok = gen_sctp:listen(Sock, true),
     true = diameter_reg:add_new({?MODULE, listener, {Ref, AS}}),
-    start_timer(#listener{ref = Ref,
-                          socket = Sock,
-                          accept = accept(Matches)});
+    proc_lib:init_ack({ok, self(), LAs}),
+    #listener{ref = Ref,
+              socket = Sock,
+              accept = [[M] || {accept, M} <- Matches]};
 
 %% A connecting transport.
 i({connect, Pid, Opts, Addrs, Ref}) ->
@@ -226,62 +236,75 @@ i({connect, Pid, Opts, Addrs, Ref}) ->
     {LAs, Sock} = open(Addrs, Rest, 0),
     putr(?REF_KEY, Ref),
     proc_lib:init_ack({ok, self(), LAs}),
-    erlang:monitor(process, Pid),
+    monitor(process, Pid),
     #transport{parent = Pid,
                mode = {connect, connect(Sock, RAs, RP, [])},
                socket = Sock};
 
-%% An accepting transport spawned by diameter.
-i({accept, Pid, LPid, Sock, Ref})
+%% An accepting transport spawned by diameter, not yet owning an
+%% association.
+i({accept, Ref, LPid, Pid})
   when is_pid(Pid) ->
     putr(?REF_KEY, Ref),
     proc_lib:init_ack({ok, self()}),
-    erlang:monitor(process, Pid),
-    erlang:monitor(process, LPid),
-    #transport{parent = Pid,
-               mode = {accept, LPid},
-               socket = Sock};
+    monitor(process, Pid),
+    MRef = monitor(process, LPid),
+    wait([{peeloff, MRef}], #transport{parent = Pid,
+                                       mode = {accept, LPid}});
 
-%% An accepting transport spawned at association establishment.
-i({accept, Ref, LPid, Sock, Id}) ->
+%% An accepting transport spawned at association establishment, whose
+%% parent is not yet known.
+i({accept, Ref, LPid}) ->
     putr(?REF_KEY, Ref),
     proc_lib:init_ack({ok, self()}),
-    MRef = erlang:monitor(process, LPid),
-    %% Wait for a signal that the transport has been started before
-    %% processing other messages.
+    erlang:send_after(?ACCEPT_TIMEOUT, self(), accept_timeout),
+    MRef = monitor(process, LPid),
+    wait([{parent, Ref}, {peeloff, MRef}], #transport{mode = {accept, LPid}}).
+
+%% wait/2
+%%
+%% Wait for diameter to start the transport process and for the
+%% association to be peeled off before processing other messages.
+
+wait(Keys, S) ->
+    lists:foldl(fun i/2, S, Keys).
+
+i({K, Ref}, #transport{mode = {accept, _}} = S) ->
     receive
-        {Ref, Pid} ->  %% transport started
-            #transport{parent = Pid,
-                       mode = {accept, LPid},
-                       socket = Sock};
-        {'DOWN', MRef, process, _, _} = T ->  %% listener down
-            close(Sock, Id),
+        {Ref, Pid} when K == parent ->  %% transport process started
+            S#transport{parent = Pid};
+        {K, T, Matches} when K == peeloff ->  %% association
+            {sctp, Sock, _RA, _RP, _Data} = T,
+            ok = accept_peer(Sock, Matches),
+            demonitor(Ref, [flush]),
+            t(T, S#transport{socket = Sock});
+        accept_timeout = T ->
+            x(T);
+        {'DOWN', _, process, _, _} = T ->
             x(T)
-    after ?ACCEPT_TIMEOUT ->
-            close(Sock, Id),
-            x(timeout)
     end.
-
-%% close/2
-
-close(Sock, Id) ->
-    gen_sctp:eof(Sock, #sctp_assoc_change{assoc_id = Id}).
-%% Having to pass a record here is hokey.
 
 %% listener/2
 
-listener(LRef, T) ->
-    l(diameter_reg:match({?MODULE, listener, {LRef, '_'}}), LRef, T).
+%% Accepting processes can be started concurrently: ensure only one
+%% listener is started.
+listener(Ref, T) ->
+    diameter_sync:call({?MODULE, listener, Ref},
+                       {?MODULE, listener, [{Ref, T}]},
+                       infinity,
+                       infinity).
 
-%% Existing process with the listening socket ...
+listener({Ref, T}) ->
+    l(diameter_reg:match({?MODULE, listener, {Ref, '_'}}), Ref, T).
+
+%% Existing listening process ...
 l([{{?MODULE, listener, {_, AS}}, LPid}], _, _) ->
     {LAs, _Sock} = AS,
-    {LPid, LAs};
+    {ok, LPid, LAs};
 
-%% ... or not: start one.
-l([], LRef, T) ->
-    {ok, LPid, LAs} = diameter_sctp_sup:start_child({listen, LRef, T}),
-    {LPid, LAs}.
+%% ... or not.
+l([], Ref, T) ->
+    diameter_sctp_sup:start_child({listen, Ref, T}).
 
 %% open/3
 
@@ -347,11 +370,17 @@ type(T) ->
 %% # handle_call/3
 %% ---------------------------------------------------------------------------
 
-handle_call({{accept, Ref}, Pid}, _, #listener{ref = Ref,
-                                               count = N}
-                                     = S) ->
+handle_call({{accept, Ref}, Pid}, _, #listener{ref = Ref} = S) ->
     {TPid, NewS} = accept(Ref, Pid, S),
-    {reply, {ok, TPid}, NewS#listener{count = N+1}};
+    {reply, {ok, TPid}, NewS};
+
+handle_call({{accept, _} = T, Pid, SPid}, From, #listener{service = P} = S) ->
+    handle_call({T, Pid}, From, if not is_pid(P), is_pid(SPid) ->
+                                        monitor(process, SPid),
+                                        S#listener{service = SPid};
+                                   true ->
+                                        S
+                                end);
 
 handle_call(_, _, State) ->
     {reply, nok, State}.
@@ -373,6 +402,15 @@ handle_info(T, #transport{} = S) ->
 handle_info(T, #listener{} = S) ->
     {noreply, #listener{} = l(T,S)}.
 
+%% Prior to the possiblity of setting pool_size on in transport
+%% configuration, a new accepting transport was only started following
+%% the death of a predecessor, so that there was only at most one
+%% previously started transport process waiting for an association.
+%% This assumption no longer holds with pool_size > 1, in which case
+%% several accepting transports are started concurrently. Deal with
+%% this by placing the started transports in a new queue of transport
+%% processes waiting for an association.
+
 %% ---------------------------------------------------------------------------
 %% # code_change/3
 %% ---------------------------------------------------------------------------
@@ -386,16 +424,6 @@ code_change(_, State, _) ->
 
 terminate(_, #transport{assoc_id = undefined}) ->
     ok;
-
-terminate(_, #transport{socket = Sock,
-                        mode = accept,
-                        assoc_id = Id}) ->
-    close(Sock, Id);
-
-terminate(_, #transport{socket = Sock,
-                        mode = {accept, _},
-                        assoc_id = Id}) ->
-    close(Sock, Id);
 
 terminate(_, #transport{socket = Sock}) ->
     gen_sctp:close(Sock);
@@ -411,78 +439,50 @@ putr(Key, Val) ->
 getr(Key) ->
     get({?MODULE, Key}).
 
-%% start_timer/1
-
-start_timer(#listener{count = 0} = S) ->
-    S#listener{tref = erlang:start_timer(?LISTENER_TIMEOUT, self(), close)};
-start_timer(S) ->
-    S.
-
 %% l/2
 %%
 %% Transition listener state.
 
 %% Incoming message from SCTP.
-l({sctp, Sock, _RA, _RP, Data} = Msg, #listener{socket = Sock} = S) ->
+l({sctp, Sock, _RA, _RP, Data} = T, #listener{socket = Sock,
+                                              accept = Matches}
+                                    = S) ->
     Id = assoc_id(Data),
+    {TPid, NewS} = accept(S),
+    TPid ! {peeloff, setelement(2, T, peeloff(Sock, Id, TPid)), Matches},
+    setopts(Sock),
+    NewS;
 
-    try find(Id, Data, S) of
-        {TPid, NewS} ->
-            TPid ! {peeloff, peeloff(Sock, Id, TPid), Msg, S#listener.accept},
-            NewS;
-        false ->
-            S
-    after
-        setopts(Sock)
-    end;
-
-%% Transport is asking message to be sent. See send/3 for why the send
-%% isn't directly from the transport.
-l({send, AssocId, StreamId, Bin}, #listener{socket = Sock} = S) ->
-    send(Sock, AssocId, StreamId, Bin),
-    S;
-
-%% Accepting transport has died. One that's awaiting an association ...
-l({'DOWN', MRef, process, TPid, _}, #listener{pending = [TPid | Q],
-                                              tmap = T,
-                                              count = N}
-                                    = S) ->
-    ets:delete(T, MRef),
-    ets:delete(T, TPid),
-    start_timer(S#listener{count = N-1,
-                           pending = Q});
-
-%% ... ditto and a new transport has already been started ...
-l({'DOWN', _, process, _, _} = T, #listener{pending = [TPid | Q]}
-                                  = S) ->
-    #listener{pending = NQ}
-        = NewS
-        = l(T, S#listener{pending = Q}),
-    NewS#listener{pending = [TPid | NQ]};
-
-%% ... or not.
-l({'DOWN', MRef, process, TPid, _}, #listener{socket = Sock,
-                                              tmap = T,
-                                              count = N,
-                                              pending = {P,Q}}
-                                    = S) ->
-    [{MRef, Id}] = ets:lookup(T, MRef),  %% Id = TPid | AssocId
-    ets:delete(T, MRef),
-    ets:delete(T, Id),
-    Id == TPid orelse close(Sock, Id),
-    case ets:lookup(Q, TPid) of
-        [{TPid, _}] -> %% transport in the pending queue ...
-            ets:delete(Q, TPid),
-            S#listener{pending = {P-1, Q}};
-        [] ->           %% ... or not
-            start_timer(S#listener{count = N-1})
-    end;
-
-%% Timeout after the last accepting process has died.
-l({timeout, TRef, close = T}, #listener{tref = TRef,
-                                        count = 0}) ->
+%% Service process has died.
+l({'DOWN', _, process, Pid, _} = T, #listener{service = Pid,
+                                              socket = Sock}) ->
+    gen_sctp:close(Sock),
     x(T);
-l({timeout, _, close}, #listener{} = S) ->
+
+%% Accepting process has died.
+l({'DOWN', _MRef, process, TPid, _}, #listener{pending = {_,Q}} = S) ->
+    down(queue:member(TPid, Q), TPid, S);
+
+%% Transport has been removed.
+l({transport, remove, _} = T, #listener{socket = Sock}) ->
+    gen_sctp:close(Sock),
+    x(T).
+
+%% down/3
+%%
+%% Accepting transport has died.
+
+%% One that's waiting for transport start in the pending queue ...
+down(true, TPid, #listener{pending = {N,Q}} = S) ->
+    NQ = queue:filter(fun(P) -> P /= TPid end, Q),
+    if N < 0 ->  %% awaiting an association ...
+            S#listener{pending = {N+1, NQ}};
+       true ->   %% ... or one has been assigned
+            S#listener{pending = {N-1, NQ}}
+    end;
+
+%% ... or one that's already attached.
+down(false, _TPid, S) ->
     S.
 
 %% t/2
@@ -501,20 +501,10 @@ t(T,S) ->
 
 %% transition/2
 
-%% Listening process is transfering ownership of an association.
-transition({peeloff, Sock, {sctp, LSock, _RA, _RP, _Data} = Msg, Matches},
-           #transport{mode = {accept, _},
-                      socket = LSock}
-           = S) ->
-    ok = accept_peer(Sock, Matches),
-    transition(Msg, S#transport{socket = Sock});
-
 %% Incoming message.
-transition({sctp, _Sock, _RA, _RP, Data}, #transport{socket = Sock} = S) ->
+transition({sctp, Sock, _RA, _RP, Data}, #transport{socket = Sock} = S) ->
     setopts(Sock),
     recv(Data, S);
-%% Don't match on Sock since in R15B01 it can be the listening socket
-%% in the (peeled-off) accept case, which is likely a bug.
 
 %% Outgoing message.
 transition({diameter, {send, Msg}}, S) ->
@@ -536,13 +526,8 @@ transition({diameter, {tls, _Ref, _Type, _Bool}}, _) ->
 transition({'DOWN', _, process, Pid, _}, #transport{parent = Pid}) ->
     stop;
 
-%% Listener process has died.
-transition({'DOWN', _, process, Pid, _}, #transport{mode = {accept, Pid}}) ->
-    stop;
-
-%% Ditto but we have ownership of the association. It might be that
-%% we'll go down anyway though.
-transition({'DOWN', _, process, _Pid, _}, #transport{mode = accept}) ->
+%% Timeout after transport process has been started.
+transition(accept_timeout, _) ->
     ok;
 
 %% Request for the local port number.
@@ -569,42 +554,27 @@ accept_peer(Sock, Matches) ->
         orelse x({accept, RAddrs, Matches}),
     ok.
 
-%% accept/1
-
-accept(Opts) ->
-    [[M] || {accept, M} <- Opts].
-
 %% accept/3
 %%
 %% Start a new transport process or use one that's already been
-%% started as a consequence of association establishment.
+%% started as a consequence of diameter requesting a transport
+%% process.
 
-%% No pending associations: spawn a new transport.
-accept(Ref, Pid, #listener{socket = Sock,
-                           tmap = T,
-                           pending = {0,_} = Q}
-                 = S) ->
-    Arg = {accept, Pid, self(), Sock, Ref},
-    {ok, TPid} = diameter_sctp_sup:start_child(Arg),
-    MRef = erlang:monitor(process, TPid),
-    ets:insert(T, [{MRef, TPid}, {TPid, MRef}]),
-    {TPid, S#listener{pending = [TPid | Q]}};
-%% Placing the transport in the pending field makes it available to
-%% the next association. The stack starts a new accepting transport
-%% only after this one brings the connection up (or dies).
-
-%% Accepting transport has died. This can happen if a new transport is
-%% started before the DOWN has arrived.
-accept(Ref, Pid, #listener{pending = [TPid | {0,_} = Q]} = S) ->
-    false = is_process_alive(TPid),  %% assert
-    accept(Ref, Pid, S#listener{pending = Q});
+accept(Ref, Pid, #listener{pending = {N,_}} = S) ->
+    {TPid, NQ} = q(Ref, Pid, S),
+    {TPid, S#listener{pending = {N-1, NQ}}}.
 
 %% Pending associations: attach to the first in the queue.
-accept(_, Pid, #listener{ref = Ref, pending = {N,Q}} = S) ->
-    TPid = ets:first(Q),
+q(_, Pid, #listener{ref = Ref,
+                    pending = {N,Q}})
+  when 0 < N ->
+    {TPid, _} = T = dq(Q),
     TPid ! {Ref, Pid},
-    ets:delete(Q, TPid),
-    {TPid, S#listener{pending = {N-1, Q}}}.
+    T;
+
+%% No pending associations: spawn a new transport.
+q(Ref, Pid, #listener{pending = {_,Q}}) ->
+    nq({accept, Ref, self(), Pid}, Q).
 
 %% send/2
 
@@ -665,7 +635,7 @@ recv({_, #sctp_assoc_change{} = E},
      = S) ->
     S#transport{mode = {C, connect(Sock, RAs, RP, [{RA,E} | Es])}};
 
-%% Lost association after establishment.
+%% Association failure.
 recv({_, #sctp_assoc_change{}}, _) ->
     stop;
 
@@ -676,8 +646,10 @@ recv({[#sctp_sndrcvinfo{stream = Id}], Bin}, #transport{parent = Pid})
                                              bin = Bin}),
     ok;
 
-recv({_, #sctp_shutdown_event{assoc_id = Id}},
-     #transport{assoc_id = Id}) ->
+recv({_, #sctp_shutdown_event{assoc_id = A}},
+     #transport{assoc_id = Id})
+  when A == Id;
+       A == 0 ->
     stop;
 
 %% Note that diameter_sctp(3) documents that sctp_events cannot be
@@ -713,49 +685,49 @@ up(#transport{parent = Pid,
     diameter_peer:up(Pid),
     S#transport{mode = A}.
 
-%% find/3
+%% accept/1
+%%
+%% Start a new transport process or use one that's already been
+%% started as a consequence of an event to a listener process.
 
-find(Id, Data, #listener{tmap = T} = S) ->
-    f(ets:lookup(T, Id), Data, S).
+accept(#listener{pending = {N,_}} = S) ->
+    {TPid, NQ} = q(S),
+    {TPid, S#listener{pending = {N+1, NQ}}}.
 
-%% New association and a transport waiting for one: use it.
-f([],
-  {_, #sctp_assoc_change{state = comm_up,
-                         assoc_id = Id}},
-  #listener{tmap = T,
-            pending = [TPid | {_,_} = Q]}
-  = S) ->
-    [{TPid, MRef}] = ets:lookup(T, TPid),
-    ets:insert(T, [{MRef, Id}, {Id, TPid}]),
-    ets:delete(T, TPid),
-    {TPid, S#listener{pending = Q}};
+%% Transport waiting for an association: use it.
+q(#listener{pending = {N,Q}})
+  when N < 0 ->
+    dq(Q);
 
-%% New association and no transport start yet: spawn one and place it
-%% in the queue.
-f([],
-  {_, #sctp_assoc_change{state = comm_up,
-                         assoc_id = Id}},
-  #listener{ref = Ref,
-            socket = Sock,
-            tmap = T,
-            pending = {N,Q}}
-  = S) ->
-    Arg = {accept, Ref, self(), Sock, Id},
+%% No transport start yet: spawn one and queue.
+q(#listener{ref = Ref,
+            pending = {_,Q}}) ->
+    nq({accept, Ref, self()}, Q).
+
+%% nq/2
+%%
+%% Place a transport process in the second pending queue to make it
+%% available to the next association.
+
+nq(Arg, Q) ->
     {ok, TPid} = diameter_sctp_sup:start_child(Arg),
-    MRef = erlang:monitor(process, TPid),
-    ets:insert(T, [{MRef, Id}, {Id, TPid}]),
-    ets:insert(Q, {TPid, now()}),
-    {TPid, S#listener{pending = {N+1, Q}}};
+    monitor(process, TPid),
+    {TPid, queue:in(TPid, Q)}.
 
-%% Known association ...
-f([{_, TPid}], _, S) ->
-    {TPid, S};
+%% dq/1
+%%
+%% Remove a transport process from the first pending queue to assign
+%% it to an existing association.
 
-%% ... or not: discard.
-f([], _, _) ->
-    false.
+dq(Q) ->
+    {{value, TPid}, NQ} = queue:out(Q),
+    {TPid, NQ}.
 
 %% assoc_id/1
+%%
+%% It's unclear if this is needed, or if the first message on an
+%% association is always sctp_assoc_change, but don't assume since
+%% SCTP behaviour differs between operating systems.
 
 assoc_id({[#sctp_sndrcvinfo{assoc_id = Id}], _}) ->
     Id;

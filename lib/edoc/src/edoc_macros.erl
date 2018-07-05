@@ -11,7 +11,7 @@
 %%
 %% You should have received a copy of the GNU Lesser General Public
 %% License along with this library; if not, write to the Free Software
-%% Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307
+%% Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301
 %% USA
 %%
 %% @private
@@ -38,10 +38,6 @@
 std_macros(Env) ->
     (if Env#env.module =:= [] -> [];
 	true -> [{module, atom_to_list(Env#env.module)}]
-     end
-     ++
-     if Env#env.package =:= [] -> [];
-	true -> [{package, atom_to_list(Env#env.package)}]
      end
      ++
      [{date, fun date_macro/3},
@@ -315,7 +311,7 @@ macro_content([C | Cs], As, L, N) ->
 macro_content([], _As, _L, _N) ->
     throw('end').
 
--type line() :: erl_scan:line().
+-type line() :: erl_anno:line().
 -type err()  :: 'unterminated_macro'
 	      | 'macro_name'
 	      | {'macro_name', string()}

@@ -1,18 +1,19 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2008-2014. All Rights Reserved.
+%% Copyright Ericsson AB 2008-2016. All Rights Reserved.
 %%
-%% The contents of this file are subject to the Erlang Public License,
-%% Version 1.1, (the "License"); you may not use this file except in
-%% compliance with the License. You should have received a copy of the
-%% Erlang Public License along with this software. If not, it can be
-%% retrieved online at http://www.erlang.org/.
+%% Licensed under the Apache License, Version 2.0 (the "License");
+%% you may not use this file except in compliance with the License.
+%% You may obtain a copy of the License at
 %%
-%% Software distributed under the License is distributed on an "AS IS"
-%% basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See
-%% the License for the specific language governing rights and limitations
-%% under the License.
+%%     http://www.apache.org/licenses/LICENSE-2.0
+%%
+%% Unless required by applicable law or agreed to in writing, software
+%% distributed under the License is distributed on an "AS IS" BASIS,
+%% WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+%% See the License for the specific language governing permissions and
+%% limitations under the License.
 %%
 %% %CopyrightEnd%
 %%%-------------------------------------------------------------------
@@ -223,18 +224,24 @@ handle_connect(Object, #evh{handler=undefined, cb=Callback} = EvData0,
 	Error ->
 	    {reply, Error, State0}
     end;
-handle_connect(Object, EvData=#evh{handler=Handler}, 
+handle_connect(Object, EvData=#evh{handler=Handler},
 	       From, State0 = #state{users=Users}) ->
     %% Correct process is already listening just register it
     put(Handler, From),
-    User0 = #user{events=Listeners0} = gb_trees:get(From, Users),
-    User  = User0#user{events=[{Object,EvData}|Listeners0]},
-    State = State0#state{users=gb_trees:update(From, User, Users)},
-    {reply, ok, State}.
+    case gb_trees:lookup(From, Users) of
+	{value, User0 = #user{events=Listeners0}} ->
+	    User  = User0#user{events=[{Object,EvData}|Listeners0]},
+	    State = State0#state{users=gb_trees:update(From, User, Users)},
+	    {reply, ok, State};
+	none -> %% We are closing up the shop
+	    {reply, {error, terminating}, State0}
+    end.
 
 invoke_cb({{Ev=#wx{}, Ref=#wx_ref{}}, FunId,_}, _S) ->
     %% Event callbacks
     case get(FunId) of
+	{{nospawn, Fun}, _} when is_function(Fun) ->
+	    invoke_callback_fun(fun() -> Fun(Ev, Ref), <<>> end);
 	{Fun,_} when is_function(Fun) ->
 	    invoke_callback(fun() -> Fun(Ev, Ref), <<>> end);
 	{Pid,_} when is_pid(Pid) -> %% wx_object sync event
@@ -253,21 +260,10 @@ invoke_cb({FunId, Args, _}, _S) when is_list(Args), is_integer(FunId) ->
 
 invoke_callback(Fun) ->
     Env = get(?WXE_IDENTIFIER),
-    CB = fun() ->
-		 wx:set_env(Env),
-		 wxe_util:cast(?WXE_CB_START, <<>>),
-		 Res = try
-			   Return = Fun(),
-			   true = is_binary(Return),
-			   Return
-		       catch _:Reason ->
-			       ?log("Callback fun crashed with {'EXIT, ~p, ~p}~n",
-				    [Reason, erlang:get_stacktrace()]),
-			       <<>>
-		       end,
-		 wxe_util:cast(?WXE_CB_RETURN, Res)
-	 end,
-    spawn(CB),
+    spawn(fun() ->
+		  wx:set_env(Env),
+		  invoke_callback_fun(Fun)
+	  end),
     ok.
 
 invoke_callback(Pid, Ev, Ref) ->
@@ -276,7 +272,7 @@ invoke_callback(Pid, Ev, Ref) ->
 		 wx:set_env(Env),
 		 wxe_util:cast(?WXE_CB_START, <<>>),
 		 try
-		     case get_wx_object_state(Pid) of
+		     case get_wx_object_state(Pid, 5) of
 			 ignore ->
 			     %% Ignore early events
 			     wxEvent:skip(Ref);
@@ -297,16 +293,38 @@ invoke_callback(Pid, Ev, Ref) ->
     spawn(CB),
     ok.
 
-get_wx_object_state(Pid) ->
+invoke_callback_fun(Fun) ->
+    wxe_util:cast(?WXE_CB_START, <<>>),
+    Res = try
+	      Return = Fun(),
+	      true = is_binary(Return),
+	      Return
+	  catch _:Reason ->
+		  ?log("Callback fun crashed with {'EXIT, ~p, ~p}~n",
+		       [Reason, erlang:get_stacktrace()]),
+		  <<>>
+	  end,
+    wxe_util:cast(?WXE_CB_RETURN, Res).
+
+
+get_wx_object_state(Pid, N) when N > 0 ->
     case process_info(Pid, dictionary) of
 	{dictionary, Dict} ->
 	    case lists:keysearch('_wx_object_',1,Dict) of
-		{value, {'_wx_object_', {_Mod, '_wx_init_'}}} -> ignore;
-		{value, {'_wx_object_', Value}} -> Value;
-		_ -> ignore
+		{value, {'_wx_object_', {_Mod, '_wx_init_'}}} ->
+		    timer:sleep(50),
+		    get_wx_object_state(Pid, N-1);
+		{value, {'_wx_object_', Value}} ->
+		    Value;
+		_ ->
+		    ignore
 	    end;
-	_ -> ignore
-    end.
+	_ ->
+	    ignore
+    end;
+get_wx_object_state(_, _) ->
+    ignore.
+
 
 attach_fun(Fun, S = #state{cb=CB,cb_cnt=Next}) ->
     case gb_trees:lookup(Fun,CB) of
@@ -342,25 +360,8 @@ handle_disconnect(Object, Evh = #evh{cb=Fun}, From,
 		  State0 = #state{users=Users0, cb=Callbacks}) ->
     #user{events=Evs0} = gb_trees:get(From, Users0),
     FunId = gb_trees:lookup(Fun, Callbacks),
-    case find_handler(Evs0, Object, Evh#evh{cb=FunId}) of
-	[] -> 
-	    {reply, false, State0};
-	Handlers ->
-	    case disconnect(Object,Handlers) of
-		#evh{} -> {reply, true, State0};
-		Result -> {reply, Result, State0}
-	    end
-    end.
-
-disconnect(Object,[Ev|Evs]) ->
-    try wxEvtHandler:disconnect_impl(Object,Ev) of
-	true ->  Ev;
-	false -> disconnect(Object, Evs);
-	Error -> Error
-    catch _:_ ->
-	    false
-    end;
-disconnect(_, []) -> false.
+    Handlers = find_handler(Evs0, Object, Evh#evh{cb=FunId}),
+    {reply, {try_in_order, Handlers}, State0}.
 
 find_handler([{Object,Evh}|Evs], Object, Match) ->
     case match_handler(Match, Evh) of

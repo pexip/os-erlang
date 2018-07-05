@@ -1,18 +1,19 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2008-2013. All Rights Reserved.
+%% Copyright Ericsson AB 2008-2016. All Rights Reserved.
 %%
-%% The contents of this file are subject to the Erlang Public License,
-%% Version 1.1, (the "License"); you may not use this file except in
-%% compliance with the License. You should have received a copy of the
-%% Erlang Public License along with this software. If not, it can be
-%% retrieved online at http://www.erlang.org/.
+%% Licensed under the Apache License, Version 2.0 (the "License");
+%% you may not use this file except in compliance with the License.
+%% You may obtain a copy of the License at
 %%
-%% Software distributed under the License is distributed on an "AS IS"
-%% basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See
-%% the License for the specific language governing rights and limitations
-%% under the License.
+%%     http://www.apache.org/licenses/LICENSE-2.0
+%%
+%% Unless required by applicable law or agreed to in writing, software
+%% distributed under the License is distributed on an "AS IS" BASIS,
+%% WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+%% See the License for the specific language governing permissions and
+%% limitations under the License.
 %%
 %% %CopyrightEnd%
 %%
@@ -32,13 +33,12 @@
 %% API
 -export([session_channel/2, session_channel/4,
 	 exec/4, shell/2, subsystem/4, send/3, send/4, send/5, 
-	 send_eof/2, adjust_window/3, setenv/5, close/2, reply_request/4]).
+	 send_eof/2, adjust_window/3, setenv/5, close/2, reply_request/4,
+	 ptty_alloc/3, ptty_alloc/4]).
 
 %% Potential API currently unsupported and not tested
--export([open_pty/3, open_pty/7,
-	 open_pty/9, window_change/4, window_change/6,
-	 direct_tcpip/6, direct_tcpip/8, tcpip_forward/3,
-	 cancel_tcpip_forward/3, signal/3, exit_status/3]).
+-export([window_change/4, window_change/6,
+	 signal/3, exit_status/3]).
 
 %% Internal application API
 -export([channel_data/5, handle_msg/3, channel_eof_msg/1,
@@ -47,7 +47,7 @@
 	 channel_adjust_window_msg/2, channel_data_msg/3,
 	 channel_open_msg/5, channel_open_confirmation_msg/4,
 	 channel_open_failure_msg/4, channel_request_msg/4,
-	 global_request_msg/3, request_failure_msg/0, 
+	 request_failure_msg/0, 
 	 request_success_msg/1, bind/4, unbind/3, unbind_channel/2, 
 	 bound_channel/3, encode_ip/1]).
 
@@ -56,8 +56,8 @@
 %%--------------------------------------------------------------------
 
 %%--------------------------------------------------------------------
--spec session_channel(pid(), timeout()) -> {ok, channel_id()} | {error, term()}.
--spec session_channel(pid(), integer(), integer(), timeout()) -> {ok, channel_id()} | {error, term()}.
+-spec session_channel(pid(), timeout()) -> {ok, channel_id()} | {error, timeout | closed}.
+-spec session_channel(pid(), integer(), integer(), timeout()) -> {ok, channel_id()} | {error, timeout | closed}.
 
 %% Description: Opens a channel for a ssh session. A session is a
 %% remote execution of a program. The program may be a shell, an
@@ -81,7 +81,8 @@ session_channel(ConnectionHandler, InitialWindowSize,
     end.
 
 %%--------------------------------------------------------------------
--spec exec(pid(), channel_id(), string(), timeout()) -> success | failure.
+-spec exec(pid(), channel_id(), string(), timeout()) -> 
+		  success | failure | {error, timeout | closed}.
 
 %% Description: Will request that the server start the
 %% execution of the given command. 
@@ -101,8 +102,8 @@ shell(ConnectionHandler, ChannelId) ->
     ssh_connection_handler:request(ConnectionHandler, self(), ChannelId,
  				   "shell", false, <<>>, 0).
 %%--------------------------------------------------------------------
--spec subsystem(pid(), channel_id(), string(), timeout()) ->
-		       success | failure | {error, timeout}.
+-spec subsystem(pid(), channel_id(), string(), timeout()) -> 
+		       success | failure | {error, timeout | closed}.
 %%
 %% Description: Executes a predefined subsystem.
 %%--------------------------------------------------------------------
@@ -142,7 +143,7 @@ send_eof(ConnectionHandler, Channel) ->
     ssh_connection_handler:send_eof(ConnectionHandler, Channel).
 
 %%--------------------------------------------------------------------
--spec adjust_window(pid(), channel_id(), integer()) -> ok.
+-spec adjust_window(pid(), channel_id(), integer()) -> ok |  {error, closed}.
 %%
 %%
 %% Description: Adjusts the ssh flowcontrol window.
@@ -151,7 +152,8 @@ adjust_window(ConnectionHandler, Channel, Bytes) ->
     ssh_connection_handler:adjust_window(ConnectionHandler, Channel, Bytes).
 
 %%--------------------------------------------------------------------
--spec setenv(pid(), channel_id(), string(), string(), timeout()) ->  success | failure.
+-spec setenv(pid(), channel_id(), string(), string(), timeout()) ->  
+		    success | failure | {error, timeout | closed}.
 %%
 %%
 %% Description: Environment variables may be passed to the shell/command to be
@@ -183,6 +185,30 @@ reply_request(_,false, _, _) ->
     ok.
 
 %%--------------------------------------------------------------------
+-spec ptty_alloc(pid(), channel_id(), proplists:proplist()) -> 
+			success | failiure | {error, closed}.
+-spec ptty_alloc(pid(), channel_id(), proplists:proplist(), timeout()) -> 
+			success | failiure | {error, timeout} | {error, closed}.
+
+%%
+%%
+%% Description: Sends a ssh connection protocol pty_req.
+%%--------------------------------------------------------------------
+ptty_alloc(ConnectionHandler, Channel, Options) ->
+    ptty_alloc(ConnectionHandler, Channel, Options, infinity).
+ptty_alloc(ConnectionHandler, Channel, Options0, TimeOut) ->
+    Options = backwards_compatible(Options0, []),
+    {Width, PixWidth} = pty_default_dimensions(width, Options),
+    {Height, PixHeight} = pty_default_dimensions(height, Options),
+    pty_req(ConnectionHandler, Channel,
+	    proplists:get_value(term, Options, os:getenv("TERM", ?DEFAULT_TERMINAL)),
+	    proplists:get_value(width, Options, Width),
+	    proplists:get_value(height, Options, Height),
+	    proplists:get_value(pixel_widh, Options, PixWidth),
+	    proplists:get_value(pixel_height, Options, PixHeight),
+	    proplists:get_value(pty_opts, Options, []), TimeOut
+	   ).
+%%--------------------------------------------------------------------
 %% Not yet officialy supported! The following functions are part of the
 %% initial contributed ssh application. They are untested. Do we want them?
 %% Should they be documented and tested?
@@ -204,69 +230,6 @@ signal(ConnectionHandler, Channel, Sig) ->
 exit_status(ConnectionHandler, Channel, Status) ->
     ssh_connection_handler:request(ConnectionHandler, Channel,
 				   "exit-status", false, [?uint32(Status)], 0).
-
-open_pty(ConnectionHandler, Channel, TimeOut) ->
-    open_pty(ConnectionHandler, Channel,
-	     os:getenv("TERM"), 80, 24, [], TimeOut).
-
-open_pty(ConnectionHandler, Channel, Term, Width, Height, PtyOpts, TimeOut) ->
-    open_pty(ConnectionHandler, Channel, Term, Width,
-	     Height, 0, 0, PtyOpts, TimeOut).
-
-open_pty(ConnectionHandler, Channel, Term, Width, Height,
-	 PixWidth, PixHeight, PtyOpts, TimeOut) ->
-    ssh_connection_handler:request(ConnectionHandler,
-				   Channel, "pty-req", true, 
-				   [?string(Term),
-				    ?uint32(Width), ?uint32(Height),
-				    ?uint32(PixWidth),?uint32(PixHeight),
-				    encode_pty_opts(PtyOpts)], TimeOut).
-
-direct_tcpip(ConnectionHandler, RemoteHost,
-	     RemotePort, OrigIP, OrigPort, Timeout) ->
-    direct_tcpip(ConnectionHandler, RemoteHost, RemotePort, OrigIP, OrigPort,
-		 ?DEFAULT_WINDOW_SIZE, ?DEFAULT_PACKET_SIZE, Timeout).
-
-direct_tcpip(ConnectionHandler, RemoteIP, RemotePort, OrigIP, OrigPort,
-	     InitialWindowSize, MaxPacketSize, Timeout) ->
-    case {encode_ip(RemoteIP), encode_ip(OrigIP)} of
-	{false, _} -> 
-	    {error, einval};
-	{_, false} -> 
-	    {error, einval};
-	{RIP, OIP} ->
-	    ssh_connection_handler:open_channel(ConnectionHandler,
-						"direct-tcpip",
-						[?string(RIP), 
-						 ?uint32(RemotePort),
-						 ?string(OIP),
-						 ?uint32(OrigPort)],
-						InitialWindowSize, 
-						MaxPacketSize,
-						Timeout)
-    end.
-
-tcpip_forward(ConnectionHandler, BindIP, BindPort) ->
-    case encode_ip(BindIP) of
-	false -> 
-	    {error, einval};
-	IPStr ->
-	    ssh_connection_handler:global_request(ConnectionHandler,
-						  "tcpip-forward", true,
-						  [?string(IPStr),
-						   ?uint32(BindPort)])
-    end.
-
-cancel_tcpip_forward(ConnectionHandler, BindIP, Port) ->
-    case encode_ip(BindIP) of
-	false -> 
-	    {error, einval};
-	IPStr ->
-	    ssh_connection_handler:global_request(ConnectionHandler,
-						  "cancel-tcpip-forward", true,
-						  [?string(IPStr),
-						   ?uint32(Port)])
-    end.
 
 %%--------------------------------------------------------------------
 %%% Internal API
@@ -290,22 +253,11 @@ l2b([]) ->
 
 channel_data(ChannelId, DataType, Data, Connection, From)
   when is_list(Data)->
-    channel_data(ChannelId, DataType, 
-%%		 list_to_binary(Data), Connection, From);
-		 l2b(Data), Connection, From);
-		 %% try list_to_binary(Data)
-		 %% of
-		 %%     B -> B
-		 %% catch
-		 %%     _:_ -> io:format('BAD BINARY: ~p~n',[Data]),
-		 %% 	    unicode:characters_to_binary(Data)
-		 %% end,
-		 %% Connection, From);
+    channel_data(ChannelId, DataType, l2b(Data), Connection, From);
 
 channel_data(ChannelId, DataType, Data, 
 	     #connection{channel_cache = Cache} = Connection,
 	     From) ->
-    
     case ssh_channel:cache_lookup(Cache, ChannelId) of
 	#channel{remote_id = Id, sent_close = false} = Channel0 ->
 	    {SendList, Channel} =
@@ -318,13 +270,10 @@ channel_data(ChannelId, DataType, Data,
 						    SendDataType,
 						    SendData)}
 			  end, SendList),
-	    FlowCtrlMsgs = flow_control(Replies, 
-					Channel,
-					Cache),
+	    FlowCtrlMsgs = flow_control(Replies, Channel, Cache),
 	    {{replies, Replies ++ FlowCtrlMsgs}, Connection};
 	_ ->
-	    gen_fsm:reply(From, {error, closed}),
-	    {noreply, Connection}
+	    {{replies,[{channel_request_reply,From,{error,closed}}]}, Connection}
     end.
 
 handle_msg(#ssh_msg_channel_open_confirmation{recipient_channel = ChannelId, 
@@ -338,6 +287,9 @@ handle_msg(#ssh_msg_channel_open_confirmation{recipient_channel = ChannelId,
     
     ssh_channel:cache_update(Cache, Channel#channel{
 				     remote_id = RemoteId,
+				     recv_packet_size = max(32768, % rfc4254/5.2
+							    min(PacketSz, Channel#channel.recv_packet_size)
+							   ),
 				     send_window_size = WindowSz,
 				     send_packet_size = PacketSz}),
     {Reply, Connection} = reply_msg(Channel, Connection0, {open, ChannelId}),
@@ -462,23 +414,37 @@ handle_msg(#ssh_msg_channel_window_adjust{recipient_channel = ChannelId,
 handle_msg(#ssh_msg_channel_open{channel_type = "session" = Type,
 				 sender_channel = RemoteId,
 				 initial_window_size = WindowSz,
-				 maximum_packet_size = PacketSz}, Connection0, server) ->
-   
-    try setup_session(Connection0, RemoteId,
-		     Type, WindowSz, PacketSz) of
-	Result ->
-	    Result
-    catch _:_ ->
+				 maximum_packet_size = PacketSz}, 
+	   #connection{options = SSHopts} = Connection0,
+	   server) ->
+    MinAcceptedPackSz = proplists:get_value(minimal_remote_max_packet_size, SSHopts, 0),
+    
+    if 
+	MinAcceptedPackSz =< PacketSz ->
+	    try setup_session(Connection0, RemoteId,
+			      Type, WindowSz, PacketSz) of
+		Result ->
+		    Result
+	    catch _:_ ->
+		    FailMsg = channel_open_failure_msg(RemoteId, 
+						       ?SSH_OPEN_CONNECT_FAILED,
+						       "Connection refused", "en"),
+		    {{replies, [{connection_reply, FailMsg}]},
+		     Connection0}
+	    end;
+
+	MinAcceptedPackSz > PacketSz ->
 	    FailMsg = channel_open_failure_msg(RemoteId, 
-					       ?SSH_OPEN_CONNECT_FAILED,
-					       "Connection refused", "en"),
-	    {{replies, [{connection_reply, FailMsg}]},
-	     Connection0}
+					       ?SSH_OPEN_ADMINISTRATIVELY_PROHIBITED,
+					       lists:concat(["Maximum packet size below ",MinAcceptedPackSz,
+							      " not supported"]), "en"),
+	    {{replies, [{connection_reply, FailMsg}]}, Connection0}
     end;
 
 handle_msg(#ssh_msg_channel_open{channel_type = "session",
 				 sender_channel = RemoteId}, 
-	   Connection, client) ->
+	   Connection,
+	   client) ->
     %% Client implementations SHOULD reject any session channel open
     %% requests to make it more difficult for a corrupt server to attack the
     %% client. See See RFC 4254 6.1.
@@ -487,57 +453,6 @@ handle_msg(#ssh_msg_channel_open{channel_type = "session",
 				       "Connection refused", "en"),
     {{replies, [{connection_reply, FailMsg}]},
      Connection};
-
-handle_msg(#ssh_msg_channel_open{channel_type = "forwarded-tcpip" = Type,
-				 sender_channel = RemoteId,
-				 initial_window_size = RWindowSz,
-				 maximum_packet_size = RPacketSz,
-				 data = Data}, 
-	   #connection{channel_cache = Cache} = Connection0, server) ->
-    <<?UINT32(ALen), Address:ALen/binary, ?UINT32(Port),
-     ?UINT32(OLen), Orig:OLen/binary, ?UINT32(OrigPort)>> = Data,
-    
-    case bound_channel(Address, Port, Connection0) of
-	undefined ->
-	    FailMsg = channel_open_failure_msg(RemoteId, 
-					       ?SSH_OPEN_CONNECT_FAILED,
-					       "Connection refused", "en"),
-	    {{replies, 
-	      [{connection_reply, FailMsg}]}, Connection0};
-	ChannelPid ->
-	    {ChannelId, Connection1} = new_channel_id(Connection0),
-	    LWindowSz = ?DEFAULT_WINDOW_SIZE,
-	    LPacketSz = ?DEFAULT_PACKET_SIZE,
-	    Channel = #channel{type = Type,
-			       sys = "none",
-			       user = ChannelPid,
-			       local_id = ChannelId,
-			       recv_window_size = LWindowSz,
-			       recv_packet_size = LPacketSz,
-			       send_window_size = RWindowSz,
-			       send_packet_size = RPacketSz},
-	    ssh_channel:cache_update(Cache, Channel),
-	    OpenConfMsg = channel_open_confirmation_msg(RemoteId, ChannelId,
-							LWindowSz, LPacketSz),
-	    {OpenMsg, Connection} = 
-		reply_msg(Channel, Connection1, 
-			  {open,  Channel, {forwarded_tcpip,
-					    decode_ip(Address), Port,
-					    decode_ip(Orig), OrigPort}}),
-	    {{replies, [{connection_reply, OpenConfMsg},
-			OpenMsg]}, Connection}
-    end;
-
-handle_msg(#ssh_msg_channel_open{channel_type = "forwarded-tcpip",
-				 sender_channel = RemoteId}, 
-	   Connection, client) ->
-    %% Client implementations SHOULD reject direct TCP/IP open requests for
-    %% security reasons. See RFC 4254 7.2.
-    FailMsg = channel_open_failure_msg(RemoteId, 
-				       ?SSH_OPEN_CONNECT_FAILED,
-				       "Connection refused", "en"),
-    {{replies, [{connection_reply, FailMsg}]}, Connection};
-
 
 handle_msg(#ssh_msg_channel_open{sender_channel = RemoteId}, Connection, _) ->
     FailMsg = channel_open_failure_msg(RemoteId, 
@@ -625,7 +540,7 @@ handle_msg(#ssh_msg_channel_request{recipient_channel = ChannelId,
     ReplyMsg =  {subsystem, ChannelId, WantReply, binary_to_list(SsName)},
     
     try
-	{ok, Pid} = start_subsytem(SsName, Connection, Channel0, ReplyMsg),
+	{ok, Pid} = start_subsystem(SsName, Connection, Channel0, ReplyMsg),
 	erlang:monitor(process, Pid),
 	Channel = Channel0#channel{user = Pid},
 	ssh_channel:cache_update(Cache, Channel),
@@ -749,11 +664,11 @@ handle_msg(#ssh_msg_global_request{name = _Type,
 
 handle_msg(#ssh_msg_request_failure{},
 	   #connection{requests = [{_, From} | Rest]} = Connection, _) ->
-    {{replies, [{channel_requst_reply, From, {failure, <<>>}}]},
+    {{replies, [{channel_request_reply, From, {failure, <<>>}}]},
      Connection#connection{requests = Rest}};
 handle_msg(#ssh_msg_request_success{data = Data},
 	   #connection{requests = [{_, From} | Rest]} = Connection, _) ->
-    {{replies, [{channel_requst_reply, From, {success, Data}}]},
+    {{replies, [{channel_request_reply, From, {success, Data}}]},
      Connection#connection{requests = Rest}};
 
 handle_msg(#ssh_msg_disconnect{code = Code,
@@ -849,10 +764,6 @@ channel_request_msg(ChannelId, Type, WantReply, Data) ->
 			     want_reply = WantReply,
 			     data = Data}.
 
-global_request_msg(Type, WantReply, Data) ->
-    #ssh_msg_global_request{name = Type,
-			    want_reply = WantReply,
-			    data = Data}.
 request_failure_msg() ->
     #ssh_msg_request_failure{}.
 
@@ -898,18 +809,32 @@ encode_ip(Addr) when is_list(Addr) ->
 	    end
     end.
 
-start_channel(Cb, Id, Args, SubSysSup) ->
-    start_channel(Cb, Id, Args, SubSysSup, undefined).
+start_channel(Cb, Id, Args, SubSysSup, Opts) ->
+    start_channel(Cb, Id, Args, SubSysSup, undefined, Opts).
 
-start_channel(Cb, Id, Args, SubSysSup, Exec) ->
+start_channel(Cb, Id, Args, SubSysSup, Exec, Opts) ->
     ChildSpec = child_spec(Cb, Id, Args, Exec),
     ChannelSup = ssh_subsystem_sup:channel_supervisor(SubSysSup),
+    assert_limit_num_channels_not_exceeded(ChannelSup, Opts),
     ssh_channel_sup:start_child(ChannelSup, ChildSpec).
     
+assert_limit_num_channels_not_exceeded(ChannelSup, Opts) ->
+    MaxNumChannels = proplists:get_value(max_channels, Opts, infinity),
+    NumChannels = length([x || {_,_,worker,[ssh_channel]} <- 
+				   supervisor:which_children(ChannelSup)]),
+    if 
+	%% Note that NumChannels is BEFORE starting a new one
+	NumChannels < MaxNumChannels ->
+	    ok;
+	true ->
+	    throw(max_num_channels_exceeded)
+    end.
+
 %%--------------------------------------------------------------------
 %%% Internal functions
 %%--------------------------------------------------------------------
-setup_session(#connection{channel_cache = Cache} = Connection0, 
+setup_session(#connection{channel_cache = Cache
+			 } = Connection0, 
 	      RemoteId,
 	      Type, WindowSize, PacketSize) ->
     {ChannelId, Connection} = new_channel_id(Connection0),
@@ -921,6 +846,7 @@ setup_session(#connection{channel_cache = Cache} = Connection0,
 		       recv_packet_size = ?DEFAULT_PACKET_SIZE,
 		       send_window_size = WindowSize,
 		       send_packet_size = PacketSize,
+		       send_buf = queue:new(),
 		       remote_id = RemoteId
 		      },
     ssh_channel:cache_update(Cache, Channel),
@@ -959,17 +885,19 @@ child_spec(Callback, Id, Args, Exec) ->
 
 start_cli(#connection{cli_spec = no_cli}, _) ->
     {error, cli_disabled};
-start_cli(#connection{cli_spec = {CbModule, Args}, exec = Exec,
+start_cli(#connection{options = Options,
+		      cli_spec = {CbModule, Args},
+		      exec = Exec,
 		      sub_system_supervisor = SubSysSup}, ChannelId) ->
-    start_channel(CbModule, ChannelId, Args, SubSysSup, Exec).
+    start_channel(CbModule, ChannelId, Args, SubSysSup, Exec, Options).
 
-start_subsytem(BinName, #connection{options = Options,
+start_subsystem(BinName, #connection{options = Options,
 				    sub_system_supervisor = SubSysSup},
 	       #channel{local_id = ChannelId}, _ReplyMsg) ->
     Name = binary_to_list(BinName),
     case check_subsystem(Name, Options) of
 	{Callback, Opts} when is_atom(Callback), Callback =/= none ->
-	    start_channel(Callback, ChannelId, Opts, SubSysSup);
+	    start_channel(Callback, ChannelId, Opts, SubSysSup, Options);
 	{Other, _} when Other =/= none ->
 	    {error, legacy_option_not_supported}
     end.
@@ -1005,7 +933,7 @@ request_reply_or_data(#channel{local_id = ChannelId, user = ChannelPid},
 		      Connection, Reply) -> 
     case lists:keysearch(ChannelId, 1, Requests) of
 	{value, {ChannelId, From}} ->
-	    {{channel_requst_reply, From, Reply}, 
+	    {{channel_request_reply, From, Reply}, 
 	     Connection#connection{requests = 
 				       lists:keydelete(ChannelId, 1, Requests)}};
 	false when (Reply == success) or (Reply == failure) ->
@@ -1016,64 +944,96 @@ request_reply_or_data(#channel{local_id = ChannelId, user = ChannelPid},
 
 update_send_window(Channel, _, undefined,
 		   #connection{channel_cache = Cache}) ->
-    do_update_send_window(Channel,  Channel#channel.send_buf, Cache);
+    do_update_send_window(Channel, Cache);
 
-update_send_window(Channel, DataType, Data,
+update_send_window(#channel{send_buf = SendBuffer} = Channel, DataType, Data,
 		   #connection{channel_cache = Cache}) ->
-    do_update_send_window(Channel, Channel#channel.send_buf ++ [{DataType, Data}], Cache).
+    do_update_send_window(Channel#channel{send_buf = queue:in({DataType, Data}, SendBuffer)},
+			  Cache).
 
-do_update_send_window(Channel0, Buf0, Cache) ->
-    {Buf1, NewSz, Buf2} = get_window(Buf0, 
-				     Channel0#channel.send_packet_size,
-				     Channel0#channel.send_window_size),
-
-    Channel = Channel0#channel{send_window_size = NewSz, send_buf = Buf2},
+do_update_send_window(Channel0, Cache) ->
+    {SendMsgs, Channel} = get_window(Channel0, []),
     ssh_channel:cache_update(Cache, Channel), 
-    {Buf1, Channel}.
+    {SendMsgs, Channel}.
 
-get_window(Bs, PSz, WSz) ->
-    get_window(Bs, PSz, WSz, []).
-
-get_window(Bs, _PSz, 0, Acc) ->
-    {lists:reverse(Acc), 0, Bs};
-get_window([B0 = {DataType, Bin} | Bs], PSz, WSz, Acc) ->
-    BSz = size(Bin),
-    if BSz =< WSz ->  %% will fit into window
-	    if BSz =< PSz ->  %% will fit into a packet
-		    get_window(Bs, PSz, WSz-BSz, [B0|Acc]);
-	       true -> %% split into packet size
-		    <<Bin1:PSz/binary, Bin2/binary>> = Bin,
-		    get_window([setelement(2, B0, Bin2) | Bs],
-			       PSz, WSz-PSz, 
-			       [{DataType, Bin1}|Acc])
+get_window(#channel{send_window_size = 0
+		   } = Channel, Acc) ->
+    {lists:reverse(Acc), Channel};
+get_window(#channel{send_packet_size = 0
+		   } = Channel, Acc) ->
+    {lists:reverse(Acc), Channel};
+get_window(#channel{send_buf = Buffer, 
+		    send_packet_size = PacketSize,
+		    send_window_size = WindowSize0
+		   } = Channel, Acc0) ->
+    case queue:out(Buffer) of
+	{{value, {_, Data} = Msg}, NewBuffer} ->
+	    case handle_send_window(Msg, size(Data), PacketSize, WindowSize0, Acc0) of		
+		{WindowSize, Acc, {_, <<>>}} ->
+		    {lists:reverse(Acc), Channel#channel{send_window_size = WindowSize,
+							 send_buf = NewBuffer}};
+		{WindowSize, Acc, Rest} ->
+		    get_window(Channel#channel{send_window_size = WindowSize,
+					       send_buf = queue:in_r(Rest, NewBuffer)}, Acc)
 	    end;
-       WSz =< PSz ->  %% use rest of window
-	    <<Bin1:WSz/binary, Bin2/binary>> = Bin,
-	    get_window([setelement(2, B0, Bin2) | Bs],
-		       PSz, WSz-WSz, 
-		       [{DataType, Bin1}|Acc]);
-       true -> %% use packet size
-	    <<Bin1:PSz/binary, Bin2/binary>> = Bin,
-	    get_window([setelement(2, B0, Bin2) | Bs],
-		       PSz, WSz-PSz, 
-		       [{DataType, Bin1}|Acc])
+	{empty, NewBuffer} ->
+	    {[], Channel#channel{send_buf = NewBuffer}}
+    end.
+
+handle_send_window(Msg = {Type, Data}, Size, PacketSize, WindowSize, Acc) when Size =< WindowSize ->
+    case Size =< PacketSize of
+	true ->
+	    {WindowSize - Size, [Msg | Acc], {Type, <<>>}};
+	false ->
+	    <<Msg1:PacketSize/binary, Msg2/binary>> = Data,
+	    {WindowSize - PacketSize, [{Type, Msg1} | Acc], {Type, Msg2}}
     end;
-get_window([], _PSz, WSz, Acc) ->
-    {lists:reverse(Acc), WSz, []}.
+handle_send_window({Type, Data}, _, PacketSize, WindowSize, Acc) when WindowSize =< PacketSize ->
+    <<Msg1:WindowSize/binary, Msg2/binary>> = Data,
+    {WindowSize - WindowSize, [{Type, Msg1} | Acc], {Type, Msg2}};
+handle_send_window({Type, Data}, _, PacketSize, WindowSize, Acc) ->
+    <<Msg1:PacketSize/binary, Msg2/binary>> = Data,
+    {WindowSize - PacketSize, [{Type, Msg1} | Acc], {Type, Msg2}}.
 
 flow_control(Channel, Cache) ->
     flow_control([window_adjusted], Channel, Cache).
-				    
+
 flow_control([], Channel, Cache) ->
     ssh_channel:cache_update(Cache, Channel),
     [];
-
 flow_control([_|_], #channel{flow_control = From,
-			     send_buf = []} = Channel, Cache) when From =/= undefined ->
-	[{flow_control, Cache, Channel, From, ok}];
+			     send_buf = Buffer} = Channel, Cache) when From =/= undefined ->
+    case queue:is_empty(Buffer) of
+	true ->
+	    ssh_channel:cache_update(Cache, Channel#channel{flow_control = undefined}),
+	    [{flow_control, Cache, Channel, From, ok}];
+	false ->
+	    []
+    end;
 flow_control(_,_,_) ->
-	[].
+    [].
 
+pty_req(ConnectionHandler, Channel, Term, Width, Height,
+	 PixWidth, PixHeight, PtyOpts, TimeOut) ->
+    ssh_connection_handler:request(ConnectionHandler,
+				   Channel, "pty-req", true,
+				   [?string(Term),
+				    ?uint32(Width), ?uint32(Height),
+				    ?uint32(PixWidth),?uint32(PixHeight),
+				    encode_pty_opts(PtyOpts)], TimeOut).
+
+pty_default_dimensions(Dimension, Options) ->
+    case proplists:get_value(Dimension, Options, 0) of
+	N when is_integer(N), N > 0 ->
+	    {N, 0};
+	_ ->
+	    case proplists:get_value(list_to_atom("pixel_" ++ atom_to_list(Dimension)), Options, 0) of
+		N when is_integer(N), N > 0 ->
+		    {0, N};
+		_ ->
+		    {?TERMINAL_WIDTH, 0}
+	    end
+    end.
 
 encode_pty_opts(Opts) ->
     Bin = list_to_binary(encode_pty_opts2(Opts)),
@@ -1265,9 +1225,12 @@ decode_pty_opts2(<<Code, ?UINT32(Value), Tail/binary>>) ->
 	 end,    
     [{Op, Value} | decode_pty_opts2(Tail)].
 
-decode_ip(Addr) when is_binary(Addr) ->
-    case inet_parse:address(binary_to_list(Addr)) of
-	{error,_} -> Addr;
-	{ok,A}    -> A
-    end.
 
+backwards_compatible([], Acc) ->
+    Acc;
+backwards_compatible([{hight, Value} | Rest], Acc) ->
+    backwards_compatible(Rest, [{height, Value} | Acc]);
+backwards_compatible([{pixel_hight, Value} | Rest], Acc) ->
+    backwards_compatible(Rest, [{height, Value} | Acc]);
+backwards_compatible([Value| Rest], Acc) ->
+    backwards_compatible(Rest, [ Value | Acc]).

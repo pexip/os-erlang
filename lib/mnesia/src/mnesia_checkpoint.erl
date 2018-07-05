@@ -1,18 +1,19 @@
 %%
 %% %CopyrightBegin%
 %% 
-%% Copyright Ericsson AB 1996-2013
+%% Copyright Ericsson AB 1996-2016
 %% 
-%% The contents of this file are subject to the Erlang Public License,
-%% Version 1.1, (the "License"); you may not use this file except in
-%% compliance with the License. You should have received a copy of the
-%% Erlang Public License along with this software. If not, it can be
-%% retrieved online at http://www.erlang.org/.
-%% 
-%% Software distributed under the License is distributed on an "AS IS"
-%% basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See
-%% the License for the specific language governing rights and limitations
-%% under the License.
+%% Licensed under the Apache License, Version 2.0 (the "License");
+%% you may not use this file except in compliance with the License.
+%% You may obtain a copy of the License at
+%%
+%%     http://www.apache.org/licenses/LICENSE-2.0
+%%
+%% Unless required by applicable law or agreed to in writing, software
+%% distributed under the License is distributed on an "AS IS" BASIS,
+%% WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+%% See the License for the specific language governing permissions and
+%% limitations under the License.
 %% 
 %% %CopyrightEnd%
 %%
@@ -68,12 +69,12 @@
 -import(mnesia_lib, [add/2, del/2, set/2, unset/1]).
 -import(mnesia_lib, [dbg_out/2]).
 
--record(checkpoint_args, {name = {now(), node()},
+-record(checkpoint_args, {name = {erlang:unique_integer([positive]), node()},
 			  allow_remote = true,
 			  ram_overrides_dump = false,
 			  nodes = [],
 			  node = node(),
-			  now = now(),
+			  now,  %% unused
 			  cookie = ?unique_cookie,
 			  min = [],
 			  max = [],
@@ -128,7 +129,7 @@ tm_enter_pending([], Pending) ->
     Pending;
 tm_enter_pending([Tab | Tabs], Pending) ->
     %% io:format("Add ~p ~p ~p~n",[Tab, Pending, hd(tl(element(2, process_info(self(), current_stacktrace))))]),
-    catch ?ets_insert(Tab, Pending),
+    ?SAFE(?ets_insert(Tab, Pending)),
     tm_enter_pending(Tabs, Pending).
 
 tm_exit_pending(Tid) ->
@@ -427,22 +428,22 @@ check_tables(Cp) ->
 
 arrange_retainers(Cp, Overriders, AllTabs) ->
     R = #retainer{cp_name = Cp#checkpoint_args.name},
-    case catch [R#retainer{tab_name = Tab, 
-			   writers = select_writers(Cp, Tab)}
-		|| Tab <- AllTabs] of
-	{'EXIT', Reason} ->
-	    {error, Reason};
+    try [R#retainer{tab_name = Tab,
+		    writers = select_writers(Cp, Tab)}
+	 || Tab <- AllTabs] of
 	Retainers ->
 	    {ok, Cp#checkpoint_args{ram_overrides_dump = Overriders,
-			       retainers = Retainers,
-			       nodes = writers(Retainers)}}
+				    retainers = Retainers,
+				    nodes = writers(Retainers)}}
+    catch throw:Reason ->
+	    {error, Reason}
     end.
 
 select_writers(Cp, Tab) ->
     case filter_remote(Cp, val({Tab, active_replicas})) of
 	[] ->
-	    exit({"Cannot prepare checkpoint (replica not available)",
-		 [Tab, Cp#checkpoint_args.name]});
+	    throw({"Cannot prepare checkpoint (replica not available)",
+		   [Tab, Cp#checkpoint_args.name]});
 	Writers ->
 	    This = node(),
 	    case {lists:member(Tab, Cp#checkpoint_args.max),
@@ -492,12 +493,12 @@ check_prep([], Name, Nodes, IgnoreNew) ->
 collect_pending(Name, Nodes, IgnoreNew) ->
     case rpc:multicall(Nodes, ?MODULE, call, [Name, collect_pending]) of
 	{Replies, []} ->
-	    case catch ?ets_new_table(mnesia_union, [bag]) of
-		{'EXIT', Reason} -> %% system limit
+	    try
+		UnionTab = ?ets_new_table(mnesia_union, [bag]),
+		compute_union(Replies, Nodes, Name, UnionTab, IgnoreNew)
+	    catch error:Reason -> %% system limit
 		    Msg = "Cannot create an ets table pending union",
-		    {error, {system_limit, Msg, Reason}};
-		UnionTab ->
-		    compute_union(Replies, Nodes, Name, UnionTab, IgnoreNew)
+		    {error, {system_limit, Msg, Reason}}
 	    end;
 	{_, BadNodes} ->
 	    deactivate(Nodes, Name),
@@ -674,6 +675,16 @@ tab2retainer({Tab, Name}) ->
     FlatName = lists:flatten(io_lib:write(Name)),
     mnesia_lib:dir(lists:concat([?MODULE, "_", Tab, "_", FlatName, ".RET"])).
 
+retainer_create(_Cp, R, Tab, Name, Ext = {ext, Alias, Mod}) ->
+    T = {Tab, retainer, Name},
+    P = mnesia_schema:cs2list(val({Tab, cstruct})),
+    Mod:delete_table(Alias, T),
+    ok = Mod:create_table(Alias, T, P),
+    Cs = val({Tab, cstruct}),
+    Mod:load_table(Alias, T, {retainer, create_table},
+		   mnesia_schema:cs2list(Cs)),
+    dbg_out("Checkpoint retainer created ~p ~p~n", [Name, Tab]),
+    R#retainer{store = {Ext, T}, really_retain = true};
 retainer_create(_Cp, R, Tab, Name, disc_only_copies) ->
     Fname = tab2retainer({Tab, Name}),
     file:delete(Fname),
@@ -733,15 +744,23 @@ traverse_dcd({Cont, Recs}, Log, Fun) ->     %% trashed data??
 traverse_dcd(eof, _Log, _Fun) ->
     ok.
 
+retainer_get({{ext, Alias, Mod}, Store}, Key) ->
+    Mod:lookup(Alias, Store, Key);
 retainer_get({ets, Store}, Key) -> ?ets_lookup(Store, Key);
 retainer_get({dets, Store}, Key) -> dets:lookup(Store, Key).
 
+retainer_put({{ext, Alias, Mod}, Store}, Val) ->
+    Mod:insert(Alias, Store, Val);
 retainer_put({ets, Store}, Val) -> ?ets_insert(Store, Val);
 retainer_put({dets, Store}, Val) -> dets:insert(Store, Val).
 
+retainer_first({{ext, Alias, Mod}, Store}) ->
+    Mod:first(Alias, Store);
 retainer_first({ets, Store}) -> ?ets_first(Store);
 retainer_first({dets, Store}) -> dets:first(Store).
  
+retainer_next({{ext, Alias, Mod}, Store}, Key) ->
+    Mod:next(Alias, Store, Key);
 retainer_next({ets, Store}, Key) -> ?ets_next(Store, Key);
 retainer_next({dets, Store}, Key) -> dets:next(Store, Key).
 
@@ -760,11 +779,16 @@ retainer_next({dets, Store}, Key) -> dets:next(Store, Key).
 
 retainer_fixtable(Tab, Bool) when is_atom(Tab) ->
     mnesia_lib:db_fixtable(val({Tab, storage_type}), Tab, Bool);
+retainer_fixtable({Ext = {ext, _, _}, Tab}, Bool) ->
+    mnesia_lib:db_fixtable(Ext, Tab, Bool);
 retainer_fixtable({ets, Tab}, Bool) ->
     mnesia_lib:db_fixtable(ram_copies, Tab, Bool);
 retainer_fixtable({dets, Tab}, Bool) ->
     mnesia_lib:db_fixtable(disc_only_copies, Tab, Bool).
 
+retainer_delete({{ext, Alias, Mod}, Store}) ->
+    Mod:close_table(Alias, Store),
+    Mod:delete_table(Alias, Store);
 retainer_delete({ets, Store}) ->
     ?ets_delete_table(Store);
 retainer_delete({dets, Store}) ->
@@ -1170,7 +1194,7 @@ iterate(Name, Tab, Fun, Acc, Source, Val) ->
 	    {error, Reason};
 	{ok, Iter, Pid} ->
 	    link(Pid), % We don't want any pending fixtable's
-	    Res = (catch iter(Fun, Acc, Iter)),
+	    Res = ?CATCH(iter(Fun, Acc, Iter)),
 	    unlink(Pid),
 	    call(Name, {iter_end, Iter}),
 	    case Res of
@@ -1246,7 +1270,7 @@ system_code_change(Cp, _Module, _OldVsn, _Extra) ->
 
 val(Var) ->
     case ?catch_val(Var) of
-	{'EXIT', _ReASoN_} -> mnesia_lib:other_val(Var, _ReASoN_); 
-	_VaLuE_ -> _VaLuE_ 
+	{'EXIT', _} -> mnesia_lib:other_val(Var);
+	_VaLuE_ -> _VaLuE_
     end.
 

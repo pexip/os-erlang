@@ -1,18 +1,19 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 1996-2014. All Rights Reserved.
+%% Copyright Ericsson AB 1996-2016. All Rights Reserved.
 %%
-%% The contents of this file are subject to the Erlang Public License,
-%% Version 1.1, (the "License"); you may not use this file except in
-%% compliance with the License. You should have received a copy of the
-%% Erlang Public License along with this software. If not, it can be
-%% retrieved online at http://www.erlang.org/.
+%% Licensed under the Apache License, Version 2.0 (the "License");
+%% you may not use this file except in compliance with the License.
+%% You may obtain a copy of the License at
 %%
-%% Software distributed under the License is distributed on an "AS IS"
-%% basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See
-%% the License for the specific language governing rights and limitations
-%% under the License.
+%%     http://www.apache.org/licenses/LICENSE-2.0
+%%
+%% Unless required by applicable law or agreed to in writing, software
+%% distributed under the License is distributed on an "AS IS" BASIS,
+%% WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+%% See the License for the specific language governing permissions and
+%% limitations under the License.
 %%
 %% %CopyrightEnd%
 %%
@@ -490,7 +491,8 @@ init(Init, Kernel) ->
 	    %% called during start-up of any app.
 	    case check_conf_data(ConfData) of
 		ok ->
-		    _ = ets:new(ac_tab, [set, public, named_table]),
+		    _ = ets:new(ac_tab, [set, public, named_table,
+                                         {read_concurrency,true}]),
 		    S = #state{conf_data = ConfData},
 		    {ok, KAppl} = make_appl(Kernel),
 		    case catch load(S, KAppl) of
@@ -1615,7 +1617,6 @@ conv([Key, Val | T]) ->
     [{make_term(Key), make_term(Val)} | conv(T)];
 conv(_) -> [].
 
-%%% Fix some day: eliminate the duplicated code here
 make_term(Str) -> 
     case erl_scan:string(Str) of
 	{ok, Tokens, _} ->		  
@@ -1623,15 +1624,16 @@ make_term(Str) ->
 		{ok, Term} ->
 		    Term;
 		{error, {_,M,Reason}} ->
-		    error_logger:format("application_controller: ~ts: ~ts~n",
-					[M:format_error(Reason), Str]),
-		    throw({error, {bad_environment_value, Str}})
+                    handle_make_term_error(M, Reason, Str)
 	    end;
 	{error, {_,M,Reason}, _} ->
-	    error_logger:format("application_controller: ~ts: ~ts~n",
-				[M:format_error(Reason), Str]),
-	    throw({error, {bad_environment_value, Str}})
+            handle_make_term_error(M, Reason, Str)
     end.
+
+handle_make_term_error(Mod, Reason, Str) ->
+    error_logger:format("application_controller: ~ts: ~ts~n",
+        [Mod:format_error(Reason), Str]),
+    throw({error, {bad_environment_value, Str}}).
 
 get_env_i(Name, #state{conf_data = ConfData}) when is_list(ConfData) ->
     case lists:keyfind(Name, 1, ConfData) of

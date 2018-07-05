@@ -4,20 +4,21 @@
 <chapter>
   <header>
     <copyright>
-      <year>2004</year><year>2013</year>
+      <year>2004</year><year>2016</year>
       <holder>Ericsson AB. All Rights Reserved.</holder>
     </copyright>
     <legalnotice>
-      The contents of this file are subject to the Erlang Public License,
-      Version 1.1, (the "License"); you may not use this file except in
-      compliance with the License. You should have received a copy of the
-      Erlang Public License along with this software. If not, it can be
-      retrieved online at http://www.erlang.org/.
+      Licensed under the Apache License, Version 2.0 (the "License");
+      you may not use this file except in compliance with the License.
+      You may obtain a copy of the License at
+ 
+          http://www.apache.org/licenses/LICENSE-2.0
 
-      Software distributed under the License is distributed on an "AS IS"
-      basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See
-      the License for the specific language governing rights and limitations
-      under the License.
+      Unless required by applicable law or agreed to in writing, software
+      distributed under the License is distributed on an "AS IS" BASIS,
+      WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+      See the License for the specific language governing permissions and
+      limitations under the License.
 
     </legalnotice>
 
@@ -30,6 +31,475 @@
   </header>
   <p>This document describes the changes made to the Compiler
     application.</p>
+
+<section><title>Compiler 7.0.3</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+          <p>
+	    Fixed a compiler crash when maps were matched.</p>
+          <p>
+	    Own Id: OTP-13931 Aux Id: ERL-266 </p>
+        </item>
+        <item>
+          <p>
+	    Fixed a compiler crash having to with the delayed
+	    sub-creation optimization. (Thanks to Jose Valim for
+	    reporting this bug.)</p>
+          <p>
+	    Own Id: OTP-13947 Aux Id: ERL-268 </p>
+        </item>
+        <item>
+	    <p>The compiler option <c>inline_list_funcs</c>
+	    accidentally turned off some other optimizations.</p>
+          <p>
+	    Own Id: OTP-13985</p>
+        </item>
+        <item>
+	    <p>The compiler could sometimes generate spurious
+	    warnings when inlining was enabled.</p>
+          <p>
+	    Own Id: OTP-14040 Aux Id: ERL-301 </p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>Compiler 7.0.2</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+          <p>
+	    If the compiler fails to write the BEAM file, it will now
+	    report the reason of the error for the write operation.</p>
+          <p>
+	    Own Id: OTP-13701</p>
+        </item>
+        <item>
+          <p>
+	    Fixed an internal compiler error. (Thanks to Svilen
+	    Ivanov for reporting this bug.)</p>
+          <p>
+	    Own Id: OTP-13780 Aux Id: ERL-202 </p>
+        </item>
+        <item>
+          <p>
+	    The compiler could crash when trying to compile a
+	    complicated expression with multiple catches all on one
+	    line . (Thanks to Thomas Arts for reporting this bug.)</p>
+          <p>
+	    Own Id: OTP-13804 Aux Id: ERL-209 </p>
+        </item>
+        <item>
+          <p>
+	    Eliminated a few internal compiler failures.</p>
+          <p>
+	    Own Id: OTP-13863</p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>Compiler 7.0.1</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+          <p>
+	    A literal binary matching regression was introduced in
+	    19.0 where a match could fail to resolve to the right
+	    clause. This has now been fixed.</p>
+          <p>
+	    Own Id: OTP-13738</p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>Compiler 7.0</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+	    <p><c>compile:forms/1,2</c> would crash when used in a
+	    working directory that had been deleted by another
+	    process.</p>
+          <p>
+	    Own Id: OTP-13430 Aux Id: ERL-113 </p>
+        </item>
+        <item>
+	    <p>Dialyzer no longer crashes when there is an invalid
+	    function call such as <c>42(7)</c> in a module being
+	    analyzed. The compiler will now warn for invalid function
+	    calls such as <c>X = 42, x(7)</c>.</p>
+          <p>
+	    Own Id: OTP-13552 Aux Id: ERL-138 </p>
+        </item>
+      </list>
+    </section>
+
+
+    <section><title>Improvements and New Features</title>
+      <list>
+        <item>
+          <p>
+	    Optimization of tuple matching has been slightly
+	    improved.</p>
+          <p>
+	    Own Id: OTP-12951</p>
+        </item>
+        <item>
+	    <p>Five deprecated and undocumented functions in the
+	    module <c>core_lib</c> have been removed. The functions
+	    are: <c>get_anno/{1,2}</c>, <c>is_literal/1</c>,
+	    <c>is_literal_list/1</c>, and <c>literal_value</c>. Use
+	    the appropriate functions in the <c>cerl</c> module
+	    instead.</p>
+          <p>
+	    Own Id: OTP-12979</p>
+        </item>
+        <item>
+	    <p>The pre-processor can now expand the ?FUNCTION_NAME
+	    and ?FUNCTION_ARITY macros.</p>
+          <p>
+	    Own Id: OTP-13059</p>
+        </item>
+        <item>
+	    <p>The function mapfold/4 has been added to the
+	    <c>cerl_trees</c> module.</p>
+          <p>
+	    Own Id: OTP-13280</p>
+        </item>
+        <item>
+	    <p>Bitstring comprehensions have been generalized to
+	    allow arbitrary expressions in the construction part.</p>
+          <p>
+	    Own Id: OTP-13289</p>
+        </item>
+        <item>
+	    <p>The compiler will now produce warnings for binary
+	    patterns that will never match (example:
+	    <c>&lt;&lt;-1/unsigned&gt;&gt; = Bin</c>). </p>
+          <p>
+	    Own Id: OTP-13374 Aux Id: ERL-44 </p>
+        </item>
+        <item>
+	    <p>The compiler will no longer put the compilation date
+	    and time into BEAM files. That means that two BEAM files
+	    compiled on the same computer from the same source code
+	    and compilation options will be identical.</p>
+	    <p>Note: If you want to find out whether a BEAM file on
+	    disk is different from the loaded code, compared the MD5
+	    value obtained from <c>Mod:module_info(md5)</c> with the
+	    MD5 value obtained from
+	    <c>beam_lib:md5(BeamFileForMod)</c></p>.
+          <p>
+	    *** POTENTIAL INCOMPATIBILITY ***</p>
+          <p>
+	    Own Id: OTP-13504</p>
+        </item>
+        <item>
+	    <p>The function <c>compile:env_compiler_options/0</c> has
+	    been added to allow tools to pick up the same default
+	    compiler options as the compiler itself.</p>
+          <p>
+	    Own Id: OTP-13654</p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>Compiler 6.0.3</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+          <p>
+	    An complicated guard expression in a function call could
+	    crash the compiler. (Thanks to Thomas Arts for reporting
+	    this bug.)</p>
+          <p>
+	    Own Id: OTP-13208</p>
+        </item>
+        <item>
+	    <p>Constructing a map in a guard in a catch could crash
+	    the compiler. (Thanks to Thomas Arts for reporting this
+	    bug.)</p>
+          <p>
+	    Own Id: OTP-13223</p>
+        </item>
+        <item>
+	    <p>Updating a fun as if it were a map would cause the
+	    compiler to crash. (Thanks to Thomas Arts for reporting
+	    this bug.)</p>
+          <p>
+	    Own Id: OTP-13231</p>
+        </item>
+        <item>
+          <p>
+	    Fix pretty printing of Core Maps</p>
+          <p>
+	    Literal maps could cause Dialyzer to crash when pretty
+	    printing the results.</p>
+          <p>
+	    Own Id: OTP-13238</p>
+        </item>
+        <item>
+          <p>
+	    A complex combination of bit syntax matching operations
+	    would cause an internal consistency check failure during
+	    compilation. (Thanks to Jose Valim for reporting this
+	    bug.)</p>
+          <p>
+	    Own Id: OTP-13309</p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>Compiler 6.0.2</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+          <p>
+	    Fix cerl_trees:label/2 bug with map K/V swap</p>
+          <p>
+	    Own Id: OTP-13091</p>
+        </item>
+        <item>
+          <p>
+	    Warnings produced when the '<c>bin_opt_info</c>' option
+	    was given could sometimes lack filenames and line
+	    numbers. (Thanks to José Valim for reporting this bug.)</p>
+          <p>
+	    Own Id: OTP-13113</p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>Compiler 6.0.1</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+          <p>
+	    Fix <c>get_map_elements</c> register corruption</p>
+          <p>
+	    Instruction <c>get_map_elements</c> might destroy target
+	    registers when the fail-label is taken. Only seen for
+	    patterns with two, and only two, target registers.
+	    Specifically if we copy one register and then jump.</p>
+          <p>
+	    Own Id: OTP-12967</p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>Compiler 6.0</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+          <p>
+	    The compiler optimizes away building of terms that are
+	    never actually used. As a result, the compiler in OTP 18
+	    may produce more warnings for terms that are built but
+	    not used than the compiler in OTP 17.</p>
+          <p>
+	    Own Id: OTP-12453</p>
+        </item>
+        <item>
+          <p>
+	    Using a map could incorrectly suppress warnings for
+	    unused variables.</p>
+          <p>
+	    Own Id: OTP-12515</p>
+        </item>
+        <item>
+          <p>
+	    The compiler now properly reports unknown parse
+	    transforms. That is, <c>undef</c> exceptions coming from
+	    the parse transform itself is reported differently from
+	    the absence of the parse transform.</p>
+          <p>
+	    Own Id: OTP-12723</p>
+        </item>
+        <item>
+          <p>
+	    Allow for 'creation of sub binary delayed' optimization
+	    if maps instructions are in a clause.</p>
+          <p>
+	    Own Id: OTP-12758</p>
+        </item>
+      </list>
+    </section>
+
+
+    <section><title>Improvements and New Features</title>
+      <list>
+        <item>
+          <p>
+	    The <c>cerl</c> and <c>cerl_trees</c> modules in the
+	    Compiler application are now documented.</p>
+          <p>
+	    Own Id: OTP-11978</p>
+        </item>
+        <item>
+          <p>
+	    The deprecated '<c>asm</c>' option has been removed.</p>
+          <p>
+	    *** POTENTIAL INCOMPATIBILITY ***</p>
+          <p>
+	    Own Id: OTP-12100</p>
+        </item>
+        <item>
+          <p>
+	    Support variables as Map keys in expressions and patterns</p>
+	    <p>Erlang will accept any expression as keys in Map
+	    expressions and it will accept literals or bound
+	    variables as keys in Map patterns.</p>
+          <p>
+	    Own Id: OTP-12218</p>
+        </item>
+        <item>
+          <p>
+	    Infer Map type information in beam_type compiler
+	    optimization pass.</p>
+          <p>
+	    Own Id: OTP-12253</p>
+        </item>
+        <item>
+          <p>
+	    Compiler optimizations have been improved.</p>
+          <p>
+	    Own Id: OTP-12393</p>
+        </item>
+        <item>
+          <p>
+	    Five undocumented functions in the module <c>core_lib</c>
+	    have been deprecated and will be removed in the next
+	    major release. The functions are: <c>get_anno/{1,2}</c>,
+	    <c>is_literal/1</c>, <c>is_literal_list/1</c>, and
+	    <c>literal_value</c>. Use the appropriate functions in
+	    the <c>cerl</c> module instead.</p>
+          <p>
+	    Own Id: OTP-12497</p>
+        </item>
+        <item>
+          <p>
+	    Change some internal data structures to Maps in order to
+	    speed up compilation time. Measured speed up is around
+	    10%-15%.</p>
+          <p>
+	    Own Id: OTP-12774</p>
+        </item>
+        <item>
+          <p>
+	    Fix beam_bool pass for Maps instruction get_map_elements</p>
+          <p>
+	    Before beam_split the get_map_elements instruction is
+	    still in blocks and the helper function in beam_jump did
+	    not reflect this.</p>
+          <p>
+	    Own Id: OTP-12844 Aux Id: 17 </p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>Compiler 5.0.4</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+          <p>
+	    Matching out a map from a record and then updating the
+	    record could cause a 'badarg' exception at run-time.
+	    (Thanks to Dmitry Aleksandrov for reporting this bug.)</p>
+          <p>
+	    Own Id: OTP-12402</p>
+        </item>
+        <item>
+	    <p>The compiler would crash when compiling some complex,
+	    nonsensical guards such as:</p>
+	    <p> ... <c>when {{X}}, -X</c>...</p>
+          <p>
+	    Own Id: OTP-12410</p>
+        </item>
+        <item>
+          <p>
+	    In rare circumstances, using binary pattern in the value
+	    part of a map pattern would cause the compiler to crash.</p>
+          <p>
+	    Own Id: OTP-12414</p>
+        </item>
+        <item>
+	    <p>Case expressions where a map was wrapped in a tuple or
+	    list such as:</p>
+	    <p><c>case {a,Map} of</c><br/> <c>{a,#{k:=_}}=Tuple -&gt;
+	    Tuple</c><br/> <c>end.</c></p>
+	    <p>would be unsafely "optimized" to either cause an
+	    exception at run-time or would return an empty map.</p>
+          <p>
+	    Own Id: OTP-12451</p>
+        </item>
+        <item>
+	    <p>When a variable was compared to a literal map using
+	    the '<c>==</c>' operator, the compiler would change the
+	    operator to '<c>=:=</c>' since it is more efficient.
+	    However, this optimization is not safe if the map literal
+	    has numeric keys or values. The compiler will now only do
+	    the optimization if all keys and values are
+	    non-numeric.</p>
+          <p>
+	    Own Id: OTP-12456</p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>Compiler 5.0.3</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+          <p>
+	    Named funs with the same name and arity could get mixed
+	    up with each other.</p>
+          <p>
+	    Own Id: OTP-12262</p>
+        </item>
+        <item>
+          <p>
+	    Coalesce map keys in dialyzer mode</p>
+          <p>
+	    This fixes a regression introduced in commit
+	    805f9c89fc01220bc1bb0f27e1b68fd4eca688ba The problem
+	    occurred with compounded map keys compiled with dialyzer
+	    option turned on, '+dialyzer'.</p>
+          <p>
+	    Reported by: Ivan Uemlianin</p>
+          <p>
+	    Own Id: OTP-12347</p>
+        </item>
+      </list>
+    </section>
+
+</section>
 
 <section><title>Compiler 5.0.2</title>
 
@@ -243,22 +713,28 @@
           <p>
 	    EEP43: New data type - Maps</p>
           <p>
-	    With Maps you may for instance: <taglist> <item><c>M0 =
-	    #{ a =&gt; 1, b =&gt; 2}, % create
-	    associations</c></item> <item><c>M1 = M0#{ a := 10 }, %
-	    update values</c></item> <item><c>M2 = M1#{ "hi" =&gt;
-	    "hello"}, % add new associations</c></item> <item><c>#{
-	    "hi" := V1, a := V2, b := V3} = M2. % match keys with
-	    values</c></item> </taglist></p>
+	    With Maps you may for instance:</p>
+          <taglist>
+            <tag/> <item><c>M0 = #{ a =&gt; 1, b =&gt; 2}, % create
+	      associations</c></item>
+            <tag/><item><c>M1 = M0#{ a := 10 }, % update values</c></item>
+            <tag/><item><c>M2 = M1#{ "hi" =&gt;
+	      "hello"}, % add new associations</c></item>
+            <tag/><item><c>#{ "hi" := V1, a := V2, b := V3} = M2.
+               % match keys with values</c></item>
+          </taglist>
 		<p>
 	    For information on how to use Maps please see Map Expressions in the
 		<seealso marker="doc/reference_manual:expressions#map_expressions">
 			Reference Manual</seealso>.</p>
           <p>
 	    The current implementation is without the following
-	    features: <taglist> <item>No variable keys</item>
-	    <item>No single value access</item> <item>No map
-	    comprehensions</item> </taglist></p>
+	    features:</p>
+          <taglist>
+            <tag/><item>No variable keys</item>
+	    <tag/><item>No single value access</item>
+            <tag/><item>No map comprehensions</item>
+          </taglist>
           <p>
 	    Note that Maps is <em>experimental</em> during OTP 17.0.</p>
           <p>
@@ -1578,7 +2054,7 @@
 	    <c>RightExpr</c> or vice versa. The evaluation order is
 	    only important if the expressions contains and/or depends
 	    on operations with side-effects, such as message passing
-	    or <c>ets</c> operations.</p>
+	    or ETS operations.</p>
           <p>
 	    Own Id: OTP-7206</p>
         </item>

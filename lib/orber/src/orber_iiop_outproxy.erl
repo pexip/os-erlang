@@ -2,18 +2,19 @@
 %%
 %% %CopyrightBegin%
 %% 
-%% Copyright Ericsson AB 1999-2013. All Rights Reserved.
+%% Copyright Ericsson AB 1999-2016. All Rights Reserved.
 %% 
-%% The contents of this file are subject to the Erlang Public License,
-%% Version 1.1, (the "License"); you may not use this file except in
-%% compliance with the License. You should have received a copy of the
-%% Erlang Public License along with this software. If not, it can be
-%% retrieved online at http://www.erlang.org/.
-%% 
-%% Software distributed under the License is distributed on an "AS IS"
-%% basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See
-%% the License for the specific language governing rights and limitations
-%% under the License.
+%% Licensed under the Apache License, Version 2.0 (the "License");
+%% you may not use this file except in compliance with the License.
+%% You may obtain a copy of the License at
+%%
+%%     http://www.apache.org/licenses/LICENSE-2.0
+%%
+%% Unless required by applicable law or agreed to in writing, software
+%% distributed under the License is distributed on an "AS IS" BASIS,
+%% WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+%% See the License for the specific language governing permissions and
+%% limitations under the License.
 %% 
 %% %CopyrightEnd%
 %%
@@ -113,7 +114,7 @@ stop(Pid) ->
 init({connect, Host, Port, SocketType, SocketOptions, Parent, Key, NewKey}) ->
     process_flag(trap_exit, true), 
     case catch orber_socket:connect(SocketType, Host, Port, 
-				    get_ip_family_opts(Host) ++ SocketOptions) of
+				    orber_socket:get_ip_family_opts(Host) ++ SocketOptions) of
 	{'EXCEPTION', _E} ->
 	    ignore;
 	%% We used to reply the below but since this would generate a CRASH REPORT
@@ -508,38 +509,3 @@ clear_queue(Proxy, RequestId, MRef) ->
             end
     end.
 	    
-get_ip_family_opts(Host) ->
-    case inet:parse_address(Host) of
-	{ok, {_,_,_,_}} -> 
-	    [inet];
-	{ok, {_,_,_,_,_,_,_,_}} -> 
-	    [inet6];
-	{error, einval} ->
-	    check_family_for_name(Host, orber_env:ip_version())
-    end.
-
-check_family_for_name(Host, inet) ->
-    case inet:getaddr(Host, inet) of
-	{ok, _Address} ->
-	    [inet];
-	{error, _} ->
-	    case inet:getaddrs(Host, inet6) of
-		{ok, _Address} ->
-		    [inet6];
-		{error, _} ->
-		    [inet]
-	    end
-    end;
-check_family_for_name(Host, inet6) ->
-    case inet:getaddr(Host, inet6) of
-	{ok, _Address} ->
-	    [inet6];
-	{error, _} ->
-	    case inet:getaddr(Host, inet) of
-		{ok, _Address} ->
-		    [inet];
-		{error, _} ->
-		    [inet6]
-	    end
-    end.
-

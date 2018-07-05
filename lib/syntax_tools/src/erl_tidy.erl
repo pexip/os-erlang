@@ -11,7 +11,7 @@
 %%
 %% You should have received a copy of the GNU Lesser General Public
 %% License along with this library; if not, write to the Free Software
-%% Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307
+%% Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301
 %% USA
 %%
 %% @copyright 1999-2014 Richard Carlsson
@@ -36,6 +36,11 @@
 %% been reasonably well tested, but the possibility of errors remains.
 %% Keep backups of your original code safely stored, until you feel
 %% confident that the new, modified code can be trusted.
+%%
+%% @type syntaxTree() = erl_syntax:syntaxTree(). An abstract syntax
+%% tree. See the {@link erl_syntax} module for details.
+%%
+%% @type filename() = file:filename().
 
 -module(erl_tidy).
 
@@ -79,7 +84,6 @@ dir(Dir) ->
 
 %% =====================================================================
 %% @spec dir(Directory::filename(), Options::[term()]) -> ok
-%%           filename() = file:filename()
 %%
 %% @doc Tidies Erlang source files in a directory and its
 %% subdirectories.
@@ -206,7 +210,7 @@ file__defaults() ->
      {verbose, false}].
 
 default_printer() ->
-    fun (Tree, Options) -> erl_prettypr:format(Tree, Options) end.
+    fun erl_prettypr:format/2.
 
 %% =====================================================================
 %% @spec file(Name) -> ok
@@ -253,7 +257,7 @@ file(Name) ->
 %%
 %%   <dt>{printer, Function}</dt>
 %%       <dd><ul>
-%%         <li>`Function = (syntaxTree()) -> string()'</li>
+%%         <li>`Function = (syntaxTree(), [term()]) -> string()'</li>
 %%       </ul>
 %%
 %%       Specifies a function for prettyprinting Erlang syntax trees.
@@ -414,7 +418,7 @@ write_module(Tree, Name, Opts) ->
 
 print_module(Tree, Opts) ->
 	Printer = proplists:get_value(printer, Opts),
-	io:format(Printer(Tree, Opts)).
+	io:put_chars(Printer(Tree, Opts)).
 
 output(FD, Printer, Tree, Opts) ->
     io:put_chars(FD, Printer(Tree, Opts)),
@@ -513,7 +517,6 @@ module(Forms) ->
 %% @spec module(Forms, Options::[term()]) -> syntaxTree()
 %%
 %%          Forms = syntaxTree() | [syntaxTree()]
-%%          syntaxTree() = erl_syntax:syntaxTree()
 %%
 %% @doc Tidies a syntax tree representation of a module
 %% definition. The given `Forms' may be either a single
@@ -792,16 +795,11 @@ keep_form(Form, Used, Opts) ->
             N = erl_syntax_lib:analyze_function(Form),
             case sets:is_element(N, Used) of
                 false ->
-                    report_removed_def("function", N, Form, Opts),
-                    false;
-                true ->
-                    true
-            end;
-        rule ->
-            N = erl_syntax_lib:analyze_rule(Form),
-            case sets:is_element(N, Used) of
-                false ->
-                    report_removed_def("rule", N, Form, Opts),
+                    {F, A} = N,
+                    File = proplists:get_value(file, Opts, ""),
+                    report({File, erl_syntax:get_pos(Form),
+                            "removing unused function `~w/~w'."},
+                           [F, A], Opts),
                     false;
                 true ->
                     true
@@ -823,22 +821,12 @@ keep_form(Form, Used, Opts) ->
             true
     end.
 
-report_removed_def(Type, {N, A}, Form, Opts) ->
-    File = proplists:get_value(file, Opts, ""),
-    report({File, erl_syntax:get_pos(Form),
-	    "removing unused ~s `~w/~w'."},
-	   [Type, N, A], Opts).
-
 collect_functions(Forms) ->
     lists:foldl(
       fun (F, {Names, Defs}) ->
               case erl_syntax:type(F) of
                   function ->
                       N = erl_syntax_lib:analyze_function(F),
-                      {sets:add_element(N, Names),
-                       dict:store(N, {F, []}, Defs)};
-                  rule ->
-                      N = erl_syntax_lib:analyze_rule(F),
                       {sets:add_element(N, Names),
                        dict:store(N, {F, []}, Defs)};
                   _ ->
@@ -852,11 +840,6 @@ update_forms([F | Fs], Defs, Imports, Opts) ->
     case erl_syntax:type(F) of
         function ->
             N = erl_syntax_lib:analyze_function(F),
-            {F1, Fs1} = dict:fetch(N, Defs),
-            [F1 | lists:reverse(Fs1)] ++ update_forms(Fs, Defs, Imports,
-                                                      Opts);
-        rule ->
-            N = erl_syntax_lib:analyze_rule(F),
             {F1, Fs1} = dict:fetch(N, Defs),
             [F1 | lists:reverse(Fs1)] ++ update_forms(Fs, Defs, Imports,
                                                       Opts);
@@ -957,7 +940,7 @@ hidden_uses_2(Tree, Used) ->
 
 -record(env, {file		       :: file:filename(),
               module                   :: atom(),
-              current                  :: fa(),
+              current                  :: fa() | 'undefined',
               imports = dict:new()     :: dict:dict(atom(), atom()),
               context = normal	       :: context(),
               verbosity = 1	       :: 0 | 1 | 2,
@@ -969,10 +952,10 @@ hidden_uses_2(Tree, Used) ->
               new_guard_tests = true   :: boolean(),
 	      old_guard_tests = false  :: boolean()}).
 
--record(st, {varc              :: non_neg_integer(),
+-record(st, {varc              :: non_neg_integer() | 'undefined',
 	     used = sets:new() :: sets:set({atom(), arity()}),
 	     imported          :: sets:set({atom(), arity()}),
-	     vars              :: sets:set(atom()),
+	     vars              :: sets:set(atom()) | 'undefined',
 	     functions         :: sets:set({atom(), arity()}),
 	     new_forms = []    :: [erl_syntax:syntaxTree()],
 	     rename            :: dict:dict(mfa(), {atom(), atom()})}).
@@ -1084,13 +1067,13 @@ visit_clause(Tree, Env, St0) ->
 
 visit_infix_expr(Tree, #env{context = guard_test}, St0) ->
     %% Detect transition from guard test to guard expression.
-    visit_other(Tree, #env{context = guard_expr}, St0);
+    visit_other(Tree, #env{context = guard_expr, file = ""}, St0);
 visit_infix_expr(Tree, Env, St0) ->
     visit_other(Tree, Env, St0).
 
 visit_prefix_expr(Tree, #env{context = guard_test}, St0) ->
     %% Detect transition from guard test to guard expression.
-    visit_other(Tree, #env{context = guard_expr}, St0);
+    visit_other(Tree, #env{context = guard_expr, file = ""}, St0);
 visit_prefix_expr(Tree, Env, St0) ->
     visit_other(Tree, Env, St0).
 

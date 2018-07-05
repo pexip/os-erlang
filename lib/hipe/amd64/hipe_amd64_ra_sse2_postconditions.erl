@@ -2,18 +2,19 @@
 %%
 %% %CopyrightBegin%
 %% 
-%% Copyright Ericsson AB 2004-2009. All Rights Reserved.
+%% Copyright Ericsson AB 2004-2016. All Rights Reserved.
 %% 
-%% The contents of this file are subject to the Erlang Public License,
-%% Version 1.1, (the "License"); you may not use this file except in
-%% compliance with the License. You should have received a copy of the
-%% Erlang Public License along with this software. If not, it can be
-%% retrieved online at http://www.erlang.org/.
-%% 
-%% Software distributed under the License is distributed on an "AS IS"
-%% basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See
-%% the License for the specific language governing rights and limitations
-%% under the License.
+%% Licensed under the Apache License, Version 2.0 (the "License");
+%% you may not use this file except in compliance with the License.
+%% You may obtain a copy of the License at
+%%
+%%     http://www.apache.org/licenses/LICENSE-2.0
+%%
+%% Unless required by applicable law or agreed to in writing, software
+%% distributed under the License is distributed on an "AS IS" BASIS,
+%% WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+%% See the License for the specific language governing permissions and
+%% limitations under the License.
 %% 
 %% %CopyrightEnd%
 %%
@@ -86,14 +87,21 @@ do_fp_unop(I, TempMap) ->
 %%% Fix an fmove op.
 do_fmove(I, TempMap) ->
   #fmove{src=Src,dst=Dst} = I,
-  case is_mem_opnd(Dst, TempMap) and is_mem_opnd(Src, TempMap) of
+  case
+    (is_mem_opnd(Src, TempMap) andalso is_mem_opnd(Dst, TempMap))
+    orelse (is_mem_opnd(Src, TempMap) andalso (not is_float_temp(Dst)))
+    orelse ((not is_float_temp(Src)) andalso is_mem_opnd(Dst, TempMap))
+  of
     true ->
-      Tmp = clone(Src),
+      Tmp = spill_temp(double),
       {[#fmove{src=Src, dst=Tmp},I#fmove{src=Tmp,dst=Dst}],
        true};
     false ->
       {[I], false}
   end.
+
+is_float_temp(#x86_temp{type=Type}) -> Type =:= double;
+is_float_temp(#x86_mem{}) -> false.
 
 %%% Check if an operand denotes a memory cell (mem or pseudo).
 
@@ -101,7 +109,7 @@ is_mem_opnd(Opnd, TempMap) ->
   R =
     case Opnd of
       #x86_mem{} -> true;
-      #x86_temp{} -> 
+      #x86_temp{type=double} ->
 	Reg = hipe_x86:temp_reg(Opnd),
 	case hipe_x86:temp_is_allocatable(Opnd) of
 	  true -> 
@@ -175,6 +183,9 @@ clone(Dst) ->
       #x86_mem{} -> hipe_x86:mem_type(Dst);
       #x86_temp{} -> hipe_x86:temp_type(Dst)
     end,
+  spill_temp(Type).
+
+spill_temp(Type) ->
   hipe_x86:mk_new_temp(Type).
 
 %%% Make a certain reg into a clone of Dst

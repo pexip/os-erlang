@@ -1,18 +1,19 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2008-2013. All Rights Reserved.
+%% Copyright Ericsson AB 2008-2016. All Rights Reserved.
 %%
-%% The contents of this file are subject to the Erlang Public License,
-%% Version 1.1, (the "License"); you may not use this file except in
-%% compliance with the License. You should have received a copy of the
-%% Erlang Public License along with this software. If not, it can be
-%% retrieved online at http://www.erlang.org/.
+%% Licensed under the Apache License, Version 2.0 (the "License");
+%% you may not use this file except in compliance with the License.
+%% You may obtain a copy of the License at
 %%
-%% Software distributed under the License is distributed on an "AS IS"
-%% basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See
-%% the License for the specific language governing rights and limitations
-%% under the License.
+%%     http://www.apache.org/licenses/LICENSE-2.0
+%%
+%% Unless required by applicable law or agreed to in writing, software
+%% distributed under the License is distributed on an "AS IS" BASIS,
+%% WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+%% See the License for the specific language governing permissions and
+%% limitations under the License.
 %%
 %% %CopyrightEnd%
 %% This file is generated DO NOT EDIT
@@ -39,16 +40,16 @@ parent_class(_Class) -> erlang:error({badtype, ?MODULE}).
 	Id::unicode:chardata().
 
 getBitmap(Id)
- when is_list(Id) ->
+ when ?is_chardata(Id) ->
   getBitmap(Id, []).
 
 %% @doc See <a href="http://www.wxwidgets.org/manuals/2.8.12/wx_wxartprovider.html#wxartprovidergetbitmap">external documentation</a>.
 -spec getBitmap(Id, [Option]) -> wxBitmap:wxBitmap() when
 	Id::unicode:chardata(),
-	Option :: {client, unicode:chardata()}
-		 | {size, {W::integer(), H::integer()}}.
+	Option :: {'client', unicode:chardata()}
+		 | {'size', {W::integer(), H::integer()}}.
 getBitmap(Id, Options)
- when is_list(Id),is_list(Options) ->
+ when ?is_chardata(Id),is_list(Options) ->
   Id_UC = unicode:characters_to_binary([Id,0]),
   MOpts = fun({client, Client}, Acc) ->   Client_UC = unicode:characters_to_binary([Client, $_, $C,0]),[<<1:32/?UI,(byte_size(Client_UC)):32/?UI,(Client_UC)/binary, 0:(((8- ((0+byte_size(Client_UC)) band 16#7)) band 16#7))/unit:8>>|Acc];
           ({size, {SizeW,SizeH}}, Acc) -> [<<2:32/?UI,SizeW:32/?UI,SizeH:32/?UI,0:32>>|Acc];
@@ -62,16 +63,16 @@ getBitmap(Id, Options)
 	Id::unicode:chardata().
 
 getIcon(Id)
- when is_list(Id) ->
+ when ?is_chardata(Id) ->
   getIcon(Id, []).
 
 %% @doc See <a href="http://www.wxwidgets.org/manuals/2.8.12/wx_wxartprovider.html#wxartprovidergeticon">external documentation</a>.
 -spec getIcon(Id, [Option]) -> wxIcon:wxIcon() when
 	Id::unicode:chardata(),
-	Option :: {client, unicode:chardata()}
-		 | {size, {W::integer(), H::integer()}}.
+	Option :: {'client', unicode:chardata()}
+		 | {'size', {W::integer(), H::integer()}}.
 getIcon(Id, Options)
- when is_list(Id),is_list(Options) ->
+ when ?is_chardata(Id),is_list(Options) ->
   Id_UC = unicode:characters_to_binary([Id,0]),
   MOpts = fun({client, Client}, Acc) ->   Client_UC = unicode:characters_to_binary([Client, $_, $C,0]),[<<1:32/?UI,(byte_size(Client_UC)):32/?UI,(Client_UC)/binary, 0:(((8- ((0+byte_size(Client_UC)) band 16#7)) band 16#7))/unit:8>>|Acc];
           ({size, {SizeW,SizeH}}, Acc) -> [<<2:32/?UI,SizeW:32/?UI,SizeH:32/?UI,0:32>>|Acc];

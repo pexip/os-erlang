@@ -1,18 +1,19 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2008-2014. All Rights Reserved.
+%% Copyright Ericsson AB 2008-2016. All Rights Reserved.
 %%
-%% The contents of this file are subject to the Erlang Public License,
-%% Version 1.1, (the "License"); you may not use this file except in
-%% compliance with the License. You should have received a copy of the
-%% Erlang Public License along with this software. If not, it can be
-%% retrieved online at http://www.erlang.org/.
+%% Licensed under the Apache License, Version 2.0 (the "License");
+%% you may not use this file except in compliance with the License.
+%% You may obtain a copy of the License at
 %%
-%% Software distributed under the License is distributed on an "AS IS"
-%% basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See
-%% the License for the specific language governing rights and limitations
-%% under the License.
+%%     http://www.apache.org/licenses/LICENSE-2.0
+%%
+%% Unless required by applicable law or agreed to in writing, software
+%% distributed under the License is distributed on an "AS IS" BASIS,
+%% WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+%% See the License for the specific language governing permissions and
+%% limitations under the License.
 %%
 %% %CopyrightEnd%
 %% This file is generated DO NOT EDIT
@@ -62,7 +63,7 @@ setDetectableAutoRepeat(Flag)
   <<(wxe_util:from_bool(Flag)):32/?UI>>).
 
 %% @doc See <a href="http://www.wxwidgets.org/manuals/2.8.12/wx_miscellany.html#wxbell">external documentation</a>.
--spec bell() -> ok.
+-spec bell() -> 'ok'.
 bell() ->
   wxe_util:cast(?utils_wxBell,
   <<>>).
@@ -71,7 +72,7 @@ bell() ->
 -spec findMenuItemId(Frame, MenuString, ItemString) -> integer() when
 	Frame::wxFrame:wxFrame(), MenuString::unicode:chardata(), ItemString::unicode:chardata().
 findMenuItemId(#wx_ref{type=FrameT,ref=FrameRef},MenuString,ItemString)
- when is_list(MenuString),is_list(ItemString) ->
+ when ?is_chardata(MenuString),?is_chardata(ItemString) ->
   ?CLASS(FrameT,wxFrame),
   MenuString_UC = unicode:characters_to_binary([MenuString,0]),
   ItemString_UC = unicode:characters_to_binary([ItemString,0]),
@@ -95,14 +96,14 @@ findWindowAtPoint({PtX,PtY})
   <<PtX:32/?UI,PtY:32/?UI>>).
 
 %% @equiv beginBusyCursor([])
--spec beginBusyCursor() -> ok.
+-spec beginBusyCursor() -> 'ok'.
 
 beginBusyCursor() ->
   beginBusyCursor([]).
 
 %% @doc See <a href="http://www.wxwidgets.org/manuals/2.8.12/wx_miscellany.html#wxbeginbusycursor">external documentation</a>.
--spec beginBusyCursor([Option]) -> ok when
-	Option :: {cursor, wxCursor:wxCursor()}.
+-spec beginBusyCursor([Option]) -> 'ok' when
+	Option :: {'cursor', wxCursor:wxCursor()}.
 beginBusyCursor(Options)
  when is_list(Options) ->
   MOpts = fun({cursor, #wx_ref{type=CursorT,ref=CursorRef}}, Acc) ->   ?CLASS(CursorT,wxCursor),[<<1:32/?UI,CursorRef:32/?UI>>|Acc];
@@ -112,7 +113,7 @@ beginBusyCursor(Options)
   <<BinOpt/binary>>).
 
 %% @doc See <a href="http://www.wxwidgets.org/manuals/2.8.12/wx_miscellany.html#wxendbusycursor">external documentation</a>.
--spec endBusyCursor() -> ok.
+-spec endBusyCursor() -> 'ok'.
 endBusyCursor() ->
   wxe_util:cast(?utils_wxEndBusyCursor,
   <<>>).
@@ -140,7 +141,7 @@ shell() ->
 
 %% @doc See <a href="http://www.wxwidgets.org/manuals/2.8.12/wx_miscellany.html#wxshell">external documentation</a>.
 -spec shell([Option]) -> boolean() when
-	Option :: {command, unicode:chardata()}.
+	Option :: {'command', unicode:chardata()}.
 shell(Options)
  when is_list(Options) ->
   MOpts = fun({command, Command}, Acc) ->   Command_UC = unicode:characters_to_binary([Command,0]),[<<1:32/?UI,(byte_size(Command_UC)):32/?UI,(Command_UC)/binary, 0:(((8- ((0+byte_size(Command_UC)) band 16#7)) band 16#7))/unit:8>>|Acc];
@@ -154,15 +155,15 @@ shell(Options)
 	Url::unicode:chardata().
 
 launchDefaultBrowser(Url)
- when is_list(Url) ->
+ when ?is_chardata(Url) ->
   launchDefaultBrowser(Url, []).
 
 %% @doc See <a href="http://www.wxwidgets.org/manuals/2.8.12/wx_miscellany.html#wxlaunchdefaultbrowser">external documentation</a>.
 -spec launchDefaultBrowser(Url, [Option]) -> boolean() when
 	Url::unicode:chardata(),
-	Option :: {flags, integer()}.
+	Option :: {'flags', integer()}.
 launchDefaultBrowser(Url, Options)
- when is_list(Url),is_list(Options) ->
+ when ?is_chardata(Url),is_list(Options) ->
   Url_UC = unicode:characters_to_binary([Url,0]),
   MOpts = fun({flags, Flags}, Acc) -> [<<1:32/?UI,Flags:32/?UI>>|Acc];
           (BadOpt, _) -> erlang:error({badoption, BadOpt}) end,
@@ -195,7 +196,7 @@ newId() ->
   <<>>).
 
 %% @doc See <a href="http://www.wxwidgets.org/manuals/2.8.12/wx_miscellany.html#wxregisterid">external documentation</a>.
--spec registerId(Id) -> ok when
+-spec registerId(Id) -> 'ok' when
 	Id::integer().
 registerId(Id)
  when is_integer(Id) ->
@@ -233,7 +234,7 @@ displaySize() ->
   <<>>).
 
 %% @doc See <a href="http://www.wxwidgets.org/manuals/2.8.12/wx_gdicmn.html#gdicmnwxsetcursor">external documentation</a>.
--spec setCursor(Cursor) -> ok when
+-spec setCursor(Cursor) -> 'ok' when
 	Cursor::wxCursor:wxCursor().
 setCursor(#wx_ref{type=CursorT,ref=CursorRef}) ->
   ?CLASS(CursorT,wxCursor),

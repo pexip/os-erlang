@@ -1,13 +1,14 @@
-/* ``The contents of this file are subject to the Erlang Public License,
- * Version 1.1, (the "License"); you may not use this file except in
- * compliance with the License. You should have received a copy of the
- * Erlang Public License along with this software. If not, it can be
- * retrieved via the world wide web at http://www.erlang.org/.
- * 
- * Software distributed under the License is distributed on an "AS IS"
- * basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See
- * the License for the specific language governing rights and limitations
- * under the License.
+/* ``Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  * 
  * The Initial Developer of the Original Code is Ericsson Utvecklings AB.
  * Portions created by Ericsson are Copyright 1999, Ericsson Utvecklings
@@ -19,7 +20,7 @@
 #include "testcase_driver.h"
 #include "allocator_test.h"
 
-#define NO_BLOCKS 100000
+int NO_BLOCKS;
 
 #define RIGHT_VISITED (1 << 0)
 #define LEFT_VISITED (1 << 1)
@@ -264,9 +265,10 @@ check_tree(TestCaseState_t *tcs, Allctr_t *alc, Ulong size)
     ASSERT(tcs, curr_blacks == 0);
     ASSERT(tcs, i == -1);
 
+    /*
     testcase_printf(tcs, "Red-Black Tree OK! Max depth = %d; "
 		    "Black depth = %d\n", max_i+1, blacks < 0 ? 0 : blacks);
-
+    */
     return res;
 
 }
@@ -467,6 +469,12 @@ testcase_run(TestCaseState_t *tcs)
     Allctr_t *a;
     rbtree_test_data *td;
 
+    NO_BLOCKS = 100*1000;
+    if (enif_is_identical(tcs->build_type,
+                          enif_make_atom(tcs->curr_env,"valgrind"))) {
+        NO_BLOCKS /= 10;
+    }
+
     /* Best fit... */
 
     testcase_printf(tcs, "Setup...\n");
@@ -576,3 +584,6 @@ testcase_run(TestCaseState_t *tcs)
     testcase_printf(tcs, "aoffcaobf test succeeded!\n");
 
 }
+
+ERL_NIF_INIT(rbtree, testcase_nif_funcs, testcase_nif_init,
+	     NULL, NULL, NULL);

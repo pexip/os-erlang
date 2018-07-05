@@ -1,18 +1,19 @@
 %%--------------------------------------------------------------------
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2012-2013. All Rights Reserved.
+%% Copyright Ericsson AB 2012-2016. All Rights Reserved.
 %%
-%% The contents of this file are subject to the Erlang Public License,
-%% Version 1.1, (the "License"); you may not use this file except in
-%% compliance with the License. You should have received a copy of the
-%% Erlang Public License along with this software. If not, it can be
-%% retrieved online at http://www.erlang.org/.
+%% Licensed under the Apache License, Version 2.0 (the "License");
+%% you may not use this file except in compliance with the License.
+%% You may obtain a copy of the License at
 %%
-%% Software distributed under the License is distributed on an "AS IS"
-%% basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See
-%% the License for the specific language governing rights and limitations
-%% under the License.
+%%     http://www.apache.org/licenses/LICENSE-2.0
+%%
+%% Unless required by applicable law or agreed to in writing, software
+%% distributed under the License is distributed on an "AS IS" BASIS,
+%% WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+%% See the License for the specific language governing permissions and
+%% limitations under the License.
 %%
 %% %CopyrightEnd%
 %%
@@ -143,8 +144,8 @@ expect_do_reply(SessionId,Expect,Do,Reply) ->
 %% Hupp the server - i.e. tell it to do something -
 %% e.g. hupp(send_event) will cause send_event(State) to be called on
 %% the session channel process.
-hupp(send_event) ->
-    hupp(send,[make_msg(event)]);
+hupp({send_events,N}) ->
+    hupp(send,[make_msg({event,N})]);
 hupp(kill) ->
     hupp(1,fun hupp_kill/1,[]).
 
@@ -276,6 +277,18 @@ hupp_kill(State = #session{connection = ConnRef}) ->
 send({CM,Ch},Data) ->
     ssh_connection:send(CM, Ch, Data).
 
+%%% Split into many small parts and send to client
+send_frag({CM,Ch},Data) ->
+    Sz = rand:uniform(1000),
+    case Data of
+	<<Chunk:Sz/binary,Rest/binary>> ->
+	    ssh_connection:send(CM, Ch, Chunk),
+	    send_frag({CM,Ch},Rest);
+	Chunk ->
+	    ssh_connection:send(CM, Ch, Chunk)
+    end.
+
+
 %%% Kill ssh connection
 kill({CM,_Ch}) ->
     ssh:close(CM).
@@ -289,11 +302,15 @@ table_trans(Fun,Args) ->
 	S ->
 	    apply(Fun,Args);
 	Pid ->
+	    Ref = erlang:monitor(process,Pid),
 	    Pid ! {table_trans,Fun,Args,self()},
 	    receive
 		{table_trans_done,Result} ->
-		    Result
-	    after 5000 ->
+		    erlang:demonitor(Ref,[flush]),
+		    Result;
+		{'DOWN',Ref,process,Pid,Reason} ->
+		    exit({main_ns_proc_died,Reason})
+	    after 20000 ->
 		    exit(table_trans_timeout)
 	    end
     end.
@@ -351,7 +368,7 @@ check_expected(SessionId,ConnRef,Msg) ->
 	    do(ConnRef, Do),
 	    reply(ConnRef,Reply);
 	error ->
-	    timer:sleep(1000),
+	    ct:sleep(1000),
 	    exit({error,{got_unexpected,SessionId,Msg,ets:tab2list(ns_tab)}})
     end.
 
@@ -382,6 +399,7 @@ event({startElement,_,Name,_,Attrs},[ignore,{se,Name,As}|Match]) ->
 event({startPrefixMapping,_,Ns},[{ns,Ns}|Match]) -> Match;
 event({startPrefixMapping,_,Ns},[ignore,{ns,Ns}|Match]) -> Match;
 event({endPrefixMapping,_},Match) -> Match;
+event({characters,Chs},[{characters,Chs}|Match]) -> Match;
 event({endElement,_,Name,_},[{ee,Name}|Match]) -> Match;
 event({endElement,_,Name,_},[ignore,{ee,Name}|Match]) -> Match;
 event(endDocument,Match) when Match==[]; Match==[ignore] -> ok;
@@ -422,6 +440,9 @@ do(_, undefined) ->
 reply(_,undefined) ->
     ?dbg("no reply~n",[]),
     ok;
+reply(ConnRef,{fragmented,Reply}) ->
+    ?dbg("Reply fragmented: ~p~n",[Reply]),
+    send_frag(ConnRef,make_msg(Reply));
 reply(ConnRef,Reply) ->
     ?dbg("Reply: ~p~n",[Reply]),
     send(ConnRef, make_msg(Reply)).
@@ -429,9 +450,12 @@ reply(ConnRef,Reply) ->
 from_simple(Simple) ->
     unicode_c2b(xmerl:export_simple_element(Simple,xmerl_xml)).
 
-xml(Content) ->
-    <<"<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n",
-      Content/binary,"\n",?END_TAG/binary>>.
+xml(Content) when is_binary(Content) ->
+    xml([Content]);
+xml(Content) when is_list(Content) ->
+    Msgs = [<<Msg/binary,"\n",?END_TAG/binary>> || Msg <- Content],
+    MsgsBin = list_to_binary(Msgs),
+    <<"<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n", MsgsBin/binary>>.
 
 rpc_reply(Content) when is_binary(Content) ->
     MsgId = case erase(msg_id) of
@@ -471,14 +495,17 @@ capabilities(no_caps) ->
 %%% expect_do_reply/3.
 %%%
 %%% match(term()) -> [Match].
-%%% Match = ignore | {se,Name} | {se,Name,Attrs} | {ee,Name} | {ns,Namespace}
+%%% Match = ignore | {se,Name} | {se,Name,Attrs} | {ee,Name} |
+%%%         {ns,Namespace} | {characters,Chs}
 %%% Name = string()
+%%% Chs = string()
 %%% Attrs = [{atom(),string()}]
 %%% Namespace = string()
 %%%
 %%% 'se' means start element, 'ee' means end element - i.e. to match
 %%% an XML element you need one 'se' entry and one 'ee' entry with the
-%%% same name in the match list.
+%%% same name in the match list. 'characters' can be used for matching
+%%% character data (cdata) inside an element.
 match(hello) ->
     [ignore,{se,"hello"},ignore,{ee,"hello"},ignore];
 match('close-session') ->
@@ -486,6 +513,10 @@ match('close-session') ->
      {ee,"close-session"},{ee,"rpc"},ignore];
 match('edit-config') ->
     [ignore,{se,"rpc"},{se,"edit-config"},{se,"target"},ignore,{ee,"target"},
+     {se,"config"},ignore,{ee,"config"},{ee,"edit-config"},{ee,"rpc"},ignore];
+match({'edit-config',{'default-operation',DO}}) ->
+    [ignore,{se,"rpc"},{se,"edit-config"},{se,"target"},ignore,{ee,"target"},
+     {se,"default-operation"},{characters,DO},{ee,"default-operation"},
      {se,"config"},ignore,{ee,"config"},{ee,"edit-config"},{ee,"rpc"},ignore];
 match('get') ->
     match({get,subtree});
@@ -540,17 +571,24 @@ make_msg({hello,SessionId,Stuff}) ->
 	  SessionIdXml/binary,"</hello>">>);
 make_msg(ok) ->
     xml(rpc_reply("<ok/>"));
+
+make_msg({ok,Data}) ->
+    xml(rpc_reply(from_simple({ok,Data})));
+
 make_msg({data,Data}) ->
     xml(rpc_reply(from_simple({data,Data})));
-make_msg(event) ->
-    xml(<<"<notification xmlns=\"",?NETCONF_NOTIF_NAMESPACE,"\">"
+
+make_msg({event,N}) ->
+    Notification = <<"<notification xmlns=\"",?NETCONF_NOTIF_NAMESPACE,"\">"
 	  "<eventTime>2012-06-14T14:50:54+02:00</eventTime>"
 	  "<event xmlns=\"http://my.namespaces.com/event\">"
 	  "<severity>major</severity>"
 	  "<description>Something terrible happened</description>"
 	  "</event>"
-	  "</notification>">>);
-make_msg(Xml) when is_binary(Xml) ->
+	  "</notification>">>,
+    xml(lists:duplicate(N,Notification));
+make_msg(Xml) when is_binary(Xml) orelse
+		   (is_list(Xml) andalso is_binary(hd(Xml))) ->
     xml(Xml);
 make_msg(Simple) when is_tuple(Simple) ->
     xml(from_simple(Simple)).

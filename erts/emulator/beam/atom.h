@@ -1,18 +1,19 @@
 /*
  * %CopyrightBegin%
  *
- * Copyright Ericsson AB 1996-2013. All Rights Reserved.
+ * Copyright Ericsson AB 1996-2016. All Rights Reserved.
  *
- * The contents of this file are subject to the Erlang Public License,
- * Version 1.1, (the "License"); you may not use this file except in
- * compliance with the License. You should have received a copy of the
- * Erlang Public License along with this software. If not, it can be
- * retrieved online at http://www.erlang.org/.
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
  *
- * Software distributed under the License is distributed on an "AS IS"
- * basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See
- * the License for the specific language governing rights and limitations
- * under the License.
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  *
  * %CopyrightEnd%
  */
@@ -20,10 +21,7 @@
 #ifndef __ATOM_H__
 #define __ATOM_H__
 
-#ifndef __INDEX_H__
 #include "index.h"
-#endif
-
 #include "erl_atom_table.h"
 
 #define MAX_ATOM_CHARACTERS 255
@@ -128,6 +126,7 @@ typedef enum {
   (erts_is_atom_utf8_bytes((byte *) LSTR, sizeof(LSTR) - 1, (TERM)))
 #define ERTS_DECL_AM(S) Eterm AM_ ## S = am_atom_put(#S, sizeof(#S) - 1)
 #define ERTS_INIT_AM(S) AM_ ## S = am_atom_put(#S, sizeof(#S) - 1)
+#define ERTS_MAKE_AM(Str) am_atom_put(Str, sizeof(Str) - 1)
 
 int atom_table_size(void);	/* number of elements */
 int atom_table_sz(void);	/* table size in bytes, excluding stored objects */
@@ -137,8 +136,8 @@ Eterm erts_atom_put(const byte *name, int len, ErtsAtomEncoding enc, int trunc);
 int atom_erase(byte*, int);
 int atom_static_put(byte*, int);
 void init_atom_table(void);
-void atom_info(int, void *);
-void dump_atoms(int, void *);
+void atom_info(fmtfn_t, void *);
+void dump_atoms(fmtfn_t, void *);
 int erts_atom_get(const char* name, int len, Eterm* ap, ErtsAtomEncoding enc);
 void erts_atom_get_text_space_sizes(Uint *reserved, Uint *used);
 #endif

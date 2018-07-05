@@ -1,18 +1,19 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2005-2013. All Rights Reserved.
+%% Copyright Ericsson AB 2005-2016. All Rights Reserved.
 %%
-%% The contents of this file are subject to the Erlang Public License,
-%% Version 1.1, (the "License"); you may not use this file except in
-%% compliance with the License. You should have received a copy of the
-%% Erlang Public License along with this software. If not, it can be
-%% retrieved online at http://www.erlang.org/.
+%% Licensed under the Apache License, Version 2.0 (the "License");
+%% you may not use this file except in compliance with the License.
+%% You may obtain a copy of the License at
 %%
-%% Software distributed under the License is distributed on an "AS IS"
-%% basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See
-%% the License for the specific language governing rights and limitations
-%% under the License.
+%%     http://www.apache.org/licenses/LICENSE-2.0
+%%
+%% Unless required by applicable law or agreed to in writing, software
+%% distributed under the License is distributed on an "AS IS" BASIS,
+%% WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+%% See the License for the specific language governing permissions and
+%% limitations under the License.
 %%
 %% %CopyrightEnd%
 %%
@@ -23,12 +24,12 @@
 
 -module(ssh_xfer).
 
--export([attach/2, connect/3]).
+-export([attach/2, attach/3, connect/3, connect/4, connect/5]).
 -export([open/6, opendir/3, readdir/3, close/3, read/5, write/5,
 	 rename/5, remove/3, mkdir/4, rmdir/3, realpath/3, extended/4,
 	 stat/4, fstat/4, lstat/4, setstat/4,
 	 readlink/3, fsetstat/4, symlink/4,
-	 protocol_version_request/1,
+	 protocol_version_request/2,
 	 xf_reply/2,
 	 xf_send_reply/3, xf_send_names/3, xf_send_name/4,
 	 xf_send_status/3, xf_send_status/4, xf_send_status/5,
@@ -46,29 +47,46 @@
 -define(is_set(F, Bits),
 	((F) band (Bits)) == (F)).
 
--define(XFER_PACKET_SIZE, 32768).
--define(XFER_WINDOW_SIZE, 4*?XFER_PACKET_SIZE).
+-define(XFER_PACKET_SIZE, 65536).
+-define(XFER_WINDOW_SIZE, 20*?XFER_PACKET_SIZE).
 
 attach(CM, Opts) ->
-    open_xfer(CM, Opts).
+    open_xfer(CM, Opts, []).
+
+attach(CM, Opts, ChanOpts) ->
+    open_xfer(CM, Opts, ChanOpts).
+
 
 connect(Host, Port, Opts) ->
     case ssh:connect(Host, Port, Opts) of
-	{ok, CM} -> open_xfer(CM, Opts);
+	{ok, CM} -> open_xfer(CM, Opts, []);
 	Error -> Error
     end.
 
-open_xfer(CM, Opts) ->
+connect(Host, Port, Opts, Timeout) ->
+    connect(Host, Port, Opts, [], Timeout).
+
+connect(Host, Port, Opts, ChanOpts, Timeout) ->
+    case ssh:connect(Host, Port, Opts, Timeout) of
+	{ok, CM} -> open_xfer(CM, [{timeout, Timeout}|Opts], ChanOpts);
+	{error, Timeout} -> {error, timeout};
+	Error -> Error
+    end.
+
+
+open_xfer(CM, Opts, ChanOpts) ->
     TMO = proplists:get_value(timeout, Opts, infinity),
-    case ssh_connection:session_channel(CM, ?XFER_WINDOW_SIZE, ?XFER_PACKET_SIZE, TMO) of
+    WindowSize = proplists:get_value(window_size, ChanOpts,  ?XFER_WINDOW_SIZE),
+    PacketSize = proplists:get_value(packet_size, ChanOpts,  ?XFER_PACKET_SIZE),
+    case ssh_connection:session_channel(CM, WindowSize, PacketSize, TMO) of
 	{ok, ChannelId} ->
 	    {ok, ChannelId, CM};
 	Error -> 
 	    Error
     end.
 
-protocol_version_request(XF) ->
-    xf_request(XF, ?SSH_FXP_INIT, <<?UINT32(?SSH_SFTP_PROTOCOL_VERSION)>>).
+protocol_version_request(XF, Version) ->
+    xf_request(XF, ?SSH_FXP_INIT, <<?UINT32(Version)>>).
 
 open(XF, ReqID, FileName, Access, Flags, Attrs) -> 
     Vsn = XF#ssh_xfer.vsn,

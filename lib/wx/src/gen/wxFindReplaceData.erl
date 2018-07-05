@@ -1,18 +1,19 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2008-2013. All Rights Reserved.
+%% Copyright Ericsson AB 2008-2016. All Rights Reserved.
 %%
-%% The contents of this file are subject to the Erlang Public License,
-%% Version 1.1, (the "License"); you may not use this file except in
-%% compliance with the License. You should have received a copy of the
-%% Erlang Public License along with this software. If not, it can be
-%% retrieved online at http://www.erlang.org/.
+%% Licensed under the Apache License, Version 2.0 (the "License");
+%% you may not use this file except in compliance with the License.
+%% You may obtain a copy of the License at
 %%
-%% Software distributed under the License is distributed on an "AS IS"
-%% basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See
-%% the License for the specific language governing rights and limitations
-%% under the License.
+%%     http://www.apache.org/licenses/LICENSE-2.0
+%%
+%% Unless required by applicable law or agreed to in writing, software
+%% distributed under the License is distributed on an "AS IS" BASIS,
+%% WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+%% See the License for the specific language governing permissions and
+%% limitations under the License.
 %%
 %% %CopyrightEnd%
 %% This file is generated DO NOT EDIT
@@ -74,7 +75,7 @@ getFlags(#wx_ref{type=ThisT,ref=ThisRef}) ->
   <<ThisRef:32/?UI>>).
 
 %% @doc See <a href="http://www.wxwidgets.org/manuals/2.8.12/wx_wxfindreplacedata.html#wxfindreplacedatasetflags">external documentation</a>.
--spec setFlags(This, Flags) -> ok when
+-spec setFlags(This, Flags) -> 'ok' when
 	This::wxFindReplaceData(), Flags::integer().
 setFlags(#wx_ref{type=ThisT,ref=ThisRef},Flags)
  when is_integer(Flags) ->
@@ -83,27 +84,27 @@ setFlags(#wx_ref{type=ThisT,ref=ThisRef},Flags)
   <<ThisRef:32/?UI,Flags:32/?UI>>).
 
 %% @doc See <a href="http://www.wxwidgets.org/manuals/2.8.12/wx_wxfindreplacedata.html#wxfindreplacedatasetfindstring">external documentation</a>.
--spec setFindString(This, Str) -> ok when
+-spec setFindString(This, Str) -> 'ok' when
 	This::wxFindReplaceData(), Str::unicode:chardata().
 setFindString(#wx_ref{type=ThisT,ref=ThisRef},Str)
- when is_list(Str) ->
+ when ?is_chardata(Str) ->
   ?CLASS(ThisT,wxFindReplaceData),
   Str_UC = unicode:characters_to_binary([Str,0]),
   wxe_util:cast(?wxFindReplaceData_SetFindString,
   <<ThisRef:32/?UI,(byte_size(Str_UC)):32/?UI,(Str_UC)/binary, 0:(((8- ((0+byte_size(Str_UC)) band 16#7)) band 16#7))/unit:8>>).
 
 %% @doc See <a href="http://www.wxwidgets.org/manuals/2.8.12/wx_wxfindreplacedata.html#wxfindreplacedatasetreplacestring">external documentation</a>.
--spec setReplaceString(This, Str) -> ok when
+-spec setReplaceString(This, Str) -> 'ok' when
 	This::wxFindReplaceData(), Str::unicode:chardata().
 setReplaceString(#wx_ref{type=ThisT,ref=ThisRef},Str)
- when is_list(Str) ->
+ when ?is_chardata(Str) ->
   ?CLASS(ThisT,wxFindReplaceData),
   Str_UC = unicode:characters_to_binary([Str,0]),
   wxe_util:cast(?wxFindReplaceData_SetReplaceString,
   <<ThisRef:32/?UI,(byte_size(Str_UC)):32/?UI,(Str_UC)/binary, 0:(((8- ((0+byte_size(Str_UC)) band 16#7)) band 16#7))/unit:8>>).
 
 %% @doc Destroys this object, do not use object again
--spec destroy(This::wxFindReplaceData()) -> ok.
+-spec destroy(This::wxFindReplaceData()) -> 'ok'.
 destroy(Obj=#wx_ref{type=Type}) ->
   ?CLASS(Type,wxFindReplaceData),
   wxe_util:destroy(?DESTROY_OBJECT,Obj),

@@ -1,18 +1,19 @@
 %% 
 %% %CopyrightBegin%
 %% 
-%% Copyright Ericsson AB 2003-2009. All Rights Reserved.
+%% Copyright Ericsson AB 2003-2016. All Rights Reserved.
 %% 
-%% The contents of this file are subject to the Erlang Public License,
-%% Version 1.1, (the "License"); you may not use this file except in
-%% compliance with the License. You should have received a copy of the
-%% Erlang Public License along with this software. If not, it can be
-%% retrieved online at http://www.erlang.org/.
-%% 
-%% Software distributed under the License is distributed on an "AS IS"
-%% basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See
-%% the License for the specific language governing rights and limitations
-%% under the License.
+%% Licensed under the Apache License, Version 2.0 (the "License");
+%% you may not use this file except in compliance with the License.
+%% You may obtain a copy of the License at
+%%
+%%     http://www.apache.org/licenses/LICENSE-2.0
+%%
+%% Unless required by applicable law or agreed to in writing, software
+%% distributed under the License is distributed on an "AS IS" BASIS,
+%% WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+%% See the License for the specific language governing permissions and
+%% limitations under the License.
 %% 
 %% %CopyrightEnd%
 %% 
@@ -28,7 +29,7 @@
 	 bits_to_int/2,
 	 ensure_trailing_dir_delimiter/1,
 	 foreach/3,
-	 is_string/1,
+	 check_file/1,
 	 read_mib/1,
 	 read_noexit/2,
 	 strip_extension_from_filename/2,
@@ -85,20 +86,20 @@ to_upper([C|Cs]) -> [C|to_upper(Cs)];
 to_upper([]) -> [].
 
 
-is_string([]) -> true;
-is_string([Tkn | Str]) 
-  when is_integer(Tkn) andalso (Tkn >= 0) andalso (Tkn =< 255) ->
-    is_string(Str);
-is_string(_) -> false.
-
-
+check_file(FileName) ->
+    case filename:extension(FileName) of
+	".mib" ->
+	    filelib:is_regular(FileName);
+	_ ->
+	    filelib:is_regular(FileName ++ ".mib")
+    end.
+	
+    
 foreach(Function, ExtraArgs, [H | T]) ->
     apply(Function, [H | ExtraArgs]),
     foreach(Function, ExtraArgs, T);
 foreach(_Function, _ExtraArgs, []) -> 
     true.
-
-
 
 %%----------------------------------------------------------------------
 %% Returns: {ok, Mib}|{error, Reason}

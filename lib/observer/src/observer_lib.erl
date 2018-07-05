@@ -1,18 +1,19 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2011-2014. All Rights Reserved.
+%% Copyright Ericsson AB 2011-2016. All Rights Reserved.
 %%
-%% The contents of this file are subject to the Erlang Public License,
-%% Version 1.1, (the "License"); you may not use this file except in
-%% compliance with the License. You should have received a copy of the
-%% Erlang Public License along with this software. If not, it can be
-%% retrieved online at http://www.erlang.org/.
+%% Licensed under the Apache License, Version 2.0 (the "License");
+%% you may not use this file except in compliance with the License.
+%% You may obtain a copy of the License at
 %%
-%% Software distributed under the License is distributed on an "AS IS"
-%% basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See
-%% the License for the specific language governing rights and limitations
-%% under the License.
+%%     http://www.apache.org/licenses/LICENSE-2.0
+%%
+%% Unless required by applicable law or agreed to in writing, software
+%% distributed under the License is distributed on an "AS IS" BASIS,
+%% WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+%% See the License for the specific language governing permissions and
+%% limitations under the License.
 %%
 %% %CopyrightEnd%
 
@@ -24,7 +25,7 @@
 	 wait_for_progress/0, report_progress/1,
 	 user_term/3, user_term_multiline/3,
 	 interval_dialog/4, start_timer/1, stop_timer/1,
-	 display_info/2, fill_info/2, update_info/2, to_str/1,
+	 display_info/2, display_info/3, fill_info/2, update_info/2, to_str/1,
 	 create_menus/3, create_menu_item/3,
 	 create_attrs/0,
 	 set_listctrl_col_size/2,
@@ -121,23 +122,26 @@ display_yes_no_dialog(Str) ->
 %% display_info(Parent, [{Title, [{Label, Info}]}]) -> {Panel, Sizer, InfoFieldsToUpdate}
 display_info(Frame, Info) ->
     Panel = wxPanel:new(Frame),
-    wxWindow:setBackgroundColour(Panel, {255,255,255}),
+    wxWindow:setBackgroundStyle(Panel, ?wxBG_STYLE_SYSTEM),
     Sizer = wxBoxSizer:new(?wxVERTICAL),
+    InfoFs = display_info(Panel, Sizer, Info),
+    wxWindow:setSizerAndFit(Panel, Sizer),
+    {Panel, Sizer, InfoFs}.
+
+display_info(Panel, Sizer, Info) ->
     wxSizer:addSpacer(Sizer, 5),
     Add = fun(BoxInfo) ->
 		  case create_box(Panel, BoxInfo) of
 		      {Box, InfoFs} ->
-			  wxSizer:add(Sizer, Box, [{flag, ?wxEXPAND bor ?wxALL},
-						   {border, 5}]),
+			  wxSizer:add(Sizer, Box,
+				      [{flag, ?wxEXPAND bor ?wxALL}, {border, 5}]),
 			  wxSizer:addSpacer(Sizer, 5),
 			  InfoFs;
 		      undefined ->
 			  []
 		  end
 	  end,
-    InfoFs = [Add(I) || I <- Info],
-    wxWindow:setSizerAndFit(Panel, Sizer),
-    {Panel, Sizer, InfoFs}.
+    [Add(I) || I <- Info].
 
 fill_info([{dynamic, Key}|Rest], Data)
   when is_atom(Key); is_function(Key) ->
@@ -173,12 +177,17 @@ fill_info([{Str,SubStructure}|Rest], Data) when is_list(SubStructure) ->
     [{Str, fill_info(SubStructure, Data)}|fill_info(Rest,Data)];
 fill_info([{Str,Attrib,SubStructure}|Rest], Data) ->
     [{Str, Attrib, fill_info(SubStructure, Data)}|fill_info(Rest,Data)];
+fill_info([{Str, Key = {K,N}}|Rest], Data) when is_atom(K), is_integer(N) ->
+    case get_value(Key, Data) of
+	undefined -> [undefined | fill_info(Rest, Data)];
+	Value -> [{Str, Value} | fill_info(Rest, Data)]
+    end;
 fill_info([], _) -> [].
 
-get_value(Key, Data) when is_atom(Key) ->
-    proplists:get_value(Key,Data);
 get_value(Fun, Data) when is_function(Fun) ->
-    Fun(Data).
+    Fun(Data);
+get_value(Key, Data) ->
+    proplists:get_value(Key,Data).
 
 update_info([Fields|Fs], [{_Header, SubStructure}| Rest]) ->
     update_info2(Fields, SubStructure),
@@ -195,22 +204,21 @@ update_info2([Scroll = {_, _, _}|Fs], [{_, NewInfo}|Rest]) ->
     update_scroll_boxes(Scroll, NewInfo),
     update_info2(Fs, Rest);
 update_info2([Field|Fs], [{_Str, {click, Value}}|Rest]) ->
-    wxTextCtrl:setValue(Field, to_str(Value)),
+    wxStaticText:setLabel(Field, to_str(Value)),
     update_info2(Fs, Rest);
 update_info2([Field|Fs], [{_Str, Value}|Rest]) ->
-    wxTextCtrl:setValue(Field, to_str(Value)),
+    wxStaticText:setLabel(Field, to_str(Value)),
     update_info2(Fs, Rest);
 update_info2([Field|Fs], [undefined|Rest]) ->
-    wxTextCtrl:setValue(Field, ""),
+    wxStaticText:setLabel(Field, ""),
     update_info2(Fs, Rest);
 update_info2([], []) -> ok.
 
 update_scroll_boxes({_, _, 0}, {_, []}) -> ok;
 update_scroll_boxes({Win, Sizer, _}, {Type, List}) ->
     [wxSizerItem:deleteWindows(Child) ||  Child <- wxSizer:getChildren(Sizer)],
-    BC = wxWindow:getBackgroundColour(Win),
     Cursor = wxCursor:new(?wxCURSOR_HAND),
-    add_entries(Type, List, Win, Sizer, BC, Cursor),
+    add_entries(Type, List, Win, Sizer, Cursor),
     wxCursor:destroy(Cursor),
     wxSizer:recalcSizes(Sizer),
     wxWindow:refresh(Win),
@@ -249,6 +257,11 @@ to_str({func, {F,A}}) when is_atom(F), is_integer(A) ->
     lists:concat([F, "/", A]);
 to_str({func, {F,'_'}}) when is_atom(F) ->
     atom_to_list(F);
+to_str({inet, Addr}) ->
+    case inet:ntoa(Addr) of
+        {error,einval} -> to_str(Addr);
+        AddrStr -> AddrStr
+    end;
 to_str({{format,Fun},Value}) when is_function(Fun) ->
     Fun(Value);
 to_str({A, B}) when is_atom(A), is_atom(B) ->
@@ -269,6 +282,8 @@ to_str(Pid) when is_pid(Pid) ->
     pid_to_list(Pid);
 to_str(No) when is_integer(No) ->
     integer_to_list(No);
+to_str(Float) when is_float(Float) ->
+    io_lib:format("~.3f", [Float]);
 to_str(Term) ->
     io_lib:format("~w", [Term]).
 
@@ -371,25 +386,22 @@ add_box(Panel, OuterBox, Cursor, Title, Proportion, {Format, List}) ->
     wxScrolledWindow:setScrollbars(Scroll,1,1,0,0),
     ScrollSizer  = wxBoxSizer:new(?wxVERTICAL),
     wxScrolledWindow:setSizer(Scroll, ScrollSizer),
-    BC = wxWindow:getBackgroundColour(Panel),
-    wxWindow:setBackgroundColour(Scroll,BC),
-    add_entries(Format, List, Scroll, ScrollSizer, BC, Cursor),
+    wxWindow:setBackgroundStyle(Scroll, ?wxBG_STYLE_SYSTEM),
+    add_entries(Format, List, Scroll, ScrollSizer, Cursor),
     wxSizer:add(Box,Scroll,[{proportion,1},{flag,?wxEXPAND}]),
     wxSizer:add(OuterBox,Box,[{proportion,Proportion},{flag,?wxEXPAND}]),
     {Scroll,ScrollSizer,length(List)}.
 
-add_entries(click, List, Scroll, ScrollSizer, BC, Cursor) ->
+add_entries(click, List, Scroll, ScrollSizer, Cursor) ->
     Add = fun(Link) ->
 		  TC = link_entry(Scroll, Link, Cursor),
-		  wxWindow:setBackgroundColour(TC,BC),
-		  wxSizer:add(ScrollSizer,TC,[{flag,?wxEXPAND}])
+                  wxWindow:setBackgroundStyle(TC, ?wxBG_STYLE_SYSTEM),
+		  wxSizer:add(ScrollSizer,TC, [{flag,?wxEXPAND}])
 	  end,
     [Add(Link) || Link <- List];
-add_entries(plain, List, Scroll, ScrollSizer, _, _) ->
+add_entries(plain, List, Scroll, ScrollSizer, _) ->
     Add = fun(String) ->
-		  TC = wxTextCtrl:new(Scroll, ?wxID_ANY,
-				      [{style,?SINGLE_LINE_STYLE},
-				       {value,String}]),
+		  TC = wxStaticText:new(Scroll, ?wxID_ANY, String),
 		  wxSizer:add(ScrollSizer,TC,[{flag,?wxEXPAND}])
 	  end,
     [Add(String) || String <- List].
@@ -427,51 +439,49 @@ create_box(Panel, {scroll_boxes,Data}) ->
     wxSizer:layout(OuterBox),
     {OuterBox, Boxes};
 
-create_box(Panel, Data) ->
-    {Title, Align, Info} = get_box_info(Data),
-    Box = wxStaticBoxSizer:new(?wxVERTICAL, Panel, [{label, Title}]),
-    LeftSize = get_max_size(Panel,Info),
-    LeftProportion = [{proportion,0}],
-    RightProportion = [{proportion,1}, {flag, Align bor ?wxEXPAND}],
+create_box(Parent, Data) ->
+    {Title, _Align, Info} = get_box_info(Data),
+    Top = wxStaticBoxSizer:new(?wxVERTICAL, Parent, [{label, Title}]),
+    Panel = wxPanel:new(Parent),
+    Box = wxBoxSizer:new(?wxVERTICAL),
+    LeftSize = 30 + get_max_width(Panel,Info),
+    RightProportion = [{flag, ?wxEXPAND}],
     AddRow = fun({Desc0, Value0}) ->
 		     Desc = Desc0++":",
 		     Line = wxBoxSizer:new(?wxHORIZONTAL),
-		     wxSizer:add(Line,
-				 wxTextCtrl:new(Panel, ?wxID_ANY,
-						[{style,?SINGLE_LINE_STYLE},
-						 {size,LeftSize},
-						 {value,Desc}]),
-				 LeftProportion),
+		     Label = wxStaticText:new(Panel, ?wxID_ANY, Desc),
+		     wxSizer:add(Line, 5, 0),
+		     wxSizer:add(Line, Label),
+		     wxSizer:setItemMinSize(Line, Label, LeftSize, -1),
 		     Field =
 			 case Value0 of
 			     {click,"unknown"} ->
-				 wxTextCtrl:new(Panel, ?wxID_ANY,
-						[{style,?SINGLE_LINE_STYLE},
-						 {value,"unknown"}]);
+				 wxStaticText:new(Panel, ?wxID_ANY,"unknown");
 			     {click,Value} ->
 				 link_entry(Panel,Value);
 			     _ ->
 				 Value = to_str(Value0),
-				 TCtrl = wxTextCtrl:new(Panel, ?wxID_ANY,
-							[{style,?SINGLE_LINE_STYLE},
-							 {value,Value}]),
-				 length(Value) > 50 andalso
-				     wxWindow:setToolTip(TCtrl,wxToolTip:new(Value)),
-				 TCtrl
+				 case length(Value) > 100 of
+				     true ->
+					 Shown = lists:sublist(Value, 80),
+					 TCtrl = wxStaticText:new(Panel, ?wxID_ANY, [Shown,"..."]),
+					 wxWindow:setToolTip(TCtrl,wxToolTip:new(Value)),
+					 TCtrl;
+				     false ->
+					 wxStaticText:new(Panel, ?wxID_ANY, Value)
+				 end
 			 end,
 		     wxSizer:add(Line, 10, 0), % space of size 10 horisontally
 		     wxSizer:add(Line, Field, RightProportion),
-
-		     {_,H,_,_} = wxTextCtrl:getTextExtent(Field,"Wj"),
-		     wxTextCtrl:setMinSize(Field,{0,H}),
-
-		     wxSizer:add(Box, Line, [{proportion,0},{flag,?wxEXPAND}]),
+		     wxSizer:add(Box, Line, [{proportion,1}]),
 		     Field;
 		(undefined) ->
 		     undefined
 	     end,
     InfoFields = [AddRow(Entry) || Entry <- Info],
-    {Box, InfoFields}.
+    wxWindow:setSizer(Panel, Box),
+    wxSizer:add(Top, Panel, [{proportion,1},{flag,?wxEXPAND}]),
+    {Top, InfoFields}.
 
 link_entry(Panel, Link) ->
     Cursor = wxCursor:new(?wxCURSOR_HAND),
@@ -482,19 +492,21 @@ link_entry(Panel, Link, Cursor) ->
     link_entry2(Panel, to_link(Link), Cursor).
 
 link_entry2(Panel,{Target,Str},Cursor) ->
-    TC = wxTextCtrl:new(Panel, ?wxID_ANY, [{style, ?SINGLE_LINE_STYLE}]),
-    wxTextCtrl:setForegroundColour(TC,?wxBLUE),
-    wxTextCtrl:appendText(TC, Str),
+    TC = wxStaticText:new(Panel, ?wxID_ANY, Str),
+    wxWindow:setForegroundColour(TC,?wxBLUE),
     wxWindow:setCursor(TC, Cursor),
-    wxTextCtrl:connect(TC, left_down, [{userData,Target}]),
-    wxTextCtrl:connect(TC, enter_window),
-    wxTextCtrl:connect(TC, leave_window),
+    wxWindow:connect(TC, left_down, [{userData,Target}]),
+    wxWindow:connect(TC, enter_window),
+    wxWindow:connect(TC, leave_window),
     ToolTip = wxToolTip:new("Click to see properties for " ++ Str),
     wxWindow:setToolTip(TC, ToolTip),
     TC.
 
-to_link(Tuple = {_Target, _Str}) ->
-    Tuple;
+to_link(RegName={Name, Node}) when is_atom(Name), is_atom(Node) ->
+    Str = io_lib:format("{~p,~p}", [Name, Node]),
+    {RegName, Str};
+to_link(TI = {_Target, _Identifier}) ->
+    TI;
 to_link(Target0) ->
     Target=to_str(Target0),
     {Target, Target}.
@@ -510,23 +522,12 @@ html_window(Panel, Html) ->
     wxHtmlWindow:setPage(Win, Html),
     Win.
 
-get_max_size(Panel,Info) ->
-    Txt = wxTextCtrl:new(Panel, ?wxID_ANY, []),
-    Size = get_max_size(Txt,Info,0,0),
-    wxTextCtrl:destroy(Txt),
-    Size.
-
-get_max_size(Txt,[{Desc,_}|Info],MaxX,MaxY) ->
-    {X,Y,_,_} = wxTextCtrl:getTextExtent(Txt,Desc++":"),
-    if X>MaxX ->
-	    get_max_size(Txt,Info,X,Y);
-       true ->
-	    get_max_size(Txt,Info,MaxX,MaxY)
-    end;
-get_max_size(Txt,[undefined|Info],MaxX,MaxY) ->
-    get_max_size(Txt,Info,MaxX,MaxY);
-get_max_size(_,[],X,_Y) ->
-    {X+2,-1}.
+get_max_width(Parent,Info) ->
+    lists:foldl(fun({Desc,_}, Max) ->
+			{W, _, _, _} = wxWindow:getTextExtent(Parent, Desc),
+			max(W,Max);
+		   (_, Max) -> Max
+		end, 0, Info).
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 set_listctrl_col_size(LCtrl, Total) ->

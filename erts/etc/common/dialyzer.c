@@ -1,18 +1,19 @@
 /*
  * %CopyrightBegin%
  * 
- * Copyright Ericsson AB 2006-2013. All Rights Reserved.
+ * Copyright Ericsson AB 2006-2016. All Rights Reserved.
  * 
- * The contents of this file are subject to the Erlang Public License,
- * Version 1.1, (the "License"); you may not use this file except in
- * compliance with the License. You should have received a copy of the
- * Erlang Public License along with this software. If not, it can be
- * retrieved online at http://www.erlang.org/.
- * 
- * Software distributed under the License is distributed on an "AS IS"
- * basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See
- * the License for the specific language governing rights and limitations
- * under the License.
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  * 
  * %CopyrightEnd%
  */
@@ -62,13 +63,14 @@ static int eargc;		/* Number of arguments in eargv. */
  */
 
 static void error(char* format, ...);
-static char* emalloc(size_t size);
+static void* emalloc(size_t size);
 static char* strsave(char* string);
 static void push_words(char* src);
 static int run_erlang(char* name, char** argv);
 static char* get_default_emulator(char* progname);
 #ifdef __WIN32__
 static char* possibly_quote(char* arg);
+static void* erealloc(void *p, size_t size);
 #endif
 
 /*
@@ -163,10 +165,10 @@ int main(int argc, char** argv)
 #ifdef __WIN32__
     int len;
     /* Convert argv to utf8 */
-    argv = malloc((argc+1) * sizeof(char*));
+    argv = emalloc((argc+1) * sizeof(char*));
     for (i=0; i<argc; i++) {
 	len = WideCharToMultiByte(CP_UTF8, 0, wcargv[i], -1, NULL, 0, NULL, NULL);
-	argv[i] = malloc(len*sizeof(char));
+	argv[i] = emalloc(len*sizeof(char));
 	WideCharToMultiByte(CP_UTF8, 0, wcargv[i], -1, argv[i], len, NULL, NULL);
     }
     argv[argc] = NULL;
@@ -309,7 +311,7 @@ wchar_t *make_commandline(char **argv)
 	buff = (wchar_t *) emalloc(siz*sizeof(wchar_t));
     } else if (siz < num) {
 	siz = num;
-	buff = (wchar_t *) realloc(buff,siz*sizeof(wchar_t));
+	buff = (wchar_t *) erealloc(buff,siz*sizeof(wchar_t));
     }
     p = buff;
     num=0;
@@ -412,14 +414,25 @@ error(char* format, ...)
     exit(1);
 }
 
-static char*
+static void*
 emalloc(size_t size)
 {
-  char *p = malloc(size);
+  void *p = malloc(size);
   if (p == NULL)
     error("Insufficient memory");
   return p;
 }
+
+#ifdef __WIN32__
+static void *
+erealloc(void *p, size_t size)
+{
+    void *res = realloc(p, size);
+    if (res == NULL)
+    error("Insufficient memory");
+    return res;
+}
+#endif
 
 static char*
 strsave(char* string)

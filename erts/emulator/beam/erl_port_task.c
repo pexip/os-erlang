@@ -1,18 +1,19 @@
 /*
  * %CopyrightBegin%
  *
- * Copyright Ericsson AB 2006-2013. All Rights Reserved.
+ * Copyright Ericsson AB 2006-2016. All Rights Reserved.
  *
- * The contents of this file are subject to the Erlang Public License,
- * Version 1.1, (the "License"); you may not use this file except in
- * compliance with the License. You should have received a copy of the
- * Erlang Public License along with this software. If not, it can be
- * retrieved online at http://www.erlang.org/.
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
  *
- * Software distributed under the License is distributed on an "AS IS"
- * basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See
- * the License for the specific language governing rights and limitations
- * under the License.
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  *
  * %CopyrightEnd%
  */
@@ -32,7 +33,9 @@
 #include "global.h"
 #include "erl_port_task.h"
 #include "dist.h"
+#include "erl_check_io.h"
 #include "dtrace-wrapper.h"
+#include "lttng-wrapper.h"
 #include <stdarg.h>
 
 /*
@@ -66,6 +69,18 @@ static void chk_task_queues(Port *pp, ErtsPortTask *execq, int processing_busy_q
     }
 #else
 #define  DTRACE_DRIVER(PROBE_NAME, PP) do {} while(0)
+#endif
+#ifdef USE_LTTNG_VM_TRACEPOINTS
+#define LTTNG_DRIVER(TRACEPOINT, PP)                              \
+    if (LTTNG_ENABLED(TRACEPOINT)) {                              \
+        lttng_decl_portbuf(port_str);                             \
+        lttng_decl_procbuf(proc_str);                             \
+        lttng_pid_to_str(ERTS_PORT_GET_CONNECTED(PP), proc_str);  \
+        lttng_port_to_str((PP), port_str);                        \
+        LTTNG3(TRACEPOINT, proc_str, port_str, (PP)->name);       \
+    }
+#else
+#define LTTNG_DRIVER(TRACEPOINT, PP) do {} while(0)
 #endif
 
 #define ERTS_SMP_LC_VERIFY_RQ(RQ, PP)					\
@@ -178,10 +193,9 @@ p2p_sig_data_to_task(ErtsProc2PortSigData *sigdp)
     return ptp;
 }
 
-ErtsProc2PortSigData *
-erts_port_task_alloc_p2p_sig_data(void)
+static ERTS_INLINE ErtsProc2PortSigData *
+p2p_sig_data_init(ErtsPortTask *ptp)
 {
-    ErtsPortTask *ptp = port_task_alloc();
 
     ptp->type = ERTS_PORT_TASK_PROC_SIG;
     ptp->u.alive.flags = ERTS_PT_FLG_SIG_DEP;
@@ -190,6 +204,31 @@ erts_port_task_alloc_p2p_sig_data(void)
     ASSERT(ptp == p2p_sig_data_to_task(&ptp->u.alive.td.psig.data));
 
     return &ptp->u.alive.td.psig.data;
+}
+
+ErtsProc2PortSigData *
+erts_port_task_alloc_p2p_sig_data(void)
+{
+    ErtsPortTask *ptp = port_task_alloc();
+
+    return p2p_sig_data_init(ptp);
+}
+
+ErtsProc2PortSigData *
+erts_port_task_alloc_p2p_sig_data_extra(size_t extra, void **extra_ptr)
+{
+    ErtsPortTask *ptp = erts_alloc(ERTS_ALC_T_PORT_TASK,
+                                   sizeof(ErtsPortTask) + extra);
+
+    *extra_ptr = ptp+1;
+
+    return p2p_sig_data_init(ptp);
+}
+
+void
+erts_port_task_free_p2p_sig_data(ErtsProc2PortSigData *sigdp)
+{
+    schedule_port_task_free(p2p_sig_data_to_task(sigdp));
 }
 
 static ERTS_INLINE Eterm
@@ -545,6 +584,16 @@ reset_handle(ErtsPortTask *ptp)
 {
     if (ptp->u.alive.handle) {
 	ASSERT(ptp == handle2task(ptp->u.alive.handle));
+	reset_port_task_handle(ptp->u.alive.handle);
+    }
+}
+
+static ERTS_INLINE void
+reset_executed_io_task_handle(ErtsPortTask *ptp)
+{
+    if (ptp->u.alive.handle) {
+	ASSERT(ptp == handle2task(ptp->u.alive.handle));
+	erts_io_notify_port_task_executed(ptp->u.alive.handle);
 	reset_port_task_handle(ptp->u.alive.handle);
     }
 }
@@ -1396,10 +1445,7 @@ erts_port_task_schedule(Eterm id,
     erts_aint32_t act, add_flags;
     unsigned int prof_runnable_ports;
 
-    if (pthp && erts_port_task_is_scheduled(pthp)) {
-	ASSERT(0);
-	erts_port_task_abort(pthp);
-    }
+    ERTS_LC_ASSERT(!pthp || !erts_port_task_is_scheduled(pthp));
 
     ASSERT(is_internal_port(id));
 
@@ -1638,6 +1684,8 @@ erts_port_task_execute(ErtsRunQueue *runq, Port **curr_port_pp)
     erts_aint32_t state;
     int active;
     Uint64 start_time = 0;
+    ErtsSchedulerData *esdp = runq->scheduler;
+    ERTS_MSACC_PUSH_STATE_M();
 
     ERTS_SMP_LC_ASSERT(erts_smp_lc_runq_is_locked(runq));
 
@@ -1654,7 +1702,6 @@ erts_port_task_execute(ErtsRunQueue *runq, Port **curr_port_pp)
     *curr_port_pp = pp;
     
     if (erts_sched_stat.enabled) {
-	ErtsSchedulerData *esdp = erts_get_scheduler_data();
 	Uint old = ERTS_PORT_SCHED_ID(pp, esdp->no);
 	int migrated = old && old != esdp->no;
 
@@ -1681,6 +1728,7 @@ erts_port_task_execute(ErtsRunQueue *runq, Port **curr_port_pp)
 
     state = erts_atomic32_read_nob(&pp->state);
     pp->reds = ERTS_PORT_REDS_EXECUTE;
+    ERTS_MSACC_SET_STATE_CACHED_M(ERTS_MSACC_STATE_PORT);
     goto begin_handle_tasks;
 
     while (1) {
@@ -1699,8 +1747,6 @@ erts_port_task_execute(ErtsRunQueue *runq, Port **curr_port_pp)
 	    goto aborted_port_task;
 	}
 
-	reset_handle(ptp);
-
 	if (erts_system_monitor_long_schedule != 0) {
 	    start_time = erts_timestamp_millis();
 	}
@@ -1711,41 +1757,57 @@ erts_port_task_execute(ErtsRunQueue *runq, Port **curr_port_pp)
 
 	switch (ptp->type) {
 	case ERTS_PORT_TASK_TIMEOUT:
-	    reds = ERTS_PORT_REDS_TIMEOUT;
-	    if (!(state & ERTS_PORT_SFLGS_DEAD)) {
-                DTRACE_DRIVER(driver_timeout, pp);
-		(*pp->drv_ptr->timeout)((ErlDrvData) pp->drv_data);
-            }
+	    reset_handle(ptp);
+	    if (!ERTS_PTMR_IS_TIMED_OUT(pp))
+		reds = 0;
+	    else {
+		ERTS_PTMR_CLEAR(pp);
+		reds = ERTS_PORT_REDS_TIMEOUT;
+		if (!(state & ERTS_PORT_SFLGS_DEAD)) {
+		    DTRACE_DRIVER(driver_timeout, pp);
+		    LTTNG_DRIVER(driver_timeout, pp);
+                    if (IS_TRACED_FL(pp, F_TRACE_RECEIVE))
+                        trace_port(pp, am_receive, am_timeout);
+		    (*pp->drv_ptr->timeout)((ErlDrvData) pp->drv_data);
+		}
+	    }
 	    break;
 	case ERTS_PORT_TASK_INPUT:
 	    reds = ERTS_PORT_REDS_INPUT;
 	    ASSERT((state & ERTS_PORT_SFLGS_DEAD) == 0);
             DTRACE_DRIVER(driver_ready_input, pp);
-	    /* NOTE some windows/ose drivers use ->ready_input
+            LTTNG_DRIVER(driver_ready_input, pp);
+	    /* NOTE some windows drivers use ->ready_input
 	       for input and output */
 	    (*pp->drv_ptr->ready_input)((ErlDrvData) pp->drv_data,
 					ptp->u.alive.td.io.event);
+	    reset_executed_io_task_handle(ptp);
 	    io_tasks_executed++;
 	    break;
 	case ERTS_PORT_TASK_OUTPUT:
 	    reds = ERTS_PORT_REDS_OUTPUT;
 	    ASSERT((state & ERTS_PORT_SFLGS_DEAD) == 0);
             DTRACE_DRIVER(driver_ready_output, pp);
+            LTTNG_DRIVER(driver_ready_output, pp);
 	    (*pp->drv_ptr->ready_output)((ErlDrvData) pp->drv_data,
 					 ptp->u.alive.td.io.event);
+	    reset_executed_io_task_handle(ptp);
 	    io_tasks_executed++;
 	    break;
 	case ERTS_PORT_TASK_EVENT:
 	    reds = ERTS_PORT_REDS_EVENT;
 	    ASSERT((state & ERTS_PORT_SFLGS_DEAD) == 0);
             DTRACE_DRIVER(driver_event, pp);
+            LTTNG_DRIVER(driver_event, pp);
 	    (*pp->drv_ptr->event)((ErlDrvData) pp->drv_data,
 				  ptp->u.alive.td.io.event,
 				  ptp->u.alive.td.io.event_data);
+	    reset_executed_io_task_handle(ptp);
 	    io_tasks_executed++;
 	    break;
 	case ERTS_PORT_TASK_PROC_SIG: {
 	    ErtsProc2PortSigData *sigdp = &ptp->u.alive.td.psig.data;
+	    reset_handle(ptp);
 	    ASSERT((state & ERTS_PORT_SFLGS_DEAD) == 0);
 	    if (!pp->sched.taskq.bpq)
 		reds = ptp->u.alive.td.psig.callback(pp,
@@ -1763,10 +1825,11 @@ erts_port_task_execute(ErtsRunQueue *runq, Port **curr_port_pp)
 	    break;
 	}
 	case ERTS_PORT_TASK_DIST_CMD:
+	    reset_handle(ptp);
 	    reds = erts_dist_command(pp, CONTEXT_REDS - pp->reds);
 	    break;
 	default:
-	    erl_exit(ERTS_ABORT_EXIT,
+	    erts_exit(ERTS_ABORT_EXIT,
 		     "Invalid port task type: %d\n",
 		     (int) ptp->type);
 	    break;
@@ -1804,6 +1867,7 @@ erts_port_task_execute(ErtsRunQueue *runq, Port **curr_port_pp)
     }
 
     erts_unblock_fpe(fpe_was_unmasked);
+    ERTS_MSACC_POP_STATE_M();
 
 
     if (io_tasks_executed) {
@@ -1867,7 +1931,7 @@ erts_port_task_execute(ErtsRunQueue *runq, Port **curr_port_pp)
     runq->scheduler->reductions += reds;
 
     ERTS_SMP_LC_ASSERT(erts_smp_lc_runq_is_locked(runq));
-    ERTS_PORT_REDUCTIONS_EXECUTED(runq, reds);
+    ERTS_PORT_REDUCTIONS_EXECUTED(esdp, runq, reds);
 
     return res;
 }
@@ -2030,7 +2094,7 @@ begin_port_cleanup(Port *pp, ErtsPortTask **execqp, int *processing_busy_q_p)
 		break;
 	    }
 	    default:
-		erl_exit(ERTS_ABORT_EXIT,
+		erts_exit(ERTS_ABORT_EXIT,
 			 "Invalid port task type: %d\n",
 			 (int) ptp->type);
 	    }

@@ -1,18 +1,19 @@
 /*
  * %CopyrightBegin%
  *
- * Copyright Ericsson AB 1996-2013. All Rights Reserved.
+ * Copyright Ericsson AB 1996-2016. All Rights Reserved.
  *
- * The contents of this file are subject to the Erlang Public License,
- * Version 1.1, (the "License"); you may not use this file except in
- * compliance with the License. You should have received a copy of the
- * Erlang Public License along with this software. If not, it can be
- * retrieved online at http://www.erlang.org/.
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
  *
- * Software distributed under the License is distributed on an "AS IS"
- * basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See
- * the License for the specific language governing rights and limitations
- * under the License.
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  *
  * %CopyrightEnd%
  */
@@ -100,15 +101,9 @@
 #  include "config.h"
 #endif
 
-#ifndef __OSE__
 #include <ctype.h>
 #include <sys/types.h>
 #include <stdlib.h>
-#else
-#include "ctype.h"
-#include "sys/types.h"
-#include "stdlib.h"
-#endif
 
 /* Need (NON)BLOCKING macros for sendfile */
 #ifndef WANT_NONBLOCKING
@@ -123,8 +118,6 @@
 #include "gzio.h"
 #include "dtrace-wrapper.h" 
 
-
-void erl_exit(int n, char *fmt, ...);
 
 static ErlDrvSysInfo sys_info;
 
@@ -262,23 +255,6 @@ dt_private *get_dt_private(int);
 
 #define READDIR_CHUNKS (5)
 
-
-
-#define GET_TIME(i, b) \
-    (i).year  = get_int32((b) + 0 * 4); \
-    (i).month = get_int32((b) + 1 * 4); \
-    (i).day   = get_int32((b) + 2 * 4); \
-    (i).hour  = get_int32((b) + 3 * 4); \
-    (i).minute = get_int32((b) + 4 * 4); \
-    (i).second = get_int32((b) + 5 * 4)
-
-#define PUT_TIME(i, b) \
-  put_int32((i).year,  (b) + 0 * 4); \
-  put_int32((i).month, (b) + 1 * 4); \
-  put_int32((i).day,   (b) + 2 * 4); \
-  put_int32((i).hour,  (b) + 3 * 4); \
-  put_int32((i).minute,(b) + 4 * 4); \
-  put_int32((i).second,(b) + 5 * 4)
 
 
 #if ALWAYS_READ_LINE_AHEAD
@@ -531,20 +507,9 @@ struct t_data
 static void *ef_safe_alloc(Uint s)
 {
     void *p = EF_ALLOC(s);
-    if (!p) erl_exit(1, "efile drv: Can't allocate %lu bytes of memory\n", (unsigned long)s);
+    if (!p) erts_exit(ERTS_ERROR_EXIT, "efile drv: Can't allocate %lu bytes of memory\n", (unsigned long)s);
     return p;
 }
-
-#if 0 /* Currently not used */
-
-static void *ef_safe_realloc(void *op, Uint s)
-{
-    void *p = EF_REALLOC(op, s);
-    if (!p) erl_exit(1, "efile drv: Can't reallocate %lu bytes of memory\n", (unsigned long)s);
-    return p;
-}
-
-#endif
 
 /*********************************************************************
  * ErlIOVec manipulation functions.
@@ -911,7 +876,7 @@ static void reply_Uint_posix_error(file_descriptor *desc, Uint num,
     TRACE_C('N');
 
     response[0] = FILE_RESP_NUMERR;
-#if SIZEOF_VOID_P == 4 || HALFWORD_HEAP
+#if SIZEOF_VOID_P == 4
     put_int32(0, response+1);
 #else
     put_int32(num>>32, response+1);
@@ -980,7 +945,7 @@ static int reply_Uint(file_descriptor *desc, Uint result) {
     TRACE_C('R');
 
     tmp[0] = FILE_RESP_NUMBER;
-#if SIZEOF_VOID_P == 4 || HALFWORD_HEAP
+#if SIZEOF_VOID_P == 4
     put_int32(0, tmp+1);
 #else
     put_int32(result>>32, tmp+1);
@@ -1548,10 +1513,10 @@ static void invoke_writev(void *data) {
 		     * with errno.
 		     */
 		    errno = EINVAL; 
-		    if (! (status = 
-			   erts_gzwrite((ErtsGzFile)d->fd,
-					iov[i].iov_base,
-					iov[i].iov_len)) == iov[i].iov_len) {
+		    status = erts_gzwrite((ErtsGzFile)d->fd,
+					  iov[i].iov_base,
+					  iov[i].iov_len) == iov[i].iov_len;
+		    if (! status) {
 			d->errInfo.posix_errno =
 			    d->errInfo.os_errno = errno; /* XXX Correct? */
 			break;
@@ -1633,12 +1598,12 @@ static void invoke_altname(void *data)
 }
 
 static void invoke_pwritev(void *data) {
-    struct t_data    *d = (struct t_data *) data;
+    struct t_data* const d = (struct t_data *) data;
+    struct t_pwritev * const c = &d->c.pwritev;
     SysIOVec         *iov0;
     SysIOVec         *iov;
     int               iovlen;
     int               iovcnt;
-    struct t_pwritev *c = &d->c.pwritev;
     size_t            p;
     int               segment;
     size_t            size, write_size, written;
@@ -1712,9 +1677,9 @@ static void invoke_pwritev(void *data) {
 	    d->result_ok = 0;
 	    d->again = 0;
 	deq_error:
-	    MUTEX_LOCK(d->c.writev.q_mtx);
-	    driver_deq(d->c.pwritev.port, c->size);
-	    MUTEX_UNLOCK(d->c.writev.q_mtx);
+	    MUTEX_LOCK(c->q_mtx);
+	    driver_deq(c->port, c->size);
+	    MUTEX_UNLOCK(c->q_mtx);
 
 	    goto done;
 	} else {
@@ -1725,9 +1690,9 @@ static void invoke_pwritev(void *data) {
       ASSERT(written >= FILE_SEGMENT_WRITE);
     }
       
-    MUTEX_LOCK(d->c.writev.q_mtx);
-    driver_deq(d->c.pwritev.port, written);
-    MUTEX_UNLOCK(d->c.writev.q_mtx);
+    MUTEX_LOCK(c->q_mtx);
+    driver_deq(c->port, written);
+    MUTEX_UNLOCK(c->q_mtx);
  done:
     EF_FREE(iov); /* Free our copy of the vector, nothing to restore */
     
@@ -1955,6 +1920,8 @@ static void invoke_sendfile(void *data)
 	d->result_ok = 1;
 	if (d->c.sendfile.nbytes != 0)
 	  d->c.sendfile.nbytes -= nbytes;
+      } else if (nbytes == 0 && d->c.sendfile.nbytes == 0) {
+	d->result_ok = 1;
       } else
 	d->result_ok = 0;
     } else {
@@ -2595,7 +2562,6 @@ file_async_ready(ErlDrvData e, ErlDrvThreadData data)
       case FILE_CLOSE_ON_PORT_EXIT:
 	  /* See file_stop. However this is never invoked after the port is killed. */
 	  free_data(data);
-	  EF_FREE(desc);
 	  desc = NULL;
 	  /* This is it for this port, so just send dtrace and return, avoid doing anything to the freed data */
 	  DTRACE6(efile_drv_return, sched_i1, sched_i2, sched_utag,
@@ -2934,12 +2900,12 @@ file_output(ErlDrvData e, char* buf, ErlDrvSizeT count)
 	    d = EF_SAFE_ALLOC(sizeof(struct t_data) - 1
 			      + FILENAME_BYTELEN(buf + 9*4) + FILENAME_CHARSIZE);
 	    
-	    d->info.mode       = get_int32(buf +  0 * 4);
-	    d->info.uid        = get_int32(buf +  1 * 4);
-	    d->info.gid        = get_int32(buf +  2 * 4);
-	    d->info.accessTime = (time_t)((Sint64)get_int64(buf +  3 * 4));
-	    d->info.modifyTime = (time_t)((Sint64)get_int64(buf +  5 * 4));
-	    d->info.cTime      = (time_t)((Sint64)get_int64(buf +  7 * 4));
+	    d->info.mode       = get_int32(buf + 0 * 4);
+	    d->info.uid        = get_int32(buf + 1 * 4);
+	    d->info.gid        = get_int32(buf + 2 * 4);
+	    d->info.accessTime = get_int64(buf + 3 * 4);
+	    d->info.modifyTime = get_int64(buf + 5 * 4);
+	    d->info.cTime      = get_int64(buf + 7 * 4);
 
 	    FILENAME_COPY(d->b, buf + 9*4);
 #ifdef USE_VM_PROBES

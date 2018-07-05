@@ -1,18 +1,19 @@
 /*
  * %CopyrightBegin%
  *
- * Copyright Ericsson AB 1998-2013. All Rights Reserved.
+ * Copyright Ericsson AB 1998-2016. All Rights Reserved.
  *
- * The contents of this file are subject to the Erlang Public License,
- * Version 1.1, (the "License"); you may not use this file except in
- * compliance with the License. You should have received a copy of the
- * Erlang Public License along with this software. If not, it can be
- * retrieved online at http://www.erlang.org/.
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
  *
- * Software distributed under the License is distributed on an "AS IS"
- * basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See
- * the License for the specific language governing rights and limitations
- * under the License.
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  *
  * %CopyrightEnd%
  */
@@ -59,10 +60,10 @@ static const char dashes[PTR_SIZE+3] = {
 
 void pps(Process*, Eterm*);
 void ptd(Process*, Eterm);
-void paranoid_display(int, void*, Process*, Eterm);
+void paranoid_display(fmtfn_t, void*, Process*, Eterm);
 static int dcount;
 
-static int pdisplay1(int to, void *to_arg, Process* p, Eterm obj);
+static int pdisplay1(fmtfn_t to, void *to_arg, Process* p, Eterm obj);
 
 void ptd(Process* p, Eterm x) 
 {
@@ -76,14 +77,14 @@ void ptd(Process* p, Eterm x)
  */
 
 void
-paranoid_display(int to, void *to_arg, Process* p, Eterm obj)
+paranoid_display(fmtfn_t to, void *to_arg, Process* p, Eterm obj)
 {
     dcount = 100000;
     pdisplay1(to, to_arg, p, obj);
 }
 
 static int
-pdisplay1(int to, void *to_arg, Process* p, Eterm obj)
+pdisplay1(fmtfn_t to, void *to_arg, Process* p, Eterm obj)
 {
     int i, k;
     Eterm* nobj;
@@ -188,6 +189,9 @@ pdisplay1(int to, void *to_arg, Process* p, Eterm obj)
     case BINARY_DEF:
 	erts_print(to, to_arg, "#Bin");
 	break;
+    case MATCHSTATE_DEF:
+        erts_print(to, to_arg, "#Matchstate");
+        break;
     default:
 	erts_print(to, to_arg, "unknown object %x", obj);
     }
@@ -197,7 +201,7 @@ pdisplay1(int to, void *to_arg, Process* p, Eterm obj)
 void
 pps(Process* p, Eterm* stop)
 {
-    int to = ERTS_PRINT_STDOUT;
+    fmtfn_t to = ERTS_PRINT_STDOUT;
     void *to_arg = NULL;
     Eterm* sp = STACK_START(p) - 1;
 
@@ -251,14 +255,14 @@ void erts_check_stack(Process *p)
     Eterm *stack_end = p->htop;
 
     if (p->stop > stack_start)
-	erl_exit(1,
+	erts_exit(ERTS_ERROR_EXIT,
 		 "<%lu.%lu.%lu>: Stack underflow\n",
 		 internal_pid_channel_no(p->common.id),
 		 internal_pid_number(p->common.id),
 		 internal_pid_serial(p->common.id));
 
     if (p->stop < stack_end)
-	erl_exit(1,
+	erts_exit(ERTS_ERROR_EXIT,
 		 "<%lu.%lu.%lu>: Stack overflow\n",
 		 internal_pid_channel_no(p->common.id),
 		 internal_pid_number(p->common.id),
@@ -283,7 +287,7 @@ void erts_check_stack(Process *p)
 	if (in_mbuf)
 	    continue;
 
-	erl_exit(1,
+	erts_exit(ERTS_ERROR_EXIT,
 		 "<%lu.%lu.%lu>: Wild stack pointer\n",
 		 internal_pid_channel_no(p->common.id),
 		 internal_pid_number(p->common.id),
@@ -308,6 +312,8 @@ void erts_check_for_holes(Process* p)
     p->last_htop = HEAP_TOP(p);
 
     for (hf = MBUF(p); hf != 0; hf = hf->next) {
+	if (hf == p->heap_hfrag)
+	    continue;
 	if (hf == p->last_mbuf) {
 	    break;
 	}
@@ -368,7 +374,7 @@ void erts_check_memory(Process *p, Eterm *start, Eterm *end)
 #ifdef DEBUG
         if (hval == DEBUG_BAD_WORD) {
             print_untagged_memory(start, end);
-            erl_exit(1, "Uninitialized HAlloc'ed memory found @ 0x%0*lx!\n",
+            erts_exit(ERTS_ERROR_EXIT, "Uninitialized HAlloc'ed memory found @ 0x%0*lx!\n",
                      PTR_SIZE,(unsigned long)(pos - 1));
         }
 #endif
@@ -381,7 +387,7 @@ void erts_check_memory(Process *p, Eterm *start, Eterm *end)
         if (verify_eterm(p,hval))
             continue;
 
-        erl_exit(1, "Wild pointer found @ 0x%0*lx!\n",
+        erts_exit(ERTS_ERROR_EXIT, "Wild pointer found @ 0x%0*lx!\n",
                  PTR_SIZE,(unsigned long)(pos - 1));
     }
 }
@@ -391,14 +397,14 @@ void verify_process(Process *p)
 #define VERIFY_AREA(name,ptr,sz) {                                      \
     int n = (sz);							\
     while (n--) if(!verify_eterm(p,*(ptr+n)))				\
-        erl_exit(1,"Wild pointer found in " name " of %T!\n",p->common.id); }
+        erts_exit(ERTS_ERROR_EXIT,"Wild pointer found in " name " of %T!\n",p->common.id); }
 
 #define VERIFY_ETERM(name,eterm) {                                      \
     if(!verify_eterm(p,eterm))                                          \
-        erl_exit(1,"Wild pointer found in " name " of %T!\n",p->common.id); }
+        erts_exit(ERTS_ERROR_EXIT,"Wild pointer found in " name " of %T!\n",p->common.id); }
 
 
-    ErlMessage* mp = p->msg.first;
+    ErtsMessage* mp = p->msg.first;
 
     VERBOSE(DEBUG_MEMORY,("Verify process: %T...\n",p->common.id));
 
@@ -412,7 +418,7 @@ void verify_process(Process *p)
     erts_check_heap(p);
 
     if (p->dictionary)
-        VERIFY_AREA("dictionary",p->dictionary->data, p->dictionary->used);
+        VERIFY_AREA("dictionary", ERTS_PD_START(p->dictionary), ERTS_PD_SIZE(p->dictionary));
     VERIFY_ETERM("seq trace token",p->seq_trace_token);
     VERIFY_ETERM("group leader",p->group_leader);
     VERIFY_ETERM("fvalue",p->fvalue);
@@ -527,7 +533,7 @@ static void print_process_memory(Process *p)
                 PTR_SIZE, "PCB", dashes, dashes, dashes, dashes);
 
     if (p->msg.first != NULL) {
-        ErlMessage* mp;
+        ErtsMessage* mp;
         erts_printf("  Message Queue:\n");
         mp = p->msg.first;
         while (mp != NULL) {
@@ -538,8 +544,8 @@ static void print_process_memory(Process *p)
     }
 
     if (p->dictionary != NULL) {
-        int n = p->dictionary->used;
-        Eterm *ptr = p->dictionary->data;
+        int n = ERTS_PD_SIZE(p->dictionary);
+        Eterm *ptr = ERTS_PD_START(p->dictionary);
         erts_printf("  Dictionary: ");
         while (n--) erts_printf("0x%0*lx ",PTR_SIZE,(unsigned long)ptr++);
         erts_printf("\n");
@@ -627,29 +633,4 @@ void print_memory_info(Process *p)
     }
     erts_printf("+-----------------%s-%s-%s-%s-+\n",dashes,dashes,dashes,dashes);
 }
-#if !HEAP_ON_C_STACK && defined(DEBUG)
-Eterm *erts_debug_allocate_tmp_heap(int size, Process *p)
-{
-    ErtsSchedulerData *sd = ((p == NULL) ? erts_get_scheduler_data() : ERTS_PROC_GET_SCHDATA(p));
-    int offset = sd->num_tmp_heap_used;
-
-    ASSERT(offset+size <= TMP_HEAP_SIZE);
-    return (sd->tmp_heap)+offset;
-}
-void erts_debug_use_tmp_heap(int size, Process *p)
-{
-    ErtsSchedulerData *sd = ((p == NULL) ? erts_get_scheduler_data() : ERTS_PROC_GET_SCHDATA(p));
-
-    sd->num_tmp_heap_used += size;
-    ASSERT(sd->num_tmp_heap_used <= TMP_HEAP_SIZE);
-}
-void erts_debug_unuse_tmp_heap(int size, Process *p)
-{
-    ErtsSchedulerData *sd = ((p == NULL) ? erts_get_scheduler_data() : ERTS_PROC_GET_SCHDATA(p));
-
-    sd->num_tmp_heap_used -= size;
-    ASSERT(sd->num_tmp_heap_used >= 0);
-}
 #endif
-#endif
-

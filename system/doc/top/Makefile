@@ -1,18 +1,19 @@
 #
 # %CopyrightBegin%
 #
-# Copyright Ericsson AB 1999-2013. All Rights Reserved.
+# Copyright Ericsson AB 1999-2016. All Rights Reserved.
 #
-# The contents of this file are subject to the Erlang Public License,
-# Version 1.1, (the "License"); you may not use this file except in
-# compliance with the License. You should have received a copy of the
-# Erlang Public License along with this software. If not, it can be
-# retrieved online at http://www.erlang.org/.
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
 #
-# Software distributed under the License is distributed on an "AS IS"
-# basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See
-# the License for the specific language governing rights and limitations
-# under the License.
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
 #
 # %CopyrightEnd%
 #
@@ -34,7 +35,7 @@ RELSYSDIR = "$(RELEASE_PATH)/doc"
 
 GIF_FILES = 
 
-INFO_FILES = ../../README ../../COPYRIGHT PR.template
+INFO_FILES = ../../../README.md ../../COPYRIGHT PR.template
 
 TOPDOCDIR=.
 
@@ -73,6 +74,7 @@ XML_FILES = \
 
 BOOK_FILES = book.xml
 
+XMLLINT_SRCDIRS= ../installation_guide:../system_principles:../embedded:../getting_started:../reference_manual:../programming_examples:../efficiency_guide:../tutorial:../design_principles:../oam
 HTMLDIR= ../html
 PDFREFDIR= pdf
 
@@ -119,10 +121,11 @@ $(HTMLDIR)/index.html + $(HTMLDIR)/applications.html: $(INDEX_SCRIPT) $(TEMPLATE
 # Check if we are building the index from source or an installed release
 	if test "$$RELEASE_ROOT" = "" ; then \
 		$(ERL) -noshell -pa $(EBIN) -s erl_html_tools top_index src $(ERL_TOP) \
-		$(HTMLDIR) $(SYSTEM_VSN) -s erlang halt ;\
+		$(HTMLDIR) `cat "$(ERL_TOP)/OTP_VERSION"` -s erlang halt ;\
 	else \
 		$(ERL) -noshell -pa $(EBIN) -s erl_html_tools top_index rel $(RELEASE_ROOT) \
-		$(HTMLDIR) $(SYSTEM_VSN) -s erlang halt ;\
+		$(HTMLDIR) `cat "$(RELEASE_ROOT)/releases/$(SYSTEM_VSN)/OTP_VERSION"` \
+		-s erlang halt ;\
 	fi
 
 

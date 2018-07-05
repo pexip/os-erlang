@@ -1,18 +1,19 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2008-2013. All Rights Reserved.
+%% Copyright Ericsson AB 2008-2016. All Rights Reserved.
 %%
-%% The contents of this file are subject to the Erlang Public License,
-%% Version 1.1, (the "License"); you may not use this file except in
-%% compliance with the License. You should have received a copy of the
-%% Erlang Public License along with this software. If not, it can be
-%% retrieved online at http://www.erlang.org/.
+%% Licensed under the Apache License, Version 2.0 (the "License");
+%% you may not use this file except in compliance with the License.
+%% You may obtain a copy of the License at
 %%
-%% Software distributed under the License is distributed on an "AS IS"
-%% basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See
-%% the License for the specific language governing rights and limitations
-%% under the License.
+%%     http://www.apache.org/licenses/LICENSE-2.0
+%%
+%% Unless required by applicable law or agreed to in writing, software
+%% distributed under the License is distributed on an "AS IS" BASIS,
+%% WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+%% See the License for the specific language governing permissions and
+%% limitations under the License.
 %%
 %% %CopyrightEnd%
 %%
@@ -42,6 +43,8 @@
 
 -export([random_error/1]).
 
+-export([unique_timestamp/0]).
+
 -include_lib("kernel/include/file.hrl").
 
 %%%-----------------------------------------------------------------
@@ -51,12 +54,12 @@ init_per_suite(Config) ->
     init_per_suite(Config, 50).
 
 init_per_suite(Config, Level) ->
+    ScaleFactor = test_server:timetrap_scale_factor(),
     case os:type() of
 	{win32, _} ->
 	    %% Extend timeout to 1 hour for windows as starting node
 	    %% can take a long time there
-	    test_server:timetrap( 60*60*1000 * 
-				      test_server:timetrap_scale_factor());
+	    test_server:timetrap( 60*60*1000 * ScaleFactor );
 	_ ->
 	    ok
     end,
@@ -67,6 +70,16 @@ init_per_suite(Config, Level) ->
 	_ ->
 	    ok
     end,
+
+    {Mult,Scale} = test_server_ctrl:get_timetrap_parameters(),
+    test_server:format(Level, "Timetrap multiplier: ~w~n", [Mult]),
+    if Scale == true ->
+	    test_server:format(Level, "Timetrap scale factor: ~w~n",
+			       [ScaleFactor]);
+       true ->
+	    ok
+    end,
+
     start_slave(Config, Level).
 
 start_slave(Config, Level) ->
@@ -99,7 +112,8 @@ start_slave(NodeName, Config, Level) ->
 			      undefined -> [];
 			      Ds -> Ds
 			  end,
-	    PathDirs = [PrivDir,TSDir | AddPathDirs],
+	    TestSupDir = filename:dirname(code:which(?MODULE)),
+	    PathDirs = [PrivDir,TSDir,TestSupDir | AddPathDirs],
 	    [true = rpc:call(CTNode, code, add_patha, [D]) || D <- PathDirs],
 	    test_server:format(Level, "Dirs added to code path (on ~w):~n",
 			       [CTNode]),
@@ -277,10 +291,13 @@ run_ct_run_test(Opts,Config) ->
     Level = proplists:get_value(trace_level, Config),
     test_server:format(Level, "~n[RUN #1] Calling ct:run_test(~p) on ~p~n",
 		       [Opts, CTNode]),
-    T0 = now(),
+    
+    T0 = erlang:monotonic_time(),
     CtRunTestResult = rpc:call(CTNode, ct, run_test, [Opts]),
+    T1 = erlang:monotonic_time(),
+    Elapsed = erlang:convert_time_unit(T1-T0, native, milli_seconds),
     test_server:format(Level, "~n[RUN #1] Got return value ~p after ~p ms~n",
-		       [CtRunTestResult,trunc(timer:now_diff(now(), T0)/1000)]),
+		       [CtRunTestResult,Elapsed]),
     case rpc:call(CTNode, erlang, whereis, [ct_util_server]) of
 	undefined ->
 	    ok;
@@ -303,10 +320,12 @@ run_ct_script_start(Opts, Config) ->
 	     [common_test, run_test_start_opts, Opts1]),
     test_server:format(Level, "[RUN #2] Calling ct_run:script_start() on ~p~n",
 		       [CTNode]),
-    T0 = now(),
+    T0 = erlang:monotonic_time(),
     ExitStatus = rpc:call(CTNode, ct_run, script_start, []),
+    T1 = erlang:monotonic_time(),
+    Elapsed = erlang:convert_time_unit(T1-T0, native, milli_seconds),
     test_server:format(Level, "[RUN #2] Got exit status value ~p after ~p ms~n",
-		       [ExitStatus,trunc(timer:now_diff(now(), T0)/1000)]),
+		       [ExitStatus,Elapsed]),
     ExitStatus.
 
 check_result({_Ok,Failed,{_UserSkipped,_AutoSkipped}},1,_Opts)
@@ -398,14 +417,14 @@ ct_rpc({M,F,A}, Config) ->
 %%%-----------------------------------------------------------------
 %%% random_error/1
 random_error(Config) when is_list(Config) ->
-    random:seed(now()),
+    rand:seed(exsplus),
     Gen = fun(0,_) -> ok; (N,Fun) -> Fun(N-1, Fun) end,
-    Gen(random:uniform(100), Gen),
+    Gen(rand:uniform(100), Gen),
 
     ErrorTypes = ['BADMATCH','BADARG','CASE_CLAUSE','FUNCTION_CLAUSE',
 		  'EXIT','THROW','UNDEF'],
-    Type = lists:nth(random:uniform(length(ErrorTypes)), ErrorTypes),
-    Where = case random:uniform(2) of
+    Type = lists:nth(rand:uniform(length(ErrorTypes)), ErrorTypes),
+    Where = case rand:uniform(2) of
 		1 ->
 		    io:format("ct_test_support *returning* error of type ~w",
 			      [Type]),
@@ -465,7 +484,8 @@ get_events(_, Config) ->
     {event_receiver,CTNode} ! {self(),get_events},
     Events = receive {event_receiver,Evs} -> Evs end,
     test_server:format(Level, "Stopping event receiver!~n", []),
-    {event_receiver,CTNode} ! stop,
+    {event_receiver,CTNode} ! {self(),stop},
+    receive {event_receiver,stopped} -> ok end,
     Events.
 
 er() ->
@@ -480,7 +500,9 @@ er_loop(Evs) ->
 	{From,get_events} ->
 	    From ! {event_receiver,lists:reverse(Evs)},
 	    er_loop(Evs);
-	stop ->
+	{From,stop} ->
+	    unregister(event_receiver),
+	    From ! {event_receiver,stopped},
 	    ok
     end.
 
@@ -1211,8 +1233,8 @@ log_events(TC, Events, EvLogDir, Opts) ->
     file:close(Dev),
     FullLogFile = join_abs_dirs(proplists:get_value(net_dir, Opts),
 				LogFile),
-    io:format("Events written to logfile: <a href=\"file://~s\">~s</a>~n",
-	      [FullLogFile,FullLogFile]),
+    ct:log("Events written to logfile: <a href=\"file://~s\">~s</a>~n",
+	   [FullLogFile,FullLogFile],[no_css]),
     io:format(user, "Events written to logfile: ~p~n", [LogFile]).
 
 log_events1(Evs, Dev, "") ->
@@ -1339,12 +1361,7 @@ delete_old_logs(_, Config) ->
 
 delete_dirs(LogDir) ->
     Now = calendar:datetime_to_gregorian_seconds(calendar:local_time()),
-    SaveTime = case os:getenv("CT_SAVE_OLD_LOGS") of
-		   false ->
-		       28800;
-		   SaveTime0 ->
-		       list_to_integer(SaveTime0)
-	       end,
+    SaveTime = list_to_integer(os:getenv("CT_SAVE_OLD_LOGS", "28800")),
     Deadline = Now - SaveTime,
     Dirs = filelib:wildcard(filename:join(LogDir,"ct_run*")),
     Dirs2Del =
@@ -1418,7 +1435,21 @@ rm_files([F | Fs]) ->
     end;
 rm_files([]) ->
     ok.
-    
+
+unique_timestamp() ->
+    unique_timestamp(os:timestamp(), 100000).
+
+unique_timestamp(TS, 0) ->
+    TS;
+unique_timestamp(TS0, N) ->
+    case os:timestamp() of
+	TS0 ->
+	    timer:sleep(1),
+	    unique_timestamp(TS0, N-1);
+	TS1 ->
+	    TS1
+    end.
+
 %%%-----------------------------------------------------------------
 %%%
 slave_stop(Node) ->

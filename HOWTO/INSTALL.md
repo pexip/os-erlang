@@ -68,7 +68,7 @@ also find the utilities needed for building the documentation.
     Required for building the application `crypto`.
     Further, `ssl` and `ssh` require a working crypto application and
     will also be skipped if OpenSSL is missing. The `public_key`
-    application will available without `crypto`, but the functionality
+    application is available without `crypto`, but the functionality
     will be very limited.
 
     The development package of OpenSSL including the header files are needed as well
@@ -76,10 +76,10 @@ also find the utilities needed for building the documentation.
     Read more and download from <http://www.openssl.org>.
 *   Oracle Java SE JDK -- The Java Development Kit (Standard Edition).
     Required for building the application `jinterface` and parts of `ic` and `orber`.
-    At least version 1.5.0 of the JDK is required.
+    At least version 1.6.0 of the JDK is required.
 
     Download from <http://www.oracle.com/technetwork/java/javase/downloads>.
-    We have also tested with IBM's JDK 1.5.0.
+    We have also tested with IBM's JDK 1.6.0.
 *   X Windows -- Development headers and libraries are needed
     to build the Erlang/OTP application `gs` on Unix/Linux.
 *   `flex` -- Headers and libraries are needed to build the flex
@@ -209,6 +209,14 @@ When building the documentation you need a full Erlang/OTP-%OTP-VSN% system in
 the `$PATH`.
 
     $ export PATH=$ERL_TOP/bin:$PATH     # Assuming bash/sh
+
+For the FOP print formatter, two steps must be taken:
+
+*   Adding the location of your installation of `fop` in `$FOP_HOME`.
+
+        $ export FOP_HOME=/path/to/fop/dir # Assuming bash/sh
+
+*   Adding the `fop` script (in `$FOP_HOME`) to your `$PATH`, either by adding `$FOP_HOME` to `$PATH`, or by copying the `fop` script to a directory already in your `$PATH`.
 
 Build the documentation.
 
@@ -348,8 +356,6 @@ Some of the available `configure` options are:
     depending on operating system and hardware platform. Note that by
     enabling this you might get a seemingly working system that sometimes
     fail on floating point operations.
-*   `--enable-darwin-universal` - Build universal binaries on darwin i386.
-*   `--enable-darwin-64bit` - Build 64-bit binaries on darwin
 *   `--enable-m64-build` - Build 64-bit binaries using the `-m64` flag to
     `(g)cc`
 *   `--enable-m32-build` - Build 32-bit binaries using the `-m32` flag to
@@ -366,9 +372,15 @@ Some of the available `configure` options are:
     `jinterface` application won't be built)
 *   `--{enable,disable}-dynamic-ssl-lib` - Dynamic OpenSSL libraries
 *   `--{enable,disable}-builtin-zlib` - Use the built-in source for zlib.
-*   `--with-ssl=PATH` - Specify location of OpenSSL include and lib
 *   `--{with,without}-ssl` - OpenSSL (without implies that the `crypto`,
     `ssh`, and `ssl` won't be built)
+*   `--with-ssl=PATH` - Specify location of OpenSSL include and lib
+*   `--with-ssl-incl=PATH` - Location of OpenSSL `include` directory,
+    if different than specified by `--with-ssl=PATH`
+*   `--with-ssl-rpath=yes|no|PATHS` - Runtime library path for OpenSSL.
+    Default is `yes`, which equates to a number of standard locations. If
+    `no`, then no runtime library paths will be used. Anything else should be
+    a comma separated list of paths.
 *   `--with-libatomic_ops=PATH` - Use the `libatomic_ops` library for atomic
     memory accesses. If `configure` should inform you about no native atomic
     implementation available, you typically want to try using the
@@ -392,7 +404,7 @@ Some of the available `configure` options are:
     that has to be the same as the filename. You also have to define
     `STATIC_ERLANG_{NIF,DRIVER}` when compiling the .o files for the nif/driver.
     If your nif/driver depends on some other dynamic library, you now have to link
-    that to the Erlang VM binary. This is easily achived by passing `LIBS=-llibname`
+    that to the Erlang VM binary. This is easily achieved by passing `LIBS=-llibname`
     to configure.
 *   `--without-$app` - By default all applications in Erlang/OTP will be included
 	in a release. If this is not wanted it is possible to specify that Erlang/OTP
@@ -400,15 +412,66 @@ Some of the available `configure` options are:
 	no automatic dependency handling between applications. If you disable
 	an application that another application depends on, you also have to disable the
 	dependant application.
+*   `--enable-gettimeofday-as-os-system-time` - Force usage of `gettimeofday()` for
+    OS system time.
+*   `--enable-prefer-elapsed-monotonic-time-during-suspend` - Prefer an OS monotonic
+    time source with elapsed time during suspend.
+*   `--disable-prefer-elapsed-monotonic-time-during-suspend` - Do not prefer an OS
+    monotonic time source with elapsed time during suspend.
+*   `--with-clock-resolution=high|low` - Try to find clock sources for OS system
+    time, and OS monotonic time with higher or lower resolution than chosen by
+    default. Note that both alternatives may have a negative impact on the performance
+    and scalability compared to the default clock sources chosen.
+*   `--disable-saved-compile-time` - Disable saving of compile date and time
+    in the emulator binary.
 *   `--enable-dirty-schedulers` - Enable the **experimental** dirty schedulers
     functionality. Note that the dirty schedulers functionality is experimental,
     and **not supported**. This functionality **will** be subject to backward
     incompatible changes. Note that you should **not** enable the dirty scheduler
     functionality on production systems. It is only provided for testing.
+    This switch also imply `--enable-new-purge-strategy` (see below).
+*   `--enable-new-purge-strategy` - Enable the purge strategy that will be
+    introduced in ERTS version 9.0 (OTP 20). Note that this switch will be
+    removed in OTP 20.
 
 If you or your system has special requirements please read the `Makefile` for
 additional configuration information.
 
+#### Atomic Memory Operations and the VM ####
+
+The VM with SMP support makes quite a heavy use of atomic memory operations.
+An implementation providing native atomic memory operations is therefore very
+important when building Erlang/OTP. By default the VM will refuse to build
+if native atomic memory operations are not available.
+
+Erlang/OTP itself provides implementations of native atomic memory operations
+that can be used when compiling with a `gcc` compatible compiler for 32/64-bit
+x86, 32/64-bit SPARC V9, 32-bit PowerPC, or 32-bit Tile. When compiling with
+a `gcc` compatible compiler for other architectures, the VM may be able to make
+use of native atomic operations using the `__atomic_*` builtins (may be
+available when using a `gcc` of at least version 4.7) and/or using the
+`__sync_*` builtins (may be available when using a `gcc` of at least version
+4.1). If only the `gcc`'s `__sync_*` builtins are available, the performance
+will suffer. Such a configuration should only be used as a last resort. When
+compiling on Windows using a MicroSoft Visual C++ compiler native atomic
+memory operations are provided by Windows APIs.
+
+Native atomic implementation in the order preferred:
+1.  The implementation provided by Erlang/OTP.
+2.  The API provided by Windows.
+3.  The implementation based on the `gcc` `__atomic_*` builtins.
+4.  If none of the above are available for your architecture/compiler, you
+    are recommended to build and install [libatomic_ops][] before building
+    Erlang/OTP. The `libatomic_ops` library provides native atomic memory
+    operations for a variety of architectures and compilers. When building
+    Erlang/OTP you need to inform the build system of where the
+    `libatomic_ops` library is installed using the
+    `--with-libatomic_ops=PATH` `configure` switch.
+5.  As a last resort, the implementation solely based on the `gcc`
+    `__sync_*` builtins. This will however cause lots of expensive and
+    unnecessary memory barrier instructions to be issued. That is,
+    performance will suffer. The `configure` script will warn at the end
+    of its execution if it cannot find any other alternative than this.
 
 ### Building ###
 
@@ -461,7 +524,7 @@ If you have Xcode 4.3, or later, you will also need to download
 If you want to build the `wx` application, you will need to get wxWidgets-3.0
 (`wxWidgets-3.0.0.tar.bz2` from <http://sourceforge.net/projects/wxwindows/files/3.0.0/>) or get it from github with bug fixes:
 
-    $ git clone --branch WX_3_0_branch git@github.com:wxWidgets/wxWidgets.git
+    $ git clone --branch WX_3_0_BRANCH git@github.com:wxWidgets/wxWidgets.git
 
 Be aware that the wxWidgets-3.0 is a new release of wxWidgets, it is not as
 mature as the old releases and the OS X port still lags behind the other ports.
@@ -505,6 +568,10 @@ as before, but the build process will take a much longer time.
 > automatically when `make` is invoked from `$ERL_TOP` with either the
 > `clean` target, or the default target. It is also automatically invoked
 > if `./otp_build remove_prebuilt_files` is invoked.
+>
+> If you need to verify the bootstrap beam files match the provided
+> source files, use `./otp_build update_primary` to create a new commit that
+> contains differences, if any exist.
 
 #### How to Build a Debug Enabled Erlang RunTime System ####
 
@@ -765,6 +832,7 @@ Known platform issues
 
 Daily Build and Test
 --------------------
+
 At Ericsson we have a "Daily Build and Test" that runs on:
 
 *   Solaris 8, 9
@@ -825,18 +893,19 @@ Copyright and License
 
 %CopyrightBegin%
 
-Copyright Ericsson AB 1998-2014. All Rights Reserved.
+Copyright Ericsson AB 1998-2015. All Rights Reserved.
 
-The contents of this file are subject to the Erlang Public License,
-Version 1.1, (the "License"); you may not use this file except in
-compliance with the License. You should have received a copy of the
-Erlang Public License along with this software. If not, it can be
-retrieved online at http://www.erlang.org/.
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+ 
+    http://www.apache.org/licenses/LICENSE-2.0
 
-Software distributed under the License is distributed on an "AS IS"
-basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See
-the License for the specific language governing rights and limitations
-under the License.
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
 
 %CopyrightEnd%
 
@@ -862,3 +931,4 @@ under the License.
    [Optional Utilities]: #Optional-Utilities
    [Building on a Mac]: #Advanced-configuration-and-build-of-ErlangOTP_Building_OS-X-Darwin
    [Building with wxErlang]: #Advanced-configuration-and-build-of-ErlangOTP_Building_Building-with-wxErlang
+   [libatomic_ops]: https://github.com/ivmai/libatomic_ops/

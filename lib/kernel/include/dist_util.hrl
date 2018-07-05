@@ -1,18 +1,19 @@
 %%
 %% %CopyrightBegin%
 %% 
-%% Copyright Ericsson AB 1999-2011. All Rights Reserved.
+%% Copyright Ericsson AB 1999-2016. All Rights Reserved.
 %% 
-%% The contents of this file are subject to the Erlang Public License,
-%% Version 1.1, (the "License"); you may not use this file except in
-%% compliance with the License. You should have received a copy of the
-%% Erlang Public License along with this software. If not, it can be
-%% retrieved online at http://www.erlang.org/.
-%% 
-%% Software distributed under the License is distributed on an "AS IS"
-%% basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See
-%% the License for the specific language governing rights and limitations
-%% under the License.
+%% Licensed under the Apache License, Version 2.0 (the "License");
+%% you may not use this file except in compliance with the License.
+%% You may obtain a copy of the License at
+%%
+%%     http://www.apache.org/licenses/LICENSE-2.0
+%%
+%% Unless required by applicable law or agreed to in writing, software
+%% distributed under the License is distributed on an "AS IS" BASIS,
+%% WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+%% See the License for the specific language governing permissions and
+%% limitations under the License.
 %% 
 %% %CopyrightEnd%
 %%
@@ -62,7 +63,7 @@
 	  f_getll,               %% Get low level port or pid.
 	  f_address,         %% The address of the "socket", 
 	                     %% generated from Socket,Node
-	  %% These two are used in the tick loop,
+	  %% These three are used in the tick loop,
 	  %% so they are not fun's to avoid holding old code.
 	  mf_tick,           %% Takes the socket as parameters and
 	                     %% sends a tick, this is no fun, it
@@ -73,7 +74,11 @@
 			     %% {ok, RecvCnt, SendCnt, SendPend} for
 	                     %% a given socket. This is a {M,F}, 
 	                     %% returning {error, Reason on failure}
-	  request_type = normal
+	  request_type = normal,
+
+	  %% New in kernel-5.1 (OTP 19.1):
+	  mf_setopts,        %% netkernel:setopts on active connection
+	  mf_getopts         %% netkernel:getopts on active connection
 }).
 	  
 
