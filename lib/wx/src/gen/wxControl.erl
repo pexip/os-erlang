@@ -1,18 +1,19 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2008-2013. All Rights Reserved.
+%% Copyright Ericsson AB 2008-2016. All Rights Reserved.
 %%
-%% The contents of this file are subject to the Erlang Public License,
-%% Version 1.1, (the "License"); you may not use this file except in
-%% compliance with the License. You should have received a copy of the
-%% Erlang Public License along with this software. If not, it can be
-%% retrieved online at http://www.erlang.org/.
+%% Licensed under the Apache License, Version 2.0 (the "License");
+%% you may not use this file except in compliance with the License.
+%% You may obtain a copy of the License at
 %%
-%% Software distributed under the License is distributed on an "AS IS"
-%% basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See
-%% the License for the specific language governing rights and limitations
-%% under the License.
+%%     http://www.apache.org/licenses/LICENSE-2.0
+%%
+%% Unless required by applicable law or agreed to in writing, software
+%% distributed under the License is distributed on an "AS IS" BASIS,
+%% WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+%% See the License for the specific language governing permissions and
+%% limitations under the License.
 %%
 %% %CopyrightEnd%
 %% This file is generated DO NOT EDIT
@@ -31,22 +32,23 @@
 -export([getLabel/1,setLabel/2]).
 
 %% inherited exports
--export([cacheBestSize/2,captureMouse/1,center/1,center/2,centerOnParent/1,
-  centerOnParent/2,centre/1,centre/2,centreOnParent/1,centreOnParent/2,
-  clearBackground/1,clientToScreen/2,clientToScreen/3,close/1,close/2,
-  connect/2,connect/3,convertDialogToPixels/2,convertPixelsToDialog/2,
+-export([cacheBestSize/2,canSetTransparent/1,captureMouse/1,center/1,center/2,
+  centerOnParent/1,centerOnParent/2,centre/1,centre/2,centreOnParent/1,
+  centreOnParent/2,clearBackground/1,clientToScreen/2,clientToScreen/3,
+  close/1,close/2,connect/2,connect/3,convertDialogToPixels/2,convertPixelsToDialog/2,
   destroyChildren/1,disable/1,disconnect/1,disconnect/2,disconnect/3,
-  enable/1,enable/2,findWindow/2,fit/1,fitInside/1,freeze/1,getAcceleratorTable/1,
-  getBackgroundColour/1,getBackgroundStyle/1,getBestSize/1,getCaret/1,
-  getCharHeight/1,getCharWidth/1,getChildren/1,getClientSize/1,getContainingSizer/1,
-  getCursor/1,getDropTarget/1,getEventHandler/1,getExtraStyle/1,getFont/1,
-  getForegroundColour/1,getGrandParent/1,getHandle/1,getHelpText/1,
-  getId/1,getMaxSize/1,getMinSize/1,getName/1,getParent/1,getPosition/1,
-  getRect/1,getScreenPosition/1,getScreenRect/1,getScrollPos/2,getScrollRange/2,
-  getScrollThumb/2,getSize/1,getSizer/1,getTextExtent/2,getTextExtent/3,
-  getToolTip/1,getUpdateRegion/1,getVirtualSize/1,getWindowStyleFlag/1,
-  getWindowVariant/1,hasCapture/1,hasScrollbar/2,hasTransparentBackground/1,
-  hide/1,inheritAttributes/1,initDialog/1,invalidateBestSize/1,isEnabled/1,
+  dragAcceptFiles/2,enable/1,enable/2,findWindow/2,fit/1,fitInside/1,
+  freeze/1,getAcceleratorTable/1,getBackgroundColour/1,getBackgroundStyle/1,
+  getBestSize/1,getCaret/1,getCharHeight/1,getCharWidth/1,getChildren/1,
+  getClientSize/1,getContainingSizer/1,getContentScaleFactor/1,getCursor/1,
+  getDropTarget/1,getEventHandler/1,getExtraStyle/1,getFont/1,getForegroundColour/1,
+  getGrandParent/1,getHandle/1,getHelpText/1,getId/1,getMaxSize/1,getMinSize/1,
+  getName/1,getParent/1,getPosition/1,getRect/1,getScreenPosition/1,
+  getScreenRect/1,getScrollPos/2,getScrollRange/2,getScrollThumb/2,
+  getSize/1,getSizer/1,getTextExtent/2,getTextExtent/3,getToolTip/1,
+  getUpdateRegion/1,getVirtualSize/1,getWindowStyleFlag/1,getWindowVariant/1,
+  hasCapture/1,hasScrollbar/2,hasTransparentBackground/1,hide/1,inheritAttributes/1,
+  initDialog/1,invalidateBestSize/1,isDoubleBuffered/1,isEnabled/1,
   isExposed/2,isExposed/3,isExposed/5,isRetained/1,isShown/1,isTopLevel/1,
   layout/1,lineDown/1,lineUp/1,lower/1,makeModal/1,makeModal/2,move/2,
   move/3,move/4,moveAfterInTabOrder/2,moveBeforeInTabOrder/2,navigate/1,
@@ -56,14 +58,14 @@
   screenToClient/2,scrollLines/2,scrollPages/2,scrollWindow/3,scrollWindow/4,
   setAcceleratorTable/2,setAutoLayout/2,setBackgroundColour/2,setBackgroundStyle/2,
   setCaret/2,setClientSize/2,setClientSize/3,setContainingSizer/2,setCursor/2,
-  setDropTarget/2,setExtraStyle/2,setFocus/1,setFocusFromKbd/1,setFont/2,
-  setForegroundColour/2,setHelpText/2,setId/2,setMaxSize/2,setMinSize/2,
-  setName/2,setOwnBackgroundColour/2,setOwnFont/2,setOwnForegroundColour/2,
+  setDoubleBuffered/2,setDropTarget/2,setExtraStyle/2,setFocus/1,setFocusFromKbd/1,
+  setFont/2,setForegroundColour/2,setHelpText/2,setId/2,setMaxSize/2,
+  setMinSize/2,setName/2,setOwnBackgroundColour/2,setOwnFont/2,setOwnForegroundColour/2,
   setPalette/2,setScrollPos/3,setScrollPos/4,setScrollbar/5,setScrollbar/6,
   setSize/2,setSize/3,setSize/5,setSize/6,setSizeHints/2,setSizeHints/3,
   setSizeHints/4,setSizer/2,setSizer/3,setSizerAndFit/2,setSizerAndFit/3,
-  setThemeEnabled/2,setToolTip/2,setVirtualSize/2,setVirtualSize/3,
-  setVirtualSizeHints/2,setVirtualSizeHints/3,setVirtualSizeHints/4,
+  setThemeEnabled/2,setToolTip/2,setTransparent/2,setVirtualSize/2,
+  setVirtualSize/3,setVirtualSizeHints/2,setVirtualSizeHints/3,setVirtualSizeHints/4,
   setWindowStyle/2,setWindowStyleFlag/2,setWindowVariant/2,shouldInheritColours/1,
   show/1,show/2,thaw/1,transferDataFromWindow/1,transferDataToWindow/1,
   update/1,updateWindowUI/1,updateWindowUI/2,validate/1,warpPointer/3]).
@@ -84,16 +86,26 @@ getLabel(#wx_ref{type=ThisT,ref=ThisRef}) ->
   <<ThisRef:32/?UI>>).
 
 %% @doc See <a href="http://www.wxwidgets.org/manuals/2.8.12/wx_wxcontrol.html#wxcontrolsetlabel">external documentation</a>.
--spec setLabel(This, Label) -> ok when
+-spec setLabel(This, Label) -> 'ok' when
 	This::wxControl(), Label::unicode:chardata().
 setLabel(#wx_ref{type=ThisT,ref=ThisRef},Label)
- when is_list(Label) ->
+ when ?is_chardata(Label) ->
   ?CLASS(ThisT,wxControl),
   Label_UC = unicode:characters_to_binary([Label,0]),
   wxe_util:cast(?wxControl_SetLabel,
   <<ThisRef:32/?UI,(byte_size(Label_UC)):32/?UI,(Label_UC)/binary, 0:(((8- ((0+byte_size(Label_UC)) band 16#7)) band 16#7))/unit:8>>).
 
  %% From wxWindow
+%% @hidden
+getContentScaleFactor(This) -> wxWindow:getContentScaleFactor(This).
+%% @hidden
+setDoubleBuffered(This,On) -> wxWindow:setDoubleBuffered(This,On).
+%% @hidden
+isDoubleBuffered(This) -> wxWindow:isDoubleBuffered(This).
+%% @hidden
+canSetTransparent(This) -> wxWindow:canSetTransparent(This).
+%% @hidden
+setTransparent(This,Alpha) -> wxWindow:setTransparent(This,Alpha).
 %% @hidden
 warpPointer(This,X,Y) -> wxWindow:warpPointer(This,X,Y).
 %% @hidden
@@ -402,6 +414,8 @@ findWindow(This,Winid) -> wxWindow:findWindow(This,Winid).
 enable(This, Options) -> wxWindow:enable(This, Options).
 %% @hidden
 enable(This) -> wxWindow:enable(This).
+%% @hidden
+dragAcceptFiles(This,Accept) -> wxWindow:dragAcceptFiles(This,Accept).
 %% @hidden
 disable(This) -> wxWindow:disable(This).
 %% @hidden

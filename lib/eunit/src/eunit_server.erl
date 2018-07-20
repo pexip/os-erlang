@@ -10,7 +10,7 @@
 %%
 %% You should have received a copy of the GNU Lesser General Public
 %% License along with this library; if not, write to the Free Software
-%% Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307
+%% Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301
 %% USA
 %%
 %% @author Richard Carlsson <carlsson.richard@gmail.com>
@@ -200,7 +200,7 @@ server_command(From, stop, St) ->
     server(St#state{stopped = true});
 server_command(From, {watch, Target, _Opts}, St) ->
     %% the code watcher is only started on demand
-    %% FIXME: this is disabled for now in the OTP distribution
+    %% TODO: this is disabled for now
     %%code_monitor:monitor(self()),
     %% TODO: propagate options to testing stage
     St1 = add_watch(Target, St),

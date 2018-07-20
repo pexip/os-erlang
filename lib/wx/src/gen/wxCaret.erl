@@ -1,18 +1,19 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2008-2013. All Rights Reserved.
+%% Copyright Ericsson AB 2008-2016. All Rights Reserved.
 %%
-%% The contents of this file are subject to the Erlang Public License,
-%% Version 1.1, (the "License"); you may not use this file except in
-%% compliance with the License. You should have received a copy of the
-%% Erlang Public License along with this software. If not, it can be
-%% retrieved online at http://www.erlang.org/.
+%% Licensed under the Apache License, Version 2.0 (the "License");
+%% you may not use this file except in compliance with the License.
+%% You may obtain a copy of the License at
 %%
-%% Software distributed under the License is distributed on an "AS IS"
-%% basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See
-%% the License for the specific language governing rights and limitations
-%% under the License.
+%%     http://www.apache.org/licenses/LICENSE-2.0
+%%
+%% Unless required by applicable law or agreed to in writing, software
+%% distributed under the License is distributed on an "AS IS" BASIS,
+%% WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+%% See the License for the specific language governing permissions and
+%% limitations under the License.
 %%
 %% %CopyrightEnd%
 %% This file is generated DO NOT EDIT
@@ -105,7 +106,7 @@ getWindow(#wx_ref{type=ThisT,ref=ThisRef}) ->
   <<ThisRef:32/?UI>>).
 
 %% @doc See <a href="http://www.wxwidgets.org/manuals/2.8.12/wx_wxcaret.html#wxcarethide">external documentation</a>.
--spec hide(This) -> ok when
+-spec hide(This) -> 'ok' when
 	This::wxCaret().
 hide(#wx_ref{type=ThisT,ref=ThisRef}) ->
   ?CLASS(ThisT,wxCaret),
@@ -129,7 +130,7 @@ isVisible(#wx_ref{type=ThisT,ref=ThisRef}) ->
   <<ThisRef:32/?UI>>).
 
 %% @doc See <a href="http://www.wxwidgets.org/manuals/2.8.12/wx_wxcaret.html#wxcaretmove">external documentation</a>.
--spec move(This, Pt) -> ok when
+-spec move(This, Pt) -> 'ok' when
 	This::wxCaret(), Pt::{X::integer(), Y::integer()}.
 move(#wx_ref{type=ThisT,ref=ThisRef},{PtX,PtY})
  when is_integer(PtX),is_integer(PtY) ->
@@ -138,7 +139,7 @@ move(#wx_ref{type=ThisT,ref=ThisRef},{PtX,PtY})
   <<ThisRef:32/?UI,PtX:32/?UI,PtY:32/?UI>>).
 
 %% @doc See <a href="http://www.wxwidgets.org/manuals/2.8.12/wx_wxcaret.html#wxcaretmove">external documentation</a>.
--spec move(This, X, Y) -> ok when
+-spec move(This, X, Y) -> 'ok' when
 	This::wxCaret(), X::integer(), Y::integer().
 move(#wx_ref{type=ThisT,ref=ThisRef},X,Y)
  when is_integer(X),is_integer(Y) ->
@@ -147,7 +148,7 @@ move(#wx_ref{type=ThisT,ref=ThisRef},X,Y)
   <<ThisRef:32/?UI,X:32/?UI,Y:32/?UI>>).
 
 %% @doc See <a href="http://www.wxwidgets.org/manuals/2.8.12/wx_wxcaret.html#wxcaretsetblinktime">external documentation</a>.
--spec setBlinkTime(Milliseconds) -> ok when
+-spec setBlinkTime(Milliseconds) -> 'ok' when
 	Milliseconds::integer().
 setBlinkTime(Milliseconds)
  when is_integer(Milliseconds) ->
@@ -155,7 +156,7 @@ setBlinkTime(Milliseconds)
   <<Milliseconds:32/?UI>>).
 
 %% @doc See <a href="http://www.wxwidgets.org/manuals/2.8.12/wx_wxcaret.html#wxcaretsetsize">external documentation</a>.
--spec setSize(This, Size) -> ok when
+-spec setSize(This, Size) -> 'ok' when
 	This::wxCaret(), Size::{W::integer(), H::integer()}.
 setSize(#wx_ref{type=ThisT,ref=ThisRef},{SizeW,SizeH})
  when is_integer(SizeW),is_integer(SizeH) ->
@@ -164,7 +165,7 @@ setSize(#wx_ref{type=ThisT,ref=ThisRef},{SizeW,SizeH})
   <<ThisRef:32/?UI,SizeW:32/?UI,SizeH:32/?UI>>).
 
 %% @doc See <a href="http://www.wxwidgets.org/manuals/2.8.12/wx_wxcaret.html#wxcaretsetsize">external documentation</a>.
--spec setSize(This, Width, Height) -> ok when
+-spec setSize(This, Width, Height) -> 'ok' when
 	This::wxCaret(), Width::integer(), Height::integer().
 setSize(#wx_ref{type=ThisT,ref=ThisRef},Width,Height)
  when is_integer(Width),is_integer(Height) ->
@@ -173,7 +174,7 @@ setSize(#wx_ref{type=ThisT,ref=ThisRef},Width,Height)
   <<ThisRef:32/?UI,Width:32/?UI,Height:32/?UI>>).
 
 %% @equiv show(This, [])
--spec show(This) -> ok when
+-spec show(This) -> 'ok' when
 	This::wxCaret().
 
 show(This)
@@ -181,9 +182,9 @@ show(This)
   show(This, []).
 
 %% @doc See <a href="http://www.wxwidgets.org/manuals/2.8.12/wx_wxcaret.html#wxcaretshow">external documentation</a>.
--spec show(This, [Option]) -> ok when
+-spec show(This, [Option]) -> 'ok' when
 	This::wxCaret(),
-	Option :: {show, boolean()}.
+	Option :: {'show', boolean()}.
 show(#wx_ref{type=ThisT,ref=ThisRef}, Options)
  when is_list(Options) ->
   ?CLASS(ThisT,wxCaret),
@@ -194,7 +195,7 @@ show(#wx_ref{type=ThisT,ref=ThisRef}, Options)
   <<ThisRef:32/?UI, 0:32,BinOpt/binary>>).
 
 %% @doc Destroys this object, do not use object again
--spec destroy(This::wxCaret()) -> ok.
+-spec destroy(This::wxCaret()) -> 'ok'.
 destroy(Obj=#wx_ref{type=Type}) ->
   ?CLASS(Type,wxCaret),
   wxe_util:destroy(?wxCaret_destruct,Obj),

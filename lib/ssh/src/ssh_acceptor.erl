@@ -1,18 +1,19 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2008-2013. All Rights Reserved.
+%% Copyright Ericsson AB 2008-2016. All Rights Reserved.
 %%
-%% The contents of this file are subject to the Erlang Public License,
-%% Version 1.1, (the "License"); you may not use this file except in
-%% compliance with the License. You should have received a copy of the
-%% Erlang Public License along with this software. If not, it can be
-%% retrieved online at http://www.erlang.org/.
+%% Licensed under the Apache License, Version 2.0 (the "License");
+%% you may not use this file except in compliance with the License.
+%% You may obtain a copy of the License at
 %%
-%% Software distributed under the License is distributed on an "AS IS"
-%% basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See
-%% the License for the specific language governing rights and limitations
-%% under the License.
+%%     http://www.apache.org/licenses/LICENSE-2.0
+%%
+%% Unless required by applicable law or agreed to in writing, software
+%% distributed under the License is distributed on an "AS IS" BASIS,
+%% WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+%% See the License for the specific language governing permissions and
+%% limitations under the License.
 %%
 %% %CopyrightEnd%
 %%
@@ -21,8 +22,13 @@
 
 -module(ssh_acceptor).
 
+-include("ssh.hrl").
+
 %% Internal application API
--export([start_link/5]).
+-export([start_link/5,
+	 number_of_connections/1,
+	 callback_listen/3,
+	 handle_connection/5]).
 
 %% spawn export  
 -export([acceptor_init/6, acceptor_loop/6]).
@@ -42,17 +48,50 @@ start_link(Port, Address, SockOpts, Opts, AcceptTimeout) ->
 acceptor_init(Parent, Port, Address, SockOpts, Opts, AcceptTimeout) ->
     {_, Callback, _} =  
 	proplists:get_value(transport, Opts, {tcp, gen_tcp, tcp_closed}),
-    case (catch do_socket_listen(Callback, Port, SockOpts)) of
-	{ok, ListenSocket} ->
+
+    SockOwner = proplists:get_value(lsock_owner, Opts),
+    LSock = proplists:get_value(lsocket, Opts),
+    UseExistingSocket =
+	case catch inet:sockname(LSock) of
+	    {ok,{_,Port}} -> is_pid(SockOwner);
+	    _ -> false
+	end,
+
+    case UseExistingSocket of
+	true ->
 	    proc_lib:init_ack(Parent, {ok, self()}),
-	    acceptor_loop(Callback, 
-			  Port, Address, Opts, ListenSocket, AcceptTimeout);
-	Error ->
-	    proc_lib:init_ack(Parent, Error),
-	    error
+	    request_ownership(LSock, SockOwner),
+	    acceptor_loop(Callback, Port, Address, Opts, LSock, AcceptTimeout);
+
+	false -> 
+	    case (catch do_socket_listen(Callback, Port, SockOpts)) of
+		{ok, ListenSocket} ->
+		    proc_lib:init_ack(Parent, {ok, self()}),
+		    acceptor_loop(Callback, 
+				  Port, Address, Opts, ListenSocket, AcceptTimeout);
+		Error ->
+		    proc_lib:init_ack(Parent, Error),
+		    error
+	    end
     end.
+
+request_ownership(LSock, SockOwner) ->
+    SockOwner ! {request_control,LSock,self()},
+    receive
+	{its_yours,LSock} -> ok
+    end.
+    
    
-do_socket_listen(Callback, Port, Opts) ->
+do_socket_listen(Callback, Port0, Opts) ->
+    Port =
+	case proplists:get_value(fd, Opts) of
+	    undefined -> Port0;
+	    _ -> 0
+	end,
+    callback_listen(Callback, Port, Opts).
+
+callback_listen(Callback, Port, Opts0) ->
+    Opts = [{active, false}, {reuseaddr,true} | Opts0],
     case Callback:listen(Port, Opts) of
 	{error, nxdomain} ->
 	    Callback:listen(Port, lists:delete(inet6, Opts));
@@ -81,8 +120,10 @@ acceptor_loop(Callback, Port, Address, Opts, ListenSocket, AcceptTimeout) ->
     end.
 
 handle_connection(Callback, Address, Port, Options, Socket) ->
-    SystemSup = ssh_system_sup:system_supervisor(Address, Port),
     SSHopts = proplists:get_value(ssh_opts, Options, []),
+    Profile =  proplists:get_value(profile, SSHopts, ?DEFAULT_PROFILE),
+    SystemSup = ssh_system_sup:system_supervisor(Address, Port, Profile),
+
     MaxSessions = proplists:get_value(max_sessions,SSHopts,infinity),
     case number_of_connections(SystemSup) < MaxSessions of
 	true ->
@@ -140,5 +181,6 @@ handle_error(Reason) ->
 number_of_connections(SystemSup) ->
     length([X || 
 	       {R,X,supervisor,[ssh_subsystem_sup]} <- supervisor:which_children(SystemSup),
+	       is_pid(X),
 	       is_reference(R)
 	  ]).

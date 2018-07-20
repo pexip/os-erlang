@@ -1,18 +1,19 @@
 /*
  * %CopyrightBegin%
  *
- * Copyright Ericsson AB 2000-2010. All Rights Reserved.
+ * Copyright Ericsson AB 2000-2016. All Rights Reserved.
  *
- * The contents of this file are subject to the Erlang Public License,
- * Version 1.1, (the "License"); you may not use this file except in
- * compliance with the License. You should have received a copy of the
- * Erlang Public License along with this software. If not, it can be
- * retrieved online at http://www.erlang.org/.
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
  *
- * Software distributed under the License is distributed on an "AS IS"
- * basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See
- * the License for the specific language governing rights and limitations
- * under the License.
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  *
  * %CopyrightEnd%
  */
@@ -65,12 +66,15 @@ erts_init_fun_table(void)
     f.cmp  = (HCMP_FUN) fun_cmp;
     f.alloc = (HALLOC_FUN) fun_alloc;
     f.free = (HFREE_FUN) fun_free;
+    f.meta_alloc = (HMALLOC_FUN) erts_alloc;
+    f.meta_free = (HMFREE_FUN) erts_free;
+    f.meta_print = (HMPRINT_FUN) erts_print;
 
     hash_init(ERTS_ALC_T_FUN_TABLE, &erts_fun_table, "fun_table", 16, f);
 }
 
 void
-erts_fun_info(int to, void *to_arg)
+erts_fun_info(fmtfn_t to, void *to_arg)
 {
     int lock = !ERTS_IS_CRASH_DUMPING;
     if (lock)
@@ -184,7 +188,7 @@ erts_erase_fun_entry(ErlFunEntry* fe)
 #endif
     {
 	if (fe->address != unloaded_fun)
-	    erl_exit(1,
+	    erts_exit(ERTS_ERROR_EXIT,
 		     "Internal error: "
 		     "Invalid reference count found on #Fun<%T.%d.%d>: "
 		     " About to erase fun still referred by code.\n",
@@ -195,14 +199,13 @@ erts_erase_fun_entry(ErlFunEntry* fe)
 }
 
 void
-erts_cleanup_funs_on_purge(BeamInstr* start, BeamInstr* end)
+erts_fun_purge_prepare(BeamInstr* start, BeamInstr* end)
 {
     int limit;
     HashBucket** bucket;
-    ErlFunEntry* to_delete = NULL;
     int i;
 
-    erts_fun_write_lock();
+    erts_fun_read_lock();
     limit = erts_fun_table.size;
     bucket = erts_fun_table.bucket;
     for (i = 0; i < limit; i++) {
@@ -213,26 +216,54 @@ erts_cleanup_funs_on_purge(BeamInstr* start, BeamInstr* end)
 	    BeamInstr* addr = fe->address;
 
 	    if (start <= addr && addr < end) {
+		fe->pend_purge_address = addr;
+		ERTS_SMP_WRITE_MEMORY_BARRIER;
 		fe->address = unloaded_fun;
-		if (erts_refc_dectest(&fe->refc, 0) == 0) {
-		    fe->address = (void *) to_delete;
-		    to_delete = fe;
-		}
+		erts_purge_state_add_fun(fe);
 	    }
 	    b = b->next;
 	}
     }
-
-    while (to_delete != NULL) {
-	ErlFunEntry* next = (ErlFunEntry *) to_delete->address;
-	erts_erase_fun_entry_unlocked(to_delete);
-	to_delete = next;
-    }
-    erts_fun_write_unlock();
+    erts_fun_read_unlock();
 }
 
 void
-erts_dump_fun_entries(int to, void *to_arg)
+erts_fun_purge_abort_prepare(ErlFunEntry **funs, Uint no)
+{
+    Uint ix;
+
+    for (ix = 0; ix < no; ix++) {
+	ErlFunEntry *fe = funs[ix];
+	if (fe->address == unloaded_fun)
+	    fe->address = fe->pend_purge_address;
+    }
+}
+
+void
+erts_fun_purge_abort_finalize(ErlFunEntry **funs, Uint no)
+{
+    Uint ix;
+
+    for (ix = 0; ix < no; ix++)
+	funs[ix]->pend_purge_address = NULL;
+}
+
+void
+erts_fun_purge_complete(ErlFunEntry **funs, Uint no)
+{
+    Uint ix;
+
+    for (ix = 0; ix < no; ix++) {
+	ErlFunEntry *fe = funs[ix];
+	fe->pend_purge_address = NULL;
+	if (erts_refc_dectest(&fe->refc, 0) == 0)
+	    erts_erase_fun_entry(fe);
+    }
+    ERTS_SMP_WRITE_MEMORY_BARRIER;
+}
+
+void
+erts_dump_fun_entries(fmtfn_t to, void *to_arg)
 {
     int limit;
     HashBucket** bucket;
@@ -290,6 +321,7 @@ fun_alloc(ErlFunEntry* template)
     obj->module = template->module;
     erts_refc_init(&obj->refc, -1);
     obj->address = unloaded_fun;
+    obj->pend_purge_address = NULL;
 #ifdef HIPE
     obj->native_address = NULL;
 #endif

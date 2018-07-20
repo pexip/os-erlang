@@ -1,18 +1,19 @@
 /*
  * %CopyrightBegin%
  *
- * Copyright Ericsson AB 1996-2013. All Rights Reserved.
+ * Copyright Ericsson AB 1996-2016. All Rights Reserved.
  *
- * The contents of this file are subject to the Erlang Public License,
- * Version 1.1, (the "License"); you may not use this file except in
- * compliance with the License. You should have received a copy of the
- * Erlang Public License along with this software. If not, it can be
- * retrieved online at http://www.erlang.org/.
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
  *
- * Software distributed under the License is distributed on an "AS IS"
- * basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See
- * the License for the specific language governing rights and limitations
- * under the License.
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  *
  * %CopyrightEnd%
  */
@@ -49,7 +50,7 @@ static erts_smp_atomic_t tot_module_bytes;
 
 #include "erl_smp.h"
 
-void module_info(int to, void *to_arg)
+void module_info(fmtfn_t to, void *to_arg)
 {
     index_info(to, to_arg, &module_tables[erts_active_code_ix()]);
 }
@@ -73,8 +74,8 @@ static Module* module_alloc(Module* tmpl)
     erts_smp_atomic_add_nob(&tot_module_bytes, sizeof(Module));
 
     obj->module = tmpl->module;
-    obj->curr.code = 0;
-    obj->old.code = 0;
+    obj->curr.code_hdr = 0;
+    obj->old.code_hdr = 0;
     obj->curr.code_length = 0;
     obj->old.code_length = 0;
     obj->slot.index = -1;
@@ -84,6 +85,7 @@ static Module* module_alloc(Module* tmpl)
     obj->old.num_breakpoints  = 0;
     obj->curr.num_traced_exports = 0;
     obj->old.num_traced_exports = 0;
+    obj->on_load = 0;
     return obj;
 }
 
@@ -102,6 +104,9 @@ void init_module_table(void)
     f.cmp  = (HCMP_FUN) module_cmp;
     f.alloc = (HALLOC_FUN) module_alloc;
     f.free = (HFREE_FUN) module_free;
+    f.meta_alloc = (HMALLOC_FUN) erts_alloc;
+    f.meta_free = (HMFREE_FUN) erts_free;
+    f.meta_print = (HMPRINT_FUN) erts_print;
 
     for (i = 0; i < ERTS_NUM_CODE_IX; i++) {
 	erts_index_init(ERTS_ALC_T_MODULE_TABLE, &module_tables[i], "module_code",
@@ -197,6 +202,7 @@ void module_start_staging(void)
 
 	dst_mod->curr = src_mod->curr;
 	dst_mod->old = src_mod->old;
+	dst_mod->on_load = src_mod->on_load;
     }
 
     /*
@@ -210,6 +216,7 @@ void module_start_staging(void)
 
 	dst_mod->curr = src_mod->curr;
 	dst_mod->old = src_mod->old;
+	dst_mod->on_load = src_mod->on_load;
     }
     newsz = index_table_sz(dst);
     erts_smp_atomic_add_nob(&tot_module_bytes, (newsz - oldsz));

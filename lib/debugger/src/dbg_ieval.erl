@@ -1,18 +1,19 @@
 %%
 %% %CopyrightBegin%
 %% 
-%% Copyright Ericsson AB 1998-2013. All Rights Reserved.
+%% Copyright Ericsson AB 1998-2016. All Rights Reserved.
 %% 
-%% The contents of this file are subject to the Erlang Public License,
-%% Version 1.1, (the "License"); you may not use this file except in
-%% compliance with the License. You should have received a copy of the
-%% Erlang Public License along with this software. If not, it can be
-%% retrieved online at http://www.erlang.org/.
-%% 
-%% Software distributed under the License is distributed on an "AS IS"
-%% basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See
-%% the License for the specific language governing rights and limitations
-%% under the License.
+%% Licensed under the Apache License, Version 2.0 (the "License");
+%% you may not use this file except in compliance with the License.
+%% You may obtain a copy of the License at
+%%
+%%     http://www.apache.org/licenses/LICENSE-2.0
+%%
+%% Unless required by applicable law or agreed to in writing, software
+%% distributed under the License is distributed on an "AS IS" BASIS,
+%% WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+%% See the License for the specific language governing permissions and
+%% limitations under the License.
 %% 
 %% %CopyrightEnd%
 %%
@@ -457,11 +458,6 @@ do_eval_function(Mod, Fun, As0, Bs0, _, Ieval0) when is_function(Fun);
 	    exception(error, Reason, Bs0, Ieval0)
     end;
 
-%% Common Test adaptation
-do_eval_function(ct_line, line, As, Bs, extern, #ieval{level=Le}=Ieval) ->
-    debugged_cmd({apply,ct_line,line,As}, Bs, Ieval#ieval{level=Le+1}),
-    {value, ignore, Bs};
-
 do_eval_function(Mod, Name, As0, Bs0, Called, Ieval0) ->
     #ieval{level=Le,line=Li,top=Top} = Ieval0,
     trace(call, {Called, {Le,Li,Mod,Name,As0}}),
@@ -564,7 +560,7 @@ get_function(Mod, Name, Args, extern) ->
     end.
 
 db_ref(Mod) ->
-    case get([Mod|db]) of
+    case get(?DB_REF_KEY(Mod)) of
 	undefined ->
 	    case dbg_iserver:call(get(int),
 				  {get_module_db, Mod, get(self)}) of
@@ -576,7 +572,7 @@ db_ref(Mod) ->
 				Node =/= node() -> {Node,ModDb};
 				true -> ModDb
 			    end,
-		    put([Mod|db], DbRef),
+		    put(?DB_REF_KEY(Mod), DbRef),
 		    DbRef
 	    end;
 	DbRef ->
@@ -655,24 +651,19 @@ expr({tuple,Line,Es0}, Bs0, Ieval) ->
     {value,list_to_tuple(Vs),Bs};
 
 %% Map
-expr({map,Line,Fs0}, Bs0, Ieval) ->
-    {Fs,Bs} = eval_map_fields(Fs0, Bs0, Ieval#ieval{line=Line,top=false}),
-    Value = lists:foldl(fun ({map_assoc,K,V}, Mi) -> maps:put(K,V,Mi) end,
-                        #{}, Fs),
-    {value,Value,Bs};
+expr({map,Line,Fs}, Bs0, Ieval) ->
+    {Map,Bs} = eval_new_map_fields(Fs, Bs0, Ieval#ieval{line=Line,top=false},
+				   fun expr/3),
+    {value,Map,Bs};
 expr({map,Line,E0,Fs0}, Bs0, Ieval0) ->
     Ieval = Ieval0#ieval{line=Line,top=false},
     {value,E,Bs1} = expr(E0, Bs0, Ieval),
-    case E of
-        #{} ->
-            {Fs,Bs2} = eval_map_fields(Fs0, Bs0, Ieval),
-            Value = lists:foldl(fun ({map_assoc,K,V}, Mi) -> maps:put(K,V,Mi);
-                                    ({map_exact,K,V}, Mi) -> maps:update(K,V,Mi)
-                                end, E, Fs),
-            {value,Value,merge_bindings(Bs2, Bs1, Ieval)};
-        _ ->
-            exception(error, {badarg,E}, Bs1, Ieval)
-    end;
+    {Fs,Bs2} = eval_map_fields(Fs0, Bs0, Ieval),
+    _ = maps:put(k, v, E),			%Validate map.
+    Value = lists:foldl(fun ({map_assoc,K,V}, Mi) -> maps:put(K,V,Mi);
+			    ({map_exact,K,V}, Mi) -> maps:update(K,V,Mi)
+			end, E, Fs),
+    {value,Value,merge_bindings(Bs2, Bs1, Ieval)};
 %% A block of statements
 expr({block,Line,Es},Bs,Ieval) ->
     seq(Es, Bs, Ieval#ieval{line=Line});
@@ -895,11 +886,6 @@ expr({make_ext_fun,Line,MFA0}, Bs0, Ieval0) ->
 				 arguments=[M,F,A],line=-1},
 	    exception(error, badarg, Bs, Ieval, true)
     end;
-
-%% Common test adaptation
-expr({call_remote,0,ct_line,line,As0,Lc}, Bs0, Ieval0) ->
-    {As,_Bs} = eval_list(As0, Bs0, Ieval0),
-    eval_function(ct_line, line, As, Bs0, extern, Ieval0, Lc);
 
 %% Local function call
 expr({local_call,Line,F,As0,Lc}, Bs0, #ieval{module=M} = Ieval0) ->
@@ -1487,11 +1473,13 @@ guard_expr({cons,_,H0,T0}, Bs) ->
 guard_expr({tuple,_,Es0}, Bs) ->
     {values,Es} = guard_exprs(Es0, Bs),
     {value,list_to_tuple(Es)};
-guard_expr({map,_,Fs0}, Bs) ->
-    Fs = eval_map_fields_guard(Fs0, Bs),
-    Value = lists:foldl(fun ({map_assoc,K,V}, Mi) -> maps:put(K,V,Mi) end,
-                        #{}, Fs),
-    {value,Value};
+guard_expr({map,_,Fs}, Bs0) ->
+    F = fun (G0, B0, _) ->
+		{value,G} = guard_expr(G0, B0),
+		{value,G,B0}
+	end,
+    {Map,_} = eval_new_map_fields(Fs, Bs0, #ieval{top=false}, F),
+    {value,Map};
 guard_expr({map,_,E0,Fs0}, Bs) ->
     {value,E} = guard_expr(E0, Bs),
     Fs = eval_map_fields_guard(Fs0, Bs),
@@ -1539,6 +1527,17 @@ eval_map_fields([{map_field_exact,Line,K0,V0}|Fs], Bs0, Ieval0, F, Acc) ->
     eval_map_fields(Fs, Bs2, Ieval0, F, [{map_exact,K,V}|Acc]);
 eval_map_fields([], Bs, _Ieval, _F, Acc) ->
     {lists:reverse(Acc),Bs}.
+
+eval_new_map_fields(Fs, Bs0, Ieval, F) ->
+    eval_new_map_fields(Fs, Bs0, Ieval, F, []).
+
+eval_new_map_fields([{Line,K0,V0}|Fs], Bs0, Ieval0, F, Acc) ->
+    Ieval = Ieval0#ieval{line=Line},
+    {value,K,Bs1} = F(K0, Bs0, Ieval),
+    {value,V,Bs2} = F(V0, Bs1, Ieval),
+    eval_new_map_fields(Fs, Bs2, Ieval0, F, [{K,V}|Acc]);
+eval_new_map_fields([], Bs, _, _, Acc) ->
+    {maps:from_list(lists:reverse(Acc)),Bs}.
 
 %% match(Pattern,Term,Bs) -> {match,Bs} | nomatch
 match(Pat, Term, Bs) ->

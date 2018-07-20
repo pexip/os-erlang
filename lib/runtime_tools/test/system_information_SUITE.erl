@@ -2,16 +2,17 @@
 %% 
 %% Copyright Ericsson AB 2013. All Rights Reserved.
 %% 
-%% The contents of this file are subject to the Erlang Public License,
-%% Version 1.1, (the "License"); you may not use this file except in
-%% compliance with the License. You should have received a copy of the
-%% Erlang Public License along with this software. If not, it can be
-%% retrieved online at http://www.erlang.org/.
-%% 
-%% Software distributed under the License is distributed on an "AS IS"
-%% basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See
-%% the License for the specific language governing rights and limitations
-%% under the License.
+%% Licensed under the Apache License, Version 2.0 (the "License");
+%% you may not use this file except in compliance with the License.
+%% You may obtain a copy of the License at
+%%
+%%     http://www.apache.org/licenses/LICENSE-2.0
+%%
+%% Unless required by applicable law or agreed to in writing, software
+%% distributed under the License is distributed on an "AS IS" BASIS,
+%% WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+%% See the License for the specific language governing permissions and
+%% limitations under the License.
 %% 
 %% %CopyrightEnd%
 %%
@@ -229,19 +230,19 @@ api_report(_Config) ->
     ok.
 
 api_to_file(Config) ->
-    DataDir  = ?config(data_dir, Config),
+    DataDir  = proplists:get_value(data_dir, Config),
     Filename = filename:join([DataDir, "system_information_report_1.dat"]),
     ok      = system_information:to_file(Filename),
     {ok, _} = file:consult(Filename),
     {save_config, [{report_name, Filename}]}.
 
 api_from_file(Config) ->
-    {api_to_file, Saved} = ?config(saved_config, Config),
-    DataDir = ?config(data_dir, Config),
+    {api_to_file, Saved} = proplists:get_value(saved_config, Config),
+    DataDir = proplists:get_value(data_dir, Config),
     Fname1  = filename:join([DataDir, "information_test_report.dat"]),
     Report1 = system_information:from_file(Fname1),
     ok      = validate_report(Report1),
-    Fname2  = ?config(report_name, Saved),
+    Fname2  = proplists:get_value(report_name, Saved),
     Report2 = system_information:from_file(Fname2),
     ok      = validate_report(Report2),
     ok.
@@ -252,7 +253,7 @@ api_start_stop(_Config) ->
     ok.
 
 validate_server_interface(Config) ->
-    DataDir = ?config(data_dir, Config),
+    DataDir = proplists:get_value(data_dir, Config),
     Fname1  = filename:join([DataDir, "information_test_report.dat"]),
     %% load old report
     ok = system_information:load_report(file, Fname1),

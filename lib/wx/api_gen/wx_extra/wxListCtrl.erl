@@ -1,18 +1,19 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2011. All Rights Reserved.
+%% Copyright Ericsson AB 2011-2016. All Rights Reserved.
 %%
-%% The contents of this file are subject to the Erlang Public License,
-%% Version 1.1, (the "License"); you may not use this file except in
-%% compliance with the License. You should have received a copy of the
-%% Erlang Public License along with this software. If not, it can be
-%% retrieved online at http://www.erlang.org/.
+%% Licensed under the Apache License, Version 2.0 (the "License");
+%% you may not use this file except in compliance with the License.
+%% You may obtain a copy of the License at
 %%
-%% Software distributed under the License is distributed on an "AS IS"
-%% basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See
-%% the License for the specific language governing rights and limitations
-%% under the License.
+%%     http://www.apache.org/licenses/LICENSE-2.0
+%%
+%% Unless required by applicable law or agreed to in writing, software
+%% distributed under the License is distributed on an "AS IS" BASIS,
+%% WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+%% See the License for the specific language governing permissions and
+%% limitations under the License.
 %%
 %% %CopyrightEnd%
 %%
@@ -42,33 +43,36 @@ SortItems>>
 <<EXPORT:wxListCtrl new/0, new/1, new/2 wxListCtrl:EXPORT>>
 
 <<wxListCtrl_new_0
-%% @spec () -> wxListCtrl()
 %% @doc See <a href="http://www.wxwidgets.org/manuals/stable/wx_wxlistctrl.html#wxlistctrlwxlistctrl">external documentation</a>.
+-spec new() -> wxListCtrl().
 new() ->
     wxe_util:construct(~s, <<>>).
 wxListCtrl_new_0>>
 
 <<wxListCtrl_new_2
-%% @spec (Parent::wxWindow:wxWindow()) -> wxListCtrl()
-%% @equiv new(Parent, [])
+-spec new(Parent) -> wxListCtrl() when
+      Parent::wxWindow:wxWindow().
 new(Parent)
  when is_record(Parent, wx_ref) ->
   new(Parent, []).
 
-%% @spec (Parent::wxWindow:wxWindow(), [Option]) -> wxListCtrl()
-%% Option = {winid, integer()} |
-%%          {pos, {X::integer(),Y::integer()}} |
-%%          {size, {W::integer(),H::integer()}} |
-%%          {style, integer()} |
-%%          {validator, wx:wx()} |
-%%          {onGetItemText, OnGetItemText} |
-%%          {onGetItemAttr, OnGetItemAttr} |
-%%          {onGetItemColumnImage, OnGetItemColumnImage}
+%% @doc Creates a listctrl with optional callback functions:
 %%
-%% OnGetItemText = (This, Item, Column) -> wxString()
-%% OnGetItemAttr = (This, Item) -> wxListItemAttr()
+%% OnGetItemText = (This, Item, Column) -> unicode:charlist()
+%% OnGetItemAttr = (This, Item) -> wxListItemAttr:wxListItemAttr()
 %% OnGetItemColumnImage = (This, Item, Column) -> integer()
-%% @doc See <a href="http://www.wxwidgets.org/manuals/stable/wx_wxlistctrl.html#wxlistctrlwxlistctrl">external documentation</a>.
+%%
+%% See <a href="http://www.wxwidgets.org/manuals/stable/wx_wxlistctrl.html#wxlistctrlwxlistctrl">external documentation</a>.
+-spec new(Parent, [Option]) -> wxListCtrl() when
+      Parent::wxWindow:wxWindow(),
+      Option::{winid, integer()} |
+	      {pos, {X::integer(),Y::integer()}} |
+	      {size, {W::integer(),H::integer()}} |
+	      {style, integer()} |
+	      {validator, wx:wx_object()} |
+	      {onGetItemText, function()} |
+	      {onGetItemAttr, function()} |
+	      {onGetItemColumnImage, function()}.
 
 new(#wx_ref{type=ParentT,ref=ParentRef}, Options)
   when is_list(Options)->
@@ -100,26 +104,27 @@ wxListCtrl_new_2>>
 <<EXPORT:Create create/2, create/3 Create:EXPORT>>
 
 <<Create
-%% @spec (This::wxListCtrl(), Parent::wxWindow:wxWindow()) -> bool()
 %% @equiv create(This,Parent, [])
+-spec create(This, Parent) -> wxListCtrl() when
+      This::wxWindow:wxWindow(),
+      Parent::wxWindow:wxWindow().
 create(This,Parent)
  when is_record(This, wx_ref),is_record(Parent, wx_ref) ->
   create(This,Parent, []).
 
-%% @spec (This::wxListCtrl(), Parent::wxWindow:wxWindow(), [Option]) -> bool()
-%% Option = {winid, integer()} |
-%%          {pos, {X::integer(),Y::integer()}} |
-%%          {size, {W::integer(),H::integer()}} |
-%%          {style, integer()} |
-%%          {validator, wx:wx()} |
-%%          {onGetItemText, OnGetItemText} |
-%%          {onGetItemAttr, OnGetItemAttr} |
-%%          {onGetItemColumnImage, OnGetItemColumnImage}
-%%
-%% OnGetItemText = (This, Item, Column) -> wxString()
-%% OnGetItemAttr = (This, Item) -> wxListItemAttr()
-%% OnGetItemColumnImage = (This, Item, Column) -> integer()
 %% @doc See <a href="http://www.wxwidgets.org/manuals/stable/wx_wxlistctrl.html#wxlistctrlcreate">external documentation</a>.
+-spec create(This, Parent, [Option]) -> wxListCtrl() when
+      This::wxWindow:wxWindow(),
+      Parent::wxWindow:wxWindow(),
+      Option::{winid, integer()} |
+	      {pos, {X::integer(),Y::integer()}} |
+	      {size, {W::integer(),H::integer()}} |
+	      {style, integer()} |
+	      {validator, wx:wx_object()} |
+	      {onGetItemText, function()} |
+	      {onGetItemAttr, function()} |
+	      {onGetItemColumnImage, function()}.
+
 create(#wx_ref{type=ThisT,ref=ThisRef},#wx_ref{type=ParentT,ref=ParentRef}, Options)
  when is_list(Options) ->
   ?CLASS(ThisT,wxListCtrl),

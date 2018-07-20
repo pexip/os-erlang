@@ -1,18 +1,19 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2008-2014. All Rights Reserved.
+%% Copyright Ericsson AB 2008-2016. All Rights Reserved.
 %%
-%% The contents of this file are subject to the Erlang Public License,
-%% Version 1.1, (the "License"); you may not use this file except in
-%% compliance with the License. You should have received a copy of the
-%% Erlang Public License along with this software. If not, it can be
-%% retrieved online at http://www.erlang.org/.
+%% Licensed under the Apache License, Version 2.0 (the "License");
+%% you may not use this file except in compliance with the License.
+%% You may obtain a copy of the License at
 %%
-%% Software distributed under the License is distributed on an "AS IS"
-%% basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See
-%% the License for the specific language governing rights and limitations
-%% under the License.
+%%     http://www.apache.org/licenses/LICENSE-2.0
+%%
+%% Unless required by applicable law or agreed to in writing, software
+%% distributed under the License is distributed on an "AS IS" BASIS,
+%% WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+%% See the License for the specific language governing permissions and
+%% limitations under the License.
 %%
 %% %CopyrightEnd%
 %% This file is generated DO NOT EDIT
@@ -52,7 +53,7 @@
 -type wxEvtHandler() :: wx:wx_object().
 
 %% @doc Equivalent to {@link connect/3. connect(This, EventType, [])}
--spec connect(This::wxEvtHandler(), EventType::wxEventType()) -> ok.
+-spec connect(This::wxEvtHandler(), EventType::wxEventType()) -> 'ok'.
 connect(This, EventType) ->
     connect(This, EventType, []).
 
@@ -74,9 +75,9 @@ connect(This, EventType) ->
 %%                          to process the event. Default not specfied i.e. a message will
 %%                          be delivered to the process calling this function.
 %%    {userData, term()}    An erlang term that will be sent with the event. Default: [].
--spec connect(This::wxEvtHandler(), EventType::wxEventType(), [Option]) -> ok when
-      Option :: {id, integer()} | {lastId, integer()} | {skip, boolean()} |
-		callback | {callback, function()} | {userData, term()}.
+-spec connect(This::wxEvtHandler(), EventType::wxEventType(), [Option]) -> 'ok' when
+      Option :: {'id', integer()} | {'lastId', integer()} | {'skip', boolean()} |
+		'callback' | {'callback', function()} | {'userData', term()}.
 connect(This=#wx_ref{type=ThisT}, EventType, Options) ->
     EvH = parse_opts(Options, #evh{et=EventType}),
     ?CLASS(ThisT,wxEvtHandler),
@@ -89,6 +90,8 @@ connect(This=#wx_ref{type=ThisT}, EventType, Options) ->
 parse_opts([{callback,Fun}|R], Opts) when is_function(Fun) ->
     %% Check Fun Arity?
     parse_opts(R, Opts#evh{cb=Fun});
+parse_opts([{callback,CB={nospawn, Fun}}|R], Opts) when is_function(Fun) ->
+    parse_opts(R, Opts#evh{cb=CB});
 parse_opts([callback|R], Opts) ->
     parse_opts(R, Opts#evh{cb=self()});
 parse_opts([{userData, UserData}|R],Opts) ->
@@ -132,7 +135,7 @@ disconnect(This=#wx_ref{type=ThisT,ref=_ThisRef}, EventType) when is_atom(EventT
 %% EventType may be the atom 'null' to match any eventtype.
 %% Notice that the options skip and userdata is not used to match the eventhandler.
 -spec disconnect(This::wxEvtHandler(), EventType::wxEventType(), [Option]) -> boolean() when
-      Option :: {id, integer()} | {lastId, integer()} | {callback, function()}.
+      Option :: {'id', integer()} | {'lastId', integer()} | {'callback', function()}.
 disconnect(This=#wx_ref{type=ThisT,ref=_ThisRef}, EventType, Opts) ->
     ?CLASS(ThisT,wxEvtHandler),
     EvH = parse_opts(Opts, #evh{et=EventType}),

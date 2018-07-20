@@ -1,18 +1,19 @@
 %%
 %% %CopyrightBegin%
 %% 
-%% Copyright Ericsson AB 1997-2014. All Rights Reserved.
+%% Copyright Ericsson AB 1997-2016. All Rights Reserved.
 %% 
-%% The contents of this file are subject to the Erlang Public License,
-%% Version 1.1, (the "License"); you may not use this file except in
-%% compliance with the License. You should have received a copy of the
-%% Erlang Public License along with this software. If not, it can be
-%% retrieved online at http://www.erlang.org/.
+%% Licensed under the Apache License, Version 2.0 (the "License");
+%% you may not use this file except in compliance with the License.
+%% You may obtain a copy of the License at
 %%
-%% Software distributed under the License is distributed on an "AS IS"
-%% basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See
-%% the License for the specific language governing rights and limitations
-%% under the License.
+%%     http://www.apache.org/licenses/LICENSE-2.0
+%%
+%% Unless required by applicable law or agreed to in writing, software
+%% distributed under the License is distributed on an "AS IS" BASIS,
+%% WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+%% See the License for the specific language governing permissions and
+%% limitations under the License.
 %%
 %% %CopyrightEnd%
 %%
@@ -29,25 +30,26 @@
 
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
-	 terminate/2, code_change/3]).
+	 terminate/2, code_change/3, format_status/2]).
 
 -include("httpd.hrl").
 -include("http_internal.hrl").
 -include("httpd_internal.hrl").
 
 -define(HANDSHAKE_TIMEOUT, 5000).
+
 -record(state, {mod,     %% #mod{}
 		manager, %% pid()
 		status,  %% accept | busy | blocked
 		mfa,     %% {Module, Function, Args} 
 		max_keep_alive_request = infinity, %% integer() | infinity
-		response_sent = false, %% true | false 
-		timeout,  %% infinity | integer() > 0
-		timer,     %% ref() - Request timer
-		headers,  %% #http_request_h{}
+		response_sent = false :: boolean(),
+		timeout,   %% infinity | integer() > 0
+		timer      :: 'undefined' | reference(), % Request timer
+		headers,   %% #http_request_h{}
 		body,      %% binary()
 		data,      %% The total data received in bits, checked after 10s
-		byte_limit  %% Bit limit per second before kick out
+		byte_limit %% Bit limit per second before kick out
 	       }).
 
 %%====================================================================
@@ -96,12 +98,13 @@ init([Manager, ConfigDB, AcceptTimeout]) ->
     proc_lib:init_ack({ok, self()}),
     
     {SocketType, Socket} = await_socket_ownership_transfer(AcceptTimeout),
- 
-    KeepAliveTimeOut = httpd_util:lookup(ConfigDB, keep_alive_timeout, 150000),
+    
+    %%Timeout value is in seconds we want it in milliseconds
+    KeepAliveTimeOut = 1000 * httpd_util:lookup(ConfigDB, keep_alive_timeout, 150),
     
     case http_transport:negotiate(SocketType, Socket, ?HANDSHAKE_TIMEOUT) of
-	{error, _Error} ->
-	    exit(shutdown); %% Can be 'normal'.
+	{error, Error} ->
+	    exit({shutdown, Error}); %% Can be 'normal'.
 	ok ->
 	    continue_init(Manager, ConfigDB, SocketType, Socket, KeepAliveTimeOut)
     end.
@@ -119,11 +122,17 @@ continue_init(Manager, ConfigDB, SocketType, Socket, TimeOut) ->
     MaxHeaderSize = max_header_size(ConfigDB), 
     MaxURISize    = max_uri_size(ConfigDB), 
     NrOfRequest   = max_keep_alive_request(ConfigDB), 
-    
+    MaxContentLen = max_content_length(ConfigDB),
+    Customize = customize(ConfigDB),
+
     {_, Status} = httpd_manager:new_connection(Manager),
     
     MFA = {httpd_request, parse, [[{max_uri, MaxURISize}, {max_header, MaxHeaderSize},
-				   {max_version, ?HTTP_MAX_VERSION_STRING}, {max_method, ?HTTP_MAX_METHOD_STRING}]]}, 
+				   {max_version, ?HTTP_MAX_VERSION_STRING}, 
+				   {max_method, ?HTTP_MAX_METHOD_STRING},
+				   {max_content_length, MaxContentLen},
+				   {customize, Customize}
+				  ]]}, 
 
     State = #state{mod                    = Mod, 
 		   manager                = Manager, 
@@ -207,7 +216,7 @@ handle_info({Proto, Socket, Data},
 			       set_new_data_size(cancel_request_timeout(State), NewDataSize)
 		       end,
             handle_http_msg(Result, NewState); 
-	{error, {too_long, MaxSize, ErrCode, ErrStr}, Version} ->
+	{error, {size_error, MaxSize, ErrCode, ErrStr}, Version} ->
 	    NewModData =  ModData#mod{http_version = Version},
 	    httpd_response:send_status(NewModData, ErrCode, ErrStr),
 	    Reason = io_lib:format("~p: ~p max size is ~p~n", 
@@ -286,7 +295,10 @@ handle_info(Info, #state{mod = ModData} = State) ->
 %% cleaning up. When it returns, the gen_server terminates with Reason.
 %% The return value is ignored.
 %%--------------------------------------------------------------------
-terminate(normal, State) ->
+terminate(Reason, State) when Reason == normal;
+			      Reason == shutdown ->
+    do_terminate(State);
+terminate({shutdown,_}, State) ->
     do_terminate(State);
 terminate(Reason, #state{response_sent = false, mod = ModData} = State) ->
     httpd_response:send_status(ModData, 500, none),
@@ -302,6 +314,18 @@ do_terminate(#state{mod = ModData} = State) ->
     cancel_request_timeout(State),
     httpd_socket:close(ModData#mod.socket_type, ModData#mod.socket).
 
+format_status(normal, [_, State]) ->
+    [{data, [{"StateData", State}]}];  
+format_status(terminate, [_, State]) ->
+    Mod = (State#state.mod),
+    case Mod#mod.socket_type of
+	ip_comm ->
+	    [{data, [{"StateData", State}]}];  
+	{essl, _} ->
+	    %% Do not print ssl options in superviosr reports
+	    [{data, [{"StateData", 
+		      State#state{mod = Mod#mod{socket_type = 'TLS'}}}]}]
+    end.
 
 %%--------------------------------------------------------------------
 %% code_change(OldVsn, State, Extra) -> {ok, NewState}
@@ -423,7 +447,7 @@ handle_body(#state{headers = Headers, body = Body, mod = ModData} = State,
 	    MaxHeaderSize, MaxBodySize) ->
     case Headers#http_request_h.'transfer-encoding' of
 	"chunked" ->
-	    case http_chunk:decode(Body, MaxBodySize, MaxHeaderSize) of
+	    try http_chunk:decode(Body, MaxBodySize, MaxHeaderSize) of
 		{Module, Function, Args} ->
 		    http_transport:setopts(ModData#mod.socket_type, 
 					   ModData#mod.socket, 
@@ -435,6 +459,14 @@ handle_body(#state{headers = Headers, body = Body, mod = ModData} = State,
 			http_chunk:handle_headers(Headers, ChunkedHeaders),
 		    handle_response(State#state{headers = NewHeaders,
 						body = NewBody})
+	    catch 
+		throw:Error ->
+		    httpd_response:send_status(ModData, 400, 
+					       "Bad input"),
+		    Reason = io_lib:format("Chunk decoding failed: ~p~n", 
+					   [Error]),
+		    error_log(Reason, ModData),
+		    {stop, normal, State#state{response_sent = true}}  
 	    end;
 	Encoding when is_list(Encoding) ->
 	    httpd_response:send_status(ModData, 501, 
@@ -444,8 +476,7 @@ handle_body(#state{headers = Headers, body = Body, mod = ModData} = State,
 	    error_log(Reason, ModData),
 	    {stop, normal, State#state{response_sent = true}};
 	_ -> 
-	    Length = 
-		list_to_integer(Headers#http_request_h.'content-length'),
+	    Length = list_to_integer(Headers#http_request_h.'content-length'),	    
 	    case ((Length =< MaxBodySize) or (MaxBodySize == nolimit)) of
 		true ->
 		    case httpd_request:whole_body(Body, Length) of 
@@ -454,7 +485,7 @@ handle_body(#state{headers = Headers, body = Body, mod = ModData} = State,
 						   ModData#mod.socket, 
 						   [{active, once}]),
 			    {noreply, State#state{mfa = 
-						  {Module, Function, Args}}};
+						      {Module, Function, Args}}};
 			
 			{ok, NewBody} ->
 			    handle_response(
@@ -471,7 +502,7 @@ handle_body(#state{headers = Headers, body = Body, mod = ModData} = State,
 handle_expect(#state{headers = Headers, mod = 
 		     #mod{config_db = ConfigDB} = ModData} = State, 
 	      MaxBodySize) ->
-    Length = Headers#http_request_h.'content-length',
+    Length = list_to_integer(Headers#http_request_h.'content-length'),
     case expect(Headers, ModData#mod.http_version, ConfigDB) of
 	continue when (MaxBodySize > Length) orelse (MaxBodySize =:= nolimit) ->
 	    httpd_response:send_status(ModData, 100, ""),
@@ -545,9 +576,15 @@ handle_next_request(#state{mod = #mod{connection = true} = ModData,
  		      init_data   = ModData#mod.init_data},
     MaxHeaderSize = max_header_size(ModData#mod.config_db), 
     MaxURISize    = max_uri_size(ModData#mod.config_db), 
+    MaxContentLen = max_content_length(ModData#mod.config_db),
+    Customize = customize(ModData#mod.config_db),
 
     MFA = {httpd_request, parse, [[{max_uri, MaxURISize}, {max_header, MaxHeaderSize},
-				   {max_version, ?HTTP_MAX_VERSION_STRING}, {max_method, ?HTTP_MAX_METHOD_STRING}]]}, 
+				   {max_version, ?HTTP_MAX_VERSION_STRING}, 
+				   {max_method, ?HTTP_MAX_METHOD_STRING},
+				   {max_content_length, MaxContentLen},
+				   {customize, Customize}
+				  ]]}, 
     TmpState = State#state{mod                    = NewModData,
 			   mfa                    = MFA,
 			   max_keep_alive_request = decrease(Max),
@@ -597,21 +634,10 @@ decrease(N) when is_integer(N) ->
 decrease(N) ->
     N.
 
-error_log(ReasonString, Info) ->
+error_log(ReasonString,  #mod{config_db = ConfigDB}) ->
     Error = lists:flatten(
 	      io_lib:format("Error reading request: ~s", [ReasonString])),
-    error_log(mod_log, Info, Error),
-    error_log(mod_disk_log, Info, Error).
-
-error_log(Mod, #mod{config_db = ConfigDB} = Info, String) ->
-    Modules = httpd_util:lookup(ConfigDB, modules,
-				[mod_get, mod_head, mod_log]),
-    case lists:member(Mod, Modules) of
-	true ->
-	    Mod:error_log(Info, String);
-	_ ->
-	    ok
-    end.
+    httpd_util:error_log(ConfigDB, Error).
 
 
 %%--------------------------------------------------------------------
@@ -630,3 +656,8 @@ max_body_size(ConfigDB) ->
 max_keep_alive_request(ConfigDB) ->
     httpd_util:lookup(ConfigDB, max_keep_alive_request, infinity).
 
+max_content_length(ConfigDB) ->    
+    httpd_util:lookup(ConfigDB, max_content_length, ?HTTP_MAX_CONTENT_LENGTH).
+
+customize(ConfigDB) ->    
+    httpd_util:lookup(ConfigDB, customize, httpd_custom).

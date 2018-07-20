@@ -8,7 +8,6 @@ usr/lib/erlang/usr/include/erl_fixed_size_int_types.h	usr/include/erl_fixed_size
 usr/lib/erlang/usr/include/erl_int_sizes_config.h	usr/include/erl_int_sizes_config.h
 usr/lib/erlang/usr/include/erl_interface.h		usr/include/erl_interface.h
 usr/lib/erlang/usr/include/erl_memory_trace_parser.h	usr/include/erl_memory_trace_parser.h
-usr/lib/erlang/usr/include/erl_native_features_config.h	usr/include/erl_native_features_config.h
 usr/lib/erlang/usr/include/erl_nif.h			usr/include/erl_nif.h
 usr/lib/erlang/usr/include/erl_nif_api_funcs.h		usr/include/erl_nif_api_funcs.h
 usr/lib/erlang/usr/include/erlang.idl			usr/include/erlang.idl

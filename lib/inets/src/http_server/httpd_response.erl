@@ -1,26 +1,27 @@
 %%
 %% %CopyrightBegin%
 %% 
-%% Copyright Ericsson AB 1997-2013. All Rights Reserved.
+%% Copyright Ericsson AB 1997-2016. All Rights Reserved.
 %% 
-%% The contents of this file are subject to the Erlang Public License,
-%% Version 1.1, (the "License"); you may not use this file except in
-%% compliance with the License. You should have received a copy of the
-%% Erlang Public License along with this software. If not, it can be
-%% retrieved online at http://www.erlang.org/.
-%% 
-%% Software distributed under the License is distributed on an "AS IS"
-%% basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See
-%% the License for the specific language governing rights and limitations
-%% under the License.
+%% Licensed under the Apache License, Version 2.0 (the "License");
+%% you may not use this file except in compliance with the License.
+%% You may obtain a copy of the License at
+%%
+%%     http://www.apache.org/licenses/LICENSE-2.0
+%%
+%% Unless required by applicable law or agreed to in writing, software
+%% distributed under the License is distributed on an "AS IS" BASIS,
+%% WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+%% See the License for the specific language governing permissions and
+%% limitations under the License.
 %% 
 %% %CopyrightEnd%
 %%
 %%
 -module(httpd_response).
 -export([generate_and_send_response/1, send_status/3, send_header/3, 
-	 send_body/3, send_chunk/3, send_final_chunk/2, split_header/2,
-	 is_disable_chunked_send/1, cache_headers/2]).
+	 send_body/3, send_chunk/3, send_final_chunk/2, send_final_chunk/3, 
+	 split_header/2, is_disable_chunked_send/1, cache_headers/2]).
 -export([map_status_code/2]).
 
 -include_lib("inets/src/inets_app/inets_internal.hrl").
@@ -88,8 +89,7 @@ traverse_modules(ModData,[Module|Rest]) ->
 				"~n   Error:       ~p"
 				"~n   Stack trace: ~p",
 				[Module, T, E, ?STACK()])),
-	    report_error(mod_log, ModData#mod.config_db, String),
-	    report_error(mod_disk_log, ModData#mod.config_db, String),
+	    httpd_util:error_log(ModData#mod.config_db, String),
 	    send_status(ModData, 500, none),
 	    done
     end.
@@ -176,7 +176,7 @@ send_header(#mod{socket_type  = Type,
     StatusLine = [NewVer, " ", io_lib:write(NewStatusCode), " ",
 		  httpd_util:reason_phrase(NewStatusCode), ?CRLF],
     ConnectionHeader = get_connection(Conn, NewVer),
-    Head = list_to_binary([StatusLine, Headers, ConnectionHeader , ?CRLF]),
+    Head = [StatusLine, Headers, ConnectionHeader , ?CRLF],
     httpd_socket:deliver(Type, Sock, Head).
 
 map_status_code("HTTP/1.0", Code) 
@@ -244,7 +244,6 @@ send_chunk(_, <<>>, _) ->
     ok;
 send_chunk(_, [], _) ->
     ok;
-
 send_chunk(#mod{http_version = "HTTP/1.1", 
 		socket_type = Type, socket = Sock}, Response0, false) ->
     Response = http_chunk:encode(Response0),
@@ -253,10 +252,13 @@ send_chunk(#mod{http_version = "HTTP/1.1",
 send_chunk(#mod{socket_type = Type, socket = Sock} = _ModData, Response, _) ->
     httpd_socket:deliver(Type, Sock, Response).
 
+send_final_chunk(Mod, IsDisableChunkedSend) ->
+    send_final_chunk(Mod, [], IsDisableChunkedSend).
+
 send_final_chunk(#mod{http_version = "HTTP/1.1", 
-		      socket_type = Type, socket = Sock}, false) ->
-    httpd_socket:deliver(Type, Sock, http_chunk:encode_last());
-send_final_chunk(#mod{socket_type = Type, socket = Sock}, _) ->
+		      socket_type = Type, socket = Sock}, Trailers, false) ->
+    httpd_socket:deliver(Type, Sock, http_chunk:encode_last(Trailers));
+send_final_chunk(#mod{socket_type = Type, socket = Sock}, _, _) ->
     httpd_socket:close(Type, Sock).
 
 is_disable_chunked_send(Db) ->
@@ -286,41 +288,27 @@ create_header(ConfigDb, KeyValueTupleHeaders) ->
     Date        = httpd_util:rfc1123_date(), 
     ContentType = "text/html", 
     Server      = server(ConfigDb),
-    NewHeaders  = add_default_headers([{"date",         Date},
-				       {"content-type", ContentType},
-				       {"server",       Server}], 
-				       KeyValueTupleHeaders),
-    lists:map(fun fix_header/1, NewHeaders).
+    CustomizeCB = httpd_util:lookup(ConfigDb, customize, httpd_custom),
 
+    CustomDefaults = httpd_custom:response_default_headers(CustomizeCB),
+    SystemDefaultes = ([{"date", Date},
+			{"content-type", ContentType}
+			| if Server=="" -> [];
+			     true -> [{"server", Server}]
+			  end
+		       ]),
 
+    %% System defaults not present in custom defaults will be added
+    %% to defaults    
+    Defaults = add_default_headers(SystemDefaultes, CustomDefaults),
+    
+    Headers0 = add_default_headers(Defaults, KeyValueTupleHeaders),
+    lists:filtermap(fun(H) ->
+			    httpd_custom:customize_headers(CustomizeCB, response_header, H)
+		    end,
+		    [Header || Header <- Headers0]).
 server(ConfigDb) ->
     httpd_util:lookup(ConfigDb, server, ?SERVER_SOFTWARE).
-
-fix_header({Key0, Value}) ->
-    %% make sure first letter is capital
-    Words1 = string:tokens(Key0, "-"),
-    Words2 = upify(Words1, []),
-    Key    = new_key(Words2),
-    Key ++ ": " ++ Value ++ ?CRLF .
-
-new_key([]) ->
-    "";
-new_key([W]) ->
-    W;
-new_key([W1,W2]) ->
-    W1 ++ "-" ++ W2;
-new_key([W|R]) ->
-    W ++ "-" ++ new_key(R).
-    
-upify([], Acc) ->
-    lists:reverse(Acc);
-upify([Key|Rest], Acc) ->
-    upify(Rest, [upify2(Key)|Acc]).
-
-upify2([C|Rest]) when (C >= $a) andalso (C =< $z) ->
-    [C-($a-$A)|Rest];
-upify2(Str) ->
-    Str.
 
 add_default_headers([], Headers) ->
     Headers;
@@ -402,23 +390,12 @@ send_response_old(#mod{socket_type = Type,
 	    send_header(ModData, StatusCode, [{content_length,
 					       content_length(NewResponse)}]),
 	    httpd_socket:deliver(Type, Sock, NewResponse);
-
-	{error, _Reason} ->
+	_ ->
 	    send_status(ModData, 500, "Internal Server Error")
     end.
 
 content_length(Body)->
     integer_to_list(httpd_util:flatlength(Body)).
-
-report_error(Mod, ConfigDB, Error) ->
-    Modules = httpd_util:lookup(ConfigDB, modules,
-				[mod_get, mod_head, mod_log]),
-    case lists:member(Mod, Modules) of
-	true ->
-	    Mod:report_error(ConfigDB, Error);
-	_ ->
-	    ok
-    end.
 
 handle_headers([], NewHeaders) ->
     {ok, NewHeaders};

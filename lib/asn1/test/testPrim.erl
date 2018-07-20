@@ -1,18 +1,19 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 1997-2013. All Rights Reserved.
+%% Copyright Ericsson AB 1997-2016. All Rights Reserved.
 %%
-%% The contents of this file are subject to the Erlang Public License,
-%% Version 1.1, (the "License"); you may not use this file except in
-%% compliance with the License. You should have received a copy of the
-%% Erlang Public License along with this software. If not, it can be
-%% retrieved online at http://www.erlang.org/.
+%% Licensed under the Apache License, Version 2.0 (the "License");
+%% you may not use this file except in compliance with the License.
+%% You may obtain a copy of the License at
 %%
-%% Software distributed under the License is distributed on an "AS IS"
-%% basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See
-%% the License for the specific language governing rights and limitations
-%% under the License.
+%%     http://www.apache.org/licenses/LICENSE-2.0
+%%
+%% Unless required by applicable law or agreed to in writing, software
+%% distributed under the License is distributed on an "AS IS" BASIS,
+%% WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+%% See the License for the specific language governing permissions and
+%% limitations under the License.
 %%
 %% %CopyrightEnd%
 %%
@@ -27,7 +28,7 @@
 -export([null/1]).
 -export([real/1]).
 
--include_lib("test_server/include/test_server.hrl").
+-include_lib("common_test/include/ct.hrl").
 
 bool(Rules) ->
     Types = ['Bool','BoolCon','BoolPri','BoolApp',
@@ -77,8 +78,37 @@ int(Rules) ->
     roundtrip('ASeq', {'ASeq',false,250,true,200,true,199,true,77788}),
     roundtrip('ASeq', {'ASeq',true,0,false,0,true,0,true,68789}),
 
+    %%==========================================================
+    %% Longitude ::= INTEGER {
+    %%  oneMicrodegreeEast(10),
+    %%  oneMicrodegreeWest(-10),
+    %%  unavailable(1800000001)
+    %% } (-1799999999..1800000001)
+    %%==========================================================
+
+    Enc10 = encoding(Rules, oneMicrodegreeEast),
+    Enc10 = roundtrip('Longitude', oneMicrodegreeEast),
+    Enc10 = roundtrip('Longitude', 10, oneMicrodegreeEast),
+
+    Enc20 = encoding(Rules, oneMicrodegreeWest),
+    Enc20 = roundtrip('Longitude', oneMicrodegreeWest),
+    Enc20 = roundtrip('Longitude', -10, oneMicrodegreeWest),
+
+    Enc30 = roundtrip('Longitude', unavailable),
+    Enc30 = roundtrip('Longitude', 1800000001, unavailable),
+
     ok.
 
+encoding(Rules, Type) ->
+    asn1_test_lib:hex_to_bin(encoding_1(Rules, Type)).
+
+encoding_1(ber, oneMicrodegreeEast) -> "02010A";
+encoding_1(per, oneMicrodegreeEast) -> "C06B49D2 09";
+encoding_1(uper, oneMicrodegreeEast) -> "6B49D209";
+
+encoding_1(ber, oneMicrodegreeWest) -> "0201F6";
+encoding_1(per, oneMicrodegreeWest) -> "C06B49D1 F5";
+encoding_1(uper, oneMicrodegreeWest) -> "6B49D1F5".
 
 enum(Rules) ->
 
@@ -98,6 +128,11 @@ enum(Rules) ->
 	ber ->
 	    ok
     end,
+
+    roundtrip('NegEnumVal', neg),
+    roundtrip('NegEnumVal', zero),
+    roundtrip('EnumVal128', val),
+
     ok.
 
 

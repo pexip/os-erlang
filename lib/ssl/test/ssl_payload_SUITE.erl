@@ -1,18 +1,19 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2008-2013. All Rights Reserved.
+%% Copyright Ericsson AB 2008-2016. All Rights Reserved.
 %%
-%% The contents of this file are subject to the Erlang Public License,
-%% Version 1.1, (the "License"); you may not use this file except in
-%% compliance with the License. You should have received a copy of the
-%% Erlang Public License along with this software. If not, it can be
-%% retrieved online at http://www.erlang.org/.
+%% Licensed under the Apache License, Version 2.0 (the "License");
+%% you may not use this file except in compliance with the License.
+%% You may obtain a copy of the License at
 %%
-%% Software distributed under the License is distributed on an "AS IS"
-%% basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See
-%% the License for the specific language governing rights and limitations
-%% under the License.
+%%     http://www.apache.org/licenses/LICENSE-2.0
+%%
+%% Unless required by applicable law or agreed to in writing, software
+%% distributed under the License is distributed on an "AS IS" BASIS,
+%% WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+%% See the License for the specific language governing permissions and
+%% limitations under the License.
 %%
 %% %CopyrightEnd%
 %%
@@ -29,8 +30,6 @@
 %%--------------------------------------------------------------------
 %% Common Test interface functions -----------------------------------
 %%--------------------------------------------------------------------
-suite() -> [{ct_hooks,[ts_install_cth]}].
-
 all() -> 
     [
      {group, 'tlsv1.2'},
@@ -71,8 +70,8 @@ init_per_suite(Config) ->
     catch crypto:stop(),
     try crypto:start() of
 	ok ->
-	    ssl:start(),
-	    make_certs:all(?config(data_dir, Config), ?config(priv_dir, Config)),
+	    ssl_test_lib:clean_start(),
+	    {ok, _} = make_certs:all(proplists:get_value(data_dir, Config), proplists:get_value(priv_dir, Config)),
 	    ssl_test_lib:cert_options(Config)
     catch _:_  ->
 	    {skip, "Crypto did not start"}
@@ -87,8 +86,7 @@ init_per_group(GroupName, Config) ->
 	true ->
 	    case ssl_test_lib:sufficient_crypto_support(GroupName) of
 		true ->
-		    ssl_test_lib:init_tls_version(GroupName),
-		    Config;
+		    ssl_test_lib:init_tls_version(GroupName, Config);
 		false ->
 		    {skip, "Missing crypto support"}
 	    end;
@@ -100,10 +98,32 @@ init_per_group(GroupName, Config) ->
 end_per_group(_GroupName, Config) ->
     Config.
 
-init_per_testcase(_TestCase, Config0) ->
-    Config = lists:keydelete(watchdog, 1, Config0),
-    Dog = ct:timetrap(?TIMEOUT),
-    [{watchdog, Dog} | Config].
+init_per_testcase(TestCase, Config) when TestCase == server_echos_passive_huge;
+					 TestCase == server_echos_active_once_huge;
+					 TestCase == server_echos_active_huge;
+					 TestCase == client_echos_passive_huge;
+					 TestCase == client_echos_active_once_huge;
+					 TestCase == client_echos_active_huge ->
+    case erlang:system_info(system_architecture) of
+	"sparc-sun-solaris2.10" ->
+	    {skip,"Will take to long time on an old Sparc"};
+	_ ->
+	    ct:timetrap({seconds, 90}),
+	    Config
+    end;
+
+init_per_testcase(TestCase, Config) when TestCase == server_echos_passive_big;
+					 TestCase == server_echos_active_once_big;
+					 TestCase == server_echos_active_big;
+					 TestCase == client_echos_passive_big;
+					 TestCase == client_echos_active_once_big;
+					 TestCase == client_echos_active_big ->
+    ct:timetrap({seconds, 60}),
+    Config;
+
+init_per_testcase(_TestCase, Config) ->
+    ct:timetrap({seconds, 15}),
+    Config.
 
 end_per_testcase(_TestCase, Config) ->
     Config.
@@ -116,8 +136,8 @@ server_echos_passive_small() ->
      "sends them back, and closes."}].
 
 server_echos_passive_small(Config) when is_list(Config) -> 
-    ClientOpts = ?config(client_opts, Config),
-    ServerOpts = ?config(server_opts, Config),
+    ClientOpts = ssl_test_lib:ssl_options(client_opts, Config),
+    ServerOpts = ssl_test_lib:ssl_options(server_opts, Config),
     {ClientNode, ServerNode, Hostname} = ssl_test_lib:run_where(Config),
 
     Str = "1234567890", 
@@ -132,8 +152,8 @@ server_echos_active_once_small() ->
      " them, sends them back, and closes."}].
 
 server_echos_active_once_small(Config) when is_list(Config) -> 
-        ClientOpts = ?config(client_opts, Config),
-    ServerOpts = ?config(server_opts, Config),
+        ClientOpts = ssl_test_lib:ssl_options(client_opts, Config),
+    ServerOpts = ssl_test_lib:ssl_options(server_opts, Config),
     {ClientNode, ServerNode, Hostname} = ssl_test_lib:run_where(Config),
 
     Str = "1234567890", 
@@ -148,8 +168,8 @@ server_echos_active_small() ->
      "sends them back, and closes."}].
 
 server_echos_active_small(Config) when is_list(Config) -> 
-    ClientOpts = ?config(client_opts, Config),
-    ServerOpts = ?config(server_opts, Config),
+    ClientOpts = ssl_test_lib:ssl_options(client_opts, Config),
+    ServerOpts = ssl_test_lib:ssl_options(server_opts, Config),
     {ClientNode, ServerNode, Hostname} = ssl_test_lib:run_where(Config),
 
     Str = "1234567890", 
@@ -163,8 +183,8 @@ client_echos_passive_small() ->
       "sends them back, and closes."}].
 
 client_echos_passive_small(Config) when is_list(Config) -> 
-    ClientOpts = ?config(client_opts, Config),
-    ServerOpts = ?config(server_opts, Config),
+    ClientOpts = ssl_test_lib:ssl_options(client_opts, Config),
+    ServerOpts = ssl_test_lib:ssl_options(server_opts, Config),
     {ClientNode, ServerNode, Hostname} = ssl_test_lib:run_where(Config),
 
     Str = "1234567890", 
@@ -178,8 +198,8 @@ client_echos_active_once_small() ->
      "them, sends them back, and closes."].
 
 client_echos_active_once_small(Config) when is_list(Config) -> 
-    ClientOpts = ?config(client_opts, Config),
-    ServerOpts = ?config(server_opts, Config),
+    ClientOpts = ssl_test_lib:ssl_options(client_opts, Config),
+    ServerOpts = ssl_test_lib:ssl_options(server_opts, Config),
     {ClientNode, ServerNode, Hostname} = ssl_test_lib:run_where(Config),
 
     Str = "1234567890", 
@@ -193,8 +213,8 @@ client_echos_active_small() ->
       "sends them back, and closes."}].
 
 client_echos_active_small(Config) when is_list(Config) -> 
-    ClientOpts = ?config(client_opts, Config),
-    ServerOpts = ?config(server_opts, Config),
+    ClientOpts = ssl_test_lib:ssl_options(client_opts, Config),
+    ServerOpts = ssl_test_lib:ssl_options(server_opts, Config),
     {ClientNode, ServerNode, Hostname} = ssl_test_lib:run_where(Config),
 
     Str = "1234567890",     
@@ -209,8 +229,8 @@ server_echos_passive_big() ->
      "sends them back, and closes."}].
 
 server_echos_passive_big(Config) when is_list(Config) -> 
-    ClientOpts = ?config(client_opts, Config),
-    ServerOpts = ?config(server_opts, Config),
+    ClientOpts = ssl_test_lib:ssl_options(client_opts, Config),
+    ServerOpts = ssl_test_lib:ssl_options(server_opts, Config),
     {ClientNode, ServerNode, Hostname} = ssl_test_lib:run_where(Config),
 
     Str = "1234567890", 
@@ -225,8 +245,8 @@ server_echos_active_once_big() ->
       "them, sends them back, and closes."}].
 
 server_echos_active_once_big(Config) when is_list(Config) -> 
-    ClientOpts = ?config(client_opts, Config),
-    ServerOpts = ?config(server_opts, Config),
+    ClientOpts = ssl_test_lib:ssl_options(client_opts, Config),
+    ServerOpts = ssl_test_lib:ssl_options(server_opts, Config),
     {ClientNode, ServerNode, Hostname} = ssl_test_lib:run_where(Config),
 
     Str = "1234567890", 
@@ -241,8 +261,8 @@ server_echos_active_big() ->
       " them, sends them back, and closes."}].
 
 server_echos_active_big(Config) when is_list(Config) -> 
-    ClientOpts = ?config(client_opts, Config),
-    ServerOpts = ?config(server_opts, Config),
+    ClientOpts = ssl_test_lib:ssl_options(client_opts, Config),
+    ServerOpts = ssl_test_lib:ssl_options(server_opts, Config),
     {ClientNode, ServerNode, Hostname} = ssl_test_lib:run_where(Config),
 
     Str = "1234567890", 
@@ -256,8 +276,8 @@ client_echos_passive_big() ->
      "sends them back, and closes."}].
 
 client_echos_passive_big(Config) when is_list(Config) -> 
-    ClientOpts = ?config(client_opts, Config),
-    ServerOpts = ?config(server_opts, Config),
+    ClientOpts = ssl_test_lib:ssl_options(client_opts, Config),
+    ServerOpts = ssl_test_lib:ssl_options(server_opts, Config),
     {ClientNode, ServerNode, Hostname} = ssl_test_lib:run_where(Config),
 
     Str = "1234567890", 
@@ -271,8 +291,8 @@ client_echos_active_once_big() ->
       " them, sends them back, and closes."}].
 
 client_echos_active_once_big(Config) when is_list(Config) -> 
-    ClientOpts = ?config(client_opts, Config),
-    ServerOpts = ?config(server_opts, Config),
+    ClientOpts = ssl_test_lib:ssl_options(client_opts, Config),
+    ServerOpts = ssl_test_lib:ssl_options(server_opts, Config),
     {ClientNode, ServerNode, Hostname} = ssl_test_lib:run_where(Config),
 
     Str = "1234567890", 
@@ -286,8 +306,8 @@ client_echos_active_big() ->
       "sends them back, and closes."}].
 
 client_echos_active_big(Config) when is_list(Config) -> 
-     ClientOpts = ?config(client_opts, Config),
-    ServerOpts = ?config(server_opts, Config),
+     ClientOpts = ssl_test_lib:ssl_options(client_opts, Config),
+    ServerOpts = ssl_test_lib:ssl_options(server_opts, Config),
     {ClientNode, ServerNode, Hostname} = ssl_test_lib:run_where(Config),
 
     Str = "1234567890", 
@@ -301,8 +321,8 @@ server_echos_passive_huge() ->
       " them, sends them back, and closes."}].
 
 server_echos_passive_huge(Config) when is_list(Config) -> 
-    ClientOpts = ?config(client_opts, Config),
-    ServerOpts = ?config(server_opts, Config),
+    ClientOpts = ssl_test_lib:ssl_options(client_opts, Config),
+    ServerOpts = ssl_test_lib:ssl_options(server_opts, Config),
     {ClientNode, ServerNode, Hostname} = ssl_test_lib:run_where(Config),
 
     Str = "1234567890", 
@@ -316,8 +336,8 @@ server_echos_active_once_huge() ->
       "them, sends them back, and closes."}].
 
 server_echos_active_once_huge(Config) when is_list(Config) -> 
-        ClientOpts = ?config(client_opts, Config),
-    ServerOpts = ?config(server_opts, Config),
+        ClientOpts = ssl_test_lib:ssl_options(client_opts, Config),
+    ServerOpts = ssl_test_lib:ssl_options(server_opts, Config),
     {ClientNode, ServerNode, Hostname} = ssl_test_lib:run_where(Config),
 
     Str = "1234567890", 
@@ -331,8 +351,8 @@ server_echos_active_huge() ->
      "sends them back, and closes."}].
 
 server_echos_active_huge(Config) when is_list(Config) -> 
-    ClientOpts = ?config(client_opts, Config),
-    ServerOpts = ?config(server_opts, Config),
+    ClientOpts = ssl_test_lib:ssl_options(client_opts, Config),
+    ServerOpts = ssl_test_lib:ssl_options(server_opts, Config),
     {ClientNode, ServerNode, Hostname} = ssl_test_lib:run_where(Config),
 
     Str = "1234567890", 
@@ -346,8 +366,8 @@ client_echos_passive_huge() ->
      "them, sends them back, and closes."}].
 
 client_echos_passive_huge(Config) when is_list(Config) -> 
-    ClientOpts = ?config(client_opts, Config),
-    ServerOpts = ?config(server_opts, Config),
+    ClientOpts = ssl_test_lib:ssl_options(client_opts, Config),
+    ServerOpts = ssl_test_lib:ssl_options(server_opts, Config),
     {ClientNode, ServerNode, Hostname} = ssl_test_lib:run_where(Config),
 
     Str = "1234567890", 
@@ -360,8 +380,8 @@ client_echos_active_once_huge() ->
       "them, sends them back, and closes."}].
 
 client_echos_active_once_huge(Config) when is_list(Config) -> 
-    ClientOpts = ?config(client_opts, Config),
-    ServerOpts = ?config(server_opts, Config),
+    ClientOpts = ssl_test_lib:ssl_options(client_opts, Config),
+    ServerOpts = ssl_test_lib:ssl_options(server_opts, Config),
     {ClientNode, ServerNode, Hostname} = ssl_test_lib:run_where(Config),
 
     Str = "1234567890", 
@@ -374,8 +394,8 @@ client_echos_active_huge() ->
      "sends them back, and closes."}].
 
 client_echos_active_huge(Config) when is_list(Config) -> 
-     ClientOpts = ?config(client_opts, Config),
-    ServerOpts = ?config(server_opts, Config),
+     ClientOpts = ssl_test_lib:ssl_options(client_opts, Config),
+    ServerOpts = ssl_test_lib:ssl_options(server_opts, Config),
     {ClientNode, ServerNode, Hostname} = ssl_test_lib:run_where(Config),
 
     Str = "1234567890", 

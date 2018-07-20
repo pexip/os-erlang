@@ -1,18 +1,19 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2008-2013. All Rights Reserved.
+%% Copyright Ericsson AB 2008-2016. All Rights Reserved.
 %%
-%% The contents of this file are subject to the Erlang Public License,
-%% Version 1.1, (the "License"); you may not use this file except in
-%% compliance with the License. You should have received a copy of the
-%% Erlang Public License along with this software. If not, it can be
-%% retrieved online at http://www.erlang.org/.
+%% Licensed under the Apache License, Version 2.0 (the "License");
+%% you may not use this file except in compliance with the License.
+%% You may obtain a copy of the License at
 %%
-%% Software distributed under the License is distributed on an "AS IS"
-%% basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See
-%% the License for the specific language governing rights and limitations
-%% under the License.
+%%     http://www.apache.org/licenses/LICENSE-2.0
+%%
+%% Unless required by applicable law or agreed to in writing, software
+%% distributed under the License is distributed on an "AS IS" BASIS,
+%% WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+%% See the License for the specific language governing permissions and
+%% limitations under the License.
 %%
 %% %CopyrightEnd%
 %% This file is generated DO NOT EDIT
@@ -58,7 +59,7 @@ new(#wx_ref{type=DialogDataT,ref=DialogDataRef}) ->
   <<DialogDataRef:32/?UI>>).
 
 %% @doc See <a href="http://www.wxwidgets.org/manuals/2.8.12/wx_wxprintdialogdata.html#wxprintdialogdataenablehelp">external documentation</a>.
--spec enableHelp(This, Flag) -> ok when
+-spec enableHelp(This, Flag) -> 'ok' when
 	This::wxPrintDialogData(), Flag::boolean().
 enableHelp(#wx_ref{type=ThisT,ref=ThisRef},Flag)
  when is_boolean(Flag) ->
@@ -67,7 +68,7 @@ enableHelp(#wx_ref{type=ThisT,ref=ThisRef},Flag)
   <<ThisRef:32/?UI,(wxe_util:from_bool(Flag)):32/?UI>>).
 
 %% @doc See <a href="http://www.wxwidgets.org/manuals/2.8.12/wx_wxprintdialogdata.html#wxprintdialogdataenablepagenumbers">external documentation</a>.
--spec enablePageNumbers(This, Flag) -> ok when
+-spec enablePageNumbers(This, Flag) -> 'ok' when
 	This::wxPrintDialogData(), Flag::boolean().
 enablePageNumbers(#wx_ref{type=ThisT,ref=ThisRef},Flag)
  when is_boolean(Flag) ->
@@ -76,7 +77,7 @@ enablePageNumbers(#wx_ref{type=ThisT,ref=ThisRef},Flag)
   <<ThisRef:32/?UI,(wxe_util:from_bool(Flag)):32/?UI>>).
 
 %% @doc See <a href="http://www.wxwidgets.org/manuals/2.8.12/wx_wxprintdialogdata.html#wxprintdialogdataenableprinttofile">external documentation</a>.
--spec enablePrintToFile(This, Flag) -> ok when
+-spec enablePrintToFile(This, Flag) -> 'ok' when
 	This::wxPrintDialogData(), Flag::boolean().
 enablePrintToFile(#wx_ref{type=ThisT,ref=ThisRef},Flag)
  when is_boolean(Flag) ->
@@ -85,7 +86,7 @@ enablePrintToFile(#wx_ref{type=ThisT,ref=ThisRef},Flag)
   <<ThisRef:32/?UI,(wxe_util:from_bool(Flag)):32/?UI>>).
 
 %% @doc See <a href="http://www.wxwidgets.org/manuals/2.8.12/wx_wxprintdialogdata.html#wxprintdialogdataenableselection">external documentation</a>.
--spec enableSelection(This, Flag) -> ok when
+-spec enableSelection(This, Flag) -> 'ok' when
 	This::wxPrintDialogData(), Flag::boolean().
 enableSelection(#wx_ref{type=ThisT,ref=ThisRef},Flag)
  when is_boolean(Flag) ->
@@ -182,7 +183,7 @@ isOk(#wx_ref{type=ThisT,ref=ThisRef}) ->
   <<ThisRef:32/?UI>>).
 
 %% @doc See <a href="http://www.wxwidgets.org/manuals/2.8.12/wx_wxprintdialogdata.html#wxprintdialogdatasetcollate">external documentation</a>.
--spec setCollate(This, Flag) -> ok when
+-spec setCollate(This, Flag) -> 'ok' when
 	This::wxPrintDialogData(), Flag::boolean().
 setCollate(#wx_ref{type=ThisT,ref=ThisRef},Flag)
  when is_boolean(Flag) ->
@@ -191,7 +192,7 @@ setCollate(#wx_ref{type=ThisT,ref=ThisRef},Flag)
   <<ThisRef:32/?UI,(wxe_util:from_bool(Flag)):32/?UI>>).
 
 %% @doc See <a href="http://www.wxwidgets.org/manuals/2.8.12/wx_wxprintdialogdata.html#wxprintdialogdatasetfrompage">external documentation</a>.
--spec setFromPage(This, V) -> ok when
+-spec setFromPage(This, V) -> 'ok' when
 	This::wxPrintDialogData(), V::integer().
 setFromPage(#wx_ref{type=ThisT,ref=ThisRef},V)
  when is_integer(V) ->
@@ -200,7 +201,7 @@ setFromPage(#wx_ref{type=ThisT,ref=ThisRef},V)
   <<ThisRef:32/?UI,V:32/?UI>>).
 
 %% @doc See <a href="http://www.wxwidgets.org/manuals/2.8.12/wx_wxprintdialogdata.html#wxprintdialogdatasetmaxpage">external documentation</a>.
--spec setMaxPage(This, V) -> ok when
+-spec setMaxPage(This, V) -> 'ok' when
 	This::wxPrintDialogData(), V::integer().
 setMaxPage(#wx_ref{type=ThisT,ref=ThisRef},V)
  when is_integer(V) ->
@@ -209,7 +210,7 @@ setMaxPage(#wx_ref{type=ThisT,ref=ThisRef},V)
   <<ThisRef:32/?UI,V:32/?UI>>).
 
 %% @doc See <a href="http://www.wxwidgets.org/manuals/2.8.12/wx_wxprintdialogdata.html#wxprintdialogdatasetminpage">external documentation</a>.
--spec setMinPage(This, V) -> ok when
+-spec setMinPage(This, V) -> 'ok' when
 	This::wxPrintDialogData(), V::integer().
 setMinPage(#wx_ref{type=ThisT,ref=ThisRef},V)
  when is_integer(V) ->
@@ -218,7 +219,7 @@ setMinPage(#wx_ref{type=ThisT,ref=ThisRef},V)
   <<ThisRef:32/?UI,V:32/?UI>>).
 
 %% @doc See <a href="http://www.wxwidgets.org/manuals/2.8.12/wx_wxprintdialogdata.html#wxprintdialogdatasetnocopies">external documentation</a>.
--spec setNoCopies(This, V) -> ok when
+-spec setNoCopies(This, V) -> 'ok' when
 	This::wxPrintDialogData(), V::integer().
 setNoCopies(#wx_ref{type=ThisT,ref=ThisRef},V)
  when is_integer(V) ->
@@ -227,7 +228,7 @@ setNoCopies(#wx_ref{type=ThisT,ref=ThisRef},V)
   <<ThisRef:32/?UI,V:32/?UI>>).
 
 %% @doc See <a href="http://www.wxwidgets.org/manuals/2.8.12/wx_wxprintdialogdata.html#wxprintdialogdatasetprintdata">external documentation</a>.
--spec setPrintData(This, PrintData) -> ok when
+-spec setPrintData(This, PrintData) -> 'ok' when
 	This::wxPrintDialogData(), PrintData::wxPrintData:wxPrintData().
 setPrintData(#wx_ref{type=ThisT,ref=ThisRef},#wx_ref{type=PrintDataT,ref=PrintDataRef}) ->
   ?CLASS(ThisT,wxPrintDialogData),
@@ -236,7 +237,7 @@ setPrintData(#wx_ref{type=ThisT,ref=ThisRef},#wx_ref{type=PrintDataT,ref=PrintDa
   <<ThisRef:32/?UI,PrintDataRef:32/?UI>>).
 
 %% @doc See <a href="http://www.wxwidgets.org/manuals/2.8.12/wx_wxprintdialogdata.html#wxprintdialogdatasetprinttofile">external documentation</a>.
--spec setPrintToFile(This, Flag) -> ok when
+-spec setPrintToFile(This, Flag) -> 'ok' when
 	This::wxPrintDialogData(), Flag::boolean().
 setPrintToFile(#wx_ref{type=ThisT,ref=ThisRef},Flag)
  when is_boolean(Flag) ->
@@ -245,7 +246,7 @@ setPrintToFile(#wx_ref{type=ThisT,ref=ThisRef},Flag)
   <<ThisRef:32/?UI,(wxe_util:from_bool(Flag)):32/?UI>>).
 
 %% @doc See <a href="http://www.wxwidgets.org/manuals/2.8.12/wx_wxprintdialogdata.html#wxprintdialogdatasetselection">external documentation</a>.
--spec setSelection(This, Flag) -> ok when
+-spec setSelection(This, Flag) -> 'ok' when
 	This::wxPrintDialogData(), Flag::boolean().
 setSelection(#wx_ref{type=ThisT,ref=ThisRef},Flag)
  when is_boolean(Flag) ->
@@ -254,7 +255,7 @@ setSelection(#wx_ref{type=ThisT,ref=ThisRef},Flag)
   <<ThisRef:32/?UI,(wxe_util:from_bool(Flag)):32/?UI>>).
 
 %% @doc See <a href="http://www.wxwidgets.org/manuals/2.8.12/wx_wxprintdialogdata.html#wxprintdialogdatasettopage">external documentation</a>.
--spec setToPage(This, V) -> ok when
+-spec setToPage(This, V) -> 'ok' when
 	This::wxPrintDialogData(), V::integer().
 setToPage(#wx_ref{type=ThisT,ref=ThisRef},V)
  when is_integer(V) ->
@@ -263,7 +264,7 @@ setToPage(#wx_ref{type=ThisT,ref=ThisRef},V)
   <<ThisRef:32/?UI,V:32/?UI>>).
 
 %% @doc Destroys this object, do not use object again
--spec destroy(This::wxPrintDialogData()) -> ok.
+-spec destroy(This::wxPrintDialogData()) -> 'ok'.
 destroy(Obj=#wx_ref{type=Type}) ->
   ?CLASS(Type,wxPrintDialogData),
   wxe_util:destroy(?DESTROY_OBJECT,Obj),

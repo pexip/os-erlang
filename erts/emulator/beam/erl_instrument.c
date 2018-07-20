@@ -1,18 +1,19 @@
 /*
  * %CopyrightBegin%
  *
- * Copyright Ericsson AB 2003-2013. All Rights Reserved.
+ * Copyright Ericsson AB 2003-2016. All Rights Reserved.
  *
- * The contents of this file are subject to the Erlang Public License,
- * Version 1.1, (the "License"); you may not use this file except in
- * compliance with the License. You should have received a copy of the
- * Erlang Public License along with this software. If not, it can be
- * retrieved online at http://www.erlang.org/.
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
  *
- * Software distributed under the License is distributed on an "AS IS"
- * basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See
- * the License for the specific language governing rights and limitations
- * under the License.
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  *
  * %CopyrightEnd%
  */
@@ -538,7 +539,7 @@ map_stat_free(ErtsAlcType_t n, void *extra, void *ptr)
 
 }
 
-static void dump_memory_map_to_stream(FILE *fp)
+static void dump_memory_map_to_stream(fmtfn_t to, void* to_arg)
 {
     ErtsAlcType_t n;
     MapStatBlock_t *bp;
@@ -550,7 +551,7 @@ static void dump_memory_map_to_stream(FILE *fp)
 
     /* Write header */
 
-    fprintf(fp,
+    erts_cbprintf(to, to_arg,
 	    "{instr_hdr,\n"
 	    " %lu,\n"
 	    " %lu,\n"
@@ -573,7 +574,7 @@ static void dump_memory_map_to_stream(FILE *fp)
 	else
 	    astr = ERTS_ALC_A2AD(ERTS_ALC_A_SYSTEM);
 
-	fprintf(fp,
+	erts_cbprintf(to, to_arg,
 		"%s{%s,%s,%s}%s",
 		(n == ERTS_ALC_N_MIN) ? "" : "  ",
 		ERTS_ALC_N2TD(n),
@@ -582,12 +583,12 @@ static void dump_memory_map_to_stream(FILE *fp)
 		(n == ERTS_ALC_N_MAX) ? "" : ",\n");
     }
 
-    fprintf(fp, "}}.\n");
+    erts_cbprintf(to, to_arg, "}}.\n");
 
     /* Write memory data */
     for (bp = mem_anchor; bp; bp = bp->next) {
 	if (is_internal_pid(bp->pid))
-	    fprintf(fp,
+	    erts_cbprintf(to, to_arg,
 		    "{%lu, %lu, %lu, {%lu,%lu,%lu}}.\n",
 		    (UWord) bp->type_no,
 		    (UWord) bp->mem,
@@ -596,7 +597,7 @@ static void dump_memory_map_to_stream(FILE *fp)
 		    (UWord) pid_number(bp->pid),
 		    (UWord) pid_serial(bp->pid));
 	else
-	    fprintf(fp,
+	    erts_cbprintf(to, to_arg,
 		    "{%lu, %lu, %lu, undefined}.\n",
 		    (UWord) bp->type_no,
 		    (UWord) bp->mem,
@@ -607,40 +608,29 @@ static void dump_memory_map_to_stream(FILE *fp)
 	erts_mtx_unlock(&instr_mutex);
 }
 
-int erts_instr_dump_memory_map_to_fd(int fd)
+int erts_instr_dump_memory_map_to(fmtfn_t to, void* to_arg)
 {
-    char buf[BUFSIZ];
-    FILE *f;
-
     if (!erts_instr_memory_map)
 	return 0;
 
-    f = fdopen(fd, "w");
-    if (f == NULL)
-	return 0;
-
-    /* Avoid allocating memory; we may have run out of it at this point. */
-    setbuf(f, buf);
-
-    dump_memory_map_to_stream(f);
-    fflush(f);
+    dump_memory_map_to_stream(to, to_arg);
     return 1;
 }
 
 int erts_instr_dump_memory_map(const char *name)
 {
-    FILE *f;
+    int fd;
 
     if (!erts_instr_memory_map)
 	return 0;
 
-    f = fopen(name, "w");
-    if (f == NULL)
+    fd = open(name, O_WRONLY | O_CREAT | O_TRUNC, 0640);
+    if (fd < 0)
 	return 0;
 
-    dump_memory_map_to_stream(f);
+    dump_memory_map_to_stream(erts_write_fd, (void*)&fd);
 
-    fclose(f);
+    close(fd);
     return 1;
 }
 
@@ -997,19 +987,19 @@ erts_instr_get_stat(Process *proc, Eterm what, int begin_max_period)
 }
 
 static void
-dump_stat_to_stream(FILE *fp, int begin_max_period)
+dump_stat_to_stream(fmtfn_t to, void* to_arg, int begin_max_period)
 {
     ErtsAlcType_t i, a_max, a_min;
 
     erts_mtx_lock(&instr_mutex);
 
-    fprintf(fp,
+    erts_cbprintf(to, to_arg,
 	    "{instr_vsn,%lu}.\n",
 	    (unsigned long) ERTS_INSTR_VSN);
     
     update_max_ever_values(&stats->tot, 0, 0);
 
-    fprintf(fp,
+    erts_cbprintf(to, to_arg,
 	    "{total,[{total,[{sizes,%lu,%lu,%lu},{blocks,%lu,%lu,%lu}]}]}.\n",
 	    (UWord) stats->tot.size,
 	    (UWord) stats->tot.max_size,
@@ -1037,7 +1027,7 @@ dump_stat_to_stream(FILE *fp, int begin_max_period)
 
     for (i = ERTS_ALC_A_MIN; i <= ERTS_ALC_A_MAX; i++) {
 	if (erts_allctrs_info[i].enabled) {
-	    fprintf(fp,
+	    erts_cbprintf(to, to_arg,
 		    "%s{%s,[{sizes,%lu,%lu,%lu},{blocks,%lu,%lu,%lu}]}%s",
 		    i == a_min ? "{allocators,\n [" : "  ",
 		    ERTS_ALC_A2AD(i),
@@ -1054,7 +1044,7 @@ dump_stat_to_stream(FILE *fp, int begin_max_period)
     update_max_ever_values(stats->c, ERTS_ALC_C_MIN, ERTS_ALC_C_MAX);
 
     for (i = ERTS_ALC_C_MIN; i <= ERTS_ALC_C_MAX; i++) {
-	fprintf(fp,
+	erts_cbprintf(to, to_arg,
 		"%s{%s,[{sizes,%lu,%lu,%lu},{blocks,%lu,%lu,%lu}]}%s",
 		i == ERTS_ALC_C_MIN ? "{classes,\n [" : "  ",
 		ERTS_ALC_C2CD(i),
@@ -1070,7 +1060,7 @@ dump_stat_to_stream(FILE *fp, int begin_max_period)
     update_max_ever_values(stats->n, ERTS_ALC_N_MIN, ERTS_ALC_N_MAX);
 
     for (i = ERTS_ALC_N_MIN; i <= ERTS_ALC_N_MAX; i++) {
-	fprintf(fp,
+	erts_cbprintf(to, to_arg,
 		"%s{%s,[{sizes,%lu,%lu,%lu},{blocks,%lu,%lu,%lu}]}%s",
 		i == ERTS_ALC_N_MIN ? "{types,\n [" : "  ",
 		ERTS_ALC_N2TD(i),
@@ -1094,40 +1084,29 @@ dump_stat_to_stream(FILE *fp, int begin_max_period)
 
 }
 
-int erts_instr_dump_stat_to_fd(int fd, int begin_max_period)
+int erts_instr_dump_stat_to(fmtfn_t to, void* to_arg, int begin_max_period)
 {
-    char buf[BUFSIZ];
-    FILE *fp;
-
     if (!erts_instr_stat)
 	return 0;
 
-    fp = fdopen(fd, "w");
-    if (fp == NULL)
-	return 0;
-
-    /* Avoid allocating memory; we may have run out of it at this point. */
-    setbuf(fp, buf);
-
-    dump_stat_to_stream(fp, begin_max_period);
-    fflush(fp);
+    dump_stat_to_stream(to, to_arg, begin_max_period);
     return 1;
 }
 
 int erts_instr_dump_stat(const char *name, int begin_max_period)
 {
-    FILE *file;
+    int fd;
 
     if (!erts_instr_stat)
 	return 0;
 
-    file = fopen(name, "w");
-    if (file == NULL)
+    fd = open(name, O_WRONLY | O_CREAT | O_TRUNC,0640);
+    if (fd < 0)
 	return 0;
 
-    dump_stat_to_stream(file, begin_max_period);
+    dump_stat_to_stream(erts_write_fd, (void*)&fd, begin_max_period);
 
-    fclose(file);
+    close(fd);
     return 1;
 }
 
@@ -1226,7 +1205,7 @@ erts_instr_init(int stat, int map_stat)
     mem_anchor = NULL;
 
     /* Install instrumentation functions */
-    ASSERT(sizeof(erts_allctrs) == sizeof(real_allctrs));
+    ERTS_CT_ASSERT(sizeof(erts_allctrs) == sizeof(real_allctrs));
 
     sys_memcpy((void *)real_allctrs,(void *)erts_allctrs,sizeof(erts_allctrs));
 

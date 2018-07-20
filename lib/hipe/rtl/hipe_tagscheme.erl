@@ -2,25 +2,26 @@
 %%
 %% %CopyrightBegin%
 %% 
-%% Copyright Ericsson AB 2001-2013. All Rights Reserved.
+%% Copyright Ericsson AB 2001-2015. All Rights Reserved.
 %% 
-%% The contents of this file are subject to the Erlang Public License,
-%% Version 1.1, (the "License"); you may not use this file except in
-%% compliance with the License. You should have received a copy of the
-%% Erlang Public License along with this software. If not, it can be
-%% retrieved online at http://www.erlang.org/.
-%% 
-%% Software distributed under the License is distributed on an "AS IS"
-%% basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See
-%% the License for the specific language governing rights and limitations
-%% under the License.
+%% Licensed under the Apache License, Version 2.0 (the "License");
+%% you may not use this file except in compliance with the License.
+%% You may obtain a copy of the License at
+%%
+%%     http://www.apache.org/licenses/LICENSE-2.0
+%%
+%% Unless required by applicable law or agreed to in writing, software
+%% distributed under the License is distributed on an "AS IS" BASIS,
+%% WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+%% See the License for the specific language governing permissions and
+%% limitations under the License.
 %% 
 %% %CopyrightEnd%
 %%
 %%========================================================================
 %%
 %% Filename : hipe_tagscheme.erl
-%% Note     : This is specific to Erlang 5.* (i.e. starting with R9).
+%% Note     : This is specific to Erlang >= 5.* (i.e. starting with R9).
 %%
 %% Modifications:
 %%  020904: Happi - added support for external pids and ports.
@@ -40,7 +41,8 @@
 	 test_any_pid/4, test_any_port/4,
 	 test_ref/4, test_fun/4, test_fun2/5, test_matchstate/4,
 	 test_binary/4, test_bitstr/4, test_list/4, test_map/4,
-	 test_integer/4, test_number/4, test_tuple_N/5]).
+	 test_integer/4, test_number/4, test_tuple_N/5,
+	 test_pos_bignum_arity/6]).
 -export([realtag_fixnum/2, tag_fixnum/2, realuntag_fixnum/2, untag_fixnum/2]).
 -export([test_two_fixnums/3, test_fixnums/4, unsafe_fixnum_add/3,
 	 unsafe_fixnum_sub/3,
@@ -52,9 +54,10 @@
 -export([unsafe_closure_element/3]).
 -export([mk_fun_header/0, tag_fun/2]).
 -export([unsafe_untag_float/2, unsafe_tag_float/2]).
--export([mk_sub_binary/6,mk_sub_binary/7]).
+-export([mk_sub_binary/6, mk_sub_binary/7]).
 -export([unsafe_mk_big/3, unsafe_load_float/3]).
--export([bignum_sizeneed/1,bignum_sizeneed_code/2, get_one_word_pos_bignum/3]).
+-export([bignum_sizeneed/1, bignum_sizeneed_code/2, get_one_word_pos_bignum/3,
+	 unsafe_get_one_word_pos_bignum/2]).
 -export([test_subbinary/3, test_heap_binary/3]).
 -export([create_heap_binary/3, create_refc_binary/3, create_refc_binary/4]).
 -export([create_matchstate/6, convert_matchstate/1, compare_matchstate/4]).
@@ -141,7 +144,7 @@ mk_non_value() -> ?THE_NON_VALUE.
 -spec is_fixnum(integer()) -> boolean().
 is_fixnum(N) when is_integer(N) ->
   Bits = ?bytes_to_bits(hipe_rtl_arch:word_size()) - ?TAG_IMMED1_SIZE,
-  (N =< ((1 bsl (Bits - 1)) - 1)) and (N >= -(1 bsl (Bits - 1))).
+  (N =< ((1 bsl (Bits - 1)) - 1)) andalso (N >= -(1 bsl (Bits - 1))).
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
@@ -347,6 +350,24 @@ test_pos_bignum(X, TrueLab, FalseLab, Pred) ->
    get_header(Tmp, X),
    mask_and_compare(Tmp, BigMask, ?TAG_HEADER_POS_BIG,
 		    TrueLab, FalseLab, Pred)].
+
+test_pos_bignum_arity(X, Arity, TrueLab, NotPosBignumLab, FalseLab, Pred) ->
+  Tmp = hipe_rtl:mk_new_reg_gcsafe(),
+  BoxedLab = hipe_rtl:mk_new_label(),
+  HeaderImm = hipe_rtl:mk_imm(mk_header(Arity, ?TAG_HEADER_POS_BIG)),
+  [test_is_boxed(X, hipe_rtl:label_name(BoxedLab), NotPosBignumLab, Pred),
+   BoxedLab,
+   get_header(Tmp, X)] ++
+    case NotPosBignumLab =:= FalseLab of
+      true -> [];
+      false ->
+	BignumLab = hipe_rtl:mk_new_label(),
+	BigMask = ?TAG_HEADER_MASK,
+	[mask_and_compare(Tmp, BigMask, ?TAG_HEADER_POS_BIG,
+			  hipe_rtl:label_name(BignumLab), NotPosBignumLab, Pred),
+	 BignumLab]
+    end ++
+    [hipe_rtl:mk_branch(Tmp, 'eq', HeaderImm, TrueLab, FalseLab, Pred)].
 
 test_matchstate(X, TrueLab, FalseLab, Pred) ->
   Tmp = hipe_rtl:mk_new_reg_gcsafe(),
@@ -962,22 +983,25 @@ get_one_word_pos_bignum(USize, Size, Fail) ->
   Header = hipe_rtl:mk_new_reg(),
   HalfLbl = hipe_rtl:mk_new_label(),
   HalfLblName = hipe_rtl:label_name(HalfLbl),
-  WordSize = hipe_rtl_arch:word_size(),
   PosHead = hipe_rtl:mk_imm(mk_header(1, ?TAG_HEADER_POS_BIG)),
   [get_header(Header, Size),
    hipe_rtl:mk_branch(Header, eq, PosHead, HalfLblName, Fail),
-   HalfLbl,
-   hipe_rtl:mk_load(USize, Size, hipe_rtl:mk_imm(1*WordSize
-						 -?TAG_PRIMARY_BOXED))].
+   HalfLbl |
+   unsafe_get_one_word_pos_bignum(USize, Size)].
+
+unsafe_get_one_word_pos_bignum(USize, Size) ->
+  WordSize = hipe_rtl_arch:word_size(),
+  Imm = hipe_rtl:mk_imm(1*WordSize-?TAG_PRIMARY_BOXED),
+  [hipe_rtl:mk_load(USize, Size, Imm)].
 
 -spec bignum_sizeneed(non_neg_integer()) -> non_neg_integer().
 
 bignum_sizeneed(Size) ->
-  WordSizeBits = hipe_rtl_arch:word_size() * 8,
   case is_fixnum(1 bsl Size) of
     true ->
       0;
     false ->
+      WordSizeBits = hipe_rtl_arch:word_size() * 8,
       ((Size + (WordSizeBits-1)) div WordSizeBits) + 1
   end.
 
@@ -1116,14 +1140,11 @@ get_field_offset({matchbuffer, binsize}) ->
   ?MB_SIZE.
 
 get_field_size(Field) ->
-  size_to_atom(get_field_size1(Field)).
-
-size_to_atom(Bytes) ->
   WordSize = hipe_rtl_arch:word_size(),
-  case Bytes of
+  case get_field_size1(Field) of
     WordSize -> word;
-    4 -> int32;
-    %%2 -> int16; So far there are no 2 byte fields
+    %% 4 -> int32; Seems not needed: covered by the previous case
+    %% 2 -> int16; So far there are no 2 byte fields
     1 -> byte
   end.
 

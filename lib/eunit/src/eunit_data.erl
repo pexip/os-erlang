@@ -10,7 +10,7 @@
 %%
 %% You should have received a copy of the GNU Lesser General Public
 %% License along with this library; if not, write to the Free Software
-%% Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307
+%% Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301
 %% USA
 %%
 %% @author Richard Carlsson <carlsson.richard@gmail.com>
@@ -391,7 +391,7 @@ parse({with, X, As}=T) when is_list(As) ->
 parse({S, T1} = T) when is_list(S) ->
     case eunit_lib:is_string(S) of
 	true ->
-	    group(#group{tests = T1, desc = list_to_binary(S)});
+	    group(#group{tests = T1, desc = unicode:characters_to_binary(S)});
 	false ->
 	    bad_test(T)
     end;
@@ -761,6 +761,7 @@ lazy_test_() ->
 	     lazy_gen(7),
 	     ?_assertMatch(7, get(count))]}.
 
+-dialyzer({no_improper_lists, lazy_gen/1}).
 lazy_gen(N) ->
     {generator,
      fun () ->

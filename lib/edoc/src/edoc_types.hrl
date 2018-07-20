@@ -15,7 +15,7 @@
 %%
 %% You should have received a copy of the GNU Lesser General Public
 %% License along with this library; if not, write to the Free Software
-%% Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307
+%% Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301
 %% USA
 %%
 %% Author contact: carlsson.richard@gmail.com
@@ -157,5 +157,5 @@
 -record(t_paren, {a=[], type}).		% parentheses
 
 -record(t_map, {a=[], types=[]}).
--record(t_map_field, {a=[], k_type, v_type}).
+-record(t_map_field, {a=[], assoc_type, k_type, v_type}).
 

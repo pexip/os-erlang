@@ -1,18 +1,19 @@
 %%
 %% %CopyrightBegin%
 %% 
-%% Copyright Ericsson AB 2009-2012. All Rights Reserved.
+%% Copyright Ericsson AB 2009-2016. All Rights Reserved.
 %% 
-%% The contents of this file are subject to the Erlang Public License,
-%% Version 1.1, (the "License"); you may not use this file except in
-%% compliance with the License. You should have received a copy of the
-%% Erlang Public License along with this software. If not, it can be
-%% retrieved online at http://www.erlang.org/.
-%% 
-%% Software distributed under the License is distributed on an "AS IS"
-%% basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See
-%% the License for the specific language governing rights and limitations
-%% under the License.
+%% Licensed under the Apache License, Version 2.0 (the "License");
+%% you may not use this file except in compliance with the License.
+%% You may obtain a copy of the License at
+%%
+%%     http://www.apache.org/licenses/LICENSE-2.0
+%%
+%% Unless required by applicable law or agreed to in writing, software
+%% distributed under the License is distributed on an "AS IS" BASIS,
+%% WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+%% See the License for the specific language governing permissions and
+%% limitations under the License.
 %% 
 %% %CopyrightEnd%
 
@@ -59,10 +60,14 @@ start_link() ->
 start_link(Debug) ->
     wx_object:start_link(?MODULE, Debug, []).
 
+format(#state{log=Log}, Str, Args) ->
+    wxTextCtrl:appendText(Log, io_lib:format(Str, Args)),
+    ok;
 format(Config,Str,Args) ->
     Log = proplists:get_value(log, Config),
     wxTextCtrl:appendText(Log, io_lib:format(Str, Args)),
     ok.
+
 
 -define(DEBUG_NONE, 101).
 -define(DEBUG_VERBOSE, 102).
@@ -96,7 +101,11 @@ init(Options) ->
     wxFrame:connect(Frame, close_window),
 
     _SB = wxFrame:createStatusBar(Frame,[]),
-    
+
+    %% Setup on toplevel because stc seems to steal this on linux
+    wxFrame:dragAcceptFiles(Frame, true),
+    wxFrame:connect(Frame, drop_files),
+
     %%   T        Uppersplitter
     %%   O        Left   |    Right
     %%   P  Widgets|Code |    Demo
@@ -200,15 +209,15 @@ handle_info({'EXIT',_, shutdown}, State) ->
 handle_info({'EXIT',_, normal}, State) ->
     {noreply,State};
 handle_info(Msg, State) ->
-    io:format("Got Info ~p~n",[Msg]),
+    format(State, "Got Info ~p~n",[Msg]),
     {noreply,State}.
 
 handle_call(Msg, _From, State) ->
-    io:format("Got Call ~p~n",[Msg]),
+    format(State, "Got Call ~p~n",[Msg]),
     {reply,ok,State}.
 
 handle_cast(Msg, State) ->
-    io:format("Got cast ~p~n",[Msg]),
+    format(State, "Got cast ~p~n",[Msg]),
     {noreply,State}.
 
 %% Async Events are handled in handle_event as in handle_info
@@ -256,9 +265,17 @@ handle_event(#wx{id = Id,
 	    wx_misc:launchDefaultBrowser("http://www.erlang.org/doc/apps/wx/part_frame.html"),
 	    {noreply, State};
 	?wxID_ABOUT ->
+	    WxWVer = io_lib:format("~p.~p.~p.~p",
+				   [?wxMAJOR_VERSION, ?wxMINOR_VERSION,
+				    ?wxRELEASE_NUMBER, ?wxSUBRELEASE_NUMBER]),
+	    application:load(wx),
+	    {ok, WxVsn} = application:get_key(wx,  vsn),
 	    AboutString =
 		"Demo of various widgets\n"
-		"Authors: Olle & Dan",
+		"Authors: Olle & Dan\n\n" ++
+		"Frontend: wx-" ++ WxVsn ++
+		"\nBackend: wxWidgets-" ++ lists:flatten(WxWVer),
+
 	    wxMessageDialog:showModal(wxMessageDialog:new(State#state.win, AboutString,
 							  [{style,
 							    ?wxOK bor
@@ -277,7 +294,7 @@ handle_event(#wx{event=#wxClose{}}, State = #state{win=Frame}) ->
     ok = wxFrame:setStatusText(Frame, "Closing...",[]),
     {stop, normal, State};
 handle_event(Ev,State) ->
-    io:format("~p Got event ~p ~n",[?MODULE, Ev]),
+    format(State, "~p Got event ~p ~n",[?MODULE, Ev]),
     {noreply, State}.
 
 code_change(_, _, State) ->
@@ -355,6 +372,7 @@ code_area(Parent) ->
     ?stc:setVisiblePolicy(Ed, Policy, 3),
 
     %% ?stc:connect(Ed, stc_doubleclick),
+    %% ?stc:connect(Ed, std_do_drop, fun(Ev, Obj) -> io:format("Ev ~p ~p~n",[Ev,Obj]) end),
     ?stc:setReadOnly(Ed, true),
     Ed.
 

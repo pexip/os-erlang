@@ -2,18 +2,19 @@
 %%------------------------------------------------------------------------
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2009-2013. All Rights Reserved.
+%% Copyright Ericsson AB 2009-2016. All Rights Reserved.
 %%
-%% The contents of this file are subject to the Erlang Public License,
-%% Version 1.1, (the "License"); you may not use this file except in
-%% compliance with the License. You should have received a copy of the
-%% Erlang Public License along with this software. If not, it can be
-%% retrieved online at http://www.erlang.org/.
+%% Licensed under the Apache License, Version 2.0 (the "License");
+%% you may not use this file except in compliance with the License.
+%% You may obtain a copy of the License at
 %%
-%% Software distributed under the License is distributed on an "AS IS"
-%% basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See
-%% the License for the specific language governing rights and limitations
-%% under the License.
+%%     http://www.apache.org/licenses/LICENSE-2.0
+%%
+%% Unless required by applicable law or agreed to in writing, software
+%% distributed under the License is distributed on an "AS IS" BASIS,
+%% WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+%% See the License for the specific language governing permissions and
+%% limitations under the License.
 %%
 %% %CopyrightEnd%
 %%
@@ -51,7 +52,6 @@
 		    add_dir           :: wx:wx_object(),
 		    add_rec           :: wx:wx_object(),
 		    chosen_box        :: wx:wx_object(),
-		    analysis_pid      :: pid(),
 		    del_file          :: wx:wx_object(),
 		    doc_plt           :: dialyzer_plt:plt(),
 		    clear_chosen      :: wx:wx_object(),
@@ -71,11 +71,11 @@
 		    stop              :: wx:wx_object(),
 		    frame             :: wx:wx_object(),
 		    warnings_box      :: wx:wx_object(),
-		    explanation_box   :: wx:wx_object(),
+		    explanation_box   :: wx:wx_object() | 'undefined',
 		    wantedWarnings    :: list(),
 		    rawWarnings       :: list(),
-		    backend_pid       :: pid(),
-		    expl_pid          :: pid()}).
+		    backend_pid       :: pid() | 'undefined',
+		    expl_pid          :: pid() | 'undefined'}).
 	       
 %%------------------------------------------------------------------------
 
@@ -310,7 +310,7 @@ createWarningsMenu() ->
   addCheckedItem(WarningsMenu, ?menuID_WARN_FAIL_FUN_CALLS,
 		 "Failing function calls"),
   addCheckedItem(WarningsMenu, ?menuID_WARN_BAD_FUN, "Bad fun applications"),
-  addCheckedItem(WarningsMenu, ?menuID_WARN_OPAQUE, "Opaqueness violations"),
+  addCheckedItem(WarningsMenu, ?menuID_WARN_OPAQUE, "Opacity violations"),
   addCheckedItem(WarningsMenu, ?menuID_WARN_LIST_CONSTR,
 		 "Improper list constructions"),
   addCheckedItem(WarningsMenu, ?menuID_WARN_UNUSED_FUN, "Unused functions"),
@@ -422,7 +422,7 @@ gui_loop(#gui_state{backend_pid = BackendPid, doc_plt = DocPlt,
     #wx{id=?menuID_HELP_ABOUT, obj=Frame, 
 	event=#wxCommand{type=command_menu_selected}} ->
       Message = "	       This is DIALYZER version "  ++ ?VSN ++  " \n"++
-	"DIALYZER is a DIscrepany AnaLYZer for ERlang programs.\n\n"++
+	"DIALYZER is a DIscrepancy AnaLYZer for ERlang programs.\n\n"++
 	"     Copyright (C) Tobias Lindahl <tobiasl@it.uu.se>\n"++
 	"                   Kostis Sagonas <kostis@it.uu.se>\n\n",
       output_sms(State, "About Dialyzer", Message, info),

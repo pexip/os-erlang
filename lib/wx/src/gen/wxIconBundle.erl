@@ -1,18 +1,19 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2008-2013. All Rights Reserved.
+%% Copyright Ericsson AB 2008-2016. All Rights Reserved.
 %%
-%% The contents of this file are subject to the Erlang Public License,
-%% Version 1.1, (the "License"); you may not use this file except in
-%% compliance with the License. You should have received a copy of the
-%% Erlang Public License along with this software. If not, it can be
-%% retrieved online at http://www.erlang.org/.
+%% Licensed under the Apache License, Version 2.0 (the "License");
+%% you may not use this file except in compliance with the License.
+%% You may obtain a copy of the License at
 %%
-%% Software distributed under the License is distributed on an "AS IS"
-%% basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See
-%% the License for the specific language governing rights and limitations
-%% under the License.
+%%     http://www.apache.org/licenses/LICENSE-2.0
+%%
+%% Unless required by applicable law or agreed to in writing, software
+%% distributed under the License is distributed on an "AS IS" BASIS,
+%% WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+%% See the License for the specific language governing permissions and
+%% limitations under the License.
 %%
 %% %CopyrightEnd%
 %% This file is generated DO NOT EDIT
@@ -57,13 +58,13 @@ new(#wx_ref{type=IcT,ref=IcRef}) ->
 -spec new(File, Type) -> wxIconBundle() when
 	File::unicode:chardata(), Type::integer().
 new(File,Type)
- when is_list(File),is_integer(Type) ->
+ when ?is_chardata(File),is_integer(Type) ->
   File_UC = unicode:characters_to_binary([File,0]),
   wxe_util:construct(?wxIconBundle_new_2,
   <<(byte_size(File_UC)):32/?UI,(File_UC)/binary, 0:(((8- ((4+byte_size(File_UC)) band 16#7)) band 16#7))/unit:8,Type:32/?UI>>).
 
 %% @doc See <a href="http://www.wxwidgets.org/manuals/2.8.12/wx_wxiconbundle.html#wxiconbundleaddicon">external documentation</a>.
--spec addIcon(This, Icon) -> ok when
+-spec addIcon(This, Icon) -> 'ok' when
 	This::wxIconBundle(), Icon::wxIcon:wxIcon().
 addIcon(#wx_ref{type=ThisT,ref=ThisRef},#wx_ref{type=IconT,ref=IconRef}) ->
   ?CLASS(ThisT,wxIconBundle),
@@ -72,10 +73,10 @@ addIcon(#wx_ref{type=ThisT,ref=ThisRef},#wx_ref{type=IconT,ref=IconRef}) ->
   <<ThisRef:32/?UI,IconRef:32/?UI>>).
 
 %% @doc See <a href="http://www.wxwidgets.org/manuals/2.8.12/wx_wxiconbundle.html#wxiconbundleaddicon">external documentation</a>.
--spec addIcon(This, File, Type) -> ok when
+-spec addIcon(This, File, Type) -> 'ok' when
 	This::wxIconBundle(), File::unicode:chardata(), Type::integer().
 addIcon(#wx_ref{type=ThisT,ref=ThisRef},File,Type)
- when is_list(File),is_integer(Type) ->
+ when ?is_chardata(File),is_integer(Type) ->
   ?CLASS(ThisT,wxIconBundle),
   File_UC = unicode:characters_to_binary([File,0]),
   wxe_util:cast(?wxIconBundle_AddIcon_2,
@@ -96,7 +97,7 @@ getIcon(This)
 %% 
 -spec getIcon(This, [Option]) -> wxIcon:wxIcon() when
 	This::wxIconBundle(),
-	Option :: {size, integer()};
+	Option :: {'size', integer()};
       (This, Size) -> wxIcon:wxIcon() when
 	This::wxIconBundle(), Size::{W::integer(), H::integer()}.
 getIcon(#wx_ref{type=ThisT,ref=ThisRef}, Options)
@@ -114,7 +115,7 @@ getIcon(#wx_ref{type=ThisT,ref=ThisRef},{SizeW,SizeH})
   <<ThisRef:32/?UI,SizeW:32/?UI,SizeH:32/?UI>>).
 
 %% @doc Destroys this object, do not use object again
--spec destroy(This::wxIconBundle()) -> ok.
+-spec destroy(This::wxIconBundle()) -> 'ok'.
 destroy(Obj=#wx_ref{type=Type}) ->
   ?CLASS(Type,wxIconBundle),
   wxe_util:destroy(?wxIconBundle_destruct,Obj),

@@ -4,7 +4,7 @@
 <erlref>
   <header>
     <copyright>
-      <year>2009</year><year>2013</year>
+      <year>2009</year><year>2016</year>
       <holder>Ericsson AB. All Rights Reserved.</holder>
     </copyright>
     <legalnotice>
@@ -47,7 +47,7 @@ Token = tuple()</code>
         <v>LeexRet = {ok, Scannerfile}
                    | {ok, Scannerfile, Warnings}
                    | error
-                   | {error, Warnings, Errors}</v>
+                   | {error, Errors, Warnings}</v>
         <v>Scannerfile = filename()</v>
         <v>Warnings = Errors = [{filename(), [ErrorInfo]}]</v>
         <v>ErrorInfo  = {ErrorLine, module(), Reason}</v>

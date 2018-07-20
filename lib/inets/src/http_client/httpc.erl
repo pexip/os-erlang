@@ -1,18 +1,19 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2009-2013. All Rights Reserved.
+%% Copyright Ericsson AB 2009-2016. All Rights Reserved.
 %%
-%% The contents of this file are subject to the Erlang Public License,
-%% Version 1.1, (the "License"); you may not use this file except in
-%% compliance with the License. You should have received a copy of the
-%% Erlang Public License along with this software. If not, it can be
-%% retrieved online at http://www.erlang.org/.
+%% Licensed under the Apache License, Version 2.0 (the "License");
+%% you may not use this file except in compliance with the License.
+%% You may obtain a copy of the License at
 %%
-%% Software distributed under the License is distributed on an "AS IS"
-%% basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See
-%% the License for the specific language governing rights and limitations
-%% under the License.
+%%     http://www.apache.org/licenses/LICENSE-2.0
+%%
+%% Unless required by applicable law or agreed to in writing, software
+%% distributed under the License is distributed on an "AS IS" BASIS,
+%% WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+%% See the License for the specific language governing permissions and
+%% limitations under the License.
 %%
 %% %CopyrightEnd%
 %%
@@ -100,7 +101,8 @@ request(Url, Profile) ->
 %%           {ok, {StatusLine, Headers, Body}} | {ok, {Status, Body}} |
 %%           {ok, RequestId} | {error,Reason} | {ok, {saved_as, FilePath}
 %%
-%%	Method - atom() = head | get | put | post | trace | options| delete 
+%%	Method - atom() = head | get | put | patch | post | trace |
+%%	                  options | delete 
 %%	Request - {Url, Headers} | {Url, Headers, ContentType, Body} 
 %%	Url - string() 
 %%	HTTPOptions - [HttpOption]
@@ -175,8 +177,8 @@ request(Method,
 request(Method, 
 	{Url, Headers, ContentType, Body}, 
 	HTTPOptions, Options, Profile) 
-  when ((Method =:= post) orelse (Method =:= put) orelse (Method =:= delete)) andalso 
-       (is_atom(Profile) orelse is_pid(Profile)) ->
+  when ((Method =:= post) orelse (Method =:= patch) orelse (Method =:= put) orelse
+	(Method =:= delete)) andalso (is_atom(Profile) orelse is_pid(Profile)) ->
     ?hcrt("request", [{method,       Method}, 
 		      {url,          Url},
 		      {headers,      Headers}, 
@@ -554,7 +556,7 @@ handle_request(Method, Url,
 
 	    Request = #request{from          = Receiver,
 			       scheme        = Scheme, 
-			       address       = {Host, Port},
+			       address       = {host_address(Host, BracketedHost), Port},
 			       path          = MaybeEscPath,
 			       pquery        = MaybeEscQuery,
 			       method        = Method,
@@ -1266,3 +1268,7 @@ child_name(Pid, [_ | Children]) ->
 %% d(_, _, _) ->
 %%     ok.
 
+host_address(Host, false) ->
+    Host;
+host_address(Host, true) ->
+    string:strip(string:strip(Host, right, $]), left, $[).

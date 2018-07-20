@@ -1,18 +1,19 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 1997-2013. All Rights Reserved.
+%% Copyright Ericsson AB 1997-2016. All Rights Reserved.
 %%
-%% The contents of this file are subject to the Erlang Public License,
-%% Version 1.1, (the "License"); you may not use this file except in
-%% compliance with the License. You should have received a copy of the
-%% Erlang Public License along with this software. If not, it can be
-%% retrieved online at http://www.erlang.org/.
+%% Licensed under the Apache License, Version 2.0 (the "License");
+%% you may not use this file except in compliance with the License.
+%% You may obtain a copy of the License at
 %%
-%% Software distributed under the License is distributed on an "AS IS"
-%% basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See
-%% the License for the specific language governing rights and limitations
-%% under the License.
+%%     http://www.apache.org/licenses/LICENSE-2.0
+%%
+%% Unless required by applicable law or agreed to in writing, software
+%% distributed under the License is distributed on an "AS IS" BASIS,
+%% WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+%% See the License for the specific language governing permissions and
+%% limitations under the License.
 %%
 %% %CopyrightEnd%
 %%
@@ -60,6 +61,7 @@
 -define(DATA_ACCEPT_TIMEOUT, infinity).
 -define(DEFAULT_MODE,        passive).
 -define(PROGRESS_DEFAULT,    ignore).
+-define(FTP_EXT_DEFAULT,    false).
 
 %% Internal Constants
 -define(FTP_PORT, 21).
@@ -94,7 +96,8 @@
 	  ipfamily,     % inet | inet6 | inet6fb4
 	  progress = ignore,   % ignore | pid()	    
 	  dtimeout = ?DATA_ACCEPT_TIMEOUT,  % non_neg_integer() | infinity
-	  tls_upgrading_data_connection = false
+	  tls_upgrading_data_connection = false,
+	  ftp_extension = ?FTP_EXT_DEFAULT
 	 }).
 
 
@@ -105,6 +108,7 @@
 
 -define(DBG(F,A), 'n/a').
 %%-define(DBG(F,A), io:format(F,A)).
+%%-define(DBG(F,A), if is_list(F) -> ct:pal(F,A); is_atom(F)->ct:pal(atom_to_list(F),A) end).
 
 %%%=========================================================================
 %%%  API - CLIENT FUNCTIONS
@@ -969,6 +973,8 @@ start_options(Options) ->
 %%    timeout
 %%    dtimeout
 %%    progress
+%%	  ftp_extension
+
 open_options(Options) ->
     ?fcrt("open_options", [{options, Options}]), 
     ValidateMode = 
@@ -1013,6 +1019,11 @@ open_options(Options) ->
 	   (_) ->
 		false
 	end,
+	ValidateFtpExtension =
+	fun(true) -> true;
+		(false) -> true;
+		(_) -> false
+	end,	
     ValidOptions = 
 	[{mode,     ValidateMode,     false, ?DEFAULT_MODE}, 
 	 {host,     ValidateHost,     true,  ehost},
@@ -1020,7 +1031,8 @@ open_options(Options) ->
 	 {ipfamily, ValidateIpFamily, false, inet},
 	 {timeout,  ValidateTimeout,  false, ?CONNECTION_TIMEOUT}, 
 	 {dtimeout, ValidateDTimeout, false, ?DATA_ACCEPT_TIMEOUT}, 
-	 {progress, ValidateProgress, false, ?PROGRESS_DEFAULT}], 
+	 {progress, ValidateProgress, false, ?PROGRESS_DEFAULT},
+	 {ftp_extension, ValidateFtpExtension, false, ?FTP_EXT_DEFAULT}], 
     validate_options(Options, ValidOptions, []).
 
 tls_options(Options) ->
@@ -1084,7 +1096,7 @@ init(Options) ->
     erlang:monitor(process, Client),
 
     %% Make sure inet is started
-    inet_db:start(),
+    _ = inet_db:start(),
     
     %% Where are we
     {ok, Dir} = file:get_cwd(),
@@ -1094,15 +1106,17 @@ init(Options) ->
 	trace ->
 	    dbg:tracer(),
 	    dbg:p(all, [call]),
-	    dbg:tpl(ftp, [{'_', [], [{return_trace}]}]),
-	    dbg:tpl(ftp_response, [{'_', [], [{return_trace}]}]),
-	    dbg:tpl(ftp_progress, [{'_', [], [{return_trace}]}]);
+	    {ok, _} = dbg:tpl(ftp, [{'_', [], [{return_trace}]}]),
+	    {ok, _} = dbg:tpl(ftp_response, [{'_', [], [{return_trace}]}]),
+	    {ok, _} = dbg:tpl(ftp_progress, [{'_', [], [{return_trace}]}]),
+	    ok;
 	debug ->
 	    dbg:tracer(),
 	    dbg:p(all, [call]),
-	    dbg:tp(ftp, [{'_', [], [{return_trace}]}]),
-	    dbg:tp(ftp_response, [{'_', [], [{return_trace}]}]),
-	    dbg:tp(ftp_progress, [{'_', [], [{return_trace}]}]); 
+	    {ok, _} = dbg:tp(ftp, [{'_', [], [{return_trace}]}]),
+	    {ok, _} = dbg:tp(ftp_response, [{'_', [], [{return_trace}]}]),
+	    {ok, _} = dbg:tp(ftp_progress, [{'_', [], [{return_trace}]}]),
+	    ok; 
 	_ ->
 	    %% Keep silent
 	    ok
@@ -1174,12 +1188,14 @@ handle_call({_, {open, ip_comm, Opts}}, From, State) ->
 	    DTimeout = key_search(dtimeout, Opts, ?DATA_ACCEPT_TIMEOUT),
 	    Progress = key_search(progress, Opts, ignore),
 	    IpFamily = key_search(ipfamily, Opts, inet),
+	    FtpExt   = key_search(ftp_extension, Opts, ?FTP_EXT_DEFAULT),
 
 	    State2 = State#state{client   = From, 
 				 mode     = Mode,
 				 progress = progress(Progress),
 				 ipfamily = IpFamily, 
-				 dtimeout = DTimeout}, 
+				 dtimeout = DTimeout,
+				 ftp_extension = FtpExt}, 
 
 	    ?fcrd("handle_call(open) -> setup ctrl connection with", 
 		  [{host, Host}, {port, Port}, {timeout, Timeout}]), 
@@ -1202,11 +1218,13 @@ handle_call({_, {open, ip_comm, Host, Opts}}, From, State) ->
     Timeout  = key_search(timeout,  Opts, ?CONNECTION_TIMEOUT),
     DTimeout = key_search(dtimeout, Opts, ?DATA_ACCEPT_TIMEOUT),
     Progress = key_search(progress, Opts, ignore),
+    FtpExt   = key_search(ftp_extension, Opts, ?FTP_EXT_DEFAULT),
     
     State2 = State#state{client   = From, 
 			 mode     = Mode,
 			 progress = progress(Progress), 
-			 dtimeout = DTimeout}, 
+			 dtimeout = DTimeout,
+			 ftp_extension = FtpExt}, 
 
     case setup_ctrl_connection(Host, Port, Timeout, State2) of
 	{ok, State3, WaitTimeout} ->
@@ -1280,8 +1298,7 @@ handle_call({_,{rmdir, Dir}}, From, #state{chunk = false} = State) ->
     activate_ctrl_connection(State),
     {noreply, State#state{client = From}};
 
-handle_call({_,{type, Type}}, From,  #state{chunk = false} 
-	    = State) ->  
+handle_call({_,{type, Type}}, From, #state{chunk = false} = State) ->  
     case Type of
 	ascii ->
 	    send_ctrl_message(State, mk_cmd("TYPE A", [])),
@@ -1368,11 +1385,17 @@ handle_call({_, {transfer_chunk, Bin}}, _, #state{chunk = true} = State) ->
     send_data_message(State, Bin),
     {reply, ok, State};
 
+handle_call({_, {transfer_chunk, _}}, _, #state{chunk = false} = State) ->
+    {reply, {error, echunk}, State};
+
 handle_call({_, chunk_end}, From, #state{chunk = true} = State) ->
     close_data_connection(State),
     activate_ctrl_connection(State),
     {noreply, State#state{client = From, dsock = undefined, 
 			  caller = end_chunk_transfer, chunk = false}};
+
+handle_call({_, chunk_end}, _, #state{chunk = false} = State) ->
+    {reply, {error, echunk}, State};
 
 handle_call({_, {quote, Cmd}}, From, #state{chunk = false} = State) ->
     send_ctrl_message(State, mk_cmd(Cmd, [])),
@@ -1433,7 +1456,7 @@ handle_info({Trpt, Socket, Data},
 	    #state{dsock = {Trpt,Socket},
 		   caller = {recv_file, Fd}} = State0) when Trpt==tcp;Trpt==ssl ->    
     ?DBG('L~p --data ~p ----> ~s~p~n',[?LINE,Socket,Data,State0]),
-    file_write(binary_to_list(Data), Fd),
+    ok = file_write(binary_to_list(Data), Fd),
     progress_report({binary, Data}, State0),
     State = activate_data_connection(State0),
     {noreply, State};
@@ -1452,16 +1475,19 @@ handle_info({Trpt, Socket, Data}, #state{dsock = {Trpt,Socket}} = State0) when T
 				  Data/binary>>}};
 
 handle_info({Cls, Socket}, #state{dsock = {Trpt,Socket},
-					 caller = {recv_file, Fd}} 
-	    = State) when {Cls,Trpt}=={tcp_closed,tcp} ; {Cls,Trpt}=={ssl_closed,ssl} ->
-    file_close(Fd),
+				  caller = {recv_file, Fd}} = State)
+  when {Cls,Trpt}=={tcp_closed,tcp} ; {Cls,Trpt}=={ssl_closed,ssl} ->
+    case file_close(Fd) of
+	ok -> ok;
+	{error,einval} -> ok
+    end,
     progress_report({transfer_size, 0}, State),
     activate_ctrl_connection(State),
     {noreply, State#state{dsock = undefined, data = <<>>}};
 
 handle_info({Cls, Socket}, #state{dsock = {Trpt,Socket}, client = From,
-					 caller = recv_chunk} 
-	    = State) when {Cls,Trpt}=={tcp_closed,tcp} ; {Cls,Trpt}=={ssl_closed,ssl} ->
+				  caller = recv_chunk} = State)
+  when {Cls,Trpt}=={tcp_closed,tcp} ; {Cls,Trpt}=={ssl_closed,ssl} ->
     gen_server:reply(From, ok),
     {noreply, State#state{dsock = undefined, client = undefined,
 			  data = <<>>, caller = undefined,
@@ -1754,12 +1780,12 @@ handle_ctrl_result({pos_compl, _Lines},
 				    {LSock, Caller}}} = State) ->
     handle_caller(State#state{caller = Caller, dsock = {lsock, LSock}});
 
-handle_ctrl_result({Status, Lines}, 
+handle_ctrl_result({Status, _Lines}, 
 		   #state{mode   = active, 
 			  caller = {setup_data_connection, {LSock, _}}} 
 		   = State) ->
-    close_connection(LSock),
-    ctrl_result_response(Status, State, {error, Lines});
+    close_connection({tcp,LSock}),
+    ctrl_result_response(Status, State, {error, Status});
 
 %% Data connection setup passive mode 
 handle_ctrl_result({pos_compl, Lines}, 
@@ -1785,7 +1811,8 @@ handle_ctrl_result({pos_compl, Lines},
 			  ipfamily = inet,
 			  client   = From,
 			  caller   = {setup_data_connection, Caller},
-			  timeout  = Timeout} = State) ->
+			  timeout  = Timeout,
+			  ftp_extension = false} = State) ->
     
     {_, [?LEFT_PAREN | Rest]} = 
 	lists:splitwith(fun(?LEFT_PAREN) -> false; (_) -> true end, Lines),
@@ -1805,6 +1832,28 @@ handle_ctrl_result({pos_compl, Lines},
 	    gen_server:reply(From, Error),
 	    {noreply,State#state{client = undefined, caller = undefined}}
     end;
+
+handle_ctrl_result({pos_compl, Lines}, 
+		   #state{mode     = passive, 
+			  ipfamily = inet,
+			  client   = From,
+			  caller   = {setup_data_connection, Caller},
+			  csock    = CSock,
+			  timeout  = Timeout,
+			  ftp_extension = true} = State) ->
+      
+    [_, PortStr | _] =  lists:reverse(string:tokens(Lines, "|")),
+    {ok, {IP, _}} = peername(CSock),
+
+    ?DBG('<--data tcp connect to ~p:~p, Caller=~p~n',[IP,PortStr,Caller]),
+	case connect(IP, list_to_integer(PortStr), Timeout, State) of
+		{ok, _, Socket} ->	       
+		    handle_caller(State#state{caller = Caller, dsock = {tcp, Socket}});
+		{error, _Reason} = Error ->
+		    gen_server:reply(From, Error),
+		    {noreply, State#state{client = undefined, caller = undefined}}
+    end;
+   
 
 %% FTP server does not support passive mode: try to fallback on active mode
 handle_ctrl_result(_, 
@@ -1927,7 +1976,7 @@ handle_ctrl_result(_, #state{caller = {handle_dir_data_third_phase, DirData},
     {noreply, State#state{client = undefined, caller = undefined}};
 
 handle_ctrl_result({Status, _}, #state{caller = cd} = State) ->
-    ctrl_result_response(Status, State, {error, epath});
+    ctrl_result_response(Status, State, {error, Status});
 
 handle_ctrl_result(Status={epath, _}, #state{caller = {dir,_}} = State) ->
      ctrl_result_response(Status, State, {error, epath});
@@ -1942,11 +1991,11 @@ handle_ctrl_result({pos_interm, _}, #state{caller = {rename, NewFile}}
 
 handle_ctrl_result({Status, _}, 
 		   #state{caller = {rename, _}} = State) ->
-    ctrl_result_response(Status, State, {error, epath});
+    ctrl_result_response(Status, State, {error, Status});
 
 handle_ctrl_result({Status, _},
 		   #state{caller = rename_second_phase} = State) ->
-    ctrl_result_response(Status, State, {error, epath});
+    ctrl_result_response(Status, State, {error, Status});
 
 %%--------------------------------------------------------------------------
 %% File handling - recv_bin
@@ -2017,7 +2066,10 @@ handle_ctrl_result({pos_prel, _}, #state{caller = {recv_file, _}} = State0) ->
     end;
 
 handle_ctrl_result({Status, _}, #state{caller = {recv_file, Fd}} = State) ->
-    file_close(Fd),
+    case file_close(Fd) of
+	ok -> ok;
+	{error, einval} -> ok
+    end,
     close_data_connection(State),
     ctrl_result_response(Status, State#state{dsock = undefined}, 
 			 {error, epath});
@@ -2055,9 +2107,9 @@ handle_ctrl_result({pos_prel, _}, #state{caller = {transfer_data, Bin}}
 
 %%--------------------------------------------------------------------------
 %% Default
-handle_ctrl_result({Status, Lines}, #state{client = From} = State) 
+handle_ctrl_result({Status, _Lines}, #state{client = From} = State) 
   when From =/= undefined ->
-    ctrl_result_response(Status, State, {error, Lines}).
+    ctrl_result_response(Status, State, {error, Status}).
 
 %%--------------------------------------------------------------------------
 %% Help functions to handle_ctrl_result
@@ -2075,7 +2127,6 @@ ctrl_result_response(Status, #state{client = From} = State, _)
        (Status =:= epnospc)  orelse 
        (Status =:= efnamena) orelse 
        (Status =:= econn) ->
-%Status == etnospc; Status == epnospc; Status == econn ->
     gen_server:reply(From, {error, Status}),
 %%    {stop, normal, {error, Status}, State#state{client = undefined}};
     {stop, normal, State#state{client = undefined}};
@@ -2139,16 +2190,16 @@ handle_caller(#state{caller = {transfer_data, {Cmd, Bin, RemoteFile}}} =
 %% Connect to FTP server at Host (default is TCP port 21) 
 %% in order to establish a control connection.
 setup_ctrl_connection(Host, Port, Timeout, State) ->
-    MsTime = millisec_time(),
+    MsTime = erlang:monotonic_time(),
     case connect(Host, Port, Timeout, State) of
 	{ok, IpFam, CSock} ->
 	    NewState = State#state{csock = {tcp, CSock}, ipfamily = IpFam},
 	    activate_ctrl_connection(NewState),
-	    case Timeout - (millisec_time() - MsTime) of
+	    case Timeout - inets_lib:millisec_passed(MsTime) of
 		Timeout2 when (Timeout2 >= 0) ->
 		    {ok, NewState#state{caller = open}, Timeout2};
 		_ ->
-		    %% Oups: Simulate timeout
+                    %% Oups: Simulate timeout
 		    {ok, NewState#state{caller = open}, 0}
 	    end;
 	Error ->
@@ -2157,7 +2208,8 @@ setup_ctrl_connection(Host, Port, Timeout, State) ->
 
 setup_data_connection(#state{mode   = active, 
 			     caller = Caller, 
-			     csock  = CSock} = State) ->    
+			     csock  = CSock,
+			     ftp_extension = FtpExt} = State) ->    
     case (catch sockname(CSock)) of
 	{ok, {{_, _, _, _, _, _, _, _} = IP, _}} ->
 	    {ok, LSock} = 
@@ -2174,11 +2226,18 @@ setup_data_connection(#state{mode   = active,
 	    {ok, LSock} = gen_tcp:listen(0, [{ip, IP}, {active, false},
 					     binary, {packet, 0}]),
 	    {ok, Port} = inet:port(LSock),
-	    {IP1, IP2, IP3, IP4} = IP,
-	    {Port1, Port2} = {Port div 256, Port rem 256},
-	    send_ctrl_message(State, 
-			      mk_cmd("PORT ~w,~w,~w,~w,~w,~w",
-				     [IP1, IP2, IP3, IP4, Port1, Port2])),
+	    case FtpExt of
+	    	false ->
+		    {IP1, IP2, IP3, IP4} = IP,
+		    {Port1, Port2} = {Port div 256, Port rem 256},
+		    send_ctrl_message(State, 
+				      mk_cmd("PORT ~w,~w,~w,~w,~w,~w",
+					     [IP1, IP2, IP3, IP4, Port1, Port2]));
+		true ->
+		    IpAddress = inet_parse:ntoa(IP),
+		    Cmd = mk_cmd("EPRT |1|~s|~p|", [IpAddress, Port]),
+		    send_ctrl_message(State, Cmd)
+	    end,	        
 	    activate_ctrl_connection(State),
 	    {noreply, State#state{caller = {setup_data_connection, 
 					    {LSock, Caller}}}}
@@ -2191,8 +2250,16 @@ setup_data_connection(#state{mode = passive, ipfamily = inet6,
     {noreply, State#state{caller = {setup_data_connection, Caller}}};
 
 setup_data_connection(#state{mode = passive, ipfamily = inet,
-			     caller = Caller} = State) ->
+			     caller = Caller,
+			     ftp_extension = false} = State) ->
     send_ctrl_message(State, mk_cmd("PASV", [])),
+    activate_ctrl_connection(State),
+    {noreply, State#state{caller = {setup_data_connection, Caller}}};    
+
+setup_data_connection(#state{mode = passive, ipfamily = inet,
+			     caller = Caller,
+			     ftp_extension = true} = State) ->
+    send_ctrl_message(State, mk_cmd("EPSV", [])),
     activate_ctrl_connection(State),
     {noreply, State#state{caller = {setup_data_connection, Caller}}}.
 
@@ -2278,7 +2345,7 @@ accept_data_connection(#state{mode = passive} = State) ->
 send_ctrl_message(_S=#state{csock = Socket, verbose = Verbose}, Message) ->
     verbose(lists:flatten(Message),Verbose,send),
     ?DBG('<--ctrl ~p ---- ~s~p~n',[Socket,Message,_S]),
-    send_message(Socket, Message).
+    ok = send_message(Socket, Message).
 
 send_data_message(_S=#state{dsock = Socket}, Message) ->
     ?DBG('<==data ~p ==== ~s~n~p~n',[Socket,Message,_S]),
@@ -2300,23 +2367,26 @@ send_message({ssl, Socket}, Message) ->
     ssl:send(Socket, Message).
 
 activate_ctrl_connection(#state{csock = Socket, ctrl_data = {<<>>, _, _}}) ->
-    activate_connection(Socket);
+    ok = activate_connection(Socket);
 activate_ctrl_connection(#state{csock = Socket}) ->
+    ok = activate_connection(Socket),
     %% We have already received at least part of the next control message,
     %% that has been saved in ctrl_data, process this first.
-    self() ! {tcp, unwrap_socket(Socket), <<>>}.
+    self() ! {socket_type(Socket), unwrap_socket(Socket), <<>>},
+    ok.
 
 unwrap_socket({tcp,Socket}) -> Socket;
-unwrap_socket({ssl,Socket}) -> Socket;
-unwrap_socket(Socket) -> Socket.
+unwrap_socket({ssl,Socket}) -> Socket.
     
+socket_type({tcp,_Socket}) -> tcp;
+socket_type({ssl,_Socket}) -> ssl.
 
 activate_data_connection(#state{dsock = Socket} = State) ->
-    activate_connection(Socket),
+    ok = activate_connection(Socket),
     State.
 
-activate_connection({tcp, Socket}) ->  inet:setopts(Socket, [{active, once}]);
-activate_connection({ssl, Socket}) ->  ssl:setopts(Socket, [{active, once}]).
+activate_connection({tcp, Socket}) -> inet:setopts(Socket, [{active, once}]);
+activate_connection({ssl, Socket}) -> ssl:setopts(Socket, [{active, once}]).
 
 close_ctrl_connection(#state{csock = undefined}) -> ok;
 close_ctrl_connection(#state{csock = Socket}) -> close_connection(Socket).
@@ -2324,20 +2394,21 @@ close_ctrl_connection(#state{csock = Socket}) -> close_connection(Socket).
 close_data_connection(#state{dsock = undefined}) -> ok;
 close_data_connection(#state{dsock = Socket}) -> close_connection(Socket).
 
+close_connection({lsock,Socket}) -> gen_tcp:close(Socket);
 close_connection({tcp, Socket}) -> gen_tcp:close(Socket);
 close_connection({ssl, Socket}) -> ssl:close(Socket).
 
-%%  ------------ FILE HANDELING  ----------------------------------------   
+%%  ------------ FILE HANDLING  ----------------------------------------   
 send_file(#state{tls_upgrading_data_connection = {true, CTRL, _}} = State, Fd) ->
     {noreply, State#state{tls_upgrading_data_connection = {true, CTRL, ?MODULE, send_file, Fd}}};
 send_file(State, Fd) ->
     case file_read(Fd) of
-	{ok, N, Bin} when N > 0->
+	{ok, N, Bin} when N > 0 ->
 	    send_data_message(State, Bin),
 	    progress_report({binary, Bin}, State),
 	    send_file(State, Fd);
 	{ok, _, _} ->
-	    file_close(Fd),
+	    ok = file_close(Fd),
 	    close_data_connection(State),
 	    progress_report({transfer_size, 0}, State),
 	    activate_ctrl_connection(State),
@@ -2444,13 +2515,9 @@ progress_report(stop, #state{progress = ProgressPid}) ->
     ftp_progress:stop(ProgressPid);
 progress_report({binary, Data}, #state{progress = ProgressPid}) ->
     ftp_progress:report(ProgressPid, {transfer_size, size(Data)});
-progress_report(Report,  #state{progress = ProgressPid}) ->
+progress_report(Report, #state{progress = ProgressPid}) ->
     ftp_progress:report(ProgressPid, Report).
 
-
-millisec_time() ->
-    {A,B,C} = erlang:now(),
-    A*1000000000+B*1000+(C div 1000).
 
 peername({tcp, Socket}) -> inet:peername(Socket);
 peername({ssl, Socket}) -> ssl:peername(Socket).

@@ -1,18 +1,19 @@
 /*
  * %CopyrightBegin%
  *
- * Copyright Ericsson AB 2002-2013. All Rights Reserved.
+ * Copyright Ericsson AB 2002-2016. All Rights Reserved.
  *
- * The contents of this file are subject to the Erlang Public License,
- * Version 1.1, (the "License"); you may not use this file except in
- * compliance with the License. You should have received a copy of the
- * Erlang Public License along with this software. If not, it can be
- * retrieved online at http://www.erlang.org/.
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
  *
- * Software distributed under the License is distributed on an "AS IS"
- * basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See
- * the License for the specific language governing rights and limitations
- * under the License.
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  *
  * %CopyrightEnd%
  */
@@ -23,6 +24,13 @@
 #define ERTS_ALCU_VSN_STR "3.0"
 
 #include "erl_alloc_types.h"
+#ifdef USE_THREADS
+#define ERL_THREADS_EMU_INTERNAL__
+#include "erl_threads.h"
+#endif
+
+#include "erl_mseg.h"
+#include "lttng-wrapper.h"
 
 #define ERTS_AU_PREF_ALLOC_BITS 11
 #define ERTS_AU_MAX_PREF_ALLOC_INSTANCES (1 << ERTS_AU_PREF_ALLOC_BITS)
@@ -44,7 +52,6 @@ typedef struct {
     int tspec;
     int tpref;
     int ramv;
-    int low_mem;   /* HALFWORD only */
     UWord sbct;
     UWord asbcst;
     UWord rsbcst;
@@ -60,6 +67,16 @@ typedef struct {
 
     void *fix;
     size_t *fix_type_size;
+
+#if HAVE_ERTS_MSEG
+    void* (*mseg_alloc)(Allctr_t*, Uint *size_p, Uint flags);
+    void* (*mseg_realloc)(Allctr_t*, void *seg, Uint old_size, Uint *new_size_p);
+    void  (*mseg_dealloc)(Allctr_t*, void *seg, Uint size, Uint flags);
+    ErtsMemMapper *mseg_mmapper;
+#endif
+    void* (*sys_alloc)(Allctr_t *allctr, Uint *size_p, int superalign);
+    void* (*sys_realloc)(Allctr_t *allctr, void *ptr, Uint *size_p, Uint old_size, int superalign);
+    void  (*sys_dealloc)(Allctr_t *allctr, void *ptr, Uint size, int superalign);
 } AllctrInit_t;
 
 typedef struct {
@@ -89,7 +106,6 @@ typedef struct {
     0,			/* (bool)   tspec:  thread specific              */\
     0,			/* (bool)   tpref:  thread preferred             */\
     0,			/* (bool)   ramv:   realloc always moves         */\
-    0,			/* (bool)   low_mem: HALFWORD only               */\
     512*1024,		/* (bytes)  sbct:   sbc threshold                */\
     2*1024*2024,	/* (amount) asbcst: abs sbc shrink threshold     */\
     20,			/* (%)      rsbcst: rel sbc shrink threshold     */\
@@ -124,7 +140,6 @@ typedef struct {
     0,			/* (bool)   tspec:  thread specific              */\
     0,			/* (bool)   tpref:  thread preferred             */\
     0,			/* (bool)   ramv:   realloc always moves         */\
-    0,			/* (bool)   low_mem: HALFWORD only               */\
     64*1024,		/* (bytes)  sbct:   sbc threshold                */\
     2*1024*2024,	/* (amount) asbcst: abs sbc shrink threshold     */\
     20,			/* (%)      rsbcst: rel sbc shrink threshold     */\
@@ -163,10 +178,10 @@ void *	erts_alcu_realloc_mv_thr_pref(ErtsAlcType_t, void *, void *, Uint);
 void	erts_alcu_free_thr_pref(ErtsAlcType_t, void *, void *);
 #endif
 #endif
-Eterm	erts_alcu_au_info_options(int *, void *, Uint **, Uint *);
-Eterm	erts_alcu_info_options(Allctr_t *, int *, void *, Uint **, Uint *);
-Eterm	erts_alcu_sz_info(Allctr_t *, int, int, int *, void *, Uint **, Uint *);
-Eterm	erts_alcu_info(Allctr_t *, int, int, int *, void *, Uint **, Uint *);
+Eterm	erts_alcu_au_info_options(fmtfn_t *, void *, Uint **, Uint *);
+Eterm	erts_alcu_info_options(Allctr_t *, fmtfn_t *, void *, Uint **, Uint *);
+Eterm	erts_alcu_sz_info(Allctr_t *, int, int, fmtfn_t *, void *, Uint **, Uint *);
+Eterm	erts_alcu_info(Allctr_t *, int, int, fmtfn_t *, void *, Uint **, Uint *);
 void	erts_alcu_init(AlcUInit_t *);
 void    erts_alcu_current_size(Allctr_t *, AllctrSize_t *,
 			       ErtsAlcUFixInfo_t *, int);
@@ -175,19 +190,43 @@ void    erts_alcu_check_delayed_dealloc(Allctr_t *, int, int *, ErtsThrPrgrVal *
 #endif
 erts_aint32_t erts_alcu_fix_alloc_shrink(Allctr_t *, erts_aint32_t);
 
+#ifdef ARCH_32
+extern UWord erts_literal_vspace_map[];
+# define ERTS_VSPACE_WORD_BITS (sizeof(UWord)*8)
 #endif
+
+void* erts_alcu_mseg_alloc(Allctr_t*, Uint *size_p, Uint flags);
+void* erts_alcu_mseg_realloc(Allctr_t*, void *seg, Uint old_size, Uint *new_size_p);
+void  erts_alcu_mseg_dealloc(Allctr_t*, void *seg, Uint size, Uint flags);
+
+#if HAVE_ERTS_MSEG
+# if defined(ARCH_32)
+void* erts_alcu_literal_32_mseg_alloc(Allctr_t*, Uint *size_p, Uint flags);
+void* erts_alcu_literal_32_mseg_realloc(Allctr_t*, void *seg, Uint old_size, Uint *new_size_p);
+void  erts_alcu_literal_32_mseg_dealloc(Allctr_t*, void *seg, Uint size, Uint flags);
+
+# elif defined(ARCH_64) && defined(ERTS_HAVE_OS_PHYSICAL_MEMORY_RESERVATION)
+void* erts_alcu_mmapper_mseg_alloc(Allctr_t*, Uint *size_p, Uint flags);
+void* erts_alcu_mmapper_mseg_realloc(Allctr_t*, void *seg, Uint old_size, Uint *new_size_p);
+void  erts_alcu_mmapper_mseg_dealloc(Allctr_t*, void *seg, Uint size, Uint flags);
+# endif
+#endif /* HAVE_ERTS_MSEG */
+
+void* erts_alcu_sys_alloc(Allctr_t*, Uint *size_p, int superalign);
+void* erts_alcu_sys_realloc(Allctr_t*, void *ptr, Uint *size_p, Uint old_size, int superalign);
+void  erts_alcu_sys_dealloc(Allctr_t*, void *ptr, Uint size, int superalign);
+#ifdef ARCH_32
+void* erts_alcu_literal_32_sys_alloc(Allctr_t*, Uint *size_p, int superalign);
+void* erts_alcu_literal_32_sys_realloc(Allctr_t*, void *ptr, Uint *size_p, Uint old_size, int superalign);
+void  erts_alcu_literal_32_sys_dealloc(Allctr_t*, void *ptr, Uint size, int superalign);
+#endif
+
+#endif /* !ERL_ALLOC_UTIL__ */
 
 #if defined(GET_ERL_ALLOC_UTIL_IMPL) && !defined(ERL_ALLOC_UTIL_IMPL__)
 #define ERL_ALLOC_UTIL_IMPL__
 
 #define ERTS_ALCU_FLG_FAIL_REALLOC_MOVE		(((Uint32) 1) << 0)
-
-#ifdef USE_THREADS
-#define ERL_THREADS_EMU_INTERNAL__
-#include "erl_threads.h"
-#endif
-
-#include "erl_mseg.h"
 
 #undef ERTS_ALLOC_UTIL_HARD_DEBUG
 #ifdef DEBUG
@@ -222,7 +261,7 @@ erts_aint32_t erts_alcu_fix_alloc_shrink(Allctr_t *, erts_aint32_t);
 
 #if ERTS_HAVE_MSEG_SUPER_ALIGNED \
     || (!HAVE_ERTS_MSEG && ERTS_HAVE_ERTS_SYS_ALIGNED_ALLOC)
-#  ifndef MSEG_ALIGN_BITS
+#  ifdef MSEG_ALIGN_BITS
 #    define ERTS_SUPER_ALIGN_BITS MSEG_ALIGN_BITS
 #  else
 #    define ERTS_SUPER_ALIGN_BITS 18
@@ -268,15 +307,21 @@ typedef union {char c[ERTS_ALLOC_ALIGN_BYTES]; long l; double d;} Unit_t;
 
 #ifdef ERTS_SMP
 
+typedef struct ErtsDoubleLink_t_ {
+    struct ErtsDoubleLink_t_ *next;
+    struct ErtsDoubleLink_t_ *prev;
+}ErtsDoubleLink_t;
+
 typedef struct {
     erts_atomic_t next;
     erts_atomic_t prev;
-    Allctr_t *orig_allctr;
+    Allctr_t *orig_allctr;      /* read-only while carrier is alive */
     ErtsThrPrgrVal thr_prgr;
     erts_atomic_t max_size;
     UWord abandon_limit;
     UWord blocks;
     UWord blocks_size;
+    ErtsDoubleLink_t abandoned; /* node in pooled_list or traitor_list */
 } ErtsAlcCPoolData_t;
 
 #endif
@@ -373,6 +418,18 @@ typedef struct {
 	StatValues_t	max_ever;
     } blocks;
 } CarriersStats_t;
+
+#ifdef USE_LTTNG_VM_TRACEPOINTS
+#define LTTNG_CARRIER_STATS_TO_LTTNG_STATS(CSP, LSP)            \
+    do {                                                        \
+        (LSP)->carriers.size = (CSP)->curr.norm.mseg.size       \
+                             + (CSP)->curr.norm.sys_alloc.size; \
+        (LSP)->carriers.no   = (CSP)->curr.norm.mseg.no         \
+                             + (CSP)->curr.norm.sys_alloc.no;   \
+        (LSP)->blocks.size   = (CSP)->blocks.curr.size;         \
+        (LSP)->blocks.no     = (CSP)->blocks.curr.no;           \
+    } while (0)
+#endif
 
 #ifdef ERTS_SMP
 
@@ -494,13 +551,20 @@ struct Allctr_t_ {
     Uint		min_mbc_size;
     Uint		min_mbc_first_free_size;
     Uint		min_block_size;
+    UWord               crr_set_flgs;
+    UWord               crr_clr_flgs;
 
     /* Carriers */
     CarrierList_t	mbc_list;
     CarrierList_t	sbc_list;
 #ifdef ERTS_SMP
     struct {
-	CarrierList_t	dc_list;
+	/* pooled_list, traitor list and dc_list contain only
+           carriers _created_ by this allocator */
+	ErtsDoubleLink_t pooled_list;
+	ErtsDoubleLink_t traitor_list;
+	CarrierList_t	 dc_list;
+
 	UWord		abandon_limit;
 	int		disable_abandon;
 	int		check_limit_count;
@@ -522,7 +586,7 @@ struct Allctr_t_ {
 						 Block_t *, Uint);
     void		(*link_free_block)	(Allctr_t *, Block_t *);
     void		(*unlink_free_block)	(Allctr_t *, Block_t *);
-    Eterm		(*info_options)		(Allctr_t *, char *, int *,
+    Eterm		(*info_options)		(Allctr_t *, char *, fmtfn_t *,
 						 void *, Uint **, Uint *);
 
     Uint		(*get_next_mbc_size)	(Allctr_t *);
@@ -533,6 +597,16 @@ struct Allctr_t_ {
     void		(*add_mbc)		(Allctr_t *, Carrier_t *);
     void		(*remove_mbc)	        (Allctr_t *, Carrier_t *);
     UWord		(*largest_fblk_in_mbc)  (Allctr_t *, Carrier_t *);
+
+#if HAVE_ERTS_MSEG
+    void*               (*mseg_alloc)(Allctr_t*, Uint *size_p, Uint flags);
+    void*               (*mseg_realloc)(Allctr_t*, void *seg, Uint old_size, Uint *new_size_p);
+    void                (*mseg_dealloc)(Allctr_t*, void *seg, Uint size, Uint flags);
+    ErtsMemMapper       *mseg_mmapper;
+#endif
+    void*               (*sys_alloc)(Allctr_t *allctr, Uint *size_p, int superalign);
+    void*               (*sys_realloc)(Allctr_t *allctr, void *ptr, Uint *size_p, Uint old_size, int superalign);
+    void                (*sys_dealloc)(Allctr_t *allctr, void *ptr, Uint size, int superalign);
 
     void		(*init_atoms)		(void);
 

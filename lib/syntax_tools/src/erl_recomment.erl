@@ -11,7 +11,7 @@
 %%
 %% You should have received a copy of the GNU Lesser General Public
 %% License along with this library; if not, write to the Free Software
-%% Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307
+%% Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301
 %% USA
 %%
 %% @copyright 1997-2006 Richard Carlsson
@@ -29,6 +29,9 @@
 
 -export([recomment_forms/2, quick_recomment_forms/2, recomment_tree/2]).
 
+
+%% @type syntaxTree() = erl_syntax:syntaxTree(). An abstract syntax
+%% tree. See the {@link erl_syntax} module for details.
 
 %% =====================================================================
 %% @spec quick_recomment_forms(Forms, Comments::[Comment]) ->
@@ -55,7 +58,6 @@ quick_recomment_forms(Tree, Cs) ->
 %% =====================================================================
 %% @spec recomment_forms(Forms, Comments::[Comment]) -> syntaxTree()
 %%
-%%	    syntaxTree() = erl_syntax:syntaxTree()
 %%	    Forms = syntaxTree() | [syntaxTree()]
 %%	    Comment = {Line, Column, Indentation, Text}
 %%	    Line = integer()
@@ -123,7 +125,6 @@ recomment_forms(Tree, Cs, Insert) ->
 	form_list ->
 	    Tree1 = erl_syntax:flatten_form_list(Tree),
 	    Node = build_tree(Tree1),
-
 	    %% Here we make a small assumption about the substructure of
 	    %% a `form_list' tree: it has exactly one group of subtrees.
 	    [Node1] = node_subtrees(Node),
@@ -602,21 +603,24 @@ expand_comment(C) ->
 
 -record(leaf, {min = 0           :: integer(),
 	       max = 0           :: integer(),
-	       precomments  = [] :: [erl_syntax:syntaxTree()],
-	       postcomments = [] :: [erl_syntax:syntaxTree()],
+	       precomments  = [] :: [erl_comment_scan:comment()],
+	       postcomments = [] :: [erl_comment_scan:comment()],
 	       value             :: erl_syntax:syntaxTree()}).
 
 -record(tree, {min = 0           :: integer(),
 	       max = 0           :: integer(),
 	       type              :: atom(),
 	       attrs             :: erl_syntax:syntaxTreeAttributes(),
-	       precomments  = [] :: [erl_syntax:syntaxTree()],
-	       postcomments = [] :: [erl_syntax:syntaxTree()],
-	       subtrees     = [] :: [erl_syntax:syntaxTree()]}).
+	       precomments  = [] :: [erl_comment_scan:comment()],
+	       postcomments = [] :: [erl_comment_scan:comment()],
+	       subtrees     = [] :: [extendedSyntaxTree()]}).
+
 
 -record(list, {min = 0           :: integer(),
 	       max = 0           :: integer(),
 	       subtrees = []     :: [erl_syntax:syntaxTree()]}).
+
+-type extendedSyntaxTree() :: #tree{} | #leaf{} | #list{}.
 
 leaf_node(Min, Max, Value) ->
     #leaf{min = Min,
@@ -753,7 +757,13 @@ get_line(Node) ->
 	{_, L, _} when is_integer(L) ->
 	    L;
 	Pos ->
-	    exit({bad_position, Pos})
+            try erl_anno:line(Pos) of
+                Line ->
+                    Line
+            catch
+                _:_ ->
+                    exit({bad_position, Pos})
+            end
     end.
 
 

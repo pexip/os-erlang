@@ -1,18 +1,19 @@
 /*
  * %CopyrightBegin%
  * 
- * Copyright Ericsson AB 2003-2013. All Rights Reserved.
+ * Copyright Ericsson AB 2003-2016. All Rights Reserved.
  * 
- * The contents of this file are subject to the Erlang Public License,
- * Version 1.1, (the "License"); you may not use this file except in
- * compliance with the License. You should have received a copy of the
- * Erlang Public License along with this software. If not, it can be
- * retrieved online at http://www.erlang.org/.
- * 
- * Software distributed under the License is distributed on an "AS IS"
- * basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See
- * the License for the specific language governing rights and limitations
- * under the License.
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  * 
  * %CopyrightEnd%
  */
@@ -122,7 +123,7 @@ struct AOFF_Carrier_t_ {
     AOFF_RBTree_t rbt_node;     /* My node in the carrier tree */
     AOFF_RBTree_t* root;        /* Root of my block tree */
 };
-#define RBT_NODE_TO_MBC(PTR) ((AOFF_Carrier_t*)((char*)(PTR) - offsetof(AOFF_Carrier_t, rbt_node)))
+#define RBT_NODE_TO_MBC(PTR) ErtsContainerStruct((PTR), AOFF_Carrier_t, rbt_node)
 
 /* 
    To support carrier migration we keep two kinds of rb-trees:
@@ -208,7 +209,9 @@ static Block_t*	aoff_get_free_block(Allctr_t *, Uint, Block_t *, Uint);
 static void aoff_link_free_block(Allctr_t *, Block_t*);
 static void aoff_unlink_free_block(Allctr_t *allctr, Block_t *del);
 static void aoff_creating_mbc(Allctr_t*, Carrier_t*);
+#ifdef DEBUG
 static void aoff_destroying_mbc(Allctr_t*, Carrier_t*);
+#endif
 static void aoff_add_mbc(Allctr_t*, Carrier_t*);
 static void aoff_remove_mbc(Allctr_t*, Carrier_t*);
 static UWord aoff_largest_fblk_in_mbc(Allctr_t*, Carrier_t*);
@@ -221,7 +224,7 @@ static AOFF_RBTree_t* rbt_search(AOFF_RBTree_t* root, Uint size);
 static int rbt_assert_is_member(AOFF_RBTree_t* root, AOFF_RBTree_t* node);
 #endif
 
-static Eterm info_options(Allctr_t *, char *, int *, void *, Uint **, Uint *);
+static Eterm info_options(Allctr_t *, char *, fmtfn_t *, void *, Uint **, Uint *);
 static void init_atoms(void);
 
 
@@ -270,7 +273,11 @@ erts_aoffalc_start(AOFFAllctr_t *alc,
 
     allctr->get_next_mbc_size		= NULL;
     allctr->creating_mbc		= aoff_creating_mbc;
+#ifdef DEBUG
     allctr->destroying_mbc		= aoff_destroying_mbc;
+#else
+    allctr->destroying_mbc		= NULL;
+#endif
     allctr->add_mbc                     = aoff_add_mbc;
     allctr->remove_mbc                  = aoff_remove_mbc;
     allctr->largest_fblk_in_mbc         = aoff_largest_fblk_in_mbc;
@@ -884,17 +891,18 @@ static void aoff_creating_mbc(Allctr_t *allctr, Carrier_t *carrier)
     HARD_CHECK_TREE(NULL, 0, *root, 0);
 }
 
+#define IS_CRR_IN_TREE(CRR,ROOT) \
+    ((CRR)->rbt_node.parent || (ROOT) == &(CRR)->rbt_node)
+
+#ifdef DEBUG
 static void aoff_destroying_mbc(Allctr_t *allctr, Carrier_t *carrier)
 {
     AOFFAllctr_t *alc = (AOFFAllctr_t *) allctr;
     AOFF_Carrier_t *crr = (AOFF_Carrier_t*) carrier;
-    AOFF_RBTree_t *root = alc->mbc_root;
 
-    if (crr->rbt_node.parent || &crr->rbt_node == root) {
-	aoff_remove_mbc(allctr, carrier);
-    }
-    /*else already removed */
+    ASSERT(!IS_CRR_IN_TREE(crr, alc->mbc_root));
 }
+#endif
 
 static void aoff_add_mbc(Allctr_t *allctr, Carrier_t *carrier)
 {
@@ -902,6 +910,7 @@ static void aoff_add_mbc(Allctr_t *allctr, Carrier_t *carrier)
     AOFF_Carrier_t *crr = (AOFF_Carrier_t*) carrier;
     AOFF_RBTree_t **root = &alc->mbc_root;
 
+    ASSERT(!IS_CRR_IN_TREE(crr, *root));
     HARD_CHECK_TREE(NULL, 0, *root, 0);   
 
     /* Link carrier in address order tree
@@ -918,6 +927,10 @@ static void aoff_remove_mbc(Allctr_t *allctr, Carrier_t *carrier)
     AOFF_RBTree_t **root = &alc->mbc_root;
 
     ASSERT(allctr == ERTS_ALC_CARRIER_TO_ALLCTR(carrier));
+
+    if (!IS_CRR_IN_TREE(crr,*root))
+        return;
+
     HARD_CHECK_TREE(NULL, 0, *root, 0);
 
     rbt_delete(root, &crr->rbt_node);
@@ -1001,7 +1014,7 @@ add_2tup(Uint **hpp, Uint *szp, Eterm *lp, Eterm el1, Eterm el2)
 static Eterm
 info_options(Allctr_t *allctr,
 	     char *prefix,
-	     int *print_to_p,
+	     fmtfn_t *print_to_p,
 	     void *print_to_arg,
 	     Uint **hpp,
 	     Uint *szp)
@@ -1022,7 +1035,7 @@ info_options(Allctr_t *allctr,
     if (hpp || szp) {
 	
 	if (!atoms_initialized)
-	    erl_exit(1, "%s:%d: Internal error: Atoms not initialized",
+	    erts_exit(ERTS_ERROR_EXIT, "%s:%d: Internal error: Atoms not initialized",
 		     __FILE__, __LINE__);;
 
 	res = NIL;

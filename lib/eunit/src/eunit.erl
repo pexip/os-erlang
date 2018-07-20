@@ -10,7 +10,7 @@
 %%
 %% You should have received a copy of the GNU Lesser General Public
 %% License along with this library; if not, write to the Free Software
-%% Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307
+%% Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301
 %% USA
 %%
 %% @copyright 2004-2009 Mickaël Rémond, Richard Carlsson
@@ -231,7 +231,7 @@ event_logger(LogFile) ->
 event_logger_loop(Reference, FD) ->
     receive
 	{status, _Id, _Info}=Msg ->
-	    io:fwrite(FD, "~p.\n", [Msg]),
+	    io:fwrite(FD, "~tp.\n", [Msg]),
 	    event_logger_loop(Reference, FD);
 	{stop, Reference, _ReplyTo} ->
 	    %% no need to reply, just exit

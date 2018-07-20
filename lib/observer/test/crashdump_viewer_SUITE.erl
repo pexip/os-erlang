@@ -1,18 +1,19 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2003-2014. All Rights Reserved.
+%% Copyright Ericsson AB 2003-2016. All Rights Reserved.
 %%
-%% The contents of this file are subject to the Erlang Public License,
-%% Version 1.1, (the "License"); you may not use this file except in
-%% compliance with the License. You should have received a copy of the
-%% Erlang Public License along with this software. If not, it can be
-%% retrieved online at http://www.erlang.org/.
+%% Licensed under the Apache License, Version 2.0 (the "License");
+%% you may not use this file except in compliance with the License.
+%% You may obtain a copy of the License at
 %%
-%% Software distributed under the License is distributed on an "AS IS"
-%% basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See
-%% the License for the specific language governing rights and limitations
-%% under the License.
+%%     http://www.apache.org/licenses/LICENSE-2.0
+%%
+%% Unless required by applicable law or agreed to in writing, software
+%% distributed under the License is distributed on an "AS IS" BASIS,
+%% WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+%% See the License for the specific language governing permissions and
+%% limitations under the License.
 %%
 %% %CopyrightEnd%
 %%
@@ -29,7 +30,6 @@
 -export([init_per_testcase/2, end_per_testcase/2]).
 
 -include_lib("common_test/include/ct.hrl").
--include("test_server_line.hrl").
 -include_lib("kernel/include/file.hrl").
 
 -define(failed_file,"failed-cases.txt").
@@ -101,7 +101,7 @@ end_per_group(_GroupName, Config) ->
 init_per_suite(Config) when is_list(Config) ->
     delete_saved(Config),
     DataDir = ?config(data_dir,Config),
-    Rels = [R || R <- [r15b,r16b], ?t:is_release_available(R)] ++ [current],
+    Rels = [R || R <- ['17','18'], ?t:is_release_available(R)] ++ [current],
     io:format("Creating crash dumps for the following releases: ~p", [Rels]),
     AllDumps = create_dumps(DataDir,Rels),
     [{dumps,AllDumps}|Config].
@@ -420,6 +420,10 @@ special(File,Procs) ->
 	%% ".trunc" ->
 	%%     %% ????
 	%%     ok;
+        ".trunc.bytes" ->
+            {ok,_,[TW]} = crashdump_viewer:general_info(),
+            {match,_} = re:run(TW,"CRASH DUMP SIZE LIMIT REACHED"),
+            ok;
 	_ ->
 	    ok
     end,
@@ -481,7 +485,11 @@ do_create_dumps(DataDir,Rel) ->
 	current ->
 	    CD3 = dump_with_args(DataDir,Rel,"instr","+Mim true"),
 	    CD4 = dump_with_strange_module_name(DataDir,Rel,"strangemodname"),
-	    {[CD1,CD2,CD3,CD4], DosDump};
+            Bytes = rand:uniform(300000) + 100,
+            CD5 = dump_with_args(DataDir,Rel,"trunc.bytes",
+                                 "-env ERL_CRASH_DUMP_BYTES " ++
+                                     integer_to_list(Bytes)),
+	    {[CD1,CD2,CD3,CD4,CD5], DosDump};
 	_ ->
 	    {[CD1,CD2], DosDump}
     end.
@@ -563,28 +571,11 @@ dump_with_strange_module_name(DataDir,Rel,DumpName) ->
     CD.
 
 dump(Node,DataDir,Rel,DumpName) ->
-    case Rel of
-	_ when Rel<r15b, Rel=/=current ->
-	    rpc:call(Node,os,putenv,["ERL_CRASH_DUMP_SECONDS","600"]);
-	_ ->
-	    ok
-    end,
+    Crashdump = filename:join(DataDir, dump_prefix(Rel)++DumpName),
+    rpc:call(Node,os,putenv,["ERL_CRASH_DUMP",Crashdump]),
     rpc:call(Node,erlang,halt,[DumpName]),
-    Crashdump0 = filename:join(filename:dirname(code:which(?t)),
-			       "erl_crash_dump.n1"),
-    Crashdump1 = filename:join(DataDir, dump_prefix(Rel)++DumpName),
-    ok = rename(Crashdump0,Crashdump1),
-    Crashdump1.
-
-rename(From,To) ->
-    ok = check_complete(From),
-    case file:rename(From,To) of
-	{error,exdev} ->
-	    {ok,_} = file:copy(From,To),
-	    ok = file:delete(From);
-	ok ->
-	    ok
-    end.
+    ok = check_complete(Crashdump),
+    Crashdump.
 
 check_complete(File) ->
     check_complete1(File,10).
@@ -623,42 +614,21 @@ dos_dump(DataDir,Rel,Dump) ->
 
 rel_opt(Rel) ->
     case Rel of
-	r9b -> [{erl,[{release,"r9b_patched"}]}];
-	r9c -> [{erl,[{release,"r9c_patched"}]}];
-	r10b -> [{erl,[{release,"r10b_patched"}]}];
-	r11b -> [{erl,[{release,"r11b_patched"}]}];
-	r12b -> [{erl,[{release,"r12b_patched"}]}];
-	r13b -> [{erl,[{release,"r13b_patched"}]}];
-	r14b -> [{erl,[{release,"r14b_latest"}]}]; %naming convention changed
-	r15b -> [{erl,[{release,"r15b_latest"}]}];
-	r16b -> [{erl,[{release,"r16b_latest"}]}];
+	'17' -> [{erl,[{release,"17_latest"}]}];
+	'18' -> [{erl,[{release,"18_latest"}]}];
 	current -> []
     end.
 
 dump_prefix(Rel) ->
     case Rel of
-	r9b -> "r9b_dump.";
-	r9c -> "r9c_dump.";
-	r10b -> "r10b_dump.";
-	r11b -> "r11b_dump.";
-	r12b -> "r12b_dump.";
-	r13b -> "r13b_dump.";
-	r14b -> "r14b_dump.";
-	r15b -> "r15b_dump.";
-	r16b -> "r16b_dump.";
-	current -> "r17b_dump."
+	'17' -> "r17_dump.";
+	'18' -> "r18_dump.";
+	current -> "r19_dump."
     end.
 
 compat_rel(Rel) ->
     case Rel of
-	r9b -> "+R9 ";
-	r9c -> "+R9 ";
-	r10b -> "+R10 ";
-	r11b -> "+R11 ";
-	r12b -> "+R12 ";
-	r13b -> "+R13 ";
-	r14b -> "+R14 ";
-	r15b -> "+R15 ";
-	r16b -> "+R16 ";
+	'17' -> "+R17 ";
+	'18' -> "+R18 ";
 	current -> ""
     end.

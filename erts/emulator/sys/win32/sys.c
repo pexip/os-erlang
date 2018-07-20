@@ -1,18 +1,19 @@
 /*
  * %CopyrightBegin%
  *
- * Copyright Ericsson AB 1996-2014. All Rights Reserved.
+ * Copyright Ericsson AB 1996-2016. All Rights Reserved.
  *
- * The contents of this file are subject to the Erlang Public License,
- * Version 1.1, (the "License"); you may not use this file except in
- * compliance with the License. You should have received a copy of the
- * Erlang Public License along with this software. If not, it can be
- * retrieved online at http://www.erlang.org/.
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
  *
- * Software distributed under the License is distributed on an "AS IS"
- * basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See
- * the License for the specific language governing rights and limitations
- * under the License.
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  *
  * %CopyrightEnd%
  */
@@ -37,9 +38,8 @@
 void erts_sys_init_float(void);
 
 void erl_start(int, char**);
-void erl_exit(int n, char*, ...);
+void erts_exit(int n, char*, ...);
 void erl_error(char*, va_list);
-void erl_crash_dump(char*, int, char*, ...);
 
 /*
  * Microsoft-specific function to map a WIN32 error code to a Posix errno.
@@ -199,7 +199,7 @@ erts_sys_misc_mem_sz(void)
  */
 void sys_tty_reset(int exit_code)
 {
-    if (exit_code > 0)
+    if (exit_code == ERTS_ERROR_EXIT)
 	ConWaitForExit();
     else
 	ConNormalExit();
@@ -245,6 +245,27 @@ void erl_sys_args(int* argc, char** argv)
 	use_named_pipes = FALSE;
     }
 #endif
+}
+
+/*
+ * Function returns 1 if we can read from all values in between
+ * start and stop.
+ */
+int
+erts_sys_is_area_readable(char *start, char *stop) {
+    volatile char tmp;
+    __try
+    {
+        while(start < stop) {
+            tmp = *start;
+            start++;
+        }
+    }
+    __except(EXCEPTION_EXECUTE_HANDLER)
+    {
+        return 0;
+    }
+    return 1;
 }
 
 int erts_sys_prepare_crash_dump(int secs)
@@ -1312,10 +1333,8 @@ spawn_start(ErlDrvPort port_num, char* utf8_name, SysDriverOpts* opts)
 	retval = set_driver_data(dp, hFromChild, hToChild, opts->read_write,
 				 opts->exit_status);
 	if (retval != ERL_DRV_ERROR_GENERAL && retval != ERL_DRV_ERROR_ERRNO) {
-	    Port *prt = erts_drvport2port(port_num);
-		/* We assume that this cannot generate a negative number */
-	    ASSERT(prt != ERTS_INVALID_ERL_DRV_PORT);
-	    prt->os_pid = (SWord) pid;
+            /* We assume that this cannot generate a negative number */
+            erl_drv_set_os_pid(port_num, pid);
 	}
     }
     
@@ -1392,39 +1411,46 @@ int parse_command(wchar_t* cmd){
     return i;
 }
 
-static BOOL need_quotes(wchar_t *str)
-{
-    int in_quote = 0;
-    int backslashed = 0;
-    int naked_space = 0;
 
-    while (*str != L'\0') {
-	switch (*str) {
-	case L'\\' :
-	    backslashed = !backslashed;
-	    break;
-	case L'"':
-	    if (backslashed) {
-		backslashed=0;
-	    } else {
-		in_quote = !in_quote;
-	    }
-	    break;
-	case L' ':
-	    backslashed = 0;
-	    if (!(backslashed || in_quote)) {
-		naked_space++;
-	    }
-	    break;
-	default:
-	    backslashed = 0;
+/*
+ * Translating of command line arguments to correct format. In the examples
+ * below the '' are not part of the actual string. 
+ * 'io:format("hello").' -> 'io:format(\"hello\").'
+ * 'io:format("is anybody in there?").' -> '"io:format(\"is anybody in there?\")."'
+ * 'Just nod if you can hear me.' -> '"Just nod if you can hear me."'
+ * 'Is there ""anyone at home?' -> '"Is there \"\"anyone at home?"'
+ * 'Relax."' -> 'Relax.\"'
+ *
+ * If new == NULL we just calculate the length.
+ *
+ * The reason for having to quote all of the is becasue CreateProcessW removes
+ * one level of escaping since it takes a single long command line rather
+ * than the argument chunks that unix uses.
+ */
+static int escape_and_quote(wchar_t *str, wchar_t *new, BOOL *quoted) {
+    int i, j = 0;
+    if (new == NULL)
+        *quoted = FALSE;
+    else if (*quoted)
+        new[j++] = L'"';
+    for ( i = 0; str[i] != L'\0'; i++,j++) {
+        if (str[i] == L' ' && new == NULL && *quoted == FALSE) {
+	    *quoted = TRUE;
+	    j++;
 	}
-	++str;
+	/* check if we have to escape quotes */
+	if (str[i] == L'"') {
+	    if (new) new[j] = L'\\';
+	    j++;
+	}
+	if (new) new[j] = str[i];
     }
-    return (naked_space > 0);
+    if (*quoted) {
+        if (new) new[j] = L'"';
+	j++;
+    }
+    return j;
 }
-	    
-	    
 
 /*
  *----------------------------------------------------------------------
@@ -1499,8 +1525,8 @@ create_child_process
 	 * Parse out the program name from the command line (it can be quoted and
 	 * contain spaces).
 	 */
-	newcmdline = (wchar_t *) erts_alloc(ERTS_ALC_T_TMP, 2048*sizeof(wchar_t));
 	cmdlength = parse_command(origcmd);
+	newcmdline = (wchar_t *) erts_alloc(ERTS_ALC_T_TMP, (MAX_PATH+wcslen(origcmd)-cmdlength)*sizeof(wchar_t));
 	thecommand = (wchar_t *) erts_alloc(ERTS_ALC_T_TMP, (cmdlength+1)*sizeof(wchar_t));
 	wcsncpy(thecommand, origcmd, cmdlength);
 	thecommand[cmdlength] = L'\0';
@@ -1585,31 +1611,24 @@ create_child_process
 	    wcscpy(appname, execPath);
 	}
 	if (argv == NULL) { 
-	    BOOL orig_need_q = need_quotes(execPath);
+	    BOOL orig_need_q;
 	    wchar_t *ptr;
-	    int ocl = wcslen(execPath);
+	    int ocl = escape_and_quote(execPath, NULL, &orig_need_q);
 	    if (run_cmd) {
 		newcmdline = (wchar_t *) erts_alloc(ERTS_ALC_T_TMP,
-						    (ocl + ((orig_need_q) ? 3 : 1)
-						     + 11)*sizeof(wchar_t));
+						    (ocl + 1 + 11)*sizeof(wchar_t));
 		memcpy(newcmdline,L"cmd.exe /c ",11*sizeof(wchar_t));
 		ptr = newcmdline + 11;
 	    } else {
 		newcmdline = (wchar_t *) erts_alloc(ERTS_ALC_T_TMP,
-						    (ocl + ((orig_need_q) ? 3 : 1))*sizeof(wchar_t));
+						    (ocl + 1)*sizeof(wchar_t));
 		ptr = (wchar_t *) newcmdline;
 	    }
-	    if (orig_need_q) {
-		*ptr++ = L'"';
-	    }
-	    memcpy(ptr,execPath,ocl*sizeof(wchar_t));
-	    ptr += ocl;
-	    if (orig_need_q) {
-		*ptr++ = L'"';
-	    }
-	    *ptr = L'\0';
+	    ptr += escape_and_quote(execPath, ptr, &orig_need_q);
+	    ptr[0] = L'\0';
 	} else {
-	    int sum = 1; /* '\0' */
+	    int sum = 0;
+	    BOOL *qte = NULL;
 	    wchar_t **ar = argv;
 	    wchar_t *n;
 	    wchar_t *save_arg0 = NULL;
@@ -1620,11 +1639,13 @@ create_child_process
 	    if (run_cmd) {
 		sum += 11; /* cmd.exe /c */
 	    }
+
+	    while (*ar != NULL)  ar++;
+	    qte = erts_alloc(ERTS_ALC_T_TMP, (ar - argv)*sizeof(BOOL));
+
+	    ar = argv;
 	    while (*ar != NULL) {
-		sum += wcslen(*ar);
-		if (need_quotes(*ar)) {
-		    sum += 2; /* quotes */
-		}
+		sum += escape_and_quote(*ar,NULL,qte+(ar - argv));
 		sum++; /* space */
 		++ar;
 	    }
@@ -1636,26 +1657,18 @@ create_child_process
 		n += 11;
 	    }
 	    while (*ar != NULL) {
-		int q = need_quotes(*ar);
-		sum = wcslen(*ar);
-		if (q) {
-		    *n++ = L'"';
-		}
-		memcpy(n,*ar,sum*sizeof(wchar_t));
-		n += sum;
-		if (q) {
-		    *n++ = L'"';
-		}
+		n += escape_and_quote(*ar,n,qte+(ar - argv));
 		*n++ = L' ';
 		++ar;
 	    }
-	    *(n-1) = L'\0';
+	    *(n-1) = L'\0'; /* overwrite last space with '\0' */
 	    if (save_arg0 != NULL) {
 		argv[0] = save_arg0;
 	    }
+	    erts_free(ERTS_ALC_T_TMP, qte);
 	}	    
 	    
-	DEBUGF(("Creating child process: %s, createFlags = %d\n", newcmdline, createFlags));
+	DEBUGF((stderr,"Creating child process: %S, createFlags = %d\n", newcmdline, createFlags));
 	ok = CreateProcessW((wchar_t *) appname,
 			    (wchar_t *) newcmdline,
 			    NULL,
@@ -2190,7 +2203,7 @@ static void fd_stop(ErlDrvData data)
 	ASSERT(dp->out.flushEvent);
 	SetEvent(dp->out.flushEvent);
       } while (WaitForSingleObject(dp->out.flushReplyEvent, 10) == WAIT_TIMEOUT
-	       || !(dp->out.flags & DF_THREAD_FLUSHED));
+	       && !(dp->out.flags & DF_THREAD_FLUSHED));
   }    
 
 }
@@ -3065,6 +3078,8 @@ erl_bin_write(buf, sz, max)
   }
 }
 
+#endif /* DEBUG */
+
 void
 erl_assert_error(const char* expr, const char* func, const char* file, int line)
 {   
@@ -3080,7 +3095,6 @@ erl_assert_error(const char* expr, const char* func, const char* file, int line)
     DebugBreak();
 }
 
-#endif /* DEBUG */
 	    
 static void
 check_supported_os_version(void)
@@ -3094,13 +3108,13 @@ check_supported_os_version(void)
 	    || int_os_version.dwMajorVersion < major
 	    || (int_os_version.dwMajorVersion == major
 		&& int_os_version.dwMinorVersion < minor))
-	    erl_exit(-1,
+	    erts_exit(1,
 		     "Windows version not supported "
 		     "(min required: winnt %d.%d)\n",
 		     major, minor);
     }
 #else
-    erl_exit(-1,
+    erts_exit(1,
 	     "Windows version not supported "
 	     "(min required: win %d.%d)\n",
 	     nt_major, nt_minor);
@@ -3157,25 +3171,31 @@ thr_create_prepare_child(void *vtcdp)
 void
 erts_sys_pre_init(void)
 {
+#ifdef USE_THREADS
+    erts_thr_init_data_t eid = ERTS_THR_INIT_DATA_DEF_INITER;
+#endif
     int_os_version.dwOSVersionInfoSize = sizeof(OSVERSIONINFO);
     GetVersionEx(&int_os_version);
     check_supported_os_version();
+
 #ifdef USE_THREADS
-    {
-	erts_thr_init_data_t eid = ERTS_THR_INIT_DATA_DEF_INITER;
+    eid.thread_create_child_func = thr_create_prepare_child;
+    /* Before creation in parent */
+    eid.thread_create_prepare_func = thr_create_prepare;
+    /* After creation in parent */
+    eid.thread_create_parent_func = thr_create_cleanup;
 
-	eid.thread_create_child_func = thr_create_prepare_child;
-	/* Before creation in parent */
-	eid.thread_create_prepare_func = thr_create_prepare;
-	/* After creation in parent */
-	eid.thread_create_parent_func = thr_create_cleanup,
-
-	erts_thr_init(&eid);
+    erts_thr_init(&eid);
+#ifdef ERTS_ENABLE_LOCK_CHECK
+    erts_lc_init();
+#endif
 #ifdef ERTS_ENABLE_LOCK_COUNT
-	erts_lcnt_init();
+    erts_lcnt_init();
 #endif
-    }
 #endif
+
+    erts_init_sys_time_sup();
+
     erts_smp_atomic_init_nob(&sys_misc_mem_sz, 0);
 }
 
@@ -3251,6 +3271,12 @@ void erl_sys_init(void)
 }
 
 void
+erl_sys_late_init(void)
+{
+    /* do nothing */
+}
+
+void
 erts_sys_schedule_interrupt(int set)
 {
     erts_check_io_interrupt(set);
@@ -3258,9 +3284,9 @@ erts_sys_schedule_interrupt(int set)
 
 #ifdef ERTS_SMP
 void
-erts_sys_schedule_interrupt_timed(int set, erts_short_time_t msec)
+erts_sys_schedule_interrupt_timed(int set, ErtsMonotonicTime timeout_time)
 {
-    erts_check_io_interrupt_timed(set, msec);
+    erts_check_io_interrupt_timed(set, timeout_time);
 }
 #endif
 

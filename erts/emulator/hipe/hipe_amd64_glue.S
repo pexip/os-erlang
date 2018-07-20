@@ -1,26 +1,26 @@
 /*
  * %CopyrightBegin%
  *
- * Copyright Ericsson AB 2004-2011. All Rights Reserved.
+ * Copyright Ericsson AB 2004-2016. All Rights Reserved.
  *
- * The contents of this file are subject to the Erlang Public License,
- * Version 1.1, (the "License"); you may not use this file except in
- * compliance with the License. You should have received a copy of the
- * Erlang Public License along with this software. If not, it can be
- * retrieved online at http://www.erlang.org/.
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
  *
- * Software distributed under the License is distributed on an "AS IS"
- * basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See
- * the License for the specific language governing rights and limitations
- * under the License.
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  *
  * %CopyrightEnd%
  */
 
-
+#define ASM
 #include "hipe_amd64_asm.h"
 #include "hipe_literals.h"
-#define ASM
 #include "hipe_mode_switch.h"
 
 /*
@@ -94,6 +94,7 @@ ASYM(nbif_return):
 .nosave_exit:
 	/* switch to C stack */
 	SWITCH_ERLANG_TO_C_QUICK
+	SET_GC_SAFE
 	/* restore C callee-save registers, drop frame, return */
 	movq	(%rsp), %rbp	# kills P
 	movq	8(%rsp), %rbx
@@ -109,7 +110,7 @@ ASYM(nbif_return):
  * stub (hipe_x86_loader.erl) which should look as follows:
  *
  * stub for f/N:
- *	movq	$<f's BEAM code address>, P_BEAM_IP(P)
+ *	movq	$<f's export entry address>, P_CALLEE_EXP(P)
  *	movb	$<N>, P_ARITY(P)
  *	jmp	nbif_callemu
  *
@@ -119,7 +120,7 @@ ASYM(nbif_return):
 	GLOBAL(ASYM(nbif_callemu))
 ASYM(nbif_callemu):
 	STORE_ARG_REGS
-	movl	$HIPE_MODE_SWITCH_RES_CALL, %eax
+	movl	$HIPE_MODE_SWITCH_RES_CALL_EXPORTED, %eax
 	jmp	.suspend_exit
 
 /*
@@ -322,6 +323,7 @@ ASYM(nbif_fail):
 	GLOBAL(nbif_1_gc_after_bif)
 	GLOBAL(nbif_2_gc_after_bif)
 	GLOBAL(nbif_3_gc_after_bif)
+	GLOBAL(nbif_4_gc_after_bif)
 	.align	4
 nbif_0_gc_after_bif:
 	xorl	%edx, %edx
@@ -337,6 +339,10 @@ nbif_2_gc_after_bif:
 	.align	4
 nbif_3_gc_after_bif:
 	movl	$3, %edx
+	jmp	.gc_after_bif
+	.align	4
+nbif_4_gc_after_bif:
+	movl	$4, %edx
 	/*FALLTHROUGH*/
 	.align	4
 .gc_after_bif:
@@ -360,6 +366,7 @@ nbif_3_gc_after_bif:
 	GLOBAL(nbif_1_simple_exception)
 	GLOBAL(nbif_2_simple_exception)
 	GLOBAL(nbif_3_simple_exception)
+	GLOBAL(nbif_4_simple_exception)
 	.align	4
 nbif_0_simple_exception:
 	xorl	%eax, %eax
@@ -375,6 +382,10 @@ nbif_2_simple_exception:
 	.align	4
 nbif_3_simple_exception:
 	movl	$3, %eax
+	jmp	.nbif_simple_exception
+	.align	4
+nbif_4_simple_exception:
+	movl	$4, %eax
 	/*FALLTHROUGH*/
 	.align	4
 .nbif_simple_exception:
@@ -388,6 +399,7 @@ nbif_3_simple_exception:
 	movl	%eax, P_NARITY(P)	# Note: narity is a 32-bit field
 	/* find and prepare to invoke the handler */
 	SWITCH_ERLANG_TO_C_QUICK	# The cached state is clean and need not be saved.
+	SET_GC_SAFE
 	movq	P, %rdi
 	call	CSYM(hipe_handle_exception)	# Note: hipe_handle_exception() conses
 	SWITCH_C_TO_ERLANG		# %rsp updated by hipe_find_handler()

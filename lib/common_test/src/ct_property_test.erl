@@ -1,18 +1,19 @@
 %%
 %% %CopyrightBegin%
 %% 
-%% Copyright Ericsson AB 2003-2014. All Rights Reserved.
+%% Copyright Ericsson AB 2003-2016. All Rights Reserved.
 %% 
-%% The contents of this file are subject to the Erlang Public License,
-%% Version 1.1, (the "License"); you may not use this file except in
-%% compliance with the License. You should have received a copy of the
-%% Erlang Public License along with this software. If not, it can be
-%% retrieved online at http://www.erlang.org/.
-%% 
-%% Software distributed under the License is distributed on an "AS IS"
-%% basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See
-%% the License for the specific language governing rights and limitations
-%% under the License.
+%% Licensed under the Apache License, Version 2.0 (the "License");
+%% you may not use this file except in compliance with the License.
+%% You may obtain a copy of the License at
+%%
+%%     http://www.apache.org/licenses/LICENSE-2.0
+%%
+%% Unless required by applicable law or agreed to in writing, software
+%% distributed under the License is distributed on an "AS IS" BASIS,
+%% WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+%% See the License for the specific language governing permissions and
+%% limitations under the License.
 %% 
 %% %CopyrightEnd%
 %%
@@ -160,7 +161,9 @@ property_tests_path(Dir, Config) ->
 add_code_pathz(Dir) ->
     case lists:member(Dir, code:get_path()) of
 	true ->  ok;
-	false -> code:add_pathz(Dir)
+	false ->
+	    true = code:add_pathz(Dir),
+	    ok
     end.
 
 compile_tests(Path, ToolModule) ->
@@ -170,10 +173,10 @@ compile_tests(Path, ToolModule) ->
     {ok,FileNames} = file:list_dir("."),
     BeamFiles = [F || F<-FileNames,
 		      filename:extension(F) == ".beam"],
-    [file:delete(F) || F<-BeamFiles],
+    _ = [file:delete(F) || F<-BeamFiles],
     ct:pal("Compiling in ~p:~n  Deleted ~p~n  MacroDefs=~p",[Path,BeamFiles,MacroDefs]),
     Result = make:all([load|MacroDefs]),
-    file:set_cwd(Cwd),
+    ok = file:set_cwd(Cwd),
     Result.
     
 

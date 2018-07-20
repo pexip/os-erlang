@@ -1,6 +1,6 @@
 %% =====================================================================
 %% Header file for EDoc doclet modules.
-%% 
+%%
 %% Copyright (C) 2001-2004 Richard Carlsson
 %%
 %% This library is free software; you can redistribute it and/or modify
@@ -15,7 +15,7 @@
 %%
 %% You should have received a copy of the GNU Lesser General Public
 %% License along with this library; if not, write to the Free Software
-%% Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307
+%% Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301
 %% USA
 %%
 %% Author contact: carlsson.richard@gmail.com
@@ -43,16 +43,11 @@
 
 %% @type doclet_gen() = #doclet_gen{sources = [string()],
 %%                                  app = no_app() | atom(),
-%%                                  packages = [atom()],
-%%                                  modules = [atom()],
-%%                                  modules = [atom()],
-%%                                  filemap = function()}
+%%                                  modules = [atom()]}
 
 -record(doclet_gen, {sources = [],
 		     app = ?NO_APP,
-		     packages = [],
-		     modules = [],
-		     filemap
+		     modules = []
 		    }).
 
 %% @type doclet_toc() = #doclet_gen{paths = [string()],

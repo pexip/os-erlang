@@ -10,7 +10,7 @@
 %%
 %% You should have received a copy of the GNU Lesser General Public
 %% License along with this library; if not, write to the Free Software
-%% Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307
+%% Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301
 %% USA
 %%
 %% @author Richard Carlsson <carlsson.richard@gmail.com>
@@ -61,14 +61,16 @@
 		messages  = dict:new()		 :: dict:dict()}).
 
 start(Pids) ->
-    spawn(fun () -> serializer(Pids) end).
+    spawn(serializer_fun(Pids)).
 
-serializer(Pids) ->
-    St = #state{listeners = sets:from_list(Pids),
-		cancelled = eunit_lib:trie_new(),
-		messages = dict:new()},
-    expect([], undefined, 0, St),
-    exit(normal).
+serializer_fun(Pids) ->
+    fun () ->
+            St = #state{listeners = sets:from_list(Pids),
+                        cancelled = eunit_lib:trie_new(),
+                        messages = dict:new()},
+            expect([], undefined, 0, St),
+            exit(normal)
+    end.
 
 %% collect beginning and end of an expected item; return {Done, NewSt}
 %% where Done is true if there are no more items of this group

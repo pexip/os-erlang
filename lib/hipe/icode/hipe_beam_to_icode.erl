@@ -2,18 +2,19 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2001-2012. All Rights Reserved.
+%% Copyright Ericsson AB 2001-2016. All Rights Reserved.
 %%
-%% The contents of this file are subject to the Erlang Public License,
-%% Version 1.1, (the "License"); you may not use this file except in
-%% compliance with the License. You should have received a copy of the
-%% Erlang Public License along with this software. If not, it can be
-%% retrieved online at http://www.erlang.org/.
+%% Licensed under the Apache License, Version 2.0 (the "License");
+%% you may not use this file except in compliance with the License.
+%% You may obtain a copy of the License at
 %%
-%% Software distributed under the License is distributed on an "AS IS"
-%% basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See
-%% the License for the specific language governing rights and limitations
-%% under the License.
+%%     http://www.apache.org/licenses/LICENSE-2.0
+%%
+%% Unless required by applicable law or agreed to in writing, software
+%% distributed under the License is distributed on an "AS IS" BASIS,
+%% WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+%% See the License for the specific language governing permissions and
+%% limitations under the License.
 %%
 %% %CopyrightEnd%
 %%
@@ -762,32 +763,10 @@ trans_fun([{test,bs_test_unit,{f,Lbl},[Ms,Unit]}|
 		[MsVar], [], Env, Instructions);
 trans_fun([{test,bs_match_string,{f,Lbl},[Ms,BitSize,Bin]}|
 	   Instructions], Env) -> 
-  True = mk_label(new),
-  FalseLabName = map_label(Lbl),
-  TrueLabName = hipe_icode:label_name(True),
+  %% the current match buffer
   MsVar = mk_var(Ms),
-  TmpVar = mk_var(new),
-  ByteSize = BitSize div 8,
-  ExtraBits = BitSize rem 8,
-  WordSize = hipe_rtl_arch:word_size(),
-  if ExtraBits =:= 0 ->
-      trans_op_call({hipe_bs_primop,{bs_match_string,Bin,ByteSize}}, Lbl, 
-		    [MsVar], [MsVar], Env, Instructions);
-      BitSize =< ((WordSize * 8) - 5) -> 
-      <<Int:BitSize, _/bits>> = Bin,
-      {I1,Env1} = trans_one_op_call({hipe_bs_primop,{bs_get_integer,BitSize,0}}, Lbl, 
-				    [MsVar], [TmpVar, MsVar], Env), 
-      I2 = hipe_icode:mk_type([TmpVar], {integer,Int}, TrueLabName, FalseLabName),
-      I1 ++ [I2,True] ++ trans_fun(Instructions, Env1);
-     true ->
-      <<RealBin:ByteSize/binary, Int:ExtraBits, _/bits>> = Bin,
-      {I1,Env1} = trans_one_op_call({hipe_bs_primop,{bs_match_string,RealBin,ByteSize}}, Lbl, 
-				    [MsVar], [MsVar], Env),
-      {I2,Env2} = trans_one_op_call({hipe_bs_primop,{bs_get_integer,ExtraBits,0}}, Lbl, 
-				    [MsVar], [TmpVar, MsVar], Env1),
-      I3 = hipe_icode:mk_type([TmpVar], {integer,Int}, TrueLabName, FalseLabName),
-      I1 ++ I2 ++ [I3,True] ++ trans_fun(Instructions, Env2)
-  end;
+  Primop = {hipe_bs_primop, {bs_match_string, Bin, BitSize}},
+  trans_op_call(Primop, Lbl, [MsVar], [MsVar], Env, Instructions);
 trans_fun([{bs_context_to_binary,Var}|Instructions], Env) -> 
   %% the current match buffer
   IVars = [trans_arg(Var)],
@@ -880,6 +859,15 @@ trans_fun([{bs_init_bits,{f,Lbl},Size,_Words,_LiveRegs,{field_flags,Flags0},X}|
 trans_fun([{bs_add, {f,Lbl}, [Old,New,Unit], Res}|Instructions], Env) ->
   Dst = mk_var(Res),
   Temp = mk_var(new),
+  {FailLblName, FailCode} =
+    if Lbl =:= 0 ->
+	FailLbl = mk_label(new),
+	{hipe_icode:label_name(FailLbl),
+	 [FailLbl,
+	  hipe_icode:mk_fail([hipe_icode:mk_const(badarg)], error)]};
+       true ->
+	{map_label(Lbl), []}
+    end,
   MultIs =
     case {New,Unit} of
       {{integer, NewInt}, _} ->
@@ -889,40 +877,26 @@ trans_fun([{bs_add, {f,Lbl}, [Old,New,Unit], Res}|Instructions], Env) ->
 	[hipe_icode:mk_move(Temp, NewVar)];
       _ ->
 	NewVar = mk_var(New),
-	if Lbl =:= 0 ->
-	    [hipe_icode:mk_primop([Temp], '*', 
-				  [NewVar, hipe_icode:mk_const(Unit)])];
-	   true ->
-	    Succ = mk_label(new),
-	    [hipe_icode:mk_primop([Temp], '*', 
-				  [NewVar, hipe_icode:mk_const(Unit)],
-				  hipe_icode:label_name(Succ), map_label(Lbl)),
-	     Succ]
-	end
+	Succ = mk_label(new),
+	[hipe_icode:mk_primop([Temp], '*',
+			      [NewVar, hipe_icode:mk_const(Unit)],
+			      hipe_icode:label_name(Succ), FailLblName),
+	 Succ]
     end,
   Succ2 = mk_label(new),
-  {FailLblName, FailCode} = 
-    if Lbl =:= 0 ->
-	FailLbl = mk_label(new),
-	{hipe_icode:label_name(FailLbl),
-	 [FailLbl,
-	  hipe_icode:mk_fail([hipe_icode:mk_const(badarg)], error)]};
-       true ->
-	{map_label(Lbl), []}
-    end,
   IsPos = 
     [hipe_icode:mk_if('>=', [Temp, hipe_icode:mk_const(0)], 
 		      hipe_icode:label_name(Succ2), FailLblName)] ++
-    FailCode ++ [Succ2], 
-  AddI =
+    FailCode ++ [Succ2],
+  AddRhs =
     case Old of
-      {integer,OldInt} ->
-	hipe_icode:mk_primop([Dst], '+', [Temp, hipe_icode:mk_const(OldInt)]);
-      _ ->
-	OldVar = mk_var(Old),
-	hipe_icode:mk_primop([Dst], '+', [Temp, OldVar])
+      {integer,OldInt} -> hipe_icode:mk_const(OldInt);
+      _ -> mk_var(Old)
     end,
-  MultIs ++ IsPos ++ [AddI|trans_fun(Instructions, Env)];
+  Succ3 = mk_label(new),
+  AddI = hipe_icode:mk_primop([Dst], '+', [Temp, AddRhs],
+			      hipe_icode:label_name(Succ3), FailLblName),
+  MultIs ++ IsPos ++ [AddI,Succ3|trans_fun(Instructions, Env)];
 %%--------------------------------------------------------------------
 %% Bit syntax instructions added in R12B-5 (Fall 2008)
 %%--------------------------------------------------------------------
@@ -1305,7 +1279,7 @@ trans_bin([{bs_put_binary,{f,Lbl},Size,Unit,{field_flags,Flags},Source}|
   {Name, Args, Env2} =
     case Size of
       {atom,all} -> %% put all bits
-	{{bs_put_binary_all, Flags}, [Src,Base,Offset], Env};
+	{{bs_put_binary_all, Unit, Flags}, [Src,Base,Offset], Env};
       {integer,NoBits} when is_integer(NoBits), NoBits >= 0 ->
 	%% Create a N*Unit bits subbinary
 	{{bs_put_binary, NoBits*Unit, Flags}, [Src,Base,Offset], Env};
@@ -1584,11 +1558,7 @@ gen_put_map_instrs(exists, Op, TempMapVar, Dst, FailLbl, Pairs, Env) ->
       end,
   {[IsMapCode, TrueLabel, PutInstructions, ReturnLbl], Env1};
 gen_put_map_instrs(new, Op, TempMapVar, Dst, new, Pairs, Env) ->
-  TrueLabel = mk_label(new),
   FailLbl = mk_label(new),
-  IsMapCode = hipe_icode:mk_type([TempMapVar], map,
-				 hipe_icode:label_name(TrueLabel),
-				 hipe_icode:label_name(FailLbl)),
   DstMapVar = mk_var(Dst),
   {ReturnLbl, PutInstructions, Env1}
     = case Op of
@@ -1596,10 +1566,10 @@ gen_put_map_instrs(new, Op, TempMapVar, Dst, new, Pairs, Env) ->
 	  trans_put_map_assoc(TempMapVar, DstMapVar, Pairs, Env, []);
 	exact ->
 	  trans_put_map_exact(TempMapVar, DstMapVar,
-	    hipe_icode:label_name(FailLbl), Pairs, Env, [])
+			      none, Pairs, Env, [])
       end,
   Fail = hipe_icode:mk_fail([hipe_icode:mk_const(badarg)], error),
-  {[IsMapCode, TrueLabel, PutInstructions, FailLbl, Fail, ReturnLbl], Env1}.
+  {[PutInstructions, FailLbl, Fail, ReturnLbl], Env1}.
 
 %%-----------------------------------------------------------------------
 %% This function generates the instructions needed to insert several
@@ -1629,6 +1599,13 @@ trans_put_map_exact(MapVar, DestMapVar, _FLbl, [], Env, Acc) ->
   ReturnLbl = mk_label(new),
   GotoReturn = hipe_icode:mk_goto(hipe_icode:label_name(ReturnLbl)),
   {ReturnLbl, lists:reverse([GotoReturn, MoveToReturnVar | Acc]), Env};
+trans_put_map_exact(MapVar, DestMapVar, none, [Key, Value | Rest], Env, Acc) ->
+  {MoveKey, KeyVar, Env1} = mk_move_and_var(Key, Env),
+  {MoveVal, ValVar, Env2} = mk_move_and_var(Value, Env1),
+  BifCallPut = hipe_icode:mk_call([MapVar], maps, update,
+				  [KeyVar, ValVar, MapVar], remote),
+  Acc1 = [BifCallPut, MoveVal, MoveKey | Acc],
+  trans_put_map_exact(MapVar, DestMapVar, none, Rest, Env2, Acc1);
 trans_put_map_exact(MapVar, DestMapVar, FLbl, [Key, Value | Rest], Env, Acc) ->
   SuccLbl = mk_label(new),
   {MoveKey, KeyVar, Env1} = mk_move_and_var(Key, Env),

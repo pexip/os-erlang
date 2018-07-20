@@ -4,20 +4,21 @@
 <chapter>
   <header>
     <copyright>
-      <year>1996</year><year>2013</year>
+      <year>1996</year><year>2016</year>
       <holder>Ericsson AB. All Rights Reserved.</holder>
     </copyright>
     <legalnotice>
-      The contents of this file are subject to the Erlang Public License,
-      Version 1.1, (the "License"); you may not use this file except in
-      compliance with the License. You should have received a copy of the
-      Erlang Public License along with this software. If not, it can be
-      retrieved online at http://www.erlang.org/.
+      Licensed under the Apache License, Version 2.0 (the "License");
+      you may not use this file except in compliance with the License.
+      You may obtain a copy of the License at
+ 
+          http://www.apache.org/licenses/LICENSE-2.0
 
-      Software distributed under the License is distributed on an "AS IS"
-      basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See
-      the License for the specific language governing rights and limitations
-      under the License.
+      Unless required by applicable law or agreed to in writing, software
+      distributed under the License is distributed on an "AS IS" BASIS,
+      WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+      See the License for the specific language governing permissions and
+      limitations under the License.
 
     </legalnotice>
 
@@ -38,7 +39,227 @@
     thus constitutes one section in this document. The title of each
     section is the version number of Mnesia.</p>
 
-  <section><title>Mnesia 4.12.3</title>
+  <section><title>Mnesia 4.14.2</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+          <p>
+	    A continuation returned by mnesia:select/[14] should be
+	    reusable in different, non-transactional activities.</p>
+          <p>
+	    Own Id: OTP-13944 Aux Id: PR-1184 </p>
+        </item>
+        <item>
+          <p>
+	    Fixed crash when calling block_table multiple times.
+	    Could happen when having locks for a long time and
+	    restarting mnesia.</p>
+          <p>
+	    Own Id: OTP-13970 Aux Id: Seq-13198 </p>
+        </item>
+        <item>
+          <p>
+	    Change mnesia_tm process to have off-heap messages since
+	    mnesia_tm can be the receiver of many non-synchronized
+	    message from other nodes.</p>
+          <p>
+	    Own Id: OTP-14074</p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>Mnesia 4.14.1</title>
+
+    <section><title>Improvements and New Features</title>
+      <list>
+        <item>
+	    <p> Correct some minor documentation issues. </p>
+          <p>
+	    Own Id: OTP-13891</p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>Mnesia 4.14</title>
+
+    <section><title>Improvements and New Features</title>
+      <list>
+        <item>
+          <p>
+	    Added experimental external backend plugin api. This adds
+	    the possibility for the user to write other storage
+	    backends for data, for example by using shared memory or
+	    ram-cached disk storage.</p>
+          <p>
+	    The plugin api may change in future versions after being
+	    battle tested.</p>
+          <p>
+	    Own Id: OTP-13058</p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>Mnesia 4.13.4</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+          <p>
+	    Mnesia transactions could hang while waiting on a
+	    response from a node who had stopped.</p>
+          <p>
+	    Own Id: OTP-13423</p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>Mnesia 4.13.3</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+          <p>
+	    Avoid deadlock possibility in
+	    <c>mnesia:del_table_copy/2</c></p>
+          <p>
+	    Own Id: OTP-13284</p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>Mnesia 4.13.2</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+          <p>
+	    Fixed a process and file descriptor leak in
+	    mnesia:restore/2.</p>
+          <p>
+	    Own Id: OTP-13025 Aux Id: seq12957 </p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>Mnesia 4.13.1</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+          <p>
+	    Improved index updates to avoid a timing glitch in
+	    dirty_index_read.</p>
+          <p>
+	    Own Id: OTP-12972</p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>Mnesia 4.13</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+          <p>
+	    Mnesia's dirty functions did not always exit with
+	    <c>{aborted, Reason}</c> as documented when an error
+	    occurred.</p>
+          <p>
+	    Own Id: OTP-12714</p>
+        </item>
+        <item>
+          <p>
+	    Consider file descriptors limits (emfile) as a fatal
+	    error and do not delete log files. Previously the error
+	    was seen as a corrupted disk and the log files deleted
+	    which caused data loss.</p>
+          <p>
+	    Own Id: OTP-12807</p>
+        </item>
+      </list>
+    </section>
+
+
+    <section><title>Improvements and New Features</title>
+      <list>
+        <item>
+          <p>
+	    Make Mnesia DCD dump behavior at start up optional, when
+	    turned off mnesia loads large disc_copies tables faster.</p>
+          <p>
+	    Own Id: OTP-12481</p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>Mnesia 4.12.5</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+          <p>
+	    Fixed race condition in protocol negotiation.</p>
+          <p>
+	    Own Id: OTP-12473</p>
+        </item>
+      </list>
+    </section>
+
+
+    <section><title>Improvements and New Features</title>
+      <list>
+        <item>
+          <p>
+	    Grammar corrections. (Thanks to Derek Brown)</p>
+          <p>
+	    Own Id: OTP-12400</p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>Mnesia 4.12.4</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+          <p>
+	    Fixed a spelling mistake in mnesia documentation.</p>
+          <p>
+	    Own Id: OTP-12278</p>
+        </item>
+        <item>
+          <p>
+	    Matching data with <c>mnesia:match_object/1</c> did not
+	    work as expected in some cases, when data was written in
+	    the same transaction before the matching was invoked.</p>
+          <p>
+	    Own Id: OTP-12304 Aux Id: Seq12745 </p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>Mnesia 4.12.3</title>
 
     <section><title>Fixed Bugs and Malfunctions</title>
       <list>

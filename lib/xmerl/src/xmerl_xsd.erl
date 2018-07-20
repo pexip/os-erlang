@@ -1,18 +1,19 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2006-2013. All Rights Reserved.
+%% Copyright Ericsson AB 2006-2016. All Rights Reserved.
 %%
-%% The contents of this file are subject to the Erlang Public License,
-%% Version 1.1, (the "License"); you may not use this file except in
-%% compliance with the License. You should have received a copy of the
-%% Erlang Public License along with this software. If not, it can be
-%% retrieved online at http://www.erlang.org/.
+%% Licensed under the Apache License, Version 2.0 (the "License");
+%% you may not use this file except in compliance with the License.
+%% You may obtain a copy of the License at
 %%
-%% Software distributed under the License is distributed on an "AS IS"
-%% basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See
-%% the License for the specific language governing rights and limitations
-%% under the License.
+%%     http://www.apache.org/licenses/LICENSE-2.0
+%%
+%% Unless required by applicable law or agreed to in writing, software
+%% distributed under the License is distributed on an "AS IS" BASIS,
+%% WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+%% See the License for the specific language governing permissions and
+%% limitations under the License.
 %%
 %% %CopyrightEnd%
 %%
@@ -48,6 +49,7 @@
 %%      <dd>It is possible by this option to provide a state with process
 %%          information from an earlier validation.</dd> 
 %% </dl>
+%% @type filename() = string()
 %% @end
 %%%-------------------------------------------------------------------
 -module(xmerl_xsd).
@@ -63,12 +65,10 @@
 %%----------------------------------------------------------------------
 %% External exports
 %%----------------------------------------------------------------------
--export([
-	 validate/2,validate/3,process_validate/2,process_validate/3,
+-export([validate/2,validate/3,process_validate/2,process_validate/3,
 	 process_schema/1,process_schema/2,
 	 process_schemas/1,process_schemas/2,
-	 state2file/1,state2file/2,file2state/1,format_error/1
-	]).
+	 state2file/1,state2file/2,file2state/1,format_error/1]).
 
 %%----------------------------------------------------------------------
 %% Internal exports
@@ -139,7 +139,7 @@ state2file(S=#xsd_state{schema_name=SN}) ->
 
 %% @spec state2file(State,FileName) -> ok | {error,Reason}
 %%       State = global_state()
-%%       FileName = filename()
+%%       FileName = string()
 %% @doc Saves the schema state with all information of the processed
 %% schema in a file. You can provide the file name for the saved
 %% state. FileName is saved with the <code>.xss</code> extension
@@ -154,7 +154,7 @@ state2file(S,FileName) when is_record(S,xsd_state) ->
 
 %% @spec file2state(FileName) -> {ok,State} | {error,Reason}
 %%       State = global_state()
-%%       FileName = filename()
+%%       FileName = string()
 %% @doc Reads the schema state with all information of the processed
 %% schema from a file created with <code>state2file/[1,2]</code>.  The
 %% format of this file is internal. The state can then be used
@@ -203,7 +203,7 @@ xmerl_xsd_vsn_check(S=#xsd_state{vsn=MD5_VSN}) ->
 process_validate(Schema,Xml) ->
     process_validate(Schema,Xml,[]).
 %% @spec process_validate(Schema,Element,Options) -> Result
-%%       Schema   = filename()
+%%       Schema   = string()
 %%       Element  = XmlElement
 %%       Options  = option_list()
 %%       Result   = {ValidXmlElement,State} | {error,Reason}
@@ -283,7 +283,7 @@ validate3(_,_,S) ->
 process_schema(Schema) ->
     process_schema(Schema,[]).
 %% @spec process_schema(Schema,Options) -> Result
-%%       Schema  = filename()
+%%       Schema  = string()
 %%       Result  = {ok,State} | {error,Reason}
 %%       State   = global_state()
 %%       Reason  = [ErrorReason] | ErrorReason
@@ -325,7 +325,7 @@ process_schema2({SE,_},State,_Schema) ->
 process_schemas(Schemas) ->
     process_schemas(Schemas,[]).
 %% @spec process_schemas(Schemas,Options) -> Result
-%%       Schemas  = [{NameSpace,filename()}|Schemas] | []
+%%       Schemas  = [{NameSpace,string()}|Schemas] | []
 %%       Result   = {ok,State} | {error,Reason}
 %%       Reason   = [ErrorReason] | ErrorReason
 %%       Options  = option_list()
@@ -381,7 +381,7 @@ initiate_state2(S,[{target_namespace,_NS}|T]) ->
 %%    initiate_state2(S#xsd_state{targetNamespace=if_list_to_atom(NS)},T);
     initiate_state2(S,T); %% used in validation phase
 initiate_state2(S,[H|T]) ->
-    error_msg("Invalid option: ~p~n",[H]),
+    error_msg("~w: invalid option: ~p~n",[?MODULE, H]),
     initiate_state2(S,T).
 
 validation_options(S,[{target_namespace,NS}|T]) ->
@@ -549,7 +549,7 @@ element_content({attribute,S=#xsd_state{scope=Scope}},Att,Env) ->
 	    {AttRef,add_ref(S,AttRef)};
 	Name ->
 	    {AttrType,S2} = attribute_type(Att,[Name|Env],S),
-	    S3  = check_cm(attribute,allowed_content(attribute,Env),AttrType,S2),
+	    S3 = check_cm(attribute,allowed_content(attribute,Env),AttrType,S2),
 	    {Attr,S4} = attribute_properties(Att#xmlElement.attributes,
 					#schema_attribute{type=AttrType},S3),
 	    Object = {attribute,
@@ -567,7 +567,7 @@ element_content({element,S},El,Env) ->
 	    %% 3.3.3 bullet 2.2
 	    S3 = element_forbidden_properties(El,S2),
 	    S4 = element_forbidden_content(El#xmlElement.content,S3),
-	    ElRef  =
+	    ElRef =
 		{element,
 		 {get_QName(Ref,El#xmlElement.namespace,reset_scope(S)),
 		  Occ}},
@@ -812,7 +812,6 @@ element_content({restriction,S},R,Env) ->
     %% base (resolved by base_type/1) or the type defined in content. 
     {CM,S2} = type(R#xmlElement.content,S,[restriction|Env]),
     S3 = check_cm(restriction,allowed_content(restriction,Env),CM,S2),
-
     {BaseTypeName,CM2,S4} = restriction_base_type(R,CM,S3), %% a QName
 %%    S5 = add_circularity_mark(BaseTypeName,S4),
     BaseTypeType = base_type_type(Env),
@@ -1177,7 +1176,7 @@ rename_redef_group(Name={LN,Scope,NS},S) ->
     NewName = {LN,['#redefine'|Scope],NS},
     case resolve({group,NewName},S) of
 	{SG=#schema_group{name=Name},_} ->
-	    save_object({group,SG#schema_group{name=NewName}},S),
+	    _ = save_object({group,SG#schema_group{name=NewName}},S),
 	    NewName;
 	_ ->
 	    failed
@@ -1734,20 +1733,20 @@ allowed_content(SorC,_Parents) when SorC==sequence;SorC==choice ->
 			{choice,{1,1}},{sequence,{1,1}},
 			{any,{1,1}}],
 		       occurance={0,unbounded}}]};
-allowed_content(E,_Parents) 
-  when E==any;E==selector;E==field;E==notation;E==include;E==import;
-       E==anyAttribute ->
-    {annotation,{0,1}};
-allowed_content(UKK,_Parents) when UKK==unique;UKK==key;UKK==keyref->
-    #chain{content=
-	      [{annotation,{0,1}},
-	       #chain{content=
-			 [{selector,{1,1}},{selector,{1,unbounded}}]}]};
-allowed_content(annotation,_Parents) ->
-    #alternative{content=[{appinfo,{1,1}},{documentation,{1,1}}],
-	    occurance={0,unbounded}};
-allowed_content(E,_Parents) when E==appinfo;E==documentation ->
-    {any,{0,unbounded}};
+%% allowed_content(E,_Parents)
+%%   when E==any;E==selector;E==field;E==notation;E==include;E==import;
+%%        E==anyAttribute ->
+%%     {annotation,{0,1}};
+%% allowed_content(UKK,_Parents) when UKK==unique;UKK==key;UKK==keyref->
+%%     #chain{content=
+%% 	      [{annotation,{0,1}},
+%% 	       #chain{content=
+%% 			 [{selector,{1,1}},{selector,{1,unbounded}}]}]};
+%% allowed_content(annotation,_Parents) ->
+%%     #alternative{content=[{appinfo,{1,1}},{documentation,{1,1}}],
+%% 	    occurance={0,unbounded}};
+%% allowed_content(E,_Parents) when E==appinfo;E==documentation ->
+%%     {any,{0,unbounded}};
 allowed_content(simpleType,_Parents) ->
     #chain{content=
 	      [{annotation,{0,1}},
@@ -1767,22 +1766,22 @@ allowed_content(restriction,Parents) ->
     end;
 allowed_content(LU,_Parent) when LU==list;LU==union ->
     #chain{content=[{annotation,{0,1}},{simpleType,{0,1}}]};
-allowed_content(schema,_) ->
-    #chain{content=
-	      [#alternative{content=
-		       [{include,{1,1}},{import,{1,1}},
-			{redefine,{1,1}},{annotation,{1,1}}],
-		       occurance={0,1}},
-	       #chain{content=
-			 [#alternative{content=
-				  [#alternative{content=
-					   [{simpleType,{1,1}},{complexType,{1,1}},
-					    {group,{1,1}},{attributeGroup,{1,1}}]},
-				   {element,{1,1}},
-				   {attribute,{1,1}},
-				   {notation,{1,1}}]},
-			  {annotation,{0,unbounded}}],
-			 occurance={0,unbounded}}]};
+%% allowed_content(schema,_) ->
+%%     #chain{content=
+%% 	      [#alternative{content=
+%% 		       [{include,{1,1}},{import,{1,1}},
+%% 			{redefine,{1,1}},{annotation,{1,1}}],
+%% 		       occurance={0,1}},
+%% 	       #chain{content=
+%% 			 [#alternative{content=
+%% 				  [#alternative{content=
+%% 					   [{simpleType,{1,1}},{complexType,{1,1}},
+%% 					    {group,{1,1}},{attributeGroup,{1,1}}]},
+%% 				   {element,{1,1}},
+%% 				   {attribute,{1,1}},
+%% 				   {notation,{1,1}}]},
+%% 			  {annotation,{0,unbounded}}],
+%% 			 occurance={0,unbounded}}]};
 allowed_content(redefine,_Parents) ->
     #alternative{content=
 	    [{annotation,{1,1}},
@@ -1802,31 +1801,31 @@ allowed_content(extension,Parents) ->
 	    allowed_content2(extension,simpleContent);
 	_ ->
 	    allowed_content2(extension,complexContent)
-    end;
-allowed_content(minExclusive,_Parents) ->
-    [];
-allowed_content(minInclusive,_Parents) ->
-    [];
-allowed_content(maxExclusive,_Parents) ->
-    [];
-allowed_content(maxInclusive,_Parents) ->
-    [];
-allowed_content(totalDigits,_Parents) ->
-    [];
-allowed_content(fractionDigits,_Parents) ->
-    [];
-allowed_content(length,_Parents) ->
-    [];
-allowed_content(minLength,_Parents) ->
-    [];
-allowed_content(maxLength,_Parents) ->
-    [];
-allowed_content(enumeration,_Parents) ->
-    [];
-allowed_content(whiteSpace,_Parents) ->
-    [];
-allowed_content(pattern,_Parents) ->
-    [].
+    end.
+%% allowed_content(minExclusive,_Parents) ->
+%%     [];
+%% allowed_content(minInclusive,_Parents) ->
+%%     [];
+%% allowed_content(maxExclusive,_Parents) ->
+%%     [];
+%% allowed_content(maxInclusive,_Parents) ->
+%%     [];
+%% allowed_content(totalDigits,_Parents) ->
+%%     [];
+%% allowed_content(fractionDigits,_Parents) ->
+%%     [];
+%% allowed_content(length,_Parents) ->
+%%     [];
+%% allowed_content(minLength,_Parents) ->
+%%     [];
+%% allowed_content(maxLength,_Parents) ->
+%%     [];
+%% allowed_content(enumeration,_Parents) ->
+%%     [];
+%% allowed_content(whiteSpace,_Parents) ->
+%%     [];
+%% allowed_content(pattern,_Parents) ->
+%%     [].
 	       
 
 
@@ -1904,9 +1903,9 @@ set_occurance(Ch = #chain{},Occ) ->
 set_occurance(Alt = #alternative{},Occ) ->
     Alt#alternative{occurance=Occ};
 set_occurance({Name,_},Occ) when is_atom(Name) ->
-    {Name,Occ};
-set_occurance(CM,_) ->
-    CM.
+    {Name,Occ}.
+%% set_occurance(CM,_) ->
+%%     CM.
 
 
 process_external_schema_once(E,Namespace,S) when is_record(E,xmlElement) ->
@@ -3435,7 +3434,7 @@ check_keys([Key=#id_constraint{selector={selector,SelectorPath},
 	    {L,S1} when length(L)==length(TargetNodeSet) -> 
 		%% Part1: 3.11.4.4.2.1
 		S2 = key_sequence_uniqueness(L,XMLEl,S1),
-		save_key(Key#id_constraint{key_sequence=L},S2),
+		_ = save_key(Key#id_constraint{key_sequence=L},S2),
 		S2;
 	    {Err,S1} ->
 		acc_errs(S1,{error_path(XMLEl,XMLEl#xmlElement.name),?MODULE,
@@ -4013,7 +4012,7 @@ merge_derived_types(XSDType,InstType,Blocks,Mode,S) ->
 	{error,S2} ->
 	    {InstType,S2};
 	{MergedType,S2} ->
-	    save_merged_type(MergedType,S2),
+	    _ = save_merged_type(MergedType,S2),
 	    {MergedType,S2}
     end.
 
@@ -4887,7 +4886,6 @@ mk_EII_Att_QName(AttName,XMLEl,S) ->
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 create_tables(S=#xsd_state{table=undefined}) ->
     Tid=ets:new(xmerl_schema_tab,[]),
-    initial_tab_data(Tid),
     S#xsd_state{table=Tid};
 create_tables(S) ->
     S.
@@ -4970,7 +4968,7 @@ save_schema_element(CM,S=#xsd_state{elementFormDefault = EFD,
 	      undefined -> [];
 	      _ -> TN
 	  end,
-    save_in_table({schema,TN2},Schema2,S),
+    _ = save_in_table({schema,TN2},Schema2,S),
     save_to_file(S).
 
 %% other_global_elements(S,ElementList) ->
@@ -5006,13 +5004,13 @@ save_to_file(S=#xsd_state{tab2file=TF}) ->
 	    {ok,IO}=file:open(filename:rootname(S#xsd_state.schema_name)++".tab",
 			      [write]),
 	    io:format(IO,"~p~n",[catch ets:tab2list(S#xsd_state.table)]),
-	    file:close(IO);
+	    ok = file:close(IO);
 	false ->
 	    ok;
 	IOFile ->
 	    {ok,IO}=file:open(IOFile,[write]),
 	    io:format(IO,"~p~n",[catch ets:tab2list(S#xsd_state.table)]),
-	    file:close(IO)
+	    ok = file:close(IO)
     end.
 
 save_merged_type(Type=#schema_simple_type{},S) ->
@@ -5034,25 +5032,25 @@ save_idc(unique,IDConstr,S) ->
     save_unique(IDConstr,S).
 
 save_key(Key,S) ->
-    save_object({key,Key},S),
+    _ = save_object({key,Key},S),
     S.
 
 save_keyref(KeyRef=#id_constraint{category=keyref},S) ->
     S1 = add_keyref(KeyRef,S),
-    save_object({keyref,KeyRef},S1),
+    _ = save_object({keyref,KeyRef},S1),
     S1;
 save_keyref(_,S) ->
     S.
 
 save_unique(Unique,S) ->
-    save_object({unique,Unique},S),
+    _ = save_object({unique,Unique},S),
     S.
 
 save_substitutionGroup([],S) ->
     S;
 save_substitutionGroup([{Head,Members}|SGs],S) ->
     %% save {head,[members]}
-    save_in_table({substitutionGroup,Head},Members,S),
+    _ = save_in_table({substitutionGroup,Head},Members,S),
     %% save {member,head}, an element can only be a member in one
     %% substitutionGroup
     lists:foreach(fun(X)->save_in_table({substitutionGroup_member,X},Head,S) end,Members),
@@ -5391,7 +5389,7 @@ search_attribute(_,{Name,_,_},SchemaAtts) ->
     end.
 
 error_msg(Format,Args) ->
-    io:format(Format,Args).
+    error_logger:error_msg(Format,Args).
 
 
 add_once(El,L) ->
@@ -5425,11 +5423,11 @@ add_key_once(Key,N,El,L) ->
 %%     "/"++filename:join(L).
 
 %% mk_xml_path(Parents,Type,Pos) ->
-%% %%    io:format("mk_xml_path: Parents = ~p~n",[Parents]),
+%% %%    ?dbg("mk_xml_path: Parents = ~p~n",[Parents]),
 %%     {filename:join([[io_lib:format("/~w(~w)",[X,Y])||{X,Y}<-Parents],Type]),Pos}.
 
 %% @spec format_error(Errors) -> Result
-%%       Errors     = error_tuple() | [error_tuple()]
+%%       Errors     = tuple() | [tuple()]
 %%       Result       = string() | [string()]
 %% @doc Formats error descriptions to human readable strings.
 format_error(L) when is_list(L) -> 
@@ -5615,132 +5613,6 @@ format_error(Err) ->
 %% format_error2(E,SchemaE,Env) ->
 %%     {shema_el_pathname(SchemaE,Env),
 %%      xml_el_pathname(E)}.
-
-initial_tab_data(Tab) ->
-    ets:insert(Tab,
-      binary_to_term(
-	<<131,108,0,0,0,9,104,2,104,2,100,0,9,97,116,116,114,105,98,117,116,
-	 101,104,3,100,0,5,115,112,97,99,101,106,100,0,36,104,116,116,112,58,
-	 47,47,119,119,119,46,119,51,46,111,114,103,47,88,77,76,47,49,57,57,
-	 56,47,110,97,109,101,115,112,97,99,101,104,9,100,0,16,115,99,104,101,
-	 109,97,95,97,116,116,114,105,98,117,116,101,104,3,100,0,5,115,112,97,
-	 99,101,106,100,0,36,104,116,116,112,58,47,47,119,119,119,46,119,51,
-	 46,111,114,103,47,88,77,76,47,49,57,57,56,47,110,97,109,101,115,112,
-	 97,99,101,108,0,0,0,1,104,2,100,0,10,115,105,109,112,108,101,84,121,
-	 112,101,104,3,100,0,15,95,120,109,101,114,108,95,110,111,95,110,97,
-	 109,101,95,108,0,0,0,1,100,0,5,115,112,97,99,101,106,106,106,100,0,5,
-	 102,97,108,115,101,106,100,0,8,111,112,116,105,111,110,97,108,100,0,9,
-	 117,110,100,101,102,105,110,101,100,100,0,9,117,110,100,101,102,105,
-	 110,101,100,100,0,9,117,110,100,101,102,105,110,101,100,104,2,104,2,
-	 100,0,6,115,99,104,101,109,97,107,0,7,120,109,108,46,120,115,100,104,
-	 7,100,0,6,115,99,104,101,109,97,100,0,11,117,110,113,117,97,108,105,
-	 102,105,101,100,100,0,11,117,110,113,117,97,108,105,102,105,101,100,
-	 100,0,36,104,116,116,112,58,47,47,119,119,119,46,119,51,46,111,114,
-	 103,47,88,77,76,47,49,57,57,56,47,110,97,109,101,115,112,97,99,101,
-	 106,106,106,104,2,104,2,100,0,9,97,116,116,114,105,98,117,116,101,
-	 104,3,100,0,4,98,97,115,101,106,100,0,36,104,116,116,112,58,47,47,
-	 119,119,119,46,119,51,46,111,114,103,47,88,77,76,47,49,57,57,56,47,
-	 110,97,109,101,115,112,97,99,101,104,9,100,0,16,115,99,104,101,109,
-	 97,95,97,116,116,114,105,98,117,116,101,104,3,100,0,4,98,97,115,101,
-	 106,100,0,36,104,116,116,112,58,47,47,119,119,119,46,119,51,46,111,
-	 114,103,47,88,77,76,47,49,57,57,56,47,110,97,109,101,115,112,97,99,
-	 101,108,0,0,0,1,104,2,100,0,10,115,105,109,112,108,101,84,121,112,101,
-	 104,3,100,0,6,97,110,121,85,82,73,106,100,0,32,104,116,116,112,58,47,
-	 47,119,119,119,46,119,51,46,111,114,103,47,50,48,48,49,47,88,77,76,83,
-	 99,104,101,109,97,106,100,0,5,102,97,108,115,101,106,100,0,8,111,112,
-	 116,105,111,110,97,108,100,0,9,117,110,100,101,102,105,110,101,100,
-	 100,0,9,117,110,100,101,102,105,110,101,100,100,0,9,117,110,100,101,
-	 102,105,110,101,100,104,2,104,2,100,0,14,97,116,116,114,105,98,117,
-	 116,101,71,114,111,117,112,104,3,100,0,12,115,112,101,99,105,97,108,
-	 65,116,116,114,115,106,100,0,36,104,116,116,112,58,47,47,119,119,119,
-	 46,119,51,46,111,114,103,47,88,77,76,47,49,57,57,56,47,110,97,109,101,
-	 115,112,97,99,101,104,5,100,0,22,115,99,104,101,109,97,95,97,116,116,
-	 114,105,98,117,116,101,95,103,114,111,117,112,104,3,100,0,12,115,112,
-	 101,99,105,97,108,65,116,116,114,115,106,100,0,36,104,116,116,112,58,
-	 47,47,119,119,119,46,119,51,46,111,114,103,47,88,77,76,47,49,57,57,
-	 56,47,110,97,109,101,115,112,97,99,101,100,0,9,117,110,100,101,102,
-	 105,110,101,100,100,0,9,117,110,100,101,102,105,110,101,100,108,0,0,
-	 0,3,104,2,100,0,9,97,116,116,114,105,98,117,116,101,104,3,100,0,4,98,
-	 97,115,101,106,106,104,2,100,0,9,97,116,116,114,105,98,117,116,101,
-	 104,3,100,0,4,108,97,110,103,106,106,104,2,100,0,9,97,116,116,114,
-	 105,98,117,116,101,104,3,100,0,5,115,112,97,99,101,106,106,106,104,
-	 2,104,2,100,0,10,115,105,109,112,108,101,84,121,112,101,104,3,100,0,
-	 15,95,120,109,101,114,108,95,110,111,95,110,97,109,101,95,108,0,0,0,
-	 1,100,0,5,115,112,97,99,101,106,106,104,9,100,0,18,115,99,104,101,
-	 109,97,95,115,105,109,112,108,101,95,116,121,112,101,104,3,100,0,15,
-	 95,120,109,101,114,108,95,110,111,95,110,97,109,101,95,108,0,0,0,1,
-	 100,0,5,115,112,97,99,101,106,106,108,0,0,0,1,100,0,5,115,112,97,99,
-	 101,106,104,3,100,0,6,78,67,78,97,109,101,106,100,0,32,104,116,116,
-	 112,58,47,47,119,119,119,46,119,51,46,111,114,103,47,50,48,48,49,47,
-	 88,77,76,83,99,104,101,109,97,100,0,5,102,97,108,115,101,106,108,0,0,
-	 0,1,104,2,100,0,11,101,110,117,109,101,114,97,116,105,111,110,108,0,0,
-	 0,2,107,0,7,100,101,102,97,117,108,116,107,0,8,112,114,101,115,101,
-	 114,118,101,106,106,100,0,6,97,116,111,109,105,99,108,0,0,0,1,104,2,
-	 100,0,11,114,101,115,116,114,105,99,116,105,111,110,104,2,104,3,100,
-	 0,6,78,67,78,97,109,101,106,100,0,32,104,116,116,112,58,47,47,119,
-	 119,119,46,119,51,46,111,114,103,47,50,48,48,49,47,88,77,76,83,99,
-	 104,101,109,97,108,0,0,0,2,104,2,100,0,11,101,110,117,109,101,114,
-	 97,116,105,111,110,107,0,7,100,101,102,97,117,108,116,104,2,100,0,
-	 11,101,110,117,109,101,114,97,116,105,111,110,107,0,8,112,114,101,
-	 115,101,114,118,101,106,106,104,2,104,2,100,0,10,115,105,109,112,
-	 108,101,84,121,112,101,104,3,100,0,15,95,120,109,101,114,108,95,110,
-	 111,95,110,97,109,101,95,108,0,0,0,1,100,0,4,108,97,110,103,106,106,
-	 104,9,100,0,18,115,99,104,101,109,97,95,115,105,109,112,108,101,95,
-	 116,121,112,101,104,3,100,0,15,95,120,109,101,114,108,95,110,111,95,
-	 110,97,109,101,95,108,0,0,0,1,100,0,4,108,97,110,103,106,106,108,0,0,
-	 0,1,100,0,4,108,97,110,103,106,100,0,9,117,110,100,101,102,105,110,
-	 101,100,100,0,5,102,97,108,115,101,106,106,100,0,6,97,116,111,109,
-	 105,99,108,0,0,0,1,104,2,100,0,5,117,110,105,111,110,108,0,0,0,2,104,
-	 2,100,0,10,115,105,109,112,108,101,84,121,112,101,104,3,100,0,8,108,
-	 97,110,103,117,97,103,101,106,100,0,32,104,116,116,112,58,47,47,119,
-	 119,119,46,119,51,46,111,114,103,47,50,48,48,49,47,88,77,76,83,99,104,
-	 101,109,97,104,2,100,0,10,115,105,109,112,108,101,84,121,112,101,104,
-	 3,100,0,15,95,120,109,101,114,108,95,110,111,95,110,97,109,101,95,108,
-	 0,0,0,2,100,0,15,95,120,109,101,114,108,95,110,111,95,110,97,109,101,
-	 95,100,0,4,108,97,110,103,106,106,106,106,104,2,104,2,100,0,9,97,116,
-	 116,114,105,98,117,116,101,104,3,100,0,2,105,100,106,100,0,36,104,116,
-	 116,112,58,47,47,119,119,119,46,119,51,46,111,114,103,47,88,77,76,47,
-	 49,57,57,56,47,110,97,109,101,115,112,97,99,101,104,9,100,0,16,115,99,
-	 104,101,109,97,95,97,116,116,114,105,98,117,116,101,104,3,100,0,2,105,
-	 100,106,100,0,36,104,116,116,112,58,47,47,119,119,119,46,119,51,46,
-	 111,114,103,47,88,77,76,47,49,57,57,56,47,110,97,109,101,115,112,97,
-	 99,101,108,0,0,0,1,104,2,100,0,10,115,105,109,112,108,101,84,121,112,
-	 101,104,3,100,0,2,73,68,106,100,0,32,104,116,116,112,58,47,47,119,119,
-	 119,46,119,51,46,111,114,103,47,50,48,48,49,47,88,77,76,83,99,104,101,
-	 109,97,106,100,0,5,102,97,108,115,101,106,100,0,8,111,112,116,105,111,
-	 110,97,108,100,0,9,117,110,100,101,102,105,110,101,100,100,0,9,117,
-	 110,100,101,102,105,110,101,100,100,0,9,117,110,100,101,102,105,110,
-	 101,100,104,2,104,2,100,0,9,97,116,116,114,105,98,117,116,101,104,3,
-	 100,0,4,108,97,110,103,106,100,0,36,104,116,116,112,58,47,47,119,119,
-	 119,46,119,51,46,111,114,103,47,88,77,76,47,49,57,57,56,47,110,97,109,
-	 101,115,112,97,99,101,104,9,100,0,16,115,99,104,101,109,97,95,97,116,
-	 116,114,105,98,117,116,101,104,3,100,0,4,108,97,110,103,106,100,0,36,
-	 104,116,116,112,58,47,47,119,119,119,46,119,51,46,111,114,103,47,88,
-	 77,76,47,49,57,57,56,47,110,97,109,101,115,112,97,99,101,108,0,0,0,1,
-	 104,2,100,0,10,115,105,109,112,108,101,84,121,112,101,104,3,100,0,15,
-	 95,120,109,101,114,108,95,110,111,95,110,97,109,101,95,108,0,0,0,1,
-	 100,0,4,108,97,110,103,106,106,106,100,0,5,102,97,108,115,101,106,
-	 100,0,8,111,112,116,105,111,110,97,108,100,0,9,117,110,100,101,102,
-	 105,110,101,100,100,0,9,117,110,100,101,102,105,110,101,100,100,0,9,
-	 117,110,100,101,102,105,110,101,100,104,2,104,2,100,0,10,115,105,109,
-	 112,108,101,84,121,112,101,104,3,100,0,15,95,120,109,101,114,108,95,
-	 110,111,95,110,97,109,101,95,108,0,0,0,2,100,0,15,95,120,109,101,114,
-	 108,95,110,111,95,110,97,109,101,95,100,0,4,108,97,110,103,106,106,
-	 104,9,100,0,18,115,99,104,101,109,97,95,115,105,109,112,108,101,95,
-	 116,121,112,101,104,3,100,0,15,95,120,109,101,114,108,95,110,111,95,
-	 110,97,109,101,95,108,0,0,0,2,100,0,15,95,120,109,101,114,108,95,110,
-	 111,95,110,97,109,101,95,100,0,4,108,97,110,103,106,106,108,0,0,0,2,
-	 100,0,15,95,120,109,101,114,108,95,110,111,95,110,97,109,101,95,100,
-	 0,4,108,97,110,103,106,104,3,100,0,6,115,116,114,105,110,103,106,100,
-	 0,32,104,116,116,112,58,47,47,119,119,119,46,119,51,46,111,114,103,47,
-	 50,48,48,49,47,88,77,76,83,99,104,101,109,97,100,0,5,102,97,108,115,
-	 101,106,108,0,0,0,1,104,2,100,0,11,101,110,117,109,101,114,97,116,105,
-	 111,110,108,0,0,0,1,106,106,106,100,0,6,97,116,111,109,105,99,108,0,0,
-	 0,1,104,2,100,0,11,114,101,115,116,114,105,99,116,105,111,110,104,2,
-	 104,3,100,0,6,115,116,114,105,110,103,106,100,0,32,104,116,116,112,58,
-	 47,47,119,119,119,46,119,51,46,111,114,103,47,50,48,48,49,47,88,77,76,
-	 83,99,104,101,109,97,108,0,0,0,1,104,2,100,0,11,101,110,117,109,101,
-	 114,97,116,105,111,110,106,106,106,106>>)).
 
 default_namespace_by_convention() ->
     [{xml,'http://www.w3.org/XML/1998/namespace'}].

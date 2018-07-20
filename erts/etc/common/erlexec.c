@@ -1,18 +1,19 @@
 /*
  * %CopyrightBegin%
  *
- * Copyright Ericsson AB 1996-2013. All Rights Reserved.
+ * Copyright Ericsson AB 1996-2016. All Rights Reserved.
  *
- * The contents of this file are subject to the Erlang Public License,
- * Version 1.1, (the "License"); you may not use this file except in
- * compliance with the License. You should have received a copy of the
- * Erlang Public License along with this software. If not, it can be
- * retrieved online at http://www.erlang.org/.
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
  *
- * Software distributed under the License is distributed on an "AS IS"
- * basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See
- * the License for the specific language governing rights and limitations
- * under the License.
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  *
  * %CopyrightEnd%
  */
@@ -64,6 +65,7 @@
 static const char plusM_au_allocs[]= {
     'u',	/* all alloc_util allocators */
     'B',	/* binary_alloc		*/
+    'I',	/* literal_alloc	*/
     'D',	/* std_alloc		*/
     'E',	/* ets_alloc		*/
     'F',	/* fix_alloc		*/
@@ -72,6 +74,8 @@ static const char plusM_au_allocs[]= {
     'R',	/* driver_alloc		*/
     'S',	/* sl_alloc		*/
     'T',	/* temp_alloc		*/
+    'X',	/* exec_alloc		*/
+    'Z',        /* test_alloc           */
     '\0'
 };
 
@@ -119,6 +123,8 @@ static char *plusM_other_switches[] = {
     "Ym",
     "Ytp",
     "Ytt",
+    "Iscs",
+    "Xscs",
     NULL
 };
 
@@ -128,6 +134,7 @@ static char *pluss_val_switches[] = {
     "bwt",
     "cl",
     "ct",
+    "ecio",
     "fwi",
     "tbt",
     "wct",
@@ -142,6 +149,11 @@ static char *pluss_val_switches[] = {
 static char *plush_val_switches[] = {
     "ms",
     "mbs",
+    "pds",
+    "max",
+    "maxk",
+    "maxel",
+    "mqd",
     "",
     NULL
 };
@@ -155,6 +167,8 @@ static char *plusr_val_switches[] = {
 /* +z arguments with values */
 static char *plusz_val_switches[] = {
     "dbbl",
+    "dntgc",
+    "ebwt",
     NULL
 };
 
@@ -181,6 +195,7 @@ static char *plusz_val_switches[] = {
 #endif
 
 void usage(const char *switchname);
+static void usage_format(char *format, ...);
 void start_epmd(char *epmd);
 void error(char* format, ...);
 
@@ -713,7 +728,7 @@ int main(int argc, char **argv)
 		     * on itself here.  We'll avoid doing that.
 		     */
 		    if (strcmp(argv[i], "-make") == 0) {
-			add_args("-noshell", "-noinput", "-s", "make", "all", NULL);
+			add_args("-noshell", "-noinput", "-s", "make", "all_or_nothing", NULL);
 			add_Eargs("-B");
 			haltAfterwards = 1;
 			i = argc; /* Skip rest of command line */
@@ -781,6 +796,24 @@ int main(int argc, char **argv)
 			    get_start_erl_data((char *) NULL);
 		    }
 #endif
+		    else if (strcmp(argv[i], "-start_epmd") == 0) {
+			if (i+1 >= argc)
+			    usage("-start_epmd");
+
+			if (strcmp(argv[i+1], "true") == 0) {
+			    /* The default */
+			    no_epmd = 0;
+			}
+			else if (strcmp(argv[i+1], "false") == 0) {
+			    no_epmd = 1;
+			}
+			else
+			    usage_format("Expected boolean argument for \'-start_epmd\'.\n");
+
+			add_arg(argv[i]);
+			add_arg(argv[i+1]);
+			i++;
+		    }
 		    else
 			add_arg(argv[i]);
 		
@@ -806,6 +839,7 @@ int main(int argc, char **argv)
 		  case 'a':
 		  case 'A':
 		  case 'b':
+		  case 'C':
 		  case 'e':
 		  case 'i':
 		  case 'n':
@@ -830,7 +864,6 @@ int main(int argc, char **argv)
 			  if (argv[i][3] != '\0')
 			      goto the_default;
 		      }
-#ifdef ERTS_DIRTY_SCHEDULERS
 		      else if (argv[i][2] == 'D') {
 			  char* type = argv[i]+3;
 			  if (strncmp(type, "cpu", 3) != 0 &&
@@ -842,7 +875,6 @@ int main(int argc, char **argv)
 			      (argv[i][3] == 'i' && argv[i][5] != '\0'))
 			      goto the_default;
 		      }
-#endif
 		      else if (argv[i][2] != '\0')
 			  goto the_default;
 		      if (i+1 >= argc)
@@ -876,6 +908,19 @@ int main(int argc, char **argv)
 			    usage(argv[i]);
 			  }
 			}
+		      }
+		      add_Eargs(argv[i]);
+		      break;
+		  case 'c':
+		      argv[i][0] = '-';
+		      if (argv[i][2] == '\0' && i+1 < argc) {
+			  if (sys_strcmp(argv[i+1], "true") == 0
+			      || sys_strcmp(argv[i+1], "false") == 0) {
+			      add_Eargs(argv[i]);
+			      add_Eargs(argv[i+1]);
+			      i++;
+			      break;
+			  }
 		      }
 		      add_Eargs(argv[i]);
 		      break;
@@ -1147,16 +1192,16 @@ usage_aux(void)
 	  "]"
 #endif
 	  "] "
-	  "[-make] [-man [manopts] MANPAGE] [-x] [-emu_args] "
-	  "[-args_file FILENAME] [+A THREADS] [+a SIZE] [+B[c|d|i]] [+c] "
-	  "[+h HEAP_SIZE_OPTION] [+K BOOLEAN] "
+	  "[-make] [-man [manopts] MANPAGE] [-x] [-emu_args] [-start_epmd BOOLEAN] "
+	  "[-args_file FILENAME] [+A THREADS] [+a SIZE] [+B[c|d|i]] [+c [BOOLEAN]] "
+	  "[+C MODE] [+h HEAP_SIZE_OPTION] [+K BOOLEAN] "
 	  "[+l] [+M<SUBSWITCH> <ARGUMENT>] [+P MAX_PROCS] [+Q MAX_PORTS] "
 	  "[+R COMPAT_REL] "
 	  "[+r] [+rg READER_GROUPS_LIMIT] [+s SCHEDULER_OPTION] "
 	  "[+S NO_SCHEDULERS:NO_SCHEDULERS_ONLINE] "
 	  "[+SP PERCENTAGE_SCHEDULERS:PERCENTAGE_SCHEDULERS_ONLINE] "
 	  "[+T LEVEL] [+V] [+v] "
-	  "[+W<i|w>] [+z MISC_OPTION] [args ...]\n");
+	  "[+W<i|w|e>] [+z MISC_OPTION] [args ...]\n");
   exit(1);
 }
 

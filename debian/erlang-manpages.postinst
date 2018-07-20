@@ -13,8 +13,7 @@ if [ "$1" = configure ] && dpkg --compare-versions "$2" lt-nl "1:12.b.1" ; then
 		erlc \
 		escript \
 		run_erl \
-		start \
-		start_webtool ; do
+		start ; do
 	dpkg-divert --package erlang-manpages --remove --rename \
 		    --divert /usr/share/man/man1/$name.erlang.1.gz \
 			     /usr/share/man/man1/$name.1.gz >/dev/null

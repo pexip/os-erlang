@@ -1,26 +1,29 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2006-2014. All Rights Reserved.
+%% Copyright Ericsson AB 2006-2016. All Rights Reserved.
 %%
-%% The contents of this file are subject to the Erlang Public License,
-%% Version 1.1, (the "License"); you may not use this file except in
-%% compliance with the License. You should have received a copy of the
-%% Erlang Public License along with this software. If not, it can be
-%% retrieved online at http://www.erlang.org/.
+%% Licensed under the Apache License, Version 2.0 (the "License");
+%% you may not use this file except in compliance with the License.
+%% You may obtain a copy of the License at
 %%
-%% Software distributed under the License is distributed on an "AS IS"
-%% basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See
-%% the License for the specific language governing rights and limitations
-%% under the License.
+%%     http://www.apache.org/licenses/LICENSE-2.0
+%%
+%% Unless required by applicable law or agreed to in writing, software
+%% distributed under the License is distributed on an "AS IS" BASIS,
+%% WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+%% See the License for the specific language governing permissions and
+%% limitations under the License.
 %%
 %% %CopyrightEnd%
 %%
 
 -module(observer_SUITE).
--include_lib("test_server/include/test_server.hrl").
+-include_lib("common_test/include/ct.hrl").
 -include_lib("wx/include/wx.hrl").
 -include_lib("observer/src/observer_tv.hrl").
+
+-define(ID_LOGVIEW, 5).
 
 %% Test server specific exports
 -export([all/0, suite/0,groups/0]).
@@ -35,7 +38,7 @@
 	]).
 
 %% Default timetrap timeout (set in init_per_testcase)
--define(default_timeout, ?t:minutes(1)).
+-define(default_timeout, ?t:minutes(2)).
 
 suite() -> [{ct_hooks,[ts_install_cth]}].
 
@@ -44,8 +47,9 @@ all() ->
 
 groups() ->
     [{gui, [],
-      [basic
-      , process_win, table_win
+      [basic,
+       process_win,
+       table_win
       ]
      }].
 
@@ -107,7 +111,7 @@ appup_file(Config) when is_list(Config) ->
 basic(suite) -> [];
 basic(doc) -> [""];
 basic(Config) when is_list(Config) ->
-    timer:send_after(100, "foobar"), %% Otherwise the timer sever gets added to procs
+    timer:send_after(100, "foobar"), %% Otherwise the timer server gets added to procs
     ProcsBefore = processes(),
     NumProcsBefore = length(ProcsBefore),
 
@@ -126,7 +130,7 @@ basic(Config) when is_list(Config) ->
 		    timer:sleep(200),
 		    ok = wxNotebook:advanceSelection(Notebook)
 	    end,
-    %% Just verify that we can toogle trough all pages
+    %% Just verify that we can toggle through all pages
     [_|_] = [Check(N, false) || N <- lists:seq(1, Count)],
     %% Cause it to resize
     Frame = get_top_level_parent(Notebook),
@@ -167,6 +171,7 @@ test_page("Applications" ++ _, _Window) ->
 test_page("Processes" ++ _, _Window) ->
     timer:sleep(500),  %% Give it time to refresh
     Active = get_active(),
+    Active ! refresh_interval,
     ChangeSort = fun(N) ->
 			 FakeEv = #wx{event=#wxList{type=command_list_col_click, col=N}},
 			 Active ! FakeEv,
@@ -180,7 +185,23 @@ test_page("Processes" ++ _, _Window) ->
     timer:sleep(1000),  %% Give it time to refresh
     ok;
 
-test_page(_Title = "Table" ++ _, _Window) ->
+test_page("Ports" ++ _, _Window) ->
+    timer:sleep(500),  %% Give it time to refresh
+    Active = get_active(),
+    Active ! refresh_interval,
+    ChangeSort = fun(N) ->
+			 FakeEv = #wx{event=#wxList{type=command_list_col_click, col=N}},
+			 Active ! FakeEv,
+			 timer:sleep(200)
+		 end,
+    [ChangeSort(N) || N <- lists:seq(1,4) ++ [0]],
+    Activate = #wx{event=#wxList{type=command_list_item_activated,
+				 itemIndex=2}},
+    Active ! Activate,
+    timer:sleep(1000),  %% Give it time to refresh
+    ok;
+
+test_page("Table" ++ _, _Window) ->
     Tables = [ets:new(list_to_atom("Test-" ++ [C]), [public]) || C <- lists:seq($A, $Z)],
     Table = lists:nth(3, Tables),
     ets:insert(Table, [{N,100-N} || N <- lists:seq(1,100)]),
@@ -204,6 +225,13 @@ test_page(_Title = "Table" ++ _, _Window) ->
     timer:sleep(1000),
     ok;
 
+test_page("Trace Overview" ++ _, _Window) ->
+    timer:sleep(500),  %% Give it time to refresh
+    Active = get_active(),
+    Active ! refresh_interval,
+    timer:sleep(1000),  %% Give it time to refresh
+    ok;
+
 test_page(Title, Window) ->
     io:format("Page ~p: ~p~n", [Title, Window]),
     %% Just let it display some info and hopefully it doesn't crash
@@ -214,10 +242,27 @@ test_page(Title, Window) ->
 process_win(suite) -> [];
 process_win(doc) -> [""];
 process_win(Config) when is_list(Config) ->
+    % Stop SASL if already started
+    SaslStart = case whereis(sasl_sup) of
+                  undefined -> false;
+                  _         -> application:stop(sasl),
+                               true
+                end,
+    % Define custom sasl and log_mf_h app vars
+    Privdir=?config(priv_dir,Config),
+    application:set_env(sasl, sasl_error_logger, tty),
+    application:set_env(sasl, error_logger_mf_dir, Privdir),
+    application:set_env(sasl, error_logger_mf_maxbytes, 1000),
+    application:set_env(sasl, error_logger_mf_maxfiles, 5),
+    application:start(sasl),
     ok = observer:start(),
     ObserverNB = setup_whitebox_testing(),
     Parent = get_top_level_parent(ObserverNB),
-    Frame = observer_procinfo:start(self(), Parent, self()),
+    % Activate log view
+    whereis(observer) ! #wx{id = ?ID_LOGVIEW, event = #wxCommand{type = command_menu_selected}},
+    timer:sleep(1000),
+    % Process window tests (use sasl_sup for a non empty Log tab)
+    Frame = observer_procinfo:start(whereis(sasl_sup), Parent, self()),
     PIPid = wx_object:get_pid(Frame),
     PIPid ! {get_debug_info, self()},
     Notebook = receive {procinfo_debug, NB} -> NB end,
@@ -229,6 +274,11 @@ process_win(Config) when is_list(Config) ->
     [_|_] = [Check(N) || N <- lists:seq(1, Count)],
     PIPid ! #wx{event=#wxClose{type=close_window}},
     observer:stop(),
+    application:stop(sasl),
+    case SaslStart of
+         true  -> application:start(sasl);
+         false -> ok
+    end,
     ok.
 
 table_win(suite) -> [];

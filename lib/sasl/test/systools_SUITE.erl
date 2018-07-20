@@ -1,18 +1,19 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2012-2014. All Rights Reserved.
+%% Copyright Ericsson AB 2012-2016. All Rights Reserved.
 %%
-%% The contents of this file are subject to the Erlang Public License,
-%% Version 1.1, (the "License"); you may not use this file except in
-%% compliance with the License. You should have received a copy of the
-%% Erlang Public License along with this software. If not, it can be
-%% retrieved online at http://www.erlang.org/.
+%% Licensed under the Apache License, Version 2.0 (the "License");
+%% you may not use this file except in compliance with the License.
+%% You may obtain a copy of the License at
 %%
-%% Software distributed under the License is distributed on an "AS IS"
-%% basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See
-%% the License for the specific language governing rights and limitations
-%% under the License.
+%%     http://www.apache.org/licenses/LICENSE-2.0
+%%
+%% Unless required by applicable law or agreed to in writing, software
+%% distributed under the License is distributed on an "AS IS" BASIS,
+%% WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+%% See the License for the specific language governing permissions and
+%% limitations under the License.
 %%
 %% %CopyrightEnd%
 %%
@@ -1639,25 +1640,21 @@ app_start_type_relup(Dir2,Name2,Config) ->
     %% ?t:format("Dn: ~p",[DownInstructions]),
     [{load_object_code, {mnesia, _, _}},
      {load_object_code, {runtime_tools, _, _}},
-     {load_object_code, {webtool, _, _}},
      {load_object_code, {snmp, _, _}},
      {load_object_code, {xmerl, _, _}},
      point_of_no_return
      | UpInstructionsT] = UpInstructions,
     true = lists:member({apply,{application,start,[mnesia,permanent]}}, UpInstructionsT),
     true = lists:member({apply,{application,start,[runtime_tools,transient]}}, UpInstructionsT),
-    true = lists:member({apply,{application,start,[webtool,temporary]}}, UpInstructionsT),
     true = lists:member({apply,{application,load,[snmp]}}, UpInstructionsT),
     false = lists:any(fun({apply,{application,_,[xmerl|_]}}) -> true; (_) -> false end, UpInstructionsT),
     [point_of_no_return | DownInstructionsT] = DownInstructions,
     true = lists:member({apply,{application,stop,[mnesia]}}, DownInstructionsT),
     true = lists:member({apply,{application,stop,[runtime_tools]}}, DownInstructionsT),
-    true = lists:member({apply,{application,stop,[webtool]}}, DownInstructionsT),
     true = lists:member({apply,{application,stop,[snmp]}}, DownInstructionsT),
     true = lists:member({apply,{application,stop,[xmerl]}}, DownInstructionsT),
     true = lists:member({apply,{application,unload,[mnesia]}}, DownInstructionsT),
     true = lists:member({apply,{application,unload,[runtime_tools]}}, DownInstructionsT),
-    true = lists:member({apply,{application,unload,[webtool]}}, DownInstructionsT),
     true = lists:member({apply,{application,unload,[snmp]}}, DownInstructionsT),
     true = lists:member({apply,{application,unload,[xmerl]}}, DownInstructionsT),
     ok.
@@ -2206,7 +2203,6 @@ create_script(latest_app_start_type1,Config) ->
 create_script(latest_app_start_type2,Config) ->
     OtherApps = [{mnesia,current,permanent},
 		 {runtime_tools,current,transient},
-		 {webtool,current,temporary},
 		 {snmp,current,load},
 		 {xmerl,current,none}],
     Apps = core_apps(current) ++ OtherApps,

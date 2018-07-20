@@ -1,18 +1,19 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2003-2013. All Rights Reserved.
+%% Copyright Ericsson AB 2003-2016. All Rights Reserved.
 %%
-%% The contents of this file are subject to the Erlang Public License,
-%% Version 1.1, (the "License"); you may not use this file except in
-%% compliance with the License. You should have received a copy of the
-%% Erlang Public License along with this software. If not, it can be
-%% retrieved online at http://www.erlang.org/.
+%% Licensed under the Apache License, Version 2.0 (the "License");
+%% you may not use this file except in compliance with the License.
+%% You may obtain a copy of the License at
 %%
-%% Software distributed under the License is distributed on an "AS IS"
-%% basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See
-%% the License for the specific language governing rights and limitations
-%% under the License.
+%%     http://www.apache.org/licenses/LICENSE-2.0
+%%
+%% Unless required by applicable law or agreed to in writing, software
+%% distributed under the License is distributed on an "AS IS" BASIS,
+%% WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+%% See the License for the specific language governing permissions and
+%% limitations under the License.
 %%
 %% %CopyrightEnd%
 %%
@@ -110,12 +111,15 @@
 %%    <dd>Set to 'true' if xmerl should add to elements missing attributes
 %%    with a defined default value (default 'false').</dd>
 %% </dl>
+%% @type xmlElement() = #xmlElement{}.
+%% The record definition is found in xmerl.hrl.
+%% @type xmlDocument() = #xmlDocument{}.
+%% The record definition is found in xmerl.hrl.
 %% @type document() = xmlElement() | xmlDocument(). <p>
 %% The document returned by <tt>xmerl_scan:string/[1,2]</tt> and
 %% <tt>xmerl_scan:file/[1,2]</tt>. The type of the returned record depends on
 %% the value of the document option passed to the function.
 %% </p>
-
 
 -module(xmerl_scan).
 -vsn('0.20').
@@ -147,7 +151,8 @@
 	    S#xmerl_scanner.quiet ->
 		ok;
 	    true ->
-		ok=io:format("~p- fatal: ~p~n", [?LINE, Reason])
+		error_logger:error_msg("~p- fatal: ~p~n", [?LINE, Reason]),
+		ok
 	end,
 	fatal(Reason, S)).
 
@@ -255,7 +260,7 @@ file(F, Options) ->
     end.
 
 int_file(F, Options,_ExtCharset) ->
-     %%io:format("int_file F=~p~n",[F]),
+     %%?dbg("int_file F=~p~n",[F]),
     case file:read_file(F) of
 	{ok, Bin} ->
 	    int_string(binary_to_list(Bin), Options, filename:dirname(F),F);
@@ -264,7 +269,7 @@ int_file(F, Options,_ExtCharset) ->
     end.
 
 int_file_decl(F, Options,_ExtCharset) ->
-%     io:format("int_file_decl F=~p~n",[F]),
+%     ?dbg("int_file_decl F=~p~n",[F]),
     case file:read_file(F) of
 	{ok, Bin} ->
 	    int_string_decl(binary_to_list(Bin), Options, filename:dirname(F),F);
@@ -294,7 +299,7 @@ int_string(Str, Options,FileName) ->
 int_string(Str, Options, XMLBase, FileName) ->
     S0=initial_state0(Options,XMLBase),
     S = S0#xmerl_scanner{filename=FileName},
-    %%io:format("int_string1, calling xmerl_lib:detect_charset~n",[]),
+    %%?dbg("int_string1, calling xmerl_lib:detect_charset~n",[]),
 
     %% In case of no encoding attribute in document utf-8 is default, but
     %% another character set may be detected with help of Byte Order Marker or
@@ -559,20 +564,20 @@ scan_document(Str0, S=#xmerl_scanner{event_fun = Event,
 		Str0
 	end,
 %%     M1 = erlang:memory(),
-%%     io:format("Memory status before prolog: ~p~n",[M1]),
+%%     ?dbg("Memory status before prolog: ~p~n",[M1]),
     {Prolog, Pos, T1, S2} = scan_prolog(Str, S1, _StartPos = 1),
 %%     M2 = erlang:memory(),
-%%     io:format("Memory status after prolog: ~p~n",[M2]),
-    %%io:format("scan_document 2, prolog parsed~n",[]),
+%%     ?dbg("Memory status after prolog: ~p~n",[M2]),
+    %%?dbg("scan_document 2, prolog parsed~n",[]),
     T2 = scan_mandatory("<", T1, 1, S2, expected_element_start_tag),
 %%     M3 = erlang:memory(),
-%%     io:format("Memory status before element: ~p~n",[M3]),
+%%     ?dbg("Memory status before element: ~p~n",[M3]),
     {Res, T3, S3} = scan_element(T2,S2,Pos),
 %%     M4 = erlang:memory(),
-%%     io:format("Memory status after element: ~p~n",[M4]),
+%%     ?dbg("Memory status after element: ~p~n",[M4]),
     {Misc, _Pos1, Tail, S4}=scan_misc(T3, S3, Pos + 1),
 %%     M5 = erlang:memory(),
-%%     io:format("Memory status after misc: ~p~n",[M5]),
+%%     ?dbg("Memory status after misc: ~p~n",[M5]),
 
     S5 = #xmerl_scanner{} = Event(#xmerl_event{event = ended,
 					       line = S4#xmerl_scanner.line,
@@ -603,8 +608,8 @@ scan_document(Str0, S=#xmerl_scanner{event_fun = Event,
 	     schema ->
 		 case schemaLocations(Res, S5) of
 		     {ok, Schemas} ->
-			 cleanup(S5),
-			 %%io:format("Schemas: ~p~nRes: ~p~ninhertih_options(S): ~p~n",
+			 _ = cleanup(S5),
+			 %%?dbg("Schemas: ~p~nRes: ~p~ninhertih_options(S): ~p~n",
 			 %%          [Schemas,Res,inherit_options(S5)]),
 			 XSDRes = xmerl_xsd:process_validate(Schemas, Res,
 							     inherit_options(S5)),
@@ -1008,7 +1013,7 @@ scan_optional_version(T,S) ->
 scan_enc_name([], S=#xmerl_scanner{continuation_fun = F}) ->
     ?dbg("cont()...~n", []),
     F(fun(MoreBytes, S1) -> scan_enc_name(MoreBytes, S1) end,
-      fun(S1) -> ?fatal(expected_encoding_name, S1) end,
+      fatal_fun(expected_encoding_name),
       S);
 scan_enc_name([H|T], S0) when H >= $"; H =< $' ->
     ?bump_col(1),
@@ -1018,7 +1023,7 @@ scan_enc_name([H|T], S0) when H >= $"; H =< $' ->
 scan_enc_name([], S=#xmerl_scanner{continuation_fun = F}, Delim, Acc) ->
     ?dbg("cont()...~n", []),
     F(fun(MoreBytes, S1) -> scan_enc_name(MoreBytes, S1, Delim, Acc) end,
-      fun(S1) -> ?fatal(expected_encoding_name, S1) end,
+      fatal_fun(expected_encoding_name),
       S);
 scan_enc_name([H|T], S0, Delim, Acc) when H >= $a, H =< $z ->
     ?bump_col(1),
@@ -1032,7 +1037,7 @@ scan_enc_name([H|_T],S,_Delim,_Acc) ->
 scan_enc_name2([], S=#xmerl_scanner{continuation_fun = F}, Delim, Acc) ->
     ?dbg("cont()...~n", []),
     F(fun(MoreBytes, S1) -> scan_enc_name2(MoreBytes, S1, Delim, Acc) end,
-      fun(S1) -> ?fatal(expected_encoding_name, S1) end,
+      fatal_fun(expected_encoding_name),
       S);
 scan_enc_name2([H|T], S0, H, Acc) ->
     ?bump_col(1),
@@ -1056,7 +1061,7 @@ scan_enc_name2([H|T], S0, Delim, Acc) when H == $.; H == $_; H == $- ->
 scan_xml_vsn([], S=#xmerl_scanner{continuation_fun = F}) ->
     ?dbg("cont()...~n", []),
     F(fun(MoreBytes, S1) -> scan_xml_vsn(MoreBytes, S1) end,
-      fun(S1) -> ?fatal(unexpected_end, S1) end,
+      fatal_fun(unexpected_end),
       S);
 scan_xml_vsn([H|T], S) when H==$"; H==$'->
     xml_vsn(T, S#xmerl_scanner{col = S#xmerl_scanner.col+1}, H, []).
@@ -1064,7 +1069,7 @@ scan_xml_vsn([H|T], S) when H==$"; H==$'->
 xml_vsn([], S=#xmerl_scanner{continuation_fun = F}, Delim, Acc) ->
     ?dbg("cont()...~n", []),
     F(fun(MoreBytes, S1) -> xml_vsn(MoreBytes, S1, Delim, Acc) end,
-      fun(S1) -> ?fatal(unexpected_end, S1) end,
+      fatal_fun(unexpected_end),
       S);
 xml_vsn([H|T], S=#xmerl_scanner{col = C}, H, Acc) ->
     {lists:reverse(Acc), T, S#xmerl_scanner{col = C+1}};
@@ -1087,7 +1092,7 @@ xml_vsn([H|T], S=#xmerl_scanner{col = C}, Delim, Acc) ->
 scan_pi([], S=#xmerl_scanner{continuation_fun = F}, Pos, Ps) ->
     ?dbg("cont()...~n", []),
     F(fun(MoreBytes, S1) -> scan_pi(MoreBytes, S1, Pos, Ps) end,
-      fun(S1) -> ?fatal(unexpected_end, S1) end,
+      fatal_fun(unexpected_end),
       S);
 scan_pi(Str = [H1,H2,H3 | T],S0=#xmerl_scanner{line = L, col = C}, Pos, Ps)
   when H1==$x;H1==$X ->
@@ -1123,7 +1128,7 @@ scan_pi([], S=#xmerl_scanner{continuation_fun = F}, Target,
     ?dbg("cont()...~n", []),
     F(fun(MoreBytes, S1) -> scan_pi(MoreBytes, S1, Target,
 				    L, C, Pos, Ps, Acc) end,
-      fun(S1) -> ?fatal(unexpected_end, S1) end,
+      fatal_fun(unexpected_end),
       S);
 scan_pi("?>" ++ T, S0 = #xmerl_scanner{hook_fun = Hook,
 				       event_fun = Event},
@@ -1150,7 +1155,7 @@ scan_pi2([], S=#xmerl_scanner{continuation_fun = F}, Target,
     ?dbg("cont()...~n", []),
     F(fun(MoreBytes, S1) -> scan_pi2(MoreBytes, S1, Target,
 				     L, C, Pos, Ps, Acc) end,
-      fun(S1) -> ?fatal(unexpected_end, S1) end,
+      fatal_fun(unexpected_end),
       S);
 scan_pi2("?>" ++ T, S0 = #xmerl_scanner{hook_fun = Hook,
 				       event_fun = Event},
@@ -1178,7 +1183,7 @@ scan_pi2(Str, S0, Target, L, C, Pos, Ps, Acc) ->
 scan_doctype([], S=#xmerl_scanner{continuation_fun = F}) ->
     ?dbg("cont()...~n", []),
     F(fun(MoreBytes, S1) -> scan_doctype(MoreBytes, S1) end,
-      fun(S1) -> ?fatal(unexpected_end, S1) end,
+      fatal_fun(unexpected_end),
       S);
 scan_doctype(T, S) ->
     {_,T1,S1} = mandatory_strip(T,S),
@@ -1192,7 +1197,7 @@ scan_doctype(T, S) ->
 scan_doctype1([], S=#xmerl_scanner{continuation_fun = F}) ->
     ?dbg("cont()...~n", []),
     F(fun(MoreBytes, S1) -> scan_doctype1(MoreBytes, S1) end,
-      fun(S1) -> ?fatal(unexpected_end, S1) end,
+      fatal_fun(unexpected_end),
       S);
 scan_doctype1("PUBLIC" ++ T, S0) ->
     ?bump_col(6),
@@ -1215,7 +1220,7 @@ scan_doctype1(T, S) ->
 scan_doctype2([], S=#xmerl_scanner{continuation_fun = F},DTD) ->
     ?dbg("cont()...~n", []),
     F(fun(MoreBytes, S1) -> scan_doctype2(MoreBytes, S1, DTD) end,
-      fun(S1) -> ?fatal(unexpected_end, S1) end,
+      fatal_fun(unexpected_end),
       S);
 scan_doctype2("[" ++ T, S0, DTD) ->
     ?bump_col(1),
@@ -1235,7 +1240,7 @@ scan_doctype2(_T,S,_DTD) ->
 scan_doctype3([], S=#xmerl_scanner{continuation_fun = F},DTD) ->
     ?dbg("cont()...~n", []),
     F(fun(MoreBytes, S1) -> scan_doctype3(MoreBytes, S1,DTD) end,
-      fun(S1) -> ?fatal(unexpected_end, S1) end,
+      fatal_fun(unexpected_end),
       S);
 scan_doctype3("%" ++ T, S0, DTD) ->
     ?bump_col(1),
@@ -1373,7 +1378,7 @@ fetch_not_parse(ExtSpec,S=#xmerl_scanner{fetch_fun=Fetch}) ->
     end.
 
 get_file(F,S) ->
-%     io:format("get_file F=~p~n",[F]),
+%     ?dbg("get_file F=~p~n",[F]),
     case file:read_file(F) of
 	{ok,Bin} ->
 	    binary_to_list(Bin);
@@ -1547,7 +1552,7 @@ scan_decl_sep(T,S) ->
 scan_conditional_sect([], S=#xmerl_scanner{continuation_fun = F}) ->
     ?dbg("cont()...~n", []),
     F(fun(MoreBytes, S1) -> scan_conditional_sect(MoreBytes, S1) end,
-      fun(S1) -> ?fatal(unexpected_end, S1) end,
+      fatal_fun(unexpected_end),
       S);
 scan_conditional_sect("IGNORE" ++ T, S0) ->
     ?bump_col(6),
@@ -1580,7 +1585,7 @@ scan_ignore(Str,S) ->
 scan_ignore([], S=#xmerl_scanner{continuation_fun = F},Level) ->
     ?dbg("cont()...~n", []),
     F(fun(MoreBytes, S1) -> scan_ignore(MoreBytes, S1,Level) end,
-      fun(S1) -> ?fatal(unexpected_end, S1) end,
+      fatal_fun(unexpected_end),
       S);
 scan_ignore("<![" ++ T, S0,Level) ->
     %% nested conditional section. Topmost condition is ignore, though
@@ -1601,7 +1606,7 @@ scan_ignore([_H|T],S0,Level) ->
 scan_include([], S=#xmerl_scanner{continuation_fun = F}) ->
     ?dbg("cont()...~n", []),
     F(fun(MoreBytes, S1) -> scan_include(MoreBytes, S1) end,
-      fun(S1) -> ?fatal(unexpected_end, S1) end,
+      fatal_fun(unexpected_end),
       S);
 scan_include("]]>" ++ T, S0) ->
     ?bump_col(3),
@@ -1743,7 +1748,7 @@ update_attributes1([],Acc) ->
 scan_attdef([], S=#xmerl_scanner{continuation_fun = F}) ->
     ?dbg("cont()...~n", []),
     F(fun(MoreBytes, S1) -> scan_attdef(MoreBytes, S1) end,
-      fun(S1) -> ?fatal(unexpected_end, S1) end,
+      fatal_fun(unexpected_end),
       S);
 scan_attdef(T, S) ->
     scan_attdef(T, S, _AttrAcc = []).
@@ -1752,7 +1757,7 @@ scan_attdef(T, S) ->
 scan_attdef([], S=#xmerl_scanner{continuation_fun = F}, Attrs) ->
     ?dbg("cont()...~n", []),
     F(fun(MoreBytes, S1) -> scan_attdef(MoreBytes, S1, Attrs) end,
-      fun(S1) -> ?fatal(unexpected_end, S1) end,
+      fatal_fun(unexpected_end),
       S);
 scan_attdef(">" ++ T, S0, Attrs) ->
     ?bump_col(1),
@@ -1796,7 +1801,7 @@ scan_attdef2(T, S, Attrs) ->
 scan_att_type([], S=#xmerl_scanner{continuation_fun = F}) ->
     ?dbg("cont()...~n", []),
     F(fun(MoreBytes, S1) -> scan_att_type(MoreBytes, S1) end,
-      fun(S1) -> ?fatal(unexpected_end, S1) end,
+      fatal_fun(unexpected_end),
       S);
 scan_att_type("CDATA" ++ T, S0) ->
     ?bump_col(5),
@@ -1854,7 +1859,7 @@ scan_att_type("%" ++ T, S0) ->
 scan_notation_type([], S=#xmerl_scanner{continuation_fun = F}, Acc) ->
     ?dbg("cont()...~n", []),
     F(fun(MoreBytes, S1) -> scan_notation_type(MoreBytes, S1, Acc) end,
-      fun(S1) -> ?fatal(unexpected_end, S1) end,
+      fatal_fun(unexpected_end),
       S);
 scan_notation_type(")" ++ T, S0, Acc) ->
     ?bump_col(1),
@@ -1887,7 +1892,7 @@ notation_exists(Name, #xmerl_scanner{rules_read_fun = Read,
 scan_enumeration([], S=#xmerl_scanner{continuation_fun = F}, Acc) ->
     ?dbg("cont()...~n", []),
     F(fun(MoreBytes, S1) -> scan_enumeration(MoreBytes, S1, Acc) end,
-      fun(S1) -> ?fatal(unexpected_end, S1) end,
+      fatal_fun(unexpected_end),
       S);
 scan_enumeration(")" ++ T, S0, Acc) ->
     ?bump_col(1),
@@ -1905,7 +1910,7 @@ scan_enumeration("|" ++ T, S0, Acc) ->
 scan_default_decl([], S=#xmerl_scanner{continuation_fun = F}, Type) ->
     ?dbg("cont()...~n", []),
     F(fun(MoreBytes, S1) -> scan_default_decl(MoreBytes, S1, Type) end,
-      fun(S1) -> ?fatal(unexpected_end, S1) end,
+      fatal_fun(unexpected_end),
       S);
 scan_default_decl("#REQUIRED" ++ T, S0, _Type) ->
     ?bump_col(9),
@@ -1934,7 +1939,7 @@ default_value(T, S, Type) ->
 scan_entity([], S=#xmerl_scanner{continuation_fun = F}) ->
     ?dbg("cont()...~n", []),
     F(fun(MoreBytes, S1) -> scan_entity(MoreBytes, S1) end,
-      fun(S1) -> ?fatal(unexpected_end, S1) end,
+      fatal_fun(unexpected_end),
       S);
 scan_entity("%" ++ T, #xmerl_scanner{rules_write_fun = Write} = S0) ->
     %% parameter entity
@@ -1972,7 +1977,7 @@ scan_entity_completion(T,S) ->
 scan_entity_def([], S=#xmerl_scanner{continuation_fun = F}, EName) ->
     ?dbg("cont()...~n", []),
     F(fun(MoreBytes, S1) -> scan_entity_def(MoreBytes, S1, EName) end,
-      fun(S1) -> ?fatal(unexpected_end, S1) end,
+      fatal_fun(unexpected_end),
       S);
 scan_entity_def("'" ++ T, S0, EName) ->
     ?bump_col(1),
@@ -2013,7 +2018,7 @@ scan_entity_def(Str, S, EName) ->
 scan_ndata_decl([], S=#xmerl_scanner{continuation_fun = F}) ->
     ?dbg("cont()...~n", []),
     F(fun(MoreBytes, S1) -> scan_ndata_decl(MoreBytes, S1) end,
-      fun(S1) -> ?fatal(unexpected_end, S1) end,
+      fatal_fun(unexpected_end),
       S);
 scan_ndata_decl(Str = ">"++_T, S) ->
     {[], Str, S};
@@ -2060,7 +2065,7 @@ scan_element("/", S=#xmerl_scanner{continuation_fun = F},
     F(fun(MoreBytes, S1) -> scan_element("/" ++ MoreBytes, S1,
 					 Pos, Name, StartL, StartC, Attrs,
 					 Lang,Parents,NSI,NS,SpaceDefault) end,
-      fun(S1) -> ?fatal(unexpected_end, S1) end,
+      fatal_fun(unexpected_end),
       S);
 scan_element([], S=#xmerl_scanner{continuation_fun = F},
 	     Pos, Name, StartL, StartC, Attrs, Lang, Parents,
@@ -2069,7 +2074,7 @@ scan_element([], S=#xmerl_scanner{continuation_fun = F},
     F(fun(MoreBytes, S1) -> scan_element(MoreBytes, S1,
 					 Pos, Name, StartL, StartC, Attrs,
 					 Lang,Parents,NSI,NS,SpaceDefault) end,
-      fun(S1) -> ?fatal(unexpected_end, S1) end,
+      fatal_fun(unexpected_end),
       S);
 scan_element("/>" ++ T, S0 = #xmerl_scanner{hook_fun = Hook,
 					    event_fun = Event,
@@ -2097,7 +2102,7 @@ scan_element(">", S=#xmerl_scanner{continuation_fun = F},
     F(fun(MoreBytes, S1) -> scan_element(">" ++ MoreBytes, S1,
 					 Pos, Name, StartL, StartC, Attrs,
 					 Lang,Parents,NSI,NS,SpaceDefault) end,
-      fun(S1) -> ?fatal(unexpected_end, S1) end,
+      fatal_fun(unexpected_end),
       S);
 scan_element(">" ++ T, S0 = #xmerl_scanner{event_fun = Event,
 					   hook_fun = Hook,
@@ -2342,7 +2347,7 @@ keyreplaceadd(_K, _Pos, [], Obj) ->
 scan_att_value([], S=#xmerl_scanner{continuation_fun = F},AT) ->
     ?dbg("cont()...~n", []),
     F(fun(MoreBytes, S1) -> scan_att_value(MoreBytes, S1, AT) end,
-      fun(S1) -> ?fatal(unexpected_end, S1) end,
+      fatal_fun(unexpected_end),
       S);
 scan_att_value("%"++_T,S=#xmerl_scanner{environment=prolog},_AttType) ->
     ?fatal({error,{wfc_PEs_In_Internal_Subset}},S);
@@ -2383,7 +2388,7 @@ scan_att_chars([],S=#xmerl_scanner{continuation_fun=F},H,Acc,TmpAcc,AT,IsNorm)->
     F(fun(MoreBytes, S1) ->
 	      scan_att_chars(MoreBytes, S1, H, Acc,TmpAcc,AT,IsNorm)
       end,
-      fun(S1) -> ?fatal(unexpected_end, S1) end,
+      fatal_fun(unexpected_end),
       S);
 scan_att_chars([H|T], S0, H, Acc, TmpAcc,AttType,IsNorm) -> % End quote
     ?bump_col(1),
@@ -2516,7 +2521,7 @@ scan_content("<", S= #xmerl_scanner{continuation_fun = F},
     F(fun(MoreBytes, S1) -> scan_content("<" ++ MoreBytes, S1,
 					 Pos, Name, Attrs,
 					 Space, Lang, Parents, NS, Acc,[]) end,
-      fun(S1) -> ?fatal(unexpected_end, S1) end,
+      fatal_fun(unexpected_end),
       S);
 scan_content([], S=#xmerl_scanner{environment={external,{entity,_}}},
              _Pos, _Name, _Attrs, _Space, _Lang, _Parents, _NS, Acc,_) ->
@@ -2530,7 +2535,7 @@ scan_content([], S=#xmerl_scanner{continuation_fun = F},
     F(fun(MoreBytes, S1) -> scan_content(MoreBytes, S1,
 					 Pos, Name, Attrs,
 					 Space, Lang, Parents, NS, Acc,[]) end,
-      fun(S1) -> ?fatal(unexpected_end, S1) end,
+      fatal_fun(unexpected_end),
       S);
 scan_content("</" ++ T, S0, _Pos, Name, _Attrs, _Space, _Lang,
 	     _Parents, _NS, Acc,[]) ->
@@ -2634,7 +2639,7 @@ scan_content_markup([], S=#xmerl_scanner{continuation_fun = F},
     F(fun(MoreBytes, S1) -> scan_content_markup(
 			      MoreBytes,S1,Pos,Name,
 			      Attrs,Space,Lang,Parents,NS) end,
-      fun(S1) -> ?fatal(unexpected_end, S1) end,
+      fatal_fun(unexpected_end),
       S);
 scan_content_markup("![CDATA[" ++ T, S0, Pos, _Name, _Attrs,
 		    _Space, _Lang, Parents, _NS) ->
@@ -2662,7 +2667,7 @@ scan_char_data([], S=#xmerl_scanner{environment=internal_parsed_entity},
 scan_char_data([], S=#xmerl_scanner{continuation_fun = F}, Space, _MUD,Acc) ->
     ?dbg("cont()...~n", []),
     F(fun(MoreBytes, S1) -> scan_char_data(MoreBytes,S1,Space,_MUD,Acc) end,
-      fun(S1) -> ?fatal(unexpected_end, S1) end,
+      fatal_fun(unexpected_end),
       S);
 scan_char_data([$&|T], S,Space,"&",Acc) ->
     scan_char_data(T, S, Space,[], [$&|Acc]);
@@ -2714,7 +2719,7 @@ scan_cdata(Str, S, Pos, Parents) ->
 scan_cdata([], S=#xmerl_scanner{continuation_fun = F}, Pos, Parents, Acc) ->
     ?dbg("cont()...~n", []),
     F(fun(MoreBytes, S1) -> scan_cdata(MoreBytes, S1, Pos, Parents, Acc) end,
-      fun(S1) -> ?fatal(unexpected_end, S1) end,
+      fatal_fun(unexpected_end),
       S);
 scan_cdata("]]>" ++ T, S0, Pos, Parents, Acc) ->
     ?bump_col(3),
@@ -2739,7 +2744,7 @@ scan_cdata(Str, S0, Pos, Parents, Acc) ->
 scan_reference([], S=#xmerl_scanner{continuation_fun = F}) ->
     ?dbg("cont()...~n", []),
     F(fun(MoreBytes, S1) -> scan_reference(MoreBytes, S1) end,
-      fun(S1) -> ?fatal(unexpected_end, S1) end,
+      fatal_fun(unexpected_end),
       S);
 scan_reference("#x" ++ T, S0) ->
     %% [66] CharRef
@@ -2781,7 +2786,7 @@ scan_reference(T, S) ->
 scan_entity_ref([], S=#xmerl_scanner{continuation_fun = F}) ->
     ?dbg("cont()...~n", []),
     F(fun(MoreBytes, S1) -> scan_entity_ref(MoreBytes, S1) end,
-      fun(S1) -> ?fatal(unexpected_end, S1) end,
+      fatal_fun(unexpected_end),
       S);
 scan_entity_ref("amp;" ++ T, S0) ->
     ?bump_col(4),
@@ -2866,7 +2871,7 @@ expand_reference(Name, #xmerl_scanner{rules_read_fun = Read} = S) ->
 scan_char_ref_dec([], S=#xmerl_scanner{continuation_fun = F}, Acc) ->
     ?dbg("cont()...~n", []),
     F(fun(MoreBytes, S1) -> scan_char_ref_dec(MoreBytes, S1, Acc) end,
-      fun(S1) -> ?fatal(unexpected_end, S1) end,
+      fatal_fun(unexpected_end),
       S);
 scan_char_ref_dec([H|T], S0, Acc) when H >= $0, H =< $9 ->
     ?bump_col(1),
@@ -2881,7 +2886,7 @@ scan_char_ref_dec(";" ++ T, S0, Acc) ->
 scan_char_ref_hex([], S=#xmerl_scanner{continuation_fun = F}, Acc) ->
     ?dbg("cont()...~n", []),
     F(fun(MoreBytes, S1) -> scan_char_ref_hex(MoreBytes, S1, Acc) end,
-      fun(S1) -> ?fatal(unexpected_end, S1) end,
+      fatal_fun(unexpected_end),
       S);
 scan_char_ref_hex([H|T], S0, Acc) when H >= $0, H =< $9 ->
     ?bump_col(1),
@@ -2955,7 +2960,7 @@ scan_name_no_colons(Str, S) ->
 scan_name([], S=#xmerl_scanner{continuation_fun = F}) ->
     ?dbg("cont()...~n", []),
     F(fun(MoreBytes, S1) -> scan_name(MoreBytes, S1) end,
-      fun(S1) -> ?fatal(unexpected_end, S1) end,
+      fatal_fun(unexpected_end),
       S);
 scan_name(Str = [$:|T], S0 = #xmerl_scanner{namespace_conformant = NSC}) ->
     if NSC == false ->
@@ -3005,7 +3010,7 @@ scan_nmtoken(Str, S, Acc, NSC) ->
 scan_nmtoken([], S=#xmerl_scanner{continuation_fun = F}) ->
     ?dbg("cont()...~n", []),
     F(fun(MoreBytes, S1) -> scan_nmtoken(MoreBytes, S1) end,
-      fun(S1) -> ?fatal(unexpected_end, S1) end,
+      fatal_fun(unexpected_end),
       S);
 scan_nmtoken("%"++T, S0=#xmerl_scanner{environment={external,_}}) ->
     ?bump_col(1),
@@ -3082,7 +3087,7 @@ isLatin1(_,_) ->
 scan_system_literal([], S=#xmerl_scanner{continuation_fun = F}) ->
     ?dbg("cont()...~n", []),
     F(fun(MoreBytes, S1) -> scan_system_literal(MoreBytes, S1) end,
-      fun(S1) -> ?fatal(unexpected_end, S1) end,
+      fatal_fun(unexpected_end),
       S);
 scan_system_literal("\"" ++ T, S) ->
     scan_system_literal(T, S, $", []);
@@ -3094,7 +3099,7 @@ scan_system_literal([], S=#xmerl_scanner{continuation_fun = F},
 		    Delimiter, Acc) ->
     ?dbg("cont()...~n", []),
     F(fun(MoreBytes, S1) -> scan_system_literal(MoreBytes,S1,Delimiter,Acc) end,
-      fun(S1) -> ?fatal(unexpected_end, S1) end,
+      fatal_fun(unexpected_end),
       S);
 scan_system_literal([H|T], S, H, Acc) ->
     {lists:reverse(Acc), T, S#xmerl_scanner{col = S#xmerl_scanner.col+1}};
@@ -3112,7 +3117,7 @@ scan_system_literal(Str, S, Delimiter, Acc) ->
 scan_pubid_literal([], S=#xmerl_scanner{continuation_fun = F}) ->
     ?dbg("cont()...~n", []),
     F(fun(MoreBytes, S1) -> scan_pubid_literal(MoreBytes, S1) end,
-      fun(S1) -> ?fatal(unexpected_end, S1) end,
+      fatal_fun(unexpected_end),
       S);
 scan_pubid_literal([H|T], S) when H == $"; H == $' ->
     scan_pubid_literal(T, S#xmerl_scanner{col = S#xmerl_scanner.col+1}, H, []);
@@ -3124,7 +3129,7 @@ scan_pubid_literal([], S=#xmerl_scanner{continuation_fun = F},
 		   Delimiter, Acc) ->
     ?dbg("cont()...~n", []),
     F(fun(MoreBytes, S1) -> scan_pubid_literal(MoreBytes,S1,Delimiter,Acc) end,
-      fun(S1) -> ?fatal(unexpected_end, S1) end,
+      fatal_fun(unexpected_end),
       S);
 scan_pubid_literal([H|T], S, H, Acc) ->
     {lists:reverse(Acc), T, S#xmerl_scanner{col = S#xmerl_scanner.col+1}};
@@ -3159,7 +3164,7 @@ is_pubid_char(X) ->
 scan_contentspec([], S=#xmerl_scanner{continuation_fun = F}) ->
     ?dbg("cont()...~n", []),
     F(fun(MoreBytes, S1) -> scan_contentspec(MoreBytes, S1) end,
-      fun(S1) -> ?fatal(unexpected_end, S1) end,
+      fatal_fun(unexpected_end),
       S);
 scan_contentspec("EMPTY" ++ T, S0) ->
     ?bump_col(5),
@@ -3193,7 +3198,7 @@ scan_elem_content([], S=#xmerl_scanner{continuation_fun = F},
 		  Context, Mode, Acc) ->
     ?dbg("cont()...~n", []),
     F(fun(MoreBytes,S1) -> scan_elem_content(MoreBytes,S1,Context,Mode,Acc) end,
-      fun(S1) -> ?fatal(unexpected_end, S1) end,
+      fatal_fun(unexpected_end),
       S);
 scan_elem_content(")" ++ T, S0, Context, Mode0, Acc0) ->
     ?bump_col(1),
@@ -3280,7 +3285,7 @@ format_elem_content(Other) -> Other.
 scan_occurrence([], S=#xmerl_scanner{continuation_fun = F}) ->
     ?dbg("cont()...~n", []),
     F(fun(MoreBytes, S1) -> scan_occurrence(MoreBytes, S1) end,
-      fun(S1) -> ?fatal(unexpected_end, S1) end,
+      fatal_fun(unexpected_end),
       S);
 scan_occurrence([$?|T], S0) ->
     ?bump_col(1),
@@ -3431,7 +3436,7 @@ wfc_whitespace_betw_attrs([$> |_]=L,S) ->
 wfc_whitespace_betw_attrs([],S=#xmerl_scanner{continuation_fun = F}) ->
     ?dbg("cont()...~n", []),
     F(fun(MoreBytes, S1) -> wfc_whitespace_betw_attrs(MoreBytes, S1) end,
-      fun(S1) -> ?fatal(unexpected_end, S1) end,
+      fatal_fun(unexpected_end),
       S);
 wfc_whitespace_betw_attrs(_,S) ->
     ?fatal({whitespace_required_between_attributes},S).
@@ -3475,7 +3480,7 @@ vc_Element_valid(_,_) ->
 scan_pe_def([], S=#xmerl_scanner{continuation_fun = F}, PEName) ->
     ?dbg("cont()...~n", []),
     F(fun(MoreBytes, S1) -> scan_pe_def(MoreBytes, S1, PEName) end,
-      fun(S1) -> ?fatal(unexpected_end, S1) end,
+      fatal_fun(unexpected_end),
       S);
 scan_pe_def("'" ++ T, S0, PEName) ->
     ?bump_col(1),
@@ -3508,7 +3513,7 @@ scan_notation_decl(T, #xmerl_scanner{rules_write_fun = Write,
 scan_notation_decl1([], S=#xmerl_scanner{continuation_fun = F}) ->
     ?dbg("cont()...~n", []),
     F(fun(MoreBytes, S1) -> scan_notation_decl1(MoreBytes, S1) end,
-      fun(S1) -> ?fatal(unexpected_end, S1) end,
+      fatal_fun(unexpected_end),
       S);
 scan_notation_decl1("SYSTEM" ++ T, S0) ->
     ?bump_col(6),
@@ -3534,7 +3539,7 @@ scan_notation_decl1("PUBLIC" ++ T, S0) ->
 scan_external_id([], S=#xmerl_scanner{continuation_fun = F}) ->
     ?dbg("cont()...~n", []),
     F(fun(MoreBytes, S1) -> scan_external_id(MoreBytes, S1) end,
-      fun(S1) -> ?fatal(unexpected_end, S1) end,
+      fatal_fun(unexpected_end),
       S);
 scan_external_id("SYSTEM" ++ T, S0) ->
     ?bump_col(6),
@@ -3580,7 +3585,7 @@ scan_entity_value([], S=#xmerl_scanner{continuation_fun = F},
 	      scan_entity_value(MoreBytes,S1,
 				Delim,Acc,PEName,Namespace,PENesting)
       end,
-      fun(S1) -> ?fatal(unexpected_end, S1) end,
+      fatal_fun(unexpected_end),
       S);
 scan_entity_value([Delim|T], S=#xmerl_scanner{validation=dtd},
 		  Delim,_Acc,PEName,_NS,PENesting) when length(PENesting) /= 0 ->
@@ -3848,7 +3853,7 @@ scan_comment1([], S=#xmerl_scanner{continuation_fun = F},
 	     Pos, Comment, Acc) ->
     ?dbg("cont()...~n", []),
     F(fun(MoreBytes, S1) -> scan_comment1(MoreBytes, S1, Pos, Comment, Acc) end,
-      fun(S1) -> ?fatal(unexpected_end, S1) end,
+      fatal_fun(unexpected_end),
       S);
 scan_comment1("-->" ++ T, S0 = #xmerl_scanner{col = C,
 					     event_fun = Event,
@@ -4088,7 +4093,7 @@ schemaLocations(#xmlElement{attributes=Atts,xmlbase=_Base}) ->
     end.
 
 inherit_options(S) ->
-    %%io:format("xsdbase: ~p~n",[S#xmerl_scanner.xmlbase]),
+    %%?dbg("xsdbase: ~p~n",[S#xmerl_scanner.xmlbase]),
     [{xsdbase,S#xmerl_scanner.xmlbase}].
 
 handle_schema_result({XSDRes=#xmlElement{},_},S5) ->
@@ -4097,6 +4102,13 @@ handle_schema_result({error,Reason},S5) ->
     ?fatal({failed_schema_validation,Reason},S5).
 
 %%% Helper functions
+
+-compile({inline, [fatal_fun/1]}).
+
+-spec fatal_fun(_) -> fun((_) -> no_return()).
+
+fatal_fun(Reason) ->
+    fun(S) -> ?fatal(Reason, S) end.
 
 fatal(Reason, S) ->
     exit({fatal, {Reason,
@@ -4227,7 +4239,7 @@ string_to_char_set(_,Str) ->
 %%     NewTot =
 %%     case {lists:keysearch(total,1,Mem),OldTot*1.1} of
 %% 	{{_,{_,Tot}},Tot110} when Tot > Tot110 ->
-%% 	    io:format("From ~p to ~p, total memory: ~p (~p)~n",[OldLine,Line,Tot,OldTot]),
+%% 	    ?dbg("From ~p to ~p, total memory: ~p (~p)~n",[OldLine,Line,Tot,OldTot]),
 %% 	    Tot;
 %% 	{{_,{_,Tot}},_} ->
 %% 	    Tot

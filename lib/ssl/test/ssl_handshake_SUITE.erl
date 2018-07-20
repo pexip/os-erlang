@@ -1,18 +1,19 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2008-2014. All Rights Reserved.
+%% Copyright Ericsson AB 2008-2016. All Rights Reserved.
 %%
-%% The contents of this file are subject to the Erlang Public License,
-%% Version 1.1, (the "License"); you may not use this file except in
-%% compliance with the License. You should have received a copy of the
-%% Erlang Public License along with this software. If not, it can be
-%% retrieved online at http://www.erlang.org/.
+%% Licensed under the Apache License, Version 2.0 (the "License");
+%% you may not use this file except in compliance with the License.
+%% You may obtain a copy of the License at
 %%
-%% Software distributed under the License is distributed on an "AS IS"
-%% basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See
-%% the License for the specific language governing rights and limitations
-%% under the License.
+%%     http://www.apache.org/licenses/LICENSE-2.0
+%%
+%% Unless required by applicable law or agreed to in writing, software
+%% distributed under the License is distributed on an "AS IS" BASIS,
+%% WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+%% See the License for the specific language governing permissions and
+%% limitations under the License.
 %%
 %% %CopyrightEnd%
 %%
@@ -31,15 +32,54 @@
 %%--------------------------------------------------------------------
 %% Common Test interface functions -----------------------------------
 %%--------------------------------------------------------------------
-suite() -> [{ct_hooks,[ts_install_cth]}].
-
 all() -> [decode_hello_handshake,
 	  decode_single_hello_extension_correctly,
 	  decode_supported_elliptic_curves_hello_extension_correctly,
 	  decode_unknown_hello_extension_correctly,
 	  encode_single_hello_sni_extension_correctly,
 	  decode_single_hello_sni_extension_correctly,
-	  select_proper_tls_1_2_rsa_default_hashsign].
+	  decode_empty_server_sni_correctly,
+	  select_proper_tls_1_2_rsa_default_hashsign,
+	  ignore_hassign_extension_pre_tls_1_2].
+
+%%--------------------------------------------------------------------
+init_per_suite(Config) ->
+    Config.
+end_per_suite(Config) ->
+    Config.
+
+init_per_group(_GroupName, Config) ->
+    Config.
+
+end_per_group(_,Config) ->
+    Config.
+
+init_per_testcase(ignore_hassign_extension_pre_tls_1_2, Config0) ->
+    catch crypto:stop(),
+    try crypto:start() of
+	ok ->
+	    case is_supported(sha512) of
+		true ->
+		    ssl_test_lib:clean_start(),
+		    %% make rsa certs using oppenssl
+		    {ok, _} = make_certs:all(proplists:get_value(data_dir, Config0),
+					     proplists:get_value(priv_dir, Config0)),
+		    Config = ssl_test_lib:cert_options(Config0),
+		    ct:timetrap({seconds, 5}),
+		    Config;
+		false ->
+		    {skip, "Crypto did not support sha512"}  
+	    end
+    catch _:_ ->
+	    {skip, "Crypto did not start"}
+    end;
+init_per_testcase(_, Config0) ->
+    Config0.
+
+end_per_testcase(ignore_hassign_extension_pre_tls_1_2, _) ->
+    crypto:stop();
+end_per_testcase(_TestCase, Config) ->
+    Config.
 
 %%--------------------------------------------------------------------
 %% Test Cases --------------------------------------------------------
@@ -59,7 +99,8 @@ decode_hello_handshake(_Config) ->
 		    16#70, 16#64, 16#79, 16#2f, 16#32>>,
 	
     Version = {3, 0},
-    {Records, _Buffer} = tls_handshake:get_tls_handshake(Version, HelloPacket, <<>>),
+    {Records, _Buffer} = tls_handshake:get_tls_handshake(Version, HelloPacket, <<>>, 
+							 #ssl_options{v2_hello_compatible = false}),
 
     {Hello, _Data} = hd(Records),
     #renegotiation_info{renegotiated_connection = <<0>>}
@@ -106,6 +147,13 @@ decode_single_hello_sni_extension_correctly(_Config) ->
     Decoded = ssl_handshake:decode_hello_extensions(SNI),
     Exts = Decoded.
 
+decode_empty_server_sni_correctly(_Config) ->
+    Exts = #hello_extensions{sni = ""},
+    SNI = <<?UINT16(?SNI_EXT),?UINT16(0)>>,
+    Decoded = ssl_handshake:decode_hello_extensions(SNI),
+    Exts = Decoded.
+
+
 select_proper_tls_1_2_rsa_default_hashsign(_Config) ->
     % RFC 5246 section 7.4.1.4.1 tells to use {sha1,rsa} as default signature_algorithm for RSA key exchanges
     {sha, rsa} = ssl_handshake:select_hashsign_algs(undefined, ?rsaEncryption, {3,3}),
@@ -113,3 +161,18 @@ select_proper_tls_1_2_rsa_default_hashsign(_Config) ->
     {md5sha, rsa} = ssl_handshake:select_hashsign_algs(undefined, ?rsaEncryption, {3,2}),
     {md5sha, rsa} = ssl_handshake:select_hashsign_algs(undefined, ?rsaEncryption, {3,0}).
 
+
+ignore_hassign_extension_pre_tls_1_2(Config) ->
+    Opts = proplists:get_value(server_opts, Config),
+    CertFile = proplists:get_value(certfile, Opts),
+    [{_, Cert, _}] = ssl_test_lib:pem_to_der(CertFile),
+    HashSigns = #hash_sign_algos{hash_sign_algos = [{sha512, rsa}, {sha, dsa}]},
+    {sha512, rsa} = ssl_handshake:select_hashsign(HashSigns, Cert, ecdhe_rsa, tls_v1:default_signature_algs({3,3}), {3,3}),
+    %%% Ignore
+    {md5sha, rsa} = ssl_handshake:select_hashsign(HashSigns, Cert, ecdhe_rsa, tls_v1:default_signature_algs({3,2}), {3,2}),
+    {md5sha, rsa} = ssl_handshake:select_hashsign(HashSigns, Cert, ecdhe_rsa, tls_v1:default_signature_algs({3,0}), {3,0}).
+
+is_supported(Hash) ->
+    Algos = crypto:supports(),
+    Hashs = proplists:get_value(hashs, Algos), 
+    lists:member(Hash, Hashs).

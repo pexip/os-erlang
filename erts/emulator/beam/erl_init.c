@@ -1,18 +1,19 @@
 /*
  * %CopyrightBegin%
  *
- * Copyright Ericsson AB 1997-2013. All Rights Reserved.
+ * Copyright Ericsson AB 1997-2016. All Rights Reserved.
  *
- * The contents of this file are subject to the Erlang Public License,
- * Version 1.1, (the "License"); you may not use this file except in
- * compliance with the License. You should have received a copy of the
- * Erlang Public License along with this software. If not, it can be
- * retrieved online at http://www.erlang.org/.
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
  *
- * Software distributed under the License is distributed on an "AS IS"
- * basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See
- * the License for the specific language governing rights and limitations
- * under the License.
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  *
  * %CopyrightEnd%
  */
@@ -35,7 +36,7 @@
 #include "dist.h"
 #include "erl_mseg.h"
 #include "erl_threads.h"
-#include "erl_bif_timer.h"
+#include "erl_hl_timer.h"
 #include "erl_instrument.h"
 #include "erl_printf_term.h"
 #include "erl_misc_utils.h"
@@ -45,6 +46,9 @@
 #include "erl_thr_queue.h"
 #include "erl_async.h"
 #include "erl_ptab.h"
+#include "erl_bif_unique.h"
+#define ERTS_WANT_TIMER_WHEEL_API
+#include "erl_time.h"
 
 #ifdef HIPE
 #include "hipe_mode_switch.h"	/* for hipe_mode_switch_init() */
@@ -87,11 +91,6 @@ const int etp_arch_bits = 32;
 #else
 # error "Not 64-bit, nor 32-bit arch"
 #endif
-#if HALFWORD_HEAP
-const int etp_halfword = 1;
-#else
-const int etp_halfword = 0;
-#endif
 #ifdef HIPE
 const int etp_hipe = 1;
 #else
@@ -117,6 +116,8 @@ const int etp_big_endian = 1;
 #else
 const int etp_big_endian = 0;
 #endif
+const Eterm etp_the_non_value = THE_NON_VALUE;
+
 /*
  * Note about VxWorks: All variables must be initialized by executable code,
  * not by an initializer. Otherwise a new instance of the emulator will
@@ -134,7 +135,11 @@ static void erl_init(int ncpu,
 		     int legacy_proc_tab,
 		     int port_tab_sz,
 		     int port_tab_sz_ignore_files,
-		     int legacy_port_tab);
+		     int legacy_port_tab,
+		     int time_correction,
+		     ErtsTimeWarpMode time_warp_mode,
+		     int node_tab_delete_delay,
+		     ErtsDbSpinCount db_spin_count);
 
 static erts_atomic_t exiting;
 
@@ -147,7 +152,7 @@ volatile int erts_writing_erl_crash_dump = 0;
 int erts_initialized = 0;
 
 #if defined(USE_THREADS) && !defined(ERTS_SMP)
-static erts_tid_t main_thread;
+erts_tid_t erts_main_thread;
 #endif
 
 int erts_use_sender_punish;
@@ -159,11 +164,10 @@ int erts_use_sender_punish;
 Uint display_items;	    	/* no of items to display in traces etc */
 int H_MIN_SIZE;			/* The minimum heap grain */
 int BIN_VH_MIN_SIZE;		/* The minimum binary virtual*/
+int H_MAX_SIZE;			/* The maximum heap size */
+int H_MAX_FLAGS;		/* The maximum heap flags */
 
 Uint32 erts_debug_flags;	/* Debug flags. */
-#ifdef ERTS_OPCODE_COUNTER_SUPPORT
-int count_instructions;
-#endif
 int erts_backtrace_depth;	/* How many functions to show in a backtrace
 				 * in error codes.
 				 */
@@ -188,11 +192,9 @@ static int no_dirty_io_schedulers;
 Uint32 verbose;             /* See erl_debug.h for information about verbose */
 #endif
 
-int erts_disable_tolerant_timeofday; /* Time correction can be disabled it is
-				      * not and/or it is too slow.
-				      */
-
 int erts_atom_table_size = ATOM_LIMIT;	/* Maximum number of atoms */
+
+int erts_pd_initial_size = 8;  /* must be power of 2 */
 
 int erts_modified_timing_level;
 
@@ -206,15 +208,15 @@ int erts_no_line_info = 0;	/* -L: Don't load line information */
 
 ErtsModifiedTimings erts_modified_timings[] = {
     /* 0 */	{make_small(0), CONTEXT_REDS, INPUT_REDUCTIONS},
-    /* 1 */	{make_small(0), 2*CONTEXT_REDS, 2*INPUT_REDUCTIONS},
+    /* 1 */	{make_small(0), (3*CONTEXT_REDS)/4, 2*INPUT_REDUCTIONS},
     /* 2 */	{make_small(0), CONTEXT_REDS/2, INPUT_REDUCTIONS/2},
-    /* 3 */	{make_small(0), 3*CONTEXT_REDS, 3*INPUT_REDUCTIONS},
+    /* 3 */	{make_small(0), (7*CONTEXT_REDS)/8, 3*INPUT_REDUCTIONS},
     /* 4 */	{make_small(0), CONTEXT_REDS/3, 3*INPUT_REDUCTIONS},
-    /* 5 */	{make_small(0), 4*CONTEXT_REDS, INPUT_REDUCTIONS/2},
+    /* 5 */	{make_small(0), (10*CONTEXT_REDS)/11, INPUT_REDUCTIONS/2},
     /* 6 */	{make_small(1), CONTEXT_REDS/4, 2*INPUT_REDUCTIONS},
-    /* 7 */	{make_small(1), 5*CONTEXT_REDS, INPUT_REDUCTIONS/3},
+    /* 7 */	{make_small(1), (5*CONTEXT_REDS)/7, INPUT_REDUCTIONS/3},
     /* 8 */	{make_small(10), CONTEXT_REDS/5, 3*INPUT_REDUCTIONS},
-    /* 9 */	{make_small(10), 6*CONTEXT_REDS, INPUT_REDUCTIONS/4}
+    /* 9 */	{make_small(10), (6*CONTEXT_REDS)/7, INPUT_REDUCTIONS/4}
 };
 
 #define ERTS_MODIFIED_TIMING_LEVELS \
@@ -264,9 +266,22 @@ this_rel_num(void)
 	    i++;
 	this_rel = atoi(&this_rel_str[i]); 
 	if (this_rel < 1)
-	    erl_exit(-1, "Unexpected ERLANG_OTP_RELEASE format\n");
+	    erts_exit(1, "Unexpected ERLANG_OTP_RELEASE format\n");
     }
     return this_rel;
+}
+
+static ERTS_INLINE void
+set_default_time_adj(int *time_correction_p, ErtsTimeWarpMode *time_warp_mode_p)
+{
+    *time_correction_p = 1;
+    *time_warp_mode_p = ERTS_NO_TIME_WARP_MODE;
+    if (!erts_check_time_adj_support(*time_correction_p,
+				     *time_warp_mode_p)) {
+	*time_correction_p = 0;
+	ASSERT(erts_check_time_adj_support(*time_correction_p,
+					   *time_warp_mode_p));
+    }
 }
 
 /*
@@ -284,13 +299,24 @@ static int early_init(int *argc, char **argv);
 void
 erts_short_init(void)
 {
-    int ncpu = early_init(NULL, NULL);
+    
+    int ncpu;
+    int time_correction;
+    ErtsTimeWarpMode time_warp_mode;
+
+    set_default_time_adj(&time_correction,
+			 &time_warp_mode);
+    ncpu = early_init(NULL, NULL);
     erl_init(ncpu,
 	     ERTS_DEFAULT_MAX_PROCESSES,
 	     0,
 	     ERTS_DEFAULT_MAX_PORTS,
 	     0,
-	     0);
+	     0,
+	     time_correction,
+	     time_warp_mode,
+	     ERTS_NODE_TAB_DELAY_GC_DEFAULT,
+	     ERTS_DB_SPNCNT_NORMAL);
     erts_initialized = 1;
 }
 
@@ -300,12 +326,15 @@ erl_init(int ncpu,
 	 int legacy_proc_tab,
 	 int port_tab_sz,
 	 int port_tab_sz_ignore_files,
-	 int legacy_port_tab)
+	 int legacy_port_tab,
+	 int time_correction,
+	 ErtsTimeWarpMode time_warp_mode,
+	 int node_tab_delete_delay,
+	 ErtsDbSpinCount db_spin_count)
 {
-    init_benchmarking();
-
+    erts_bif_unique_init();
     erts_init_monitors();
-    erts_init_time();
+    erts_init_time(time_correction, time_warp_mode);
     erts_init_sys_common_misc();
     erts_init_process(ncpu, proc_tab_sz, legacy_proc_tab);
     erts_init_scheduling(no_schedulers,
@@ -316,6 +345,7 @@ erl_init(int ncpu,
 			 no_dirty_io_schedulers
 #endif
 			 );
+    erts_late_init_time_sup();
     erts_init_cpu_topology(); /* Must be after init_scheduling */
     erts_init_gc(); /* Must be after init_scheduling */
     erts_alloc_late_init();
@@ -338,9 +368,8 @@ erl_init(int ncpu,
     erts_ptab_init(); /* Must be after init_emulator() */
     erts_init_binary(); /* Must be after init_emulator() */
     erts_bp_init();
-    init_db(); /* Must be after init_emulator */
-    erts_bif_timer_init();
-    erts_init_node_tables();
+    init_db(db_spin_count); /* Must be after init_emulator */
+    erts_init_node_tables(node_tab_delete_delay);
     init_dist();
     erl_drv_thr_init();
     erts_init_async();
@@ -352,25 +381,30 @@ erl_init(int ncpu,
     erts_init_bif_re();
     erts_init_unicode(); /* after RE to get access to PCRE unicode */
     erts_init_external();
+    erts_init_map();
+    erts_beam_bif_load_init();
     erts_delay_trap = erts_export_put(am_erlang, am_delay_trap, 2);
     erts_late_init_process();
 #if HAVE_ERTS_MSEG
     erts_mseg_late_init(); /* Must be after timer (erts_init_time()) and thread
 			      initializations */
 #endif
+    erl_sys_late_init();
 #ifdef HIPE
     hipe_mode_switch_init(); /* Must be after init_load/beam_catches/init */
 #endif
     packet_parser_init();
     erl_nif_init();
+    erts_msacc_init();
 }
 
-static void
+static Eterm
 erl_first_process_otp(char* modname, void* code, unsigned size, int argc, char** argv)
 {
     int i;
     Eterm start_mod;
     Eterm args;
+    Eterm res;
     Eterm* hp;
     Process parent;
     ErlSpawnOpts so;
@@ -379,7 +413,7 @@ erl_first_process_otp(char* modname, void* code, unsigned size, int argc, char**
     start_mod = erts_atom_put((byte *) modname, sys_strlen(modname), ERTS_ATOM_ENC_LATIN1, 1);
     if (erts_find_function(start_mod, am_start, 2,
 			   erts_active_code_ix()) == NULL) {
-	erl_exit(5, "No function %s:start/2\n", modname);
+	erts_exit(ERTS_ERROR_EXIT, "No function %s:start/2\n", modname);
     }
 
     /*
@@ -400,11 +434,35 @@ erl_first_process_otp(char* modname, void* code, unsigned size, int argc, char**
     hp += 2;
     args = CONS(hp, env, args);
 
-    so.flags = 0;
-    (void) erl_create_process(&parent, start_mod, am_start, args, &so);
+    so.flags = erts_default_spo_flags|SPO_SYSTEM_PROC;
+    res = erl_create_process(&parent, start_mod, am_start, args, &so);
     erts_smp_proc_unlock(&parent, ERTS_PROC_LOCK_MAIN);
     erts_cleanup_empty_process(&parent);
+    return res;
 }
+
+static Eterm
+erl_system_process_otp(Eterm parent_pid, char* modname)
+{
+    Eterm start_mod;
+    Process* parent;
+    ErlSpawnOpts so;
+    Eterm res;
+
+    start_mod = erts_atom_put((byte *) modname, sys_strlen(modname), ERTS_ATOM_ENC_LATIN1, 1);
+    if (erts_find_function(start_mod, am_start, 0,
+			   erts_active_code_ix()) == NULL) {
+	erts_exit(ERTS_ERROR_EXIT, "No function %s:start/0\n", modname);
+    }
+
+    parent = erts_pid2proc(NULL, 0, parent_pid, ERTS_PROC_LOCK_MAIN);
+
+    so.flags = erts_default_spo_flags|SPO_SYSTEM_PROC;
+    res = erl_create_process(parent, start_mod, am_start, NIL, &so);
+    erts_smp_proc_unlock(parent, ERTS_PROC_LOCK_MAIN);
+    return res;
+}
+
 
 Eterm
 erts_preloaded(Process* p)
@@ -475,12 +533,12 @@ load_preloaded(void)
 	length = preload_p[i].size;
 	module_name = erts_atom_put((byte *) name, sys_strlen(name), ERTS_ATOM_ENC_LATIN1, 1);
 	if ((code = sys_preload_begin(&preload_p[i])) == 0)
-	    erl_exit(1, "Failed to find preloaded code for module %s\n", 
+	    erts_exit(ERTS_ERROR_EXIT, "Failed to find preloaded code for module %s\n",
 		     name);
 	res = erts_preload_module(NULL, 0, NIL, &module_name, code, length);
 	sys_preload_end(&preload_p[i]);
 	if (res != NIL)
-	    erl_exit(1,"Failed loading preloaded module %s (%T)\n",
+	    erts_exit(ERTS_ERROR_EXIT,"Failed loading preloaded module %s (%T)\n",
 		     name, res);
 	i++;
     }
@@ -509,9 +567,9 @@ void erts_usage(void)
 
     /*    erts_fprintf(stderr, "-b func    set the boot function (default boot)\n"); */
 
-    erts_fprintf(stderr, "-c             disable continuous date/time correction with\n");
-    erts_fprintf(stderr, "               respect to uptime\n");
-
+    erts_fprintf(stderr, "-c bool        enable or disable time correction\n");
+    erts_fprintf(stderr, "-C mode        set time warp mode; valid modes are:\n");
+    erts_fprintf(stderr, "               no_time_warp|single_time_warp|multi_time_warp\n");
     erts_fprintf(stderr, "-d             don't write a crash dump for internally detected errors\n");
     erts_fprintf(stderr, "               (halt(String) will still produce a crash dump)\n");
     erts_fprintf(stderr, "-fn[u|a|l]     Control how filenames are interpreted\n");
@@ -519,6 +577,14 @@ void erts_usage(void)
 	       H_DEFAULT_SIZE);
     erts_fprintf(stderr, "-hmbs size     set minimum binary virtual heap size in words (default %d)\n",
 	       VH_DEFAULT_SIZE);
+    erts_fprintf(stderr, "-hmax size     set maximum heap size in words (default %d)\n",
+	       H_DEFAULT_MAX_SIZE);
+    erts_fprintf(stderr, "-hmaxk bool    enable or disable kill at max heap size (default true)\n");
+    erts_fprintf(stderr, "-hmaxel bool   enable or disable error_logger report at max heap size (default true)\n");
+    erts_fprintf(stderr, "-hpds size     initial process dictionary size (default %d)\n",
+	       erts_pd_initial_size);
+    erts_fprintf(stderr, "-hmqd  val     set default message queue data flag for processes,\n");
+    erts_fprintf(stderr, "               valid values are: off_heap | on_heap\n");
 
     /*    erts_fprintf(stderr, "-i module  set the boot module (default init)\n"); */
 
@@ -547,6 +613,8 @@ void erts_usage(void)
     erts_fprintf(stderr, "-scl bool      enable/disable compaction of scheduler load,\n");
     erts_fprintf(stderr, "               see the erl(1) documentation for more info.\n");
     erts_fprintf(stderr, "-sct cput      set cpu topology,\n");
+    erts_fprintf(stderr, "               see the erl(1) documentation for more info.\n");
+    erts_fprintf(stderr, "-secio bool    enable/disable eager check I/O scheduling,\n");
     erts_fprintf(stderr, "               see the erl(1) documentation for more info.\n");
 #if ERTS_HAVE_SCHED_UTIL_BALANCING_SUPPORT_OPT
     erts_fprintf(stderr, "-sub bool      enable/disable scheduler utilization balancing,\n");
@@ -592,15 +660,22 @@ void erts_usage(void)
 
     erts_fprintf(stderr, "-v             turn on chatty mode (GCs will be reported etc)\n");
 
-    erts_fprintf(stderr, "-W<i|w>        set error logger warnings mapping,\n");
+    erts_fprintf(stderr, "-W<i|w|e>      set error logger warnings mapping,\n");
     erts_fprintf(stderr, "               see error_logger documentation for details\n");
     erts_fprintf(stderr, "-zdbbl size    set the distribution buffer busy limit in kilobytes\n");
     erts_fprintf(stderr, "               valid range is [1-%d]\n", INT_MAX/1024);
+    erts_fprintf(stderr, "-zdntgc time   set delayed node table gc in seconds\n");
+    erts_fprintf(stderr, "               valid values are infinity or intergers in the range [0-%d]\n",
+		 ERTS_NODE_TAB_DELAY_GC_MAX);
+#if 0
+    erts_fprintf(stderr, "-zebwt  val    set ets busy wait threshold, valid values are:\n");
+    erts_fprintf(stderr, "               none|very_short|short|medium|long|very_long|extremely_long\n");
+#endif
     erts_fprintf(stderr, "\n");
     erts_fprintf(stderr, "Note that if the emulator is started with erlexec (typically\n");
     erts_fprintf(stderr, "from the erl script), these flags should be specified with +.\n");
     erts_fprintf(stderr, "\n\n");
-    erl_exit(-1, "");
+    erts_exit(1, "");
 }
 
 #ifdef USE_THREADS
@@ -675,17 +750,22 @@ early_init(int *argc, char **argv) /*
     char envbuf[21]; /* enough for any 64-bit integer */
     size_t envbufsz;
 
+#if defined(USE_THREADS) && !defined(ERTS_SMP)
+    erts_main_thread = erts_thr_self();
+#endif
+
     erts_save_emu_args(*argc, argv);
 
     erts_sched_compact_load = 1;
     erts_printf_eterm_func = erts_printf_term;
-    erts_disable_tolerant_timeofday = 0;
     display_items = 200;
     erts_backtrace_depth = DEFAULT_BACKTRACE_SIZE;
     erts_async_max_threads = ERTS_DEFAULT_NO_ASYNC_THREADS;
     erts_async_thread_suggested_stack_size = ERTS_ASYNC_THREAD_MIN_STACK_SIZE;
     H_MIN_SIZE = H_DEFAULT_SIZE;
     BIN_VH_MIN_SIZE = VH_DEFAULT_SIZE;
+    H_MAX_SIZE = H_DEFAULT_MAX_SIZE;
+    H_MAX_FLAGS = MAX_HEAP_SIZE_KILL|MAX_HEAP_SIZE_LOG;
 
     erts_initialized = 0;
 
@@ -715,9 +795,6 @@ early_init(int *argc, char **argv) /*
     erts_thr_progress_pre_init();
 #endif
 
-#ifdef ERTS_ENABLE_LOCK_CHECK
-    erts_lc_init();
-#endif
 #ifdef ERTS_SMP
     erts_smp_atomic32_init_nob(&erts_writing_erl_crash_dump, 0L);
     erts_tsd_key_create(&erts_is_crash_dumping_key,"erts_is_crash_dumping_key");
@@ -729,9 +806,6 @@ early_init(int *argc, char **argv) /*
 			       (erts_aint32_t) ((Uint16) -1));
 
     erts_pre_init_process();
-#if defined(USE_THREADS) && !defined(ERTS_SMP)
-    main_thread = erts_thr_self();
-#endif
 
     /*
      * We need to know the number of schedulers to use before we
@@ -1125,6 +1199,7 @@ early_init(int *argc, char **argv) /*
 	erts_thr_late_init(&elid);
     }
 #endif
+    erts_msacc_early_init();
 
 #ifdef ERTS_ENABLE_LOCK_CHECK
     erts_lc_late_init();
@@ -1185,7 +1260,14 @@ erl_start(int argc, char **argv)
     int port_tab_sz_ignore_files = 0;
     int legacy_proc_tab = 0;
     int legacy_port_tab = 0;
+    int time_correction;
+    ErtsTimeWarpMode time_warp_mode;
+    int node_tab_delete_delay = ERTS_NODE_TAB_DELAY_GC_DEFAULT;
+    ErtsDbSpinCount db_spin_count = ERTS_DB_SPNCNT_NORMAL;
+    Eterm otp_ring0_pid;
 
+    set_default_time_adj(&time_correction,
+			 &time_warp_mode);
 
     envbufsz = sizeof(envbuf);
     if (erts_sys_getenv_raw(ERL_MAX_ETS_TABLES_ENV, envbuf, &envbufsz) == 0)
@@ -1217,7 +1299,7 @@ erl_start(int argc, char **argv)
     verbose = DEBUG_DEFAULT;
 #endif
 
-    erts_error_logger_warnings = am_error;
+    erts_error_logger_warnings = am_warning;
 
     while (i < argc) {
 	if (argv[i][0] != '-') {
@@ -1352,6 +1434,7 @@ erl_start(int argc, char **argv)
 		    case 't': verbose |= DEBUG_THREADS; break;
 		    case 'p': verbose |= DEBUG_PROCESSES; break;
 		    case 'm': verbose |= DEBUG_MESSAGES; break;
+		    case 'c': verbose |= DEBUG_SHCOPY; break;
 		    default : erts_fprintf(stderr,"Unknown verbose option: %c\n",*ch);
 		    }
 		}
@@ -1364,6 +1447,7 @@ erl_start(int argc, char **argv)
 	    if (verbose & DEBUG_THREADS) erts_printf("THREADS ");
 	    if (verbose & DEBUG_PROCESSES) erts_printf("PROCESSES ");
 	    if (verbose & DEBUG_MESSAGES) erts_printf("MESSAGES ");
+	    if (verbose & DEBUG_SHCOPY) erts_printf("SHCOPY ");
             erts_printf("\n");
 #else
 	    erts_fprintf(stderr, "warning: -v (only in debug compiled code)\n");
@@ -1392,7 +1476,7 @@ erl_start(int argc, char **argv)
 		}
 		erts_fprintf(stderr, "(" EMULATOR ") emulator version "
 			   ERLANG_VERSION "\n");
-		erl_exit(0, "");
+		erts_exit(0, "");
 	    }
 	    break;
 
@@ -1404,8 +1488,13 @@ erl_start(int argc, char **argv)
 	    char *sub_param = argv[i]+2;
 	    /* set default heap size
 	     *
-	     * h|ms  - min_heap_size
-	     * h|mbs - min_bin_vheap_size
+	     * h|ms    - min_heap_size
+	     * h|mbs   - min_bin_vheap_size
+	     * h|pds   - erts_pd_initial_size
+	     * h|mqd   - message_queue_data
+             * h|max   - max_heap_size
+             * h|maxk  - max_heap_kill
+             * h|maxel - max_heap_error_logger
 	     *
 	     */
 	    if (has_prefix("mbs", sub_param)) {
@@ -1423,6 +1512,64 @@ erl_start(int argc, char **argv)
 		    erts_usage();
 		}
 		VERBOSE(DEBUG_SYSTEM, ("using minimum heap size %d\n", H_MIN_SIZE));
+	    } else if (has_prefix("pds", sub_param)) {
+		arg = get_arg(sub_param+3, argv[i+1], &i);
+		if (!erts_pd_set_initial_size(atoi(arg))) {
+		    erts_fprintf(stderr, "bad initial process dictionary size %s\n", arg);
+		    erts_usage();
+		}
+		VERBOSE(DEBUG_SYSTEM, ("using initial process dictionary size %d\n",
+			    erts_pd_initial_size));
+            } else if (has_prefix("mqd", sub_param)) {
+		arg = get_arg(sub_param+3, argv[i+1], &i);
+		if (sys_strcmp(arg, "on_heap") == 0) {
+		    erts_default_spo_flags &= ~SPO_OFF_HEAP_MSGQ;
+		    erts_default_spo_flags |= SPO_ON_HEAP_MSGQ;
+		}
+		else if (sys_strcmp(arg, "off_heap") == 0) {
+		    erts_default_spo_flags &= ~SPO_ON_HEAP_MSGQ;
+		    erts_default_spo_flags |= SPO_OFF_HEAP_MSGQ;
+		}
+		else {
+		    erts_fprintf(stderr,
+				 "Invalid message_queue_data flag: %s\n", arg);
+		    erts_usage();
+		}
+            } else if (has_prefix("maxk", sub_param)) {
+		arg = get_arg(sub_param+4, argv[i+1], &i);
+		if (strcmp(arg,"true") == 0) {
+                    H_MAX_FLAGS |= MAX_HEAP_SIZE_KILL;
+                } else if (strcmp(arg,"false") == 0) {
+                    H_MAX_FLAGS &= ~MAX_HEAP_SIZE_KILL;
+                } else {
+		    erts_fprintf(stderr, "bad max heap kill %s\n", arg);
+		    erts_usage();
+		}
+		VERBOSE(DEBUG_SYSTEM, ("using max heap kill %d\n", H_MAX_FLAGS));
+            } else if (has_prefix("maxel", sub_param)) {
+		arg = get_arg(sub_param+5, argv[i+1], &i);
+		if (strcmp(arg,"true") == 0) {
+                    H_MAX_FLAGS |= MAX_HEAP_SIZE_LOG;
+                } else if (strcmp(arg,"false") == 0) {
+                    H_MAX_FLAGS &= ~MAX_HEAP_SIZE_LOG;
+                } else {
+		    erts_fprintf(stderr, "bad max heap error logger %s\n", arg);
+		    erts_usage();
+		}
+		VERBOSE(DEBUG_SYSTEM, ("using max heap log %d\n", H_MAX_FLAGS));
+	    } else if (has_prefix("max", sub_param)) {
+		arg = get_arg(sub_param+3, argv[i+1], &i);
+		if ((H_MAX_SIZE = atoi(arg)) < 0) {
+		    erts_fprintf(stderr, "bad max heap size %s\n", arg);
+		    erts_usage();
+		}
+                if (H_MAX_SIZE < H_MIN_SIZE && H_MAX_SIZE) {
+		    erts_fprintf(stderr, "max heap size (%s) is not allowed to be "
+                                 "smaller than min heap size (%d)\n",
+                                 arg, H_MIN_SIZE);
+		    erts_usage();
+		}
+		VERBOSE(DEBUG_SYSTEM, ("using max heap size %d\n", H_MAX_SIZE));
 	    } else {
 	        /* backward compatibility */
 		arg = get_arg(argv[i]+2, argv[i+1], &i);
@@ -1674,6 +1821,22 @@ erl_start(int argc, char **argv)
 		    erts_usage();
 		}
 	    }
+	    else if (has_prefix("ecio", sub_param)) {
+		arg = get_arg(sub_param+4, argv[i+1], &i);
+#ifndef __OSE__
+		if (sys_strcmp("true", arg) == 0)
+		    erts_eager_check_io = 1;
+		else
+#endif
+		if (sys_strcmp("false", arg) == 0)
+		    erts_eager_check_io = 0;
+		else {
+		    erts_fprintf(stderr,
+				 "bad schedule eager check I/O value '%s'\n",
+				 arg);
+		    erts_usage();
+		}
+	    }
 	    else if (has_prefix("pp", sub_param)) {
 		arg = get_arg(sub_param+2, argv[i+1], &i);
 		if (sys_strcmp(arg, "true") == 0)
@@ -1878,15 +2041,51 @@ erl_start(int argc, char **argv)
 	    }
 	    break;
 	}
+	case 'C':
+	    arg = get_arg(argv[i]+2, argv[i+1], &i);
+	    if (sys_strcmp(arg, "no_time_warp") == 0)
+		time_warp_mode = ERTS_NO_TIME_WARP_MODE;
+	    else if (sys_strcmp(arg, "single_time_warp") == 0)
+		time_warp_mode = ERTS_SINGLE_TIME_WARP_MODE;
+	    else if (sys_strcmp(arg, "multi_time_warp") == 0)
+		time_warp_mode = ERTS_MULTI_TIME_WARP_MODE;
+	    else {
+		erts_fprintf(stderr,
+			     "Invalid time warp mode: %s\n", arg);
+		erts_usage();
+	    }
+	    break;
 	case 'c':
-	    if (argv[i][2] == 0) { /* -c: documented option */
-		erts_disable_tolerant_timeofday = 1;
+	    if (sys_strcmp(argv[i]+2, "false") == 0)
+		goto time_correction_false;
+	    else if (sys_strcmp(argv[i]+2, "true") == 0)
+		goto time_correction_true;
+	    else if (argv[i][2] == '\0') {
+		if (i + 1 >= argc)
+		    goto time_correction_false;
+		else {
+		    if (sys_strcmp(argv[i+1], "false") == 0) {
+			(void) get_arg(argv[i]+2, argv[i+1], &i);
+			goto time_correction_false;
+		    }
+		    else if (sys_strcmp(argv[i+1], "true") == 0) {
+			(void) get_arg(argv[i]+2, argv[i+1], &i);
+		    time_correction_true:
+			time_correction = 1;
+			break;
+		    }
+		    else {
+		    time_correction_false:
+			time_correction = 0;
+			break;
+		    }
+		}
 	    }
-#ifdef ERTS_OPCODE_COUNTER_SUPPORT
-	    else if (argv[i][2] == 'i') { /* -ci: undcoumented option*/
-		count_instructions = 1;
+	    else {
+		arg = get_arg(argv[i]+2, argv[i+1], &i);
+		erts_fprintf(stderr, "Invalid time correnction value: %s\n", arg);
+		erts_usage();
 	    }
-#endif
 	    break;
 	case 'W':
 	    arg = get_arg(argv[i]+2, argv[i+1], &i);
@@ -1894,11 +2093,12 @@ erl_start(int argc, char **argv)
 	    case 'i':
 		erts_error_logger_warnings = am_info;
 		break;
+	    case 'e':
+		erts_error_logger_warnings = am_error;
+		break;
 	    case 'w':
 		erts_error_logger_warnings = am_warning;
 		break;
-	    case 'e': /* The default */
-		erts_error_logger_warnings = am_error;
 	    default:
 		erts_fprintf(stderr, "unrecognized warning_map option %s\n", arg);
 		erts_usage();
@@ -1907,9 +2107,9 @@ erl_start(int argc, char **argv)
 
 	case 'z': {
 	    char *sub_param = argv[i]+2;
-	    int new_limit;
 
 	    if (has_prefix("dbbl", sub_param)) {
+		int new_limit;
 		arg = get_arg(sub_param+4, argv[i+1], &i);
 		new_limit = atoi(arg);
 		if (new_limit < 1 || INT_MAX/1024 < new_limit) {
@@ -1918,7 +2118,48 @@ erl_start(int argc, char **argv)
 		} else {
 		    erts_dist_buf_busy_limit = new_limit*1024;
 		}
-	    } else {
+	    }
+	    else if (has_prefix("dntgc", sub_param)) {
+		long secs;
+
+		arg = get_arg(sub_param+5, argv[i+1], &i);
+		if (sys_strcmp(arg, "infinity") == 0)
+		    secs = ERTS_NODE_TAB_DELAY_GC_INFINITY;
+		else {
+		    char *endptr;
+		    errno = 0;
+		    secs = strtol(arg, &endptr, 10);
+		    if (errno != 0 || *arg == '\0' || *endptr != '\0'
+			|| secs < 0 || ERTS_NODE_TAB_DELAY_GC_MAX < secs) {
+			erts_fprintf(stderr, "Invalid delayed node table gc: %s\n", arg);
+			erts_usage();
+		    }
+		}
+		node_tab_delete_delay = (int) secs;
+	    }
+	    else if (has_prefix("ebwt", sub_param)) {
+		arg = get_arg(sub_param+4, argv[i+1], &i);
+		if (sys_strcmp(arg, "none") == 0)
+		    db_spin_count = ERTS_DB_SPNCNT_NONE;
+		else if (sys_strcmp(arg, "very_short") == 0)
+		    db_spin_count = ERTS_DB_SPNCNT_VERY_LOW;
+		else if (sys_strcmp(arg, "short") == 0)
+		    db_spin_count = ERTS_DB_SPNCNT_LOW;
+		else if (sys_strcmp(arg, "medium") == 0)
+		    db_spin_count = ERTS_DB_SPNCNT_NORMAL;
+		else if (sys_strcmp(arg, "long") == 0)
+		    db_spin_count = ERTS_DB_SPNCNT_HIGH;
+		else if (sys_strcmp(arg, "very_long") == 0)
+		    db_spin_count = ERTS_DB_SPNCNT_VERY_HIGH;
+		else if (sys_strcmp(arg, "extremely_long") == 0)
+		    db_spin_count = ERTS_DB_SPNCNT_EXTREMELY_HIGH;
+		else {
+		    erts_fprintf(stderr,
+				 "Invalid ets busy wait threshold: %s\n", arg);
+		    erts_usage();
+		}
+	    }
+	    else {
 		erts_fprintf(stderr, "bad -z option %s\n", argv[i]);
 		erts_usage();
 	    }
@@ -1930,6 +2171,30 @@ erl_start(int argc, char **argv)
 	    erts_usage();
 	}
 	i++;
+    }
+
+    if (!erts_check_time_adj_support(time_correction, time_warp_mode)) {
+	char *time_correction_str = time_correction ? "Enabled" : "Disabled";
+	char *time_warp_str = "undefined";
+	switch (time_warp_mode) {
+	case ERTS_NO_TIME_WARP_MODE:
+	    time_warp_str = "no";
+	    break;
+	case ERTS_SINGLE_TIME_WARP_MODE:
+	    time_warp_str = "single";
+	    break;
+	case ERTS_MULTI_TIME_WARP_MODE:
+	    time_warp_str = "multi";
+	    break;
+	default:
+	    time_warp_str = "undefined";
+	    break;
+	}
+	erts_fprintf(stderr, "%s time correction with %s time warp mode "
+		     "is not supported on this platform\n",
+		     time_correction_str,
+		     time_warp_str);
+	erts_usage();
     }
 
 /* Output format on windows for sprintf defaults to three exponents.
@@ -1955,6 +2220,7 @@ erl_start(int argc, char **argv)
 	init_break_handler();
     if (replace_intr)
 	erts_replace_intr();
+    sys_init_suspend_handler();
 #endif
 
     boot_argc = argc - i;  /* Number of arguments to init */
@@ -1965,7 +2231,11 @@ erl_start(int argc, char **argv)
 	     legacy_proc_tab,
 	     port_tab_sz,
 	     port_tab_sz_ignore_files,
-	     legacy_port_tab);
+	     legacy_port_tab,
+	     time_correction,
+	     time_warp_mode,
+	     node_tab_delete_delay,
+	     db_spin_count);
 
     load_preloaded();
     erts_end_staging_code_ix();
@@ -1973,7 +2243,45 @@ erl_start(int argc, char **argv)
 
     erts_initialized = 1;
 
-    erl_first_process_otp("otp_ring0", NULL, 0, boot_argc, boot_argv);
+    otp_ring0_pid = erl_first_process_otp("otp_ring0", NULL, 0,
+					  boot_argc, boot_argv);
+
+    {
+	/*
+	 * The erts_code_purger and the erts_literal_area_collector
+	 * system processes are *always* alive. If they terminate
+	 * they bring the whole VM down.
+	 */
+	Eterm pid;
+
+	pid = erl_system_process_otp(otp_ring0_pid, "erts_code_purger");
+	erts_code_purger
+	    = (Process *) erts_ptab_pix2intptr_ddrb(&erts_proc,
+						    internal_pid_index(pid));
+	ASSERT(erts_code_purger && erts_code_purger->common.id == pid);
+	erts_proc_inc_refc(erts_code_purger); 
+
+#ifdef ERTS_NEW_PURGE_STRATEGY
+	pid = erl_system_process_otp(otp_ring0_pid, "erts_literal_area_collector");
+	erts_literal_area_collector
+	    = (Process *) erts_ptab_pix2intptr_ddrb(&erts_proc,
+						    internal_pid_index(pid));
+	ASSERT(erts_literal_area_collector
+	       && erts_literal_area_collector->common.id == pid);
+	erts_proc_inc_refc(erts_literal_area_collector);
+#endif
+
+#ifdef ERTS_DIRTY_SCHEDULERS
+	pid = erl_system_process_otp(otp_ring0_pid, "erts_dirty_process_code_checker");
+	erts_dirty_process_code_checker
+	    = (Process *) erts_ptab_pix2intptr_ddrb(&erts_proc,
+						    internal_pid_index(pid));
+	ASSERT(erts_dirty_process_code_checker
+	       && erts_dirty_process_code_checker->common.id == pid);
+	erts_proc_inc_refc(erts_dirty_process_code_checker);
+#endif
+
+    }
 
 #ifdef ERTS_SMP
     erts_start_schedulers();
@@ -1981,13 +2289,18 @@ erl_start(int argc, char **argv)
 
     erts_sys_main_thread(); /* May or may not return! */
 #else
-    erts_thr_set_main_status(1, 1);
+    {
+	ErtsSchedulerData *esdp = erts_get_scheduler_data();
+        erts_msacc_init_thread("scheduler", 1, 1);
+	erts_thr_set_main_status(1, 1);
 #if ERTS_USE_ASYNC_READY_Q
-    erts_get_scheduler_data()->aux_work_data.async_ready.queue
-	= erts_get_async_ready_queue(1);
+	esdp->aux_work_data.async_ready.queue
+	    = erts_get_async_ready_queue(1);
 #endif
-    set_main_stack_size();
-    process_main();
+	set_main_stack_size();
+	erts_sched_init_time_sup(esdp);
+	process_main();
+    }
 #endif
 }
 
@@ -2044,7 +2357,7 @@ system_cleanup(int flush_async)
     if (!flush_async
 	|| !erts_initialized
 #if defined(USE_THREADS) && !defined(ERTS_SMP)
-	|| !erts_equal_tids(main_thread, erts_thr_self())
+	|| !erts_equal_tids(erts_main_thread, erts_thr_self())
 #endif
 	)
 	return;
@@ -2058,59 +2371,63 @@ system_cleanup(int flush_async)
     erts_exit_flush_async();
 }
 
-static __decl_noreturn void __noreturn
-erl_exit_vv(int n, int flush_async, char *fmt, va_list args1, va_list args2)
-{
-    unsigned int an;
+static int erts_exit_code;
 
+static __decl_noreturn void __noreturn
+erts_exit_vv(int n, int flush_async, char *fmt, va_list args1, va_list args2)
+{
     system_cleanup(flush_async);
 
-    save_statistics();
-    if (n < 0)
-        an = -(unsigned int)n;
-    else
-        an = n;
-
     if (erts_mtrace_enabled)
-	erts_mtrace_exit((Uint32) an);
+	erts_mtrace_exit((Uint32) n);
 
-    /* Produce an Erlang core dump if error */
-    if (((n > 0 && erts_no_crash_dump == 0) || n == ERTS_DUMP_EXIT)
+    if (fmt != NULL && *fmt != '\0')
+	erl_error(fmt, args2);	/* Print error message. */
+
+    erts_exit_code = n;
+
+    /* Produce an Erlang crash dump if error */
+    if (((n == ERTS_ERROR_EXIT && erts_no_crash_dump == 0) || n == ERTS_DUMP_EXIT)
 	&& erts_initialized) {
 	erl_crash_dump_v((char*) NULL, 0, fmt, args1);
     }
 
-    if (fmt != NULL && *fmt != '\0')
-	  erl_error(fmt, args2);	/* Print error message. */
+    erts_exit_epilogue();
+}
+
+__decl_noreturn void __noreturn erts_exit_epilogue(void)
+{
+    int n = erts_exit_code;
+
     sys_tty_reset(n);
 
     if (n == ERTS_INTR_EXIT)
 	exit(0);
     else if (n == ERTS_DUMP_EXIT)
 	ERTS_EXIT_AFTER_DUMP(1);
-    else if (n > 0 || n == ERTS_ABORT_EXIT)
+    else if (n == ERTS_ERROR_EXIT || n == ERTS_ABORT_EXIT)
         abort();
-    exit(an);
+    exit(n);
 }
 
 /* Exit without flushing async threads */
-__decl_noreturn void __noreturn erl_exit(int n, char *fmt, ...)
+__decl_noreturn void __noreturn erts_exit(int n, char *fmt, ...)
 {
     va_list args1, args2;
     va_start(args1, fmt);
     va_start(args2, fmt);
-    erl_exit_vv(n, 0, fmt, args1, args2);
+    erts_exit_vv(n, 0, fmt, args1, args2);
     va_end(args2);
     va_end(args1);
 }
 
 /* Exit after flushing async threads */
-__decl_noreturn void __noreturn erl_exit_flush_async(int n, char *fmt, ...)
+__decl_noreturn void __noreturn erts_flush_async_exit(int n, char *fmt, ...)
 {
     va_list args1, args2;
     va_start(args1, fmt);
     va_start(args2, fmt);
-    erl_exit_vv(n, 1, fmt, args1, args2);
+    erts_exit_vv(n, 1, fmt, args1, args2);
     va_end(args2);
     va_end(args1);
 }

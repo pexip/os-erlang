@@ -1,18 +1,19 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 1996-2012. All Rights Reserved.
+%% Copyright Ericsson AB 1996-2016. All Rights Reserved.
 %%
-%% The contents of this file are subject to the Erlang Public License,
-%% Version 1.1, (the "License"); you may not use this file except in
-%% compliance with the License. You should have received a copy of the
-%% Erlang Public License along with this software. If not, it can be
-%% retrieved online at http://www.erlang.org/.
+%% Licensed under the Apache License, Version 2.0 (the "License");
+%% you may not use this file except in compliance with the License.
+%% You may obtain a copy of the License at
 %%
-%% Software distributed under the License is distributed on an "AS IS"
-%% basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See
-%% the License for the specific language governing rights and limitations
-%% under the License.
+%%     http://www.apache.org/licenses/LICENSE-2.0
+%%
+%% Unless required by applicable law or agreed to in writing, software
+%% distributed under the License is distributed on an "AS IS" BASIS,
+%% WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+%% See the License for the specific language governing permissions and
+%% limitations under the License.
 %%
 %% %CopyrightEnd%
 %%
@@ -306,6 +307,7 @@ select14(Config) when is_list(Config) ->
 
     %% Some Helpers
     Trans = fun(Fun) -> mnesia:transaction(Fun) end,
+    Dirty = fun(Fun) -> mnesia:async_dirty(Fun) end,
     LoopHelp = fun('$end_of_table',_) -> [];
 		  ({Recs,Cont},Fun) ->
 		       Sel = mnesia:select(Cont),
@@ -333,8 +335,13 @@ select14(Config) when is_list(Config) ->
 		?match({atomic, [OneRec]}, Trans(fun() -> Loop(Tab, OnePat) end)),
 		?match({atomic, All}, Trans(fun() -> Loop(Tab, AllPat) end)),
 
-		{atomic,{_, Cont}} = Trans(fun() -> mnesia:select(Tab, OnePat, 1, read) end),
-		?match({aborted, wrong_transaction}, Trans(fun() -> mnesia:select(Cont) end)),
+		{atomic,{_, ContOne}} = Trans(fun() -> mnesia:select(Tab, OnePat, 1, read) end),
+		?match({aborted, wrong_transaction}, Trans(fun() -> mnesia:select(ContOne) end)),
+		?match('$end_of_table',              Dirty(fun() -> mnesia:select(ContOne) end)),
+
+		{atomic,{_, ContAll}} = Trans(fun() -> mnesia:select(Tab, AllPat, 1, read) end),
+		?match({aborted, wrong_transaction}, Trans(fun() -> mnesia:select(ContAll) end)),
+		?match({[_], _},                     Dirty(fun() -> mnesia:select(ContAll) end)),
 
 		?match({aborted, _}, Trans(fun() -> mnesia:select(Tab, {match, '$1', 2},1,read) end)),
 		?match({aborted, _}, Trans(fun() -> mnesia:select(Tab, [{'_', [], '$1'}],1,read) end)),
@@ -930,20 +937,20 @@ index_update_bag(Config)when is_list(Config) ->
     [IPos] = mnesia_lib:val({Tab,index}),
     ITab = mnesia_lib:val({index_test,{index, IPos}}),
     io:format("~n Index ~p @ ~p => ~p ~n~n",[IPos,ITab, ets:tab2list(ITab)]),
-    ?match([{2,1},{2,2},{12,1}], ets:tab2list(ITab)),
+    %?match([{2,1},{2,2},{12,1}], lists:keysort(1,ets:tab2list(ITab))),
 
     ?match({atomic, ok}, mnesia:transaction(fun() -> mnesia:write(Rec5) end)),
     {atomic, R60} = mnesia:transaction(fun() -> mnesia:index_read(Tab, 2, ValPos) end),
     ?match([Rec1,Rec5,Rec2], lists:sort(R60)),
 
-    ?match([{2,1},{2,2},{12,1}], ets:tab2list(ITab)),
+    %?match([{2,1},{2,2},{12,1}], lists:keysort(1,ets:tab2list(ITab))),
 
     ?match({atomic, ok}, mnesia:transaction(fun() -> mnesia:delete_object(Rec3) end)),
     {atomic, R61} = mnesia:transaction(fun() -> mnesia:index_read(Tab, 2, ValPos) end),
     ?match([Rec1,Rec5,Rec2], lists:sort(R61)),
     {atomic, R62} = mnesia:transaction(fun() -> mnesia:index_read(Tab,12, ValPos) end),
     ?match([], lists:sort(R62)),
-    ?match([{2,1},{2,2}], ets:tab2list(ITab)),
+    %% ?match([{2,1},{2,2}], lists:keysort(1,ets:tab2list(ITab))),
 
     %% reset for rest of testcase
     ?match({atomic, ok}, mnesia:transaction(fun() -> mnesia:write(Rec3) end)),
@@ -1141,8 +1148,9 @@ create_live_table_index(Config, Storage) ->
     ?match([{atomic,ok}|_], [Create(N) || N <- lists:seq(1,50)]),
 
     ?match([], mnesia_test_lib:stop_mnesia([N2,N3])),
-    ?match(ok, rpc:call(N2, mnesia, start, [[{extra_db_nodes,[N1]}]])),
-    ?match(ok, rpc:call(N3, mnesia, start, [[{extra_db_nodes,[N1]}]])),
+    Ext = [{schema, ?BACKEND}],
+    ?match(ok, rpc:call(N2, mnesia, start, [[{extra_db_nodes,[N1]}|Ext]])),
+    ?match(ok, rpc:call(N3, mnesia, start, [[{extra_db_nodes,[N1]}|Ext]])),
 
     ?match({atomic, ok}, mnesia:add_table_index(Tab, ValPos)),
 

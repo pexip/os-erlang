@@ -1,18 +1,19 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2012. All Rights Reserved.
+%% Copyright Ericsson AB 2012-2016. All Rights Reserved.
 %%
-%% The contents of this file are subject to the Erlang Public License,
-%% Version 1.1, (the "License"); you may not use this file except in
-%% compliance with the License. You should have received a copy of the
-%% Erlang Public License along with this software. If not, it can be
-%% retrieved online at http://www.erlang.org/.
+%% Licensed under the Apache License, Version 2.0 (the "License");
+%% you may not use this file except in compliance with the License.
+%% You may obtain a copy of the License at
 %%
-%% Software distributed under the License is distributed on an "AS IS"
-%% basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See
-%% the License for the specific language governing rights and limitations
-%% under the License.
+%%     http://www.apache.org/licenses/LICENSE-2.0
+%%
+%% Unless required by applicable law or agreed to in writing, software
+%% distributed under the License is distributed on an "AS IS" BASIS,
+%% WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+%% See the License for the specific language governing permissions and
+%% limitations under the License.
 %%
 %% %CopyrightEnd%
 %%
@@ -43,13 +44,29 @@
 %% instance, the tests need to be performed on a separate node (or
 %% there will be clashes with logging processes etc).
 %%--------------------------------------------------------------------
+suite() ->
+    [{ct_hooks,[ts_install_cth]},
+     {timetrap,{seconds,120}}].
+
+all() ->
+    [
+     pre_post_io
+    ].
+
 init_per_suite(Config) ->
-    DataDir = ?config(data_dir, Config),
-    CTH = filename:join(DataDir, "cth_ctrl.erl"),
-    ct:pal("Compiling ~p: ~p",
-	   [CTH,compile:file(CTH,[{outdir,DataDir},debug_info])]),
-    ct_test_support:init_per_suite([{path_dirs,[DataDir]},
-				    {start_sasl,true} | Config]).
+    TTInfo = {_T,{_Scaled,ScaleVal}} = ct:get_timetrap_info(),
+    ct:pal("Timetrap info = ~w", [TTInfo]),
+    if ScaleVal > 1 ->
+	    {skip,"Skip on systems running e.g. cover or debug!"};
+       ScaleVal =< 1 ->
+	    DataDir = ?config(data_dir, Config),
+	    CTH = filename:join(DataDir, "cth_ctrl.erl"),
+	    ct:pal("Compiling ~p: ~p",
+		   [CTH,compile:file(CTH,[{outdir,DataDir},
+					  debug_info])]),
+	    ct_test_support:init_per_suite([{path_dirs,[DataDir]},
+					    {start_sasl,true} | Config])
+    end.
 
 end_per_suite(Config) ->
     ct_test_support:end_per_suite(Config).
@@ -59,13 +76,6 @@ init_per_testcase(TestCase, Config) ->
 
 end_per_testcase(TestCase, Config) ->
     ct_test_support:end_per_testcase(TestCase, Config).
-
-suite() -> [{ct_hooks,[ts_install_cth]}].
-
-all() ->
-    [
-     pre_post_io
-    ].
 
 %%--------------------------------------------------------------------
 %% TEST CASES
@@ -89,31 +99,50 @@ pre_post_io(Config) ->
     %%!--------------------------------------------------------------------
 
     spawn(fun() ->
-		  ct:pal("CONTROLLER: Started!", []),
+		  ct:pal("CONTROLLER: Starting test run #1...", []),
 		  %% --- test run 1 ---
-		  timer:sleep(3000),
-		  ct:pal("CONTROLLER: Handle remote events = true", []),
-		  ok = ct_test_support:ct_rpc({cth_log_redirect,
-					       handle_remote_events,
-					       [true]}, Config),
-		  timer:sleep(2000),
-		  ct:pal("CONTROLLER: Proceeding with test run #1!", []),
+		  try_loop(ct_test_support, ct_rpc, [{cth_log_redirect,
+						      handle_remote_events,
+						      [true]}, Config], 3000),
+		  CTLoggerPid1 = ct_test_support:ct_rpc({erlang,whereis,
+							[ct_logs]}, Config),
+		  ct:pal("CONTROLLER: Logger = ~w~nHandle remote events = true",
+			 [CTLoggerPid1]),
+		  ct:sleep(5000),
+		  ct:pal("CONTROLLER: Proceeding with test run #1...", []),
 		  ok = ct_test_support:ct_rpc({cth_ctrl,proceed,[]}, Config),
-		  timer:sleep(6000),
-		  ct:pal("CONTROLLER: Proceeding with shutdown #1!", []),
+		  ct:sleep(6000),
+		  ct:pal("CONTROLLER: Proceeding with shutdown #1...", []),
 		  ok = ct_test_support:ct_rpc({cth_ctrl,proceed,[]}, Config),
+		  try_loop(fun() ->
+				   false = ct_test_support:ct_rpc({erlang,
+								    is_process_alive,
+								    [CTLoggerPid1]},
+								   Config)
+			   end, 3000),
+		  ct:pal("CONTROLLER: Shutdown #1 complete!", []),
+		  ct:pal("CONTROLLER: Starting test run #2...", []),
 		  %% --- test run 2 ---
-		  timer:sleep(3000),
-		  ct:pal("CONTROLLER: Handle remote events = true", []),
-		  ok = ct_test_support:ct_rpc({cth_log_redirect,
-					       handle_remote_events,
-					       [true]}, Config),
-		  timer:sleep(2000),
-		  ct:pal("CONTROLLER: Proceeding with test run #2!", []),
+		  try_loop(ct_test_support, ct_rpc, [{cth_log_redirect,
+						      handle_remote_events,
+						      [true]}, Config], 3000),
+		  CTLoggerPid2 = ct_test_support:ct_rpc({erlang,whereis,
+							[ct_logs]}, Config),
+		  ct:pal("CONTROLLER: Logger = ~w~nHandle remote events = true",
+			 [CTLoggerPid2]),
+		  ct:sleep(5000),
+		  ct:pal("CONTROLLER: Proceeding with test run #2...", []),
 		  ok = ct_test_support:ct_rpc({cth_ctrl,proceed,[]}, Config),
-		  timer:sleep(6000),
-		  ct:pal("CONTROLLER: Proceeding with shutdown #2!", []),
-		  ok = ct_test_support:ct_rpc({cth_ctrl,proceed,[]}, Config)
+		  ct:sleep(6000),
+		  ct:pal("CONTROLLER: Proceeding with shutdown #2...", []),
+		  ok = ct_test_support:ct_rpc({cth_ctrl,proceed,[]}, Config),
+		  try_loop(fun() ->
+				   false = ct_test_support:ct_rpc({erlang,
+								   is_process_alive,
+								   [CTLoggerPid2]},
+								  Config)
+			   end, 3000),
+		  ct:pal("CONTROLLER: Shutdown #2 complete!", [])
 	  end),
     ct_test_support:run(Opts, Config),
     Events = ct_test_support:get_events(ERPid, Config),
@@ -156,7 +185,7 @@ pre_post_io(Config) ->
 				      Counters
 			      end, {pre,0,0,0,0}, Ts),
 	      [_|Counters] = tuple_to_list(PrePostIOEntries),
-	      ct:log("Entries in the Pre/Post Test IO Log: ~p", [Counters]),
+	      ct:pal("Entries in the Pre/Post Test IO Log: ~w", [Counters]),
 	      case [C || C <- Counters, C < 2] of
 		  [] ->
 		      ok;
@@ -182,7 +211,7 @@ pre_post_io(Config) ->
 				      [LogN,ErrN+1];
 				 (_, Counters) -> Counters
 			      end, [0,0], Ts),
-	      ct:log("Entries in the Unexpected IO Log: ~p", [UnexpIOEntries]),
+	      ct:log("Entries in the Unexpected IO Log: ~w", [UnexpIOEntries]),
 	      case [N || N <- UnexpIOEntries, N < 2] of
 		  [] ->
 		      ok;
@@ -206,6 +235,38 @@ setup(Test, Config) ->
 
 reformat(Events, EH) ->
     ct_test_support:reformat(Events, EH).
+
+try_loop(_Fun, 0) ->
+    ct:pal("WARNING! Fun never succeeded!", []),
+    gave_up;
+try_loop(Fun, N) ->
+    try Fun() of
+	{error,_} ->
+	    timer:sleep(10),
+	    try_loop(Fun, N-1);
+	Result ->
+	    Result
+    catch
+	_:_What ->
+	    timer:sleep(10),
+	    try_loop(Fun, N-1)
+    end.
+
+try_loop(M, F, _A, 0) ->
+    ct:pal("WARNING! ~w:~w never succeeded!", [M,F]),
+    gave_up;
+try_loop(M, F, A, N) ->
+    try apply(M, F, A) of
+	{error,_} ->
+	    timer:sleep(10),
+	    try_loop(M, F, A, N-1);
+	Result ->
+	    Result
+    catch
+	_:_ ->
+	    timer:sleep(10),
+	    try_loop(M, F, A, N-1)
+    end.
 
 %%%-----------------------------------------------------------------
 %%% TEST EVENTS

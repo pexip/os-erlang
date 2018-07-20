@@ -1,18 +1,19 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 1998-2013. All Rights Reserved.
+%% Copyright Ericsson AB 1998-2016. All Rights Reserved.
 %%
-%% The contents of this file are subject to the Erlang Public License,
-%% Version 1.1, (the "License"); you may not use this file except in
-%% compliance with the License. You should have received a copy of the
-%% Erlang Public License along with this software. If not, it can be
-%% retrieved online at http://www.erlang.org/.
+%% Licensed under the Apache License, Version 2.0 (the "License");
+%% you may not use this file except in compliance with the License.
+%% You may obtain a copy of the License at
 %%
-%% Software distributed under the License is distributed on an "AS IS"
-%% basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See
-%% the License for the specific language governing rights and limitations
-%% under the License.
+%%     http://www.apache.org/licenses/LICENSE-2.0
+%%
+%% Unless required by applicable law or agreed to in writing, software
+%% distributed under the License is distributed on an "AS IS" BASIS,
+%% WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+%% See the License for the specific language governing permissions and
+%% limitations under the License.
 %%
 %% %CopyrightEnd%
 %%
@@ -31,7 +32,7 @@
 %% External exports
 -export([start/0, start_link/0, stop/0, port_please/2, 
 	 port_please/3, names/0, names/1,
-	 register_node/2, open/0, open/1, open/2]).
+	 register_node/2, register_node/3, open/0, open/1, open/2]).
 
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, 
@@ -101,7 +102,13 @@ names(EpmdAddr) ->
 
 
 register_node(Name, PortNo) ->
-    gen_server:call(erl_epmd, {register, Name, PortNo}, infinity).
+    register_node(Name, PortNo, inet).
+register_node(Name, PortNo, inet_tcp) ->
+    register_node(Name, PortNo, inet);
+register_node(Name, PortNo, inet6_tcp) ->
+    register_node(Name, PortNo, inet6);
+register_node(Name, PortNo, Family) ->
+    gen_server:call(erl_epmd, {register, Name, PortNo, Family}, infinity).
 
 %%%----------------------------------------------------------------------
 %%% Callback functions from gen_server
@@ -119,10 +126,10 @@ init(_) ->
 -spec handle_call(calls(), term(), state()) ->
         {'reply', term(), state()} | {'stop', 'shutdown', 'ok', state()}.
 
-handle_call({register, Name, PortNo}, _From, State) ->
+handle_call({register, Name, PortNo, Family}, _From, State) ->
     case State#state.socket of
 	P when P < 0 ->
-	    case do_register_node(Name, PortNo) of
+	    case do_register_node(Name, PortNo, Family) of
 		{alive, Socket, Creation} ->
 		    S = State#state{socket = Socket,
 				    port_no = PortNo,
@@ -205,8 +212,12 @@ open({A,B,C,D,E,F,G,H}=EpmdAddr, Timeout) when ?ip6(A,B,C,D,E,F,G,H) ->
 close(Socket) ->
     gen_tcp:close(Socket).
 
-do_register_node(NodeName, TcpPort) ->
-    case open() of
+do_register_node(NodeName, TcpPort, Family) ->
+    Localhost = case Family of
+        inet -> open({127,0,0,1});
+        inet6 -> open({0,0,0,0,0,0,0,1})
+    end,
+    case Localhost of
 	{ok, Socket} ->
 	    Name = to_string(NodeName),
 	    Extra = "",
@@ -393,8 +404,6 @@ best_version(Low, High) ->
 %%% We silently assume that the low's are not greater than the high's.
 %%% We should report if the intervals don't overlap.
 select_best_version(L1, _H1, _L2, H2) when L1 > H2 ->
-    0;
-select_best_version(_L1, H1, L2, _H2) when L2 > H1 ->
     0;
 select_best_version(_L1, H1, L2, _H2) when L2 > H1 ->
     0;

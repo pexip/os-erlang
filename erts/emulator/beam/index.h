@@ -1,18 +1,19 @@
 /*
  * %CopyrightBegin%
  * 
- * Copyright Ericsson AB 1996-2013. All Rights Reserved.
+ * Copyright Ericsson AB 1996-2016. All Rights Reserved.
  * 
- * The contents of this file are subject to the Erlang Public License,
- * Version 1.1, (the "License"); you may not use this file except in
- * compliance with the License. You should have received a copy of the
- * Erlang Public License along with this software. If not, it can be
- * retrieved online at http://www.erlang.org/.
- * 
- * Software distributed under the License is distributed on an "AS IS"
- * basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See
- * the License for the specific language governing rights and limitations
- * under the License.
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  * 
  * %CopyrightEnd%
  */
@@ -25,9 +26,8 @@
 #ifndef __INDEX_H__
 #define __INDEX_H__
 
-#ifndef __HASH_H__
 #include "hash.h"
-#endif
+#include "erl_alloc.h"
 
 typedef struct index_slot 
 {
@@ -51,7 +51,7 @@ typedef struct index_table
 #define INDEX_PAGE_MASK ((1 << INDEX_PAGE_SHIFT)-1)
 
 IndexTable *erts_index_init(ErtsAlcType_t,IndexTable*,char*,int,int,HashFunctions);
-void index_info(int, void *, IndexTable*);
+void index_info(fmtfn_t, void *, IndexTable*);
 int index_table_sz(IndexTable *);
 
 int index_get(IndexTable*, void*);
@@ -65,6 +65,7 @@ void index_erase_latest_from(IndexTable*, Uint ix);
 
 ERTS_GLB_INLINE int index_put(IndexTable*, void*);
 ERTS_GLB_INLINE IndexSlot* erts_index_lookup(IndexTable*, Uint);
+ERTS_GLB_INLINE int erts_index_num_entries(IndexTable* t);
 
 #if ERTS_GLB_INLINE_INCL_FUNC_DEF
 
@@ -78,6 +79,19 @@ erts_index_lookup(IndexTable* t, Uint ix)
 {
     return t->seg_table[ix>>INDEX_PAGE_SHIFT][ix&INDEX_PAGE_MASK];
 }
+
+ERTS_GLB_INLINE int erts_index_num_entries(IndexTable* t)
+{
+    int ret = t->entries;
+    /*
+     * Do a read barrier here to allow lock free iteration
+     * on tables where entries are never erased.
+     * index_put_entry() does matching write barrier.
+     */
+    ERTS_SMP_READ_MEMORY_BARRIER;
+    return ret;
+}
+
 #endif
 
 #endif

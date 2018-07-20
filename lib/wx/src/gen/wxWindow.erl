@@ -1,18 +1,19 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2008-2013. All Rights Reserved.
+%% Copyright Ericsson AB 2008-2016. All Rights Reserved.
 %%
-%% The contents of this file are subject to the Erlang Public License,
-%% Version 1.1, (the "License"); you may not use this file except in
-%% compliance with the License. You should have received a copy of the
-%% Erlang Public License along with this software. If not, it can be
-%% retrieved online at http://www.erlang.org/.
+%% Licensed under the Apache License, Version 2.0 (the "License");
+%% you may not use this file except in compliance with the License.
+%% You may obtain a copy of the License at
 %%
-%% Software distributed under the License is distributed on an "AS IS"
-%% basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See
-%% the License for the specific language governing rights and limitations
-%% under the License.
+%%     http://www.apache.org/licenses/LICENSE-2.0
+%%
+%% Unless required by applicable law or agreed to in writing, software
+%% distributed under the License is distributed on an "AS IS" BASIS,
+%% WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+%% See the License for the specific language governing permissions and
+%% limitations under the License.
 %%
 %% %CopyrightEnd%
 %% This file is generated DO NOT EDIT
@@ -27,41 +28,42 @@
 
 -module(wxWindow).
 -include("wxe.hrl").
--export(['Destroy'/1,cacheBestSize/2,captureMouse/1,center/1,center/2,centerOnParent/1,
-  centerOnParent/2,centre/1,centre/2,centreOnParent/1,centreOnParent/2,
-  clearBackground/1,clientToScreen/2,clientToScreen/3,close/1,close/2,
-  convertDialogToPixels/2,convertPixelsToDialog/2,destroy/1,destroyChildren/1,
-  disable/1,enable/1,enable/2,findFocus/0,findWindow/2,findWindowById/1,
-  findWindowById/2,findWindowByLabel/1,findWindowByLabel/2,findWindowByName/1,
-  findWindowByName/2,fit/1,fitInside/1,freeze/1,getAcceleratorTable/1,
-  getBackgroundColour/1,getBackgroundStyle/1,getBestSize/1,getCapture/0,
-  getCaret/1,getCharHeight/1,getCharWidth/1,getChildren/1,getClientSize/1,
-  getContainingSizer/1,getCursor/1,getDropTarget/1,getEventHandler/1,
-  getExtraStyle/1,getFont/1,getForegroundColour/1,getGrandParent/1,
-  getHandle/1,getHelpText/1,getId/1,getLabel/1,getMaxSize/1,getMinSize/1,
-  getName/1,getParent/1,getPosition/1,getRect/1,getScreenPosition/1,
-  getScreenRect/1,getScrollPos/2,getScrollRange/2,getScrollThumb/2,
-  getSize/1,getSizer/1,getTextExtent/2,getTextExtent/3,getToolTip/1,
-  getUpdateRegion/1,getVirtualSize/1,getWindowStyleFlag/1,getWindowVariant/1,
-  hasCapture/1,hasScrollbar/2,hasTransparentBackground/1,hide/1,inheritAttributes/1,
-  initDialog/1,invalidateBestSize/1,isEnabled/1,isExposed/2,isExposed/3,
-  isExposed/5,isRetained/1,isShown/1,isTopLevel/1,layout/1,lineDown/1,
-  lineUp/1,lower/1,makeModal/1,makeModal/2,move/2,move/3,move/4,moveAfterInTabOrder/2,
-  moveBeforeInTabOrder/2,navigate/1,navigate/2,new/0,new/2,new/3,pageDown/1,
-  pageUp/1,popEventHandler/1,popEventHandler/2,popupMenu/2,popupMenu/3,
-  popupMenu/4,raise/1,refresh/1,refresh/2,refreshRect/2,refreshRect/3,
-  releaseMouse/1,removeChild/2,reparent/2,screenToClient/1,screenToClient/2,
-  scrollLines/2,scrollPages/2,scrollWindow/3,scrollWindow/4,setAcceleratorTable/2,
-  setAutoLayout/2,setBackgroundColour/2,setBackgroundStyle/2,setCaret/2,
-  setClientSize/2,setClientSize/3,setContainingSizer/2,setCursor/2,
+-export(['Destroy'/1,cacheBestSize/2,canSetTransparent/1,captureMouse/1,center/1,
+  center/2,centerOnParent/1,centerOnParent/2,centre/1,centre/2,centreOnParent/1,
+  centreOnParent/2,clearBackground/1,clientToScreen/2,clientToScreen/3,
+  close/1,close/2,convertDialogToPixels/2,convertPixelsToDialog/2,destroy/1,
+  destroyChildren/1,disable/1,dragAcceptFiles/2,enable/1,enable/2,findFocus/0,
+  findWindow/2,findWindowById/1,findWindowById/2,findWindowByLabel/1,
+  findWindowByLabel/2,findWindowByName/1,findWindowByName/2,fit/1,fitInside/1,
+  freeze/1,getAcceleratorTable/1,getBackgroundColour/1,getBackgroundStyle/1,
+  getBestSize/1,getCapture/0,getCaret/1,getCharHeight/1,getCharWidth/1,
+  getChildren/1,getClientSize/1,getContainingSizer/1,getContentScaleFactor/1,
+  getCursor/1,getDropTarget/1,getEventHandler/1,getExtraStyle/1,getFont/1,
+  getForegroundColour/1,getGrandParent/1,getHandle/1,getHelpText/1,
+  getId/1,getLabel/1,getMaxSize/1,getMinSize/1,getName/1,getParent/1,
+  getPosition/1,getRect/1,getScreenPosition/1,getScreenRect/1,getScrollPos/2,
+  getScrollRange/2,getScrollThumb/2,getSize/1,getSizer/1,getTextExtent/2,
+  getTextExtent/3,getToolTip/1,getUpdateRegion/1,getVirtualSize/1,getWindowStyleFlag/1,
+  getWindowVariant/1,hasCapture/1,hasScrollbar/2,hasTransparentBackground/1,
+  hide/1,inheritAttributes/1,initDialog/1,invalidateBestSize/1,isDoubleBuffered/1,
+  isEnabled/1,isExposed/2,isExposed/3,isExposed/5,isRetained/1,isShown/1,
+  isTopLevel/1,layout/1,lineDown/1,lineUp/1,lower/1,makeModal/1,makeModal/2,
+  move/2,move/3,move/4,moveAfterInTabOrder/2,moveBeforeInTabOrder/2,
+  navigate/1,navigate/2,new/0,new/2,new/3,pageDown/1,pageUp/1,popEventHandler/1,
+  popEventHandler/2,popupMenu/2,popupMenu/3,popupMenu/4,raise/1,refresh/1,
+  refresh/2,refreshRect/2,refreshRect/3,releaseMouse/1,removeChild/2,
+  reparent/2,screenToClient/1,screenToClient/2,scrollLines/2,scrollPages/2,
+  scrollWindow/3,scrollWindow/4,setAcceleratorTable/2,setAutoLayout/2,
+  setBackgroundColour/2,setBackgroundStyle/2,setCaret/2,setClientSize/2,
+  setClientSize/3,setContainingSizer/2,setCursor/2,setDoubleBuffered/2,
   setDropTarget/2,setExtraStyle/2,setFocus/1,setFocusFromKbd/1,setFont/2,
   setForegroundColour/2,setHelpText/2,setId/2,setLabel/2,setMaxSize/2,
   setMinSize/2,setName/2,setOwnBackgroundColour/2,setOwnFont/2,setOwnForegroundColour/2,
   setPalette/2,setScrollPos/3,setScrollPos/4,setScrollbar/5,setScrollbar/6,
   setSize/2,setSize/3,setSize/5,setSize/6,setSizeHints/2,setSizeHints/3,
   setSizeHints/4,setSizer/2,setSizer/3,setSizerAndFit/2,setSizerAndFit/3,
-  setThemeEnabled/2,setToolTip/2,setVirtualSize/2,setVirtualSize/3,
-  setVirtualSizeHints/2,setVirtualSizeHints/3,setVirtualSizeHints/4,
+  setThemeEnabled/2,setToolTip/2,setTransparent/2,setVirtualSize/2,
+  setVirtualSize/3,setVirtualSizeHints/2,setVirtualSizeHints/3,setVirtualSizeHints/4,
   setWindowStyle/2,setWindowStyleFlag/2,setWindowVariant/2,shouldInheritColours/1,
   show/1,show/2,thaw/1,transferDataFromWindow/1,transferDataToWindow/1,
   update/1,updateWindowUI/1,updateWindowUI/2,validate/1,warpPointer/3]).
@@ -92,9 +94,9 @@ new(Parent,Id)
 %% @doc See <a href="http://www.wxwidgets.org/manuals/2.8.12/wx_wxwindow.html#wxwindowwxwindow">external documentation</a>.
 -spec new(Parent, Id, [Option]) -> wxWindow() when
 	Parent::wxWindow(), Id::integer(),
-	Option :: {pos, {X::integer(), Y::integer()}}
-		 | {size, {W::integer(), H::integer()}}
-		 | {style, integer()}.
+	Option :: {'pos', {X::integer(), Y::integer()}}
+		 | {'size', {W::integer(), H::integer()}}
+		 | {'style', integer()}.
 new(#wx_ref{type=ParentT,ref=ParentRef},Id, Options)
  when is_integer(Id),is_list(Options) ->
   ?CLASS(ParentT,wxWindow),
@@ -107,7 +109,7 @@ new(#wx_ref{type=ParentT,ref=ParentRef},Id, Options)
   <<ParentRef:32/?UI,Id:32/?UI, BinOpt/binary>>).
 
 %% @doc See <a href="http://www.wxwidgets.org/manuals/2.8.12/wx_wxwindow.html#wxwindowcachebestsize">external documentation</a>.
--spec cacheBestSize(This, Size) -> ok when
+-spec cacheBestSize(This, Size) -> 'ok' when
 	This::wxWindow(), Size::{W::integer(), H::integer()}.
 cacheBestSize(#wx_ref{type=ThisT,ref=ThisRef},{SizeW,SizeH})
  when is_integer(SizeW),is_integer(SizeH) ->
@@ -116,7 +118,7 @@ cacheBestSize(#wx_ref{type=ThisT,ref=ThisRef},{SizeW,SizeH})
   <<ThisRef:32/?UI,SizeW:32/?UI,SizeH:32/?UI>>).
 
 %% @doc See <a href="http://www.wxwidgets.org/manuals/2.8.12/wx_wxwindow.html#wxwindowcapturemouse">external documentation</a>.
--spec captureMouse(This) -> ok when
+-spec captureMouse(This) -> 'ok' when
 	This::wxWindow().
 captureMouse(#wx_ref{type=ThisT,ref=ThisRef}) ->
   ?CLASS(ThisT,wxWindow),
@@ -124,7 +126,7 @@ captureMouse(#wx_ref{type=ThisT,ref=ThisRef}) ->
   <<ThisRef:32/?UI>>).
 
 %% @equiv center(This, [])
--spec center(This) -> ok when
+-spec center(This) -> 'ok' when
 	This::wxWindow().
 
 center(This)
@@ -132,9 +134,9 @@ center(This)
   center(This, []).
 
 %% @doc See <a href="http://www.wxwidgets.org/manuals/2.8.12/wx_wxwindow.html#wxwindowcenter">external documentation</a>.
--spec center(This, [Option]) -> ok when
+-spec center(This, [Option]) -> 'ok' when
 	This::wxWindow(),
-	Option :: {dir, integer()}.
+	Option :: {'dir', integer()}.
 center(#wx_ref{type=ThisT,ref=ThisRef}, Options)
  when is_list(Options) ->
   ?CLASS(ThisT,wxWindow),
@@ -145,7 +147,7 @@ center(#wx_ref{type=ThisT,ref=ThisRef}, Options)
   <<ThisRef:32/?UI, 0:32,BinOpt/binary>>).
 
 %% @equiv centerOnParent(This, [])
--spec centerOnParent(This) -> ok when
+-spec centerOnParent(This) -> 'ok' when
 	This::wxWindow().
 
 centerOnParent(This)
@@ -153,9 +155,9 @@ centerOnParent(This)
   centerOnParent(This, []).
 
 %% @doc See <a href="http://www.wxwidgets.org/manuals/2.8.12/wx_wxwindow.html#wxwindowcenteronparent">external documentation</a>.
--spec centerOnParent(This, [Option]) -> ok when
+-spec centerOnParent(This, [Option]) -> 'ok' when
 	This::wxWindow(),
-	Option :: {dir, integer()}.
+	Option :: {'dir', integer()}.
 centerOnParent(#wx_ref{type=ThisT,ref=ThisRef}, Options)
  when is_list(Options) ->
   ?CLASS(ThisT,wxWindow),
@@ -166,7 +168,7 @@ centerOnParent(#wx_ref{type=ThisT,ref=ThisRef}, Options)
   <<ThisRef:32/?UI, 0:32,BinOpt/binary>>).
 
 %% @equiv centre(This, [])
--spec centre(This) -> ok when
+-spec centre(This) -> 'ok' when
 	This::wxWindow().
 
 centre(This)
@@ -174,9 +176,9 @@ centre(This)
   centre(This, []).
 
 %% @doc See <a href="http://www.wxwidgets.org/manuals/2.8.12/wx_wxwindow.html#wxwindowcentre">external documentation</a>.
--spec centre(This, [Option]) -> ok when
+-spec centre(This, [Option]) -> 'ok' when
 	This::wxWindow(),
-	Option :: {dir, integer()}.
+	Option :: {'dir', integer()}.
 centre(#wx_ref{type=ThisT,ref=ThisRef}, Options)
  when is_list(Options) ->
   ?CLASS(ThisT,wxWindow),
@@ -187,7 +189,7 @@ centre(#wx_ref{type=ThisT,ref=ThisRef}, Options)
   <<ThisRef:32/?UI, 0:32,BinOpt/binary>>).
 
 %% @equiv centreOnParent(This, [])
--spec centreOnParent(This) -> ok when
+-spec centreOnParent(This) -> 'ok' when
 	This::wxWindow().
 
 centreOnParent(This)
@@ -195,9 +197,9 @@ centreOnParent(This)
   centreOnParent(This, []).
 
 %% @doc See <a href="http://www.wxwidgets.org/manuals/2.8.12/wx_wxwindow.html#wxwindowcentreonparent">external documentation</a>.
--spec centreOnParent(This, [Option]) -> ok when
+-spec centreOnParent(This, [Option]) -> 'ok' when
 	This::wxWindow(),
-	Option :: {dir, integer()}.
+	Option :: {'dir', integer()}.
 centreOnParent(#wx_ref{type=ThisT,ref=ThisRef}, Options)
  when is_list(Options) ->
   ?CLASS(ThisT,wxWindow),
@@ -208,7 +210,7 @@ centreOnParent(#wx_ref{type=ThisT,ref=ThisRef}, Options)
   <<ThisRef:32/?UI, 0:32,BinOpt/binary>>).
 
 %% @doc See <a href="http://www.wxwidgets.org/manuals/2.8.12/wx_wxwindow.html#wxwindowclearbackground">external documentation</a>.
--spec clearBackground(This) -> ok when
+-spec clearBackground(This) -> 'ok' when
 	This::wxWindow().
 clearBackground(#wx_ref{type=ThisT,ref=ThisRef}) ->
   ?CLASS(ThisT,wxWindow),
@@ -244,7 +246,7 @@ close(This)
 %% @doc See <a href="http://www.wxwidgets.org/manuals/2.8.12/wx_wxwindow.html#wxwindowclose">external documentation</a>.
 -spec close(This, [Option]) -> boolean() when
 	This::wxWindow(),
-	Option :: {force, boolean()}.
+	Option :: {'force', boolean()}.
 close(#wx_ref{type=ThisT,ref=ThisRef}, Options)
  when is_list(Options) ->
   ?CLASS(ThisT,wxWindow),
@@ -296,6 +298,15 @@ disable(#wx_ref{type=ThisT,ref=ThisRef}) ->
   wxe_util:call(?wxWindow_Disable,
   <<ThisRef:32/?UI>>).
 
+%% @doc See <a href="http://www.wxwidgets.org/manuals/2.8.12/wx_wxwindow.html#wxwindowdragacceptfiles">external documentation</a>.
+-spec dragAcceptFiles(This, Accept) -> 'ok' when
+	This::wxWindow(), Accept::boolean().
+dragAcceptFiles(#wx_ref{type=ThisT,ref=ThisRef},Accept)
+ when is_boolean(Accept) ->
+  ?CLASS(ThisT,wxWindow),
+  wxe_util:cast(?wxWindow_DragAcceptFiles,
+  <<ThisRef:32/?UI,(wxe_util:from_bool(Accept)):32/?UI>>).
+
 %% @equiv enable(This, [])
 -spec enable(This) -> boolean() when
 	This::wxWindow().
@@ -307,7 +318,7 @@ enable(This)
 %% @doc See <a href="http://www.wxwidgets.org/manuals/2.8.12/wx_wxwindow.html#wxwindowenable">external documentation</a>.
 -spec enable(This, [Option]) -> boolean() when
 	This::wxWindow(),
-	Option :: {enable, boolean()}.
+	Option :: {'enable', boolean()}.
 enable(#wx_ref{type=ThisT,ref=ThisRef}, Options)
  when is_list(Options) ->
   ?CLASS(ThisT,wxWindow),
@@ -338,7 +349,7 @@ findWindow(#wx_ref{type=ThisT,ref=ThisRef},Winid)
   wxe_util:call(?wxWindow_FindWindow_1_0,
   <<ThisRef:32/?UI,Winid:32/?UI>>);
 findWindow(#wx_ref{type=ThisT,ref=ThisRef},Name)
- when is_list(Name) ->
+ when ?is_chardata(Name) ->
   ?CLASS(ThisT,wxWindow),
   Name_UC = unicode:characters_to_binary([Name,0]),
   wxe_util:call(?wxWindow_FindWindow_1_1,
@@ -355,7 +366,7 @@ findWindowById(Winid)
 %% @doc See <a href="http://www.wxwidgets.org/manuals/2.8.12/wx_wxwindow.html#wxwindowfindwindowbyid">external documentation</a>.
 -spec findWindowById(Winid, [Option]) -> wxWindow() when
 	Winid::integer(),
-	Option :: {parent, wxWindow()}.
+	Option :: {'parent', wxWindow()}.
 findWindowById(Winid, Options)
  when is_integer(Winid),is_list(Options) ->
   MOpts = fun({parent, #wx_ref{type=ParentT,ref=ParentRef}}, Acc) ->   ?CLASS(ParentT,wxWindow),[<<1:32/?UI,ParentRef:32/?UI>>|Acc];
@@ -369,15 +380,15 @@ findWindowById(Winid, Options)
 	Name::unicode:chardata().
 
 findWindowByName(Name)
- when is_list(Name) ->
+ when ?is_chardata(Name) ->
   findWindowByName(Name, []).
 
 %% @doc See <a href="http://www.wxwidgets.org/manuals/2.8.12/wx_wxwindow.html#wxwindowfindwindowbyname">external documentation</a>.
 -spec findWindowByName(Name, [Option]) -> wxWindow() when
 	Name::unicode:chardata(),
-	Option :: {parent, wxWindow()}.
+	Option :: {'parent', wxWindow()}.
 findWindowByName(Name, Options)
- when is_list(Name),is_list(Options) ->
+ when ?is_chardata(Name),is_list(Options) ->
   Name_UC = unicode:characters_to_binary([Name,0]),
   MOpts = fun({parent, #wx_ref{type=ParentT,ref=ParentRef}}, Acc) ->   ?CLASS(ParentT,wxWindow),[<<1:32/?UI,ParentRef:32/?UI>>|Acc];
           (BadOpt, _) -> erlang:error({badoption, BadOpt}) end,
@@ -390,15 +401,15 @@ findWindowByName(Name, Options)
 	Label::unicode:chardata().
 
 findWindowByLabel(Label)
- when is_list(Label) ->
+ when ?is_chardata(Label) ->
   findWindowByLabel(Label, []).
 
 %% @doc See <a href="http://www.wxwidgets.org/manuals/2.8.12/wx_wxwindow.html#wxwindowfindwindowbylabel">external documentation</a>.
 -spec findWindowByLabel(Label, [Option]) -> wxWindow() when
 	Label::unicode:chardata(),
-	Option :: {parent, wxWindow()}.
+	Option :: {'parent', wxWindow()}.
 findWindowByLabel(Label, Options)
- when is_list(Label),is_list(Options) ->
+ when ?is_chardata(Label),is_list(Options) ->
   Label_UC = unicode:characters_to_binary([Label,0]),
   MOpts = fun({parent, #wx_ref{type=ParentT,ref=ParentRef}}, Acc) ->   ?CLASS(ParentT,wxWindow),[<<1:32/?UI,ParentRef:32/?UI>>|Acc];
           (BadOpt, _) -> erlang:error({badoption, BadOpt}) end,
@@ -407,7 +418,7 @@ findWindowByLabel(Label, Options)
   <<(byte_size(Label_UC)):32/?UI,(Label_UC)/binary, 0:(((8- ((4+byte_size(Label_UC)) band 16#7)) band 16#7))/unit:8, BinOpt/binary>>).
 
 %% @doc See <a href="http://www.wxwidgets.org/manuals/2.8.12/wx_wxwindow.html#wxwindowfit">external documentation</a>.
--spec fit(This) -> ok when
+-spec fit(This) -> 'ok' when
 	This::wxWindow().
 fit(#wx_ref{type=ThisT,ref=ThisRef}) ->
   ?CLASS(ThisT,wxWindow),
@@ -415,7 +426,7 @@ fit(#wx_ref{type=ThisT,ref=ThisRef}) ->
   <<ThisRef:32/?UI>>).
 
 %% @doc See <a href="http://www.wxwidgets.org/manuals/2.8.12/wx_wxwindow.html#wxwindowfitinside">external documentation</a>.
--spec fitInside(This) -> ok when
+-spec fitInside(This) -> 'ok' when
 	This::wxWindow().
 fitInside(#wx_ref{type=ThisT,ref=ThisRef}) ->
   ?CLASS(ThisT,wxWindow),
@@ -423,7 +434,7 @@ fitInside(#wx_ref{type=ThisT,ref=ThisRef}) ->
   <<ThisRef:32/?UI>>).
 
 %% @doc See <a href="http://www.wxwidgets.org/manuals/2.8.12/wx_wxwindow.html#wxwindowfreeze">external documentation</a>.
--spec freeze(This) -> ok when
+-spec freeze(This) -> 'ok' when
 	This::wxWindow().
 freeze(#wx_ref{type=ThisT,ref=ThisRef}) ->
   ?CLASS(ThisT,wxWindow),
@@ -718,16 +729,16 @@ getSizer(#wx_ref{type=ThisT,ref=ThisRef}) ->
 	This::wxWindow(), String::unicode:chardata().
 
 getTextExtent(This,String)
- when is_record(This, wx_ref),is_list(String) ->
+ when is_record(This, wx_ref),?is_chardata(String) ->
   getTextExtent(This,String, []).
 
 %% @doc See <a href="http://www.wxwidgets.org/manuals/2.8.12/wx_wxwindow.html#wxwindowgettextextent">external documentation</a>.
 -spec getTextExtent(This, String, [Option]) -> Result when
 	Result :: {X::integer(), Y::integer(), Descent::integer(), ExternalLeading::integer()},
 	This::wxWindow(), String::unicode:chardata(),
-	Option :: {theFont, wxFont:wxFont()}.
+	Option :: {'theFont', wxFont:wxFont()}.
 getTextExtent(#wx_ref{type=ThisT,ref=ThisRef},String, Options)
- when is_list(String),is_list(Options) ->
+ when ?is_chardata(String),is_list(Options) ->
   ?CLASS(ThisT,wxWindow),
   String_UC = unicode:characters_to_binary([String,0]),
   MOpts = fun({theFont, #wx_ref{type=TheFontT,ref=TheFontRef}}, Acc) ->   ?CLASS(TheFontT,wxFont),[<<1:32/?UI,TheFontRef:32/?UI>>|Acc];
@@ -811,7 +822,7 @@ hide(#wx_ref{type=ThisT,ref=ThisRef}) ->
   <<ThisRef:32/?UI>>).
 
 %% @doc See <a href="http://www.wxwidgets.org/manuals/2.8.12/wx_wxwindow.html#wxwindowinheritattributes">external documentation</a>.
--spec inheritAttributes(This) -> ok when
+-spec inheritAttributes(This) -> 'ok' when
 	This::wxWindow().
 inheritAttributes(#wx_ref{type=ThisT,ref=ThisRef}) ->
   ?CLASS(ThisT,wxWindow),
@@ -819,7 +830,7 @@ inheritAttributes(#wx_ref{type=ThisT,ref=ThisRef}) ->
   <<ThisRef:32/?UI>>).
 
 %% @doc See <a href="http://www.wxwidgets.org/manuals/2.8.12/wx_wxwindow.html#wxwindowinitdialog">external documentation</a>.
--spec initDialog(This) -> ok when
+-spec initDialog(This) -> 'ok' when
 	This::wxWindow().
 initDialog(#wx_ref{type=ThisT,ref=ThisRef}) ->
   ?CLASS(ThisT,wxWindow),
@@ -827,7 +838,7 @@ initDialog(#wx_ref{type=ThisT,ref=ThisRef}) ->
   <<ThisRef:32/?UI>>).
 
 %% @doc See <a href="http://www.wxwidgets.org/manuals/2.8.12/wx_wxwindow.html#wxwindowinvalidatebestsize">external documentation</a>.
--spec invalidateBestSize(This) -> ok when
+-spec invalidateBestSize(This) -> 'ok' when
 	This::wxWindow().
 invalidateBestSize(#wx_ref{type=ThisT,ref=ThisRef}) ->
   ?CLASS(ThisT,wxWindow),
@@ -929,7 +940,7 @@ lineUp(#wx_ref{type=ThisT,ref=ThisRef}) ->
   <<ThisRef:32/?UI>>).
 
 %% @doc See <a href="http://www.wxwidgets.org/manuals/2.8.12/wx_wxwindow.html#wxwindowlower">external documentation</a>.
--spec lower(This) -> ok when
+-spec lower(This) -> 'ok' when
 	This::wxWindow().
 lower(#wx_ref{type=ThisT,ref=ThisRef}) ->
   ?CLASS(ThisT,wxWindow),
@@ -937,7 +948,7 @@ lower(#wx_ref{type=ThisT,ref=ThisRef}) ->
   <<ThisRef:32/?UI>>).
 
 %% @equiv makeModal(This, [])
--spec makeModal(This) -> ok when
+-spec makeModal(This) -> 'ok' when
 	This::wxWindow().
 
 makeModal(This)
@@ -945,9 +956,9 @@ makeModal(This)
   makeModal(This, []).
 
 %% @doc See <a href="http://www.wxwidgets.org/manuals/2.8.12/wx_wxwindow.html#wxwindowmakemodal">external documentation</a>.
--spec makeModal(This, [Option]) -> ok when
+-spec makeModal(This, [Option]) -> 'ok' when
 	This::wxWindow(),
-	Option :: {modal, boolean()}.
+	Option :: {'modal', boolean()}.
 makeModal(#wx_ref{type=ThisT,ref=ThisRef}, Options)
  when is_list(Options) ->
   ?CLASS(ThisT,wxWindow),
@@ -958,7 +969,7 @@ makeModal(#wx_ref{type=ThisT,ref=ThisRef}, Options)
   <<ThisRef:32/?UI, 0:32,BinOpt/binary>>).
 
 %% @equiv move(This,Pt, [])
--spec move(This, Pt) -> ok when
+-spec move(This, Pt) -> 'ok' when
 	This::wxWindow(), Pt::{X::integer(), Y::integer()}.
 
 move(This,Pt={PtX,PtY})
@@ -967,15 +978,15 @@ move(This,Pt={PtX,PtY})
 
 %% @doc See <a href="http://www.wxwidgets.org/manuals/2.8.12/wx_wxwindow.html#wxwindowmove">external documentation</a>.
 %% <br /> Also:<br />
-%% move(This, Pt, [Option]) -> ok when<br />
+%% move(This, Pt, [Option]) -> 'ok' when<br />
 %% 	This::wxWindow(), Pt::{X::integer(), Y::integer()},<br />
-%% 	Option :: {flags, integer()}.<br />
+%% 	Option :: {'flags', integer()}.<br />
 %% 
--spec move(This, X, Y) -> ok when
+-spec move(This, X, Y) -> 'ok' when
 	This::wxWindow(), X::integer(), Y::integer();
-      (This, Pt, [Option]) -> ok when
+      (This, Pt, [Option]) -> 'ok' when
 	This::wxWindow(), Pt::{X::integer(), Y::integer()},
-	Option :: {flags, integer()}.
+	Option :: {'flags', integer()}.
 
 move(This,X,Y)
  when is_record(This, wx_ref),is_integer(X),is_integer(Y) ->
@@ -990,9 +1001,9 @@ move(#wx_ref{type=ThisT,ref=ThisRef},{PtX,PtY}, Options)
   <<ThisRef:32/?UI,PtX:32/?UI,PtY:32/?UI, 0:32,BinOpt/binary>>).
 
 %% @doc See <a href="http://www.wxwidgets.org/manuals/2.8.12/wx_wxwindow.html#wxwindowmove">external documentation</a>.
--spec move(This, X, Y, [Option]) -> ok when
+-spec move(This, X, Y, [Option]) -> 'ok' when
 	This::wxWindow(), X::integer(), Y::integer(),
-	Option :: {flags, integer()}.
+	Option :: {'flags', integer()}.
 move(#wx_ref{type=ThisT,ref=ThisRef},X,Y, Options)
  when is_integer(X),is_integer(Y),is_list(Options) ->
   ?CLASS(ThisT,wxWindow),
@@ -1003,7 +1014,7 @@ move(#wx_ref{type=ThisT,ref=ThisRef},X,Y, Options)
   <<ThisRef:32/?UI,X:32/?UI,Y:32/?UI, 0:32,BinOpt/binary>>).
 
 %% @doc See <a href="http://www.wxwidgets.org/manuals/2.8.12/wx_wxwindow.html#wxwindowmoveafterintaborder">external documentation</a>.
--spec moveAfterInTabOrder(This, Win) -> ok when
+-spec moveAfterInTabOrder(This, Win) -> 'ok' when
 	This::wxWindow(), Win::wxWindow().
 moveAfterInTabOrder(#wx_ref{type=ThisT,ref=ThisRef},#wx_ref{type=WinT,ref=WinRef}) ->
   ?CLASS(ThisT,wxWindow),
@@ -1012,7 +1023,7 @@ moveAfterInTabOrder(#wx_ref{type=ThisT,ref=ThisRef},#wx_ref{type=WinT,ref=WinRef
   <<ThisRef:32/?UI,WinRef:32/?UI>>).
 
 %% @doc See <a href="http://www.wxwidgets.org/manuals/2.8.12/wx_wxwindow.html#wxwindowmovebeforeintaborder">external documentation</a>.
--spec moveBeforeInTabOrder(This, Win) -> ok when
+-spec moveBeforeInTabOrder(This, Win) -> 'ok' when
 	This::wxWindow(), Win::wxWindow().
 moveBeforeInTabOrder(#wx_ref{type=ThisT,ref=ThisRef},#wx_ref{type=WinT,ref=WinRef}) ->
   ?CLASS(ThisT,wxWindow),
@@ -1031,7 +1042,7 @@ navigate(This)
 %% @doc See <a href="http://www.wxwidgets.org/manuals/2.8.12/wx_wxwindow.html#wxwindownavigate">external documentation</a>.
 -spec navigate(This, [Option]) -> boolean() when
 	This::wxWindow(),
-	Option :: {flags, integer()}.
+	Option :: {'flags', integer()}.
 navigate(#wx_ref{type=ThisT,ref=ThisRef}, Options)
  when is_list(Options) ->
   ?CLASS(ThisT,wxWindow),
@@ -1068,7 +1079,7 @@ popEventHandler(This)
 %% @doc See <a href="http://www.wxwidgets.org/manuals/2.8.12/wx_wxwindow.html#wxwindowpopeventhandler">external documentation</a>.
 -spec popEventHandler(This, [Option]) -> wxEvtHandler:wxEvtHandler() when
 	This::wxWindow(),
-	Option :: {deleteHandler, boolean()}.
+	Option :: {'deleteHandler', boolean()}.
 popEventHandler(#wx_ref{type=ThisT,ref=ThisRef}, Options)
  when is_list(Options) ->
   ?CLASS(ThisT,wxWindow),
@@ -1089,7 +1100,7 @@ popupMenu(This,Menu)
 %% @doc See <a href="http://www.wxwidgets.org/manuals/2.8.12/wx_wxwindow.html#wxwindowpopupmenu">external documentation</a>.
 -spec popupMenu(This, Menu, [Option]) -> boolean() when
 	This::wxWindow(), Menu::wxMenu:wxMenu(),
-	Option :: {pos, {X::integer(), Y::integer()}}.
+	Option :: {'pos', {X::integer(), Y::integer()}}.
 popupMenu(#wx_ref{type=ThisT,ref=ThisRef},#wx_ref{type=MenuT,ref=MenuRef}, Options)
  when is_list(Options) ->
   ?CLASS(ThisT,wxWindow),
@@ -1111,7 +1122,7 @@ popupMenu(#wx_ref{type=ThisT,ref=ThisRef},#wx_ref{type=MenuT,ref=MenuRef},X,Y)
   <<ThisRef:32/?UI,MenuRef:32/?UI,X:32/?UI,Y:32/?UI>>).
 
 %% @doc See <a href="http://www.wxwidgets.org/manuals/2.8.12/wx_wxwindow.html#wxwindowraise">external documentation</a>.
--spec raise(This) -> ok when
+-spec raise(This) -> 'ok' when
 	This::wxWindow().
 raise(#wx_ref{type=ThisT,ref=ThisRef}) ->
   ?CLASS(ThisT,wxWindow),
@@ -1119,7 +1130,7 @@ raise(#wx_ref{type=ThisT,ref=ThisRef}) ->
   <<ThisRef:32/?UI>>).
 
 %% @equiv refresh(This, [])
--spec refresh(This) -> ok when
+-spec refresh(This) -> 'ok' when
 	This::wxWindow().
 
 refresh(This)
@@ -1127,10 +1138,10 @@ refresh(This)
   refresh(This, []).
 
 %% @doc See <a href="http://www.wxwidgets.org/manuals/2.8.12/wx_wxwindow.html#wxwindowrefresh">external documentation</a>.
--spec refresh(This, [Option]) -> ok when
+-spec refresh(This, [Option]) -> 'ok' when
 	This::wxWindow(),
-	Option :: {eraseBackground, boolean()}
-		 | {rect, {X::integer(), Y::integer(), W::integer(), H::integer()}}.
+	Option :: {'eraseBackground', boolean()}
+		 | {'rect', {X::integer(), Y::integer(), W::integer(), H::integer()}}.
 refresh(#wx_ref{type=ThisT,ref=ThisRef}, Options)
  when is_list(Options) ->
   ?CLASS(ThisT,wxWindow),
@@ -1142,7 +1153,7 @@ refresh(#wx_ref{type=ThisT,ref=ThisRef}, Options)
   <<ThisRef:32/?UI, 0:32,BinOpt/binary>>).
 
 %% @equiv refreshRect(This,Rect, [])
--spec refreshRect(This, Rect) -> ok when
+-spec refreshRect(This, Rect) -> 'ok' when
 	This::wxWindow(), Rect::{X::integer(), Y::integer(), W::integer(), H::integer()}.
 
 refreshRect(This,Rect={RectX,RectY,RectW,RectH})
@@ -1150,9 +1161,9 @@ refreshRect(This,Rect={RectX,RectY,RectW,RectH})
   refreshRect(This,Rect, []).
 
 %% @doc See <a href="http://www.wxwidgets.org/manuals/2.8.12/wx_wxwindow.html#wxwindowrefreshrect">external documentation</a>.
--spec refreshRect(This, Rect, [Option]) -> ok when
+-spec refreshRect(This, Rect, [Option]) -> 'ok' when
 	This::wxWindow(), Rect::{X::integer(), Y::integer(), W::integer(), H::integer()},
-	Option :: {eraseBackground, boolean()}.
+	Option :: {'eraseBackground', boolean()}.
 refreshRect(#wx_ref{type=ThisT,ref=ThisRef},{RectX,RectY,RectW,RectH}, Options)
  when is_integer(RectX),is_integer(RectY),is_integer(RectW),is_integer(RectH),is_list(Options) ->
   ?CLASS(ThisT,wxWindow),
@@ -1163,7 +1174,7 @@ refreshRect(#wx_ref{type=ThisT,ref=ThisRef},{RectX,RectY,RectW,RectH}, Options)
   <<ThisRef:32/?UI,RectX:32/?UI,RectY:32/?UI,RectW:32/?UI,RectH:32/?UI, 0:32,BinOpt/binary>>).
 
 %% @doc See <a href="http://www.wxwidgets.org/manuals/2.8.12/wx_wxwindow.html#wxwindowreleasemouse">external documentation</a>.
--spec releaseMouse(This) -> ok when
+-spec releaseMouse(This) -> 'ok' when
 	This::wxWindow().
 releaseMouse(#wx_ref{type=ThisT,ref=ThisRef}) ->
   ?CLASS(ThisT,wxWindow),
@@ -1171,7 +1182,7 @@ releaseMouse(#wx_ref{type=ThisT,ref=ThisRef}) ->
   <<ThisRef:32/?UI>>).
 
 %% @doc See <a href="http://www.wxwidgets.org/manuals/2.8.12/wx_wxwindow.html#wxwindowremovechild">external documentation</a>.
--spec removeChild(This, Child) -> ok when
+-spec removeChild(This, Child) -> 'ok' when
 	This::wxWindow(), Child::wxWindow().
 removeChild(#wx_ref{type=ThisT,ref=ThisRef},#wx_ref{type=ChildT,ref=ChildRef}) ->
   ?CLASS(ThisT,wxWindow),
@@ -1224,7 +1235,7 @@ scrollPages(#wx_ref{type=ThisT,ref=ThisRef},Pages)
   <<ThisRef:32/?UI,Pages:32/?UI>>).
 
 %% @equiv scrollWindow(This,Dx,Dy, [])
--spec scrollWindow(This, Dx, Dy) -> ok when
+-spec scrollWindow(This, Dx, Dy) -> 'ok' when
 	This::wxWindow(), Dx::integer(), Dy::integer().
 
 scrollWindow(This,Dx,Dy)
@@ -1232,9 +1243,9 @@ scrollWindow(This,Dx,Dy)
   scrollWindow(This,Dx,Dy, []).
 
 %% @doc See <a href="http://www.wxwidgets.org/manuals/2.8.12/wx_wxwindow.html#wxwindowscrollwindow">external documentation</a>.
--spec scrollWindow(This, Dx, Dy, [Option]) -> ok when
+-spec scrollWindow(This, Dx, Dy, [Option]) -> 'ok' when
 	This::wxWindow(), Dx::integer(), Dy::integer(),
-	Option :: {rect, {X::integer(), Y::integer(), W::integer(), H::integer()}}.
+	Option :: {'rect', {X::integer(), Y::integer(), W::integer(), H::integer()}}.
 scrollWindow(#wx_ref{type=ThisT,ref=ThisRef},Dx,Dy, Options)
  when is_integer(Dx),is_integer(Dy),is_list(Options) ->
   ?CLASS(ThisT,wxWindow),
@@ -1245,7 +1256,7 @@ scrollWindow(#wx_ref{type=ThisT,ref=ThisRef},Dx,Dy, Options)
   <<ThisRef:32/?UI,Dx:32/?UI,Dy:32/?UI, 0:32,BinOpt/binary>>).
 
 %% @doc See <a href="http://www.wxwidgets.org/manuals/2.8.12/wx_wxwindow.html#wxwindowsetacceleratortable">external documentation</a>.
--spec setAcceleratorTable(This, Accel) -> ok when
+-spec setAcceleratorTable(This, Accel) -> 'ok' when
 	This::wxWindow(), Accel::wxAcceleratorTable:wxAcceleratorTable().
 setAcceleratorTable(#wx_ref{type=ThisT,ref=ThisRef},#wx_ref{type=AccelT,ref=AccelRef}) ->
   ?CLASS(ThisT,wxWindow),
@@ -1254,7 +1265,7 @@ setAcceleratorTable(#wx_ref{type=ThisT,ref=ThisRef},#wx_ref{type=AccelT,ref=Acce
   <<ThisRef:32/?UI,AccelRef:32/?UI>>).
 
 %% @doc See <a href="http://www.wxwidgets.org/manuals/2.8.12/wx_wxwindow.html#wxwindowsetautolayout">external documentation</a>.
--spec setAutoLayout(This, AutoLayout) -> ok when
+-spec setAutoLayout(This, AutoLayout) -> 'ok' when
 	This::wxWindow(), AutoLayout::boolean().
 setAutoLayout(#wx_ref{type=ThisT,ref=ThisRef},AutoLayout)
  when is_boolean(AutoLayout) ->
@@ -1282,7 +1293,7 @@ setBackgroundStyle(#wx_ref{type=ThisT,ref=ThisRef},Style)
   <<ThisRef:32/?UI,Style:32/?UI>>).
 
 %% @doc See <a href="http://www.wxwidgets.org/manuals/2.8.12/wx_wxwindow.html#wxwindowsetcaret">external documentation</a>.
--spec setCaret(This, Caret) -> ok when
+-spec setCaret(This, Caret) -> 'ok' when
 	This::wxWindow(), Caret::wxCaret:wxCaret().
 setCaret(#wx_ref{type=ThisT,ref=ThisRef},#wx_ref{type=CaretT,ref=CaretRef}) ->
   ?CLASS(ThisT,wxWindow),
@@ -1292,12 +1303,12 @@ setCaret(#wx_ref{type=ThisT,ref=ThisRef},#wx_ref{type=CaretT,ref=CaretRef}) ->
 
 %% @doc See <a href="http://www.wxwidgets.org/manuals/2.8.12/wx_wxwindow.html#wxwindowsetclientsize">external documentation</a>.
 %% <br /> Also:<br />
-%% setClientSize(This, Rect) -> ok when<br />
+%% setClientSize(This, Rect) -> 'ok' when<br />
 %% 	This::wxWindow(), Rect::{X::integer(), Y::integer(), W::integer(), H::integer()}.<br />
 %% 
--spec setClientSize(This, Size) -> ok when
+-spec setClientSize(This, Size) -> 'ok' when
 	This::wxWindow(), Size::{W::integer(), H::integer()};
-      (This, Rect) -> ok when
+      (This, Rect) -> 'ok' when
 	This::wxWindow(), Rect::{X::integer(), Y::integer(), W::integer(), H::integer()}.
 setClientSize(#wx_ref{type=ThisT,ref=ThisRef},{SizeW,SizeH})
  when is_integer(SizeW),is_integer(SizeH) ->
@@ -1311,7 +1322,7 @@ setClientSize(#wx_ref{type=ThisT,ref=ThisRef},{RectX,RectY,RectW,RectH})
   <<ThisRef:32/?UI,RectX:32/?UI,RectY:32/?UI,RectW:32/?UI,RectH:32/?UI>>).
 
 %% @doc See <a href="http://www.wxwidgets.org/manuals/2.8.12/wx_wxwindow.html#wxwindowsetclientsize">external documentation</a>.
--spec setClientSize(This, Width, Height) -> ok when
+-spec setClientSize(This, Width, Height) -> 'ok' when
 	This::wxWindow(), Width::integer(), Height::integer().
 setClientSize(#wx_ref{type=ThisT,ref=ThisRef},Width,Height)
  when is_integer(Width),is_integer(Height) ->
@@ -1320,7 +1331,7 @@ setClientSize(#wx_ref{type=ThisT,ref=ThisRef},Width,Height)
   <<ThisRef:32/?UI,Width:32/?UI,Height:32/?UI>>).
 
 %% @doc See <a href="http://www.wxwidgets.org/manuals/2.8.12/wx_wxwindow.html#wxwindowsetcontainingsizer">external documentation</a>.
--spec setContainingSizer(This, Sizer) -> ok when
+-spec setContainingSizer(This, Sizer) -> 'ok' when
 	This::wxWindow(), Sizer::wxSizer:wxSizer().
 setContainingSizer(#wx_ref{type=ThisT,ref=ThisRef},#wx_ref{type=SizerT,ref=SizerRef}) ->
   ?CLASS(ThisT,wxWindow),
@@ -1338,7 +1349,7 @@ setCursor(#wx_ref{type=ThisT,ref=ThisRef},#wx_ref{type=CursorT,ref=CursorRef}) -
   <<ThisRef:32/?UI,CursorRef:32/?UI>>).
 
 %% @doc See <a href="http://www.wxwidgets.org/manuals/2.8.12/wx_wxwindow.html#wxwindowsetmaxsize">external documentation</a>.
--spec setMaxSize(This, MaxSize) -> ok when
+-spec setMaxSize(This, MaxSize) -> 'ok' when
 	This::wxWindow(), MaxSize::{W::integer(), H::integer()}.
 setMaxSize(#wx_ref{type=ThisT,ref=ThisRef},{MaxSizeW,MaxSizeH})
  when is_integer(MaxSizeW),is_integer(MaxSizeH) ->
@@ -1347,7 +1358,7 @@ setMaxSize(#wx_ref{type=ThisT,ref=ThisRef},{MaxSizeW,MaxSizeH})
   <<ThisRef:32/?UI,MaxSizeW:32/?UI,MaxSizeH:32/?UI>>).
 
 %% @doc See <a href="http://www.wxwidgets.org/manuals/2.8.12/wx_wxwindow.html#wxwindowsetminsize">external documentation</a>.
--spec setMinSize(This, MinSize) -> ok when
+-spec setMinSize(This, MinSize) -> 'ok' when
 	This::wxWindow(), MinSize::{W::integer(), H::integer()}.
 setMinSize(#wx_ref{type=ThisT,ref=ThisRef},{MinSizeW,MinSizeH})
  when is_integer(MinSizeW),is_integer(MinSizeH) ->
@@ -1356,7 +1367,7 @@ setMinSize(#wx_ref{type=ThisT,ref=ThisRef},{MinSizeW,MinSizeH})
   <<ThisRef:32/?UI,MinSizeW:32/?UI,MinSizeH:32/?UI>>).
 
 %% @doc See <a href="http://www.wxwidgets.org/manuals/2.8.12/wx_wxwindow.html#wxwindowsetownbackgroundcolour">external documentation</a>.
--spec setOwnBackgroundColour(This, Colour) -> ok when
+-spec setOwnBackgroundColour(This, Colour) -> 'ok' when
 	This::wxWindow(), Colour::wx:wx_colour().
 setOwnBackgroundColour(#wx_ref{type=ThisT,ref=ThisRef},Colour)
  when tuple_size(Colour) =:= 3; tuple_size(Colour) =:= 4 ->
@@ -1365,7 +1376,7 @@ setOwnBackgroundColour(#wx_ref{type=ThisT,ref=ThisRef},Colour)
   <<ThisRef:32/?UI,(wxe_util:colour_bin(Colour)):16/binary>>).
 
 %% @doc See <a href="http://www.wxwidgets.org/manuals/2.8.12/wx_wxwindow.html#wxwindowsetownfont">external documentation</a>.
--spec setOwnFont(This, Font) -> ok when
+-spec setOwnFont(This, Font) -> 'ok' when
 	This::wxWindow(), Font::wxFont:wxFont().
 setOwnFont(#wx_ref{type=ThisT,ref=ThisRef},#wx_ref{type=FontT,ref=FontRef}) ->
   ?CLASS(ThisT,wxWindow),
@@ -1374,7 +1385,7 @@ setOwnFont(#wx_ref{type=ThisT,ref=ThisRef},#wx_ref{type=FontT,ref=FontRef}) ->
   <<ThisRef:32/?UI,FontRef:32/?UI>>).
 
 %% @doc See <a href="http://www.wxwidgets.org/manuals/2.8.12/wx_wxwindow.html#wxwindowsetownforegroundcolour">external documentation</a>.
--spec setOwnForegroundColour(This, Colour) -> ok when
+-spec setOwnForegroundColour(This, Colour) -> 'ok' when
 	This::wxWindow(), Colour::wx:wx_colour().
 setOwnForegroundColour(#wx_ref{type=ThisT,ref=ThisRef},Colour)
  when tuple_size(Colour) =:= 3; tuple_size(Colour) =:= 4 ->
@@ -1383,7 +1394,7 @@ setOwnForegroundColour(#wx_ref{type=ThisT,ref=ThisRef},Colour)
   <<ThisRef:32/?UI,(wxe_util:colour_bin(Colour)):16/binary>>).
 
 %% @doc See <a href="http://www.wxwidgets.org/manuals/2.8.12/wx_wxwindow.html#wxwindowsetdroptarget">external documentation</a>.
--spec setDropTarget(This, DropTarget) -> ok when
+-spec setDropTarget(This, DropTarget) -> 'ok' when
 	This::wxWindow(), DropTarget::wx:wx_object().
 setDropTarget(#wx_ref{type=ThisT,ref=ThisRef},#wx_ref{type=DropTargetT,ref=DropTargetRef}) ->
   ?CLASS(ThisT,wxWindow),
@@ -1392,7 +1403,7 @@ setDropTarget(#wx_ref{type=ThisT,ref=ThisRef},#wx_ref{type=DropTargetT,ref=DropT
   <<ThisRef:32/?UI,DropTargetRef:32/?UI>>).
 
 %% @doc See <a href="http://www.wxwidgets.org/manuals/2.8.12/wx_wxwindow.html#wxwindowsetextrastyle">external documentation</a>.
--spec setExtraStyle(This, ExStyle) -> ok when
+-spec setExtraStyle(This, ExStyle) -> 'ok' when
 	This::wxWindow(), ExStyle::integer().
 setExtraStyle(#wx_ref{type=ThisT,ref=ThisRef},ExStyle)
  when is_integer(ExStyle) ->
@@ -1401,7 +1412,7 @@ setExtraStyle(#wx_ref{type=ThisT,ref=ThisRef},ExStyle)
   <<ThisRef:32/?UI,ExStyle:32/?UI>>).
 
 %% @doc See <a href="http://www.wxwidgets.org/manuals/2.8.12/wx_wxwindow.html#wxwindowsetfocus">external documentation</a>.
--spec setFocus(This) -> ok when
+-spec setFocus(This) -> 'ok' when
 	This::wxWindow().
 setFocus(#wx_ref{type=ThisT,ref=ThisRef}) ->
   ?CLASS(ThisT,wxWindow),
@@ -1409,7 +1420,7 @@ setFocus(#wx_ref{type=ThisT,ref=ThisRef}) ->
   <<ThisRef:32/?UI>>).
 
 %% @doc See <a href="http://www.wxwidgets.org/manuals/2.8.12/wx_wxwindow.html#wxwindowsetfocusfromkbd">external documentation</a>.
--spec setFocusFromKbd(This) -> ok when
+-spec setFocusFromKbd(This) -> 'ok' when
 	This::wxWindow().
 setFocusFromKbd(#wx_ref{type=ThisT,ref=ThisRef}) ->
   ?CLASS(ThisT,wxWindow),
@@ -1435,17 +1446,17 @@ setForegroundColour(#wx_ref{type=ThisT,ref=ThisRef},Colour)
   <<ThisRef:32/?UI,(wxe_util:colour_bin(Colour)):16/binary>>).
 
 %% @doc See <a href="http://www.wxwidgets.org/manuals/2.8.12/wx_wxwindow.html#wxwindowsethelptext">external documentation</a>.
--spec setHelpText(This, Text) -> ok when
+-spec setHelpText(This, Text) -> 'ok' when
 	This::wxWindow(), Text::unicode:chardata().
 setHelpText(#wx_ref{type=ThisT,ref=ThisRef},Text)
- when is_list(Text) ->
+ when ?is_chardata(Text) ->
   ?CLASS(ThisT,wxWindow),
   Text_UC = unicode:characters_to_binary([Text,0]),
   wxe_util:cast(?wxWindow_SetHelpText,
   <<ThisRef:32/?UI,(byte_size(Text_UC)):32/?UI,(Text_UC)/binary, 0:(((8- ((0+byte_size(Text_UC)) band 16#7)) band 16#7))/unit:8>>).
 
 %% @doc See <a href="http://www.wxwidgets.org/manuals/2.8.12/wx_wxwindow.html#wxwindowsetid">external documentation</a>.
--spec setId(This, Winid) -> ok when
+-spec setId(This, Winid) -> 'ok' when
 	This::wxWindow(), Winid::integer().
 setId(#wx_ref{type=ThisT,ref=ThisRef},Winid)
  when is_integer(Winid) ->
@@ -1454,27 +1465,27 @@ setId(#wx_ref{type=ThisT,ref=ThisRef},Winid)
   <<ThisRef:32/?UI,Winid:32/?UI>>).
 
 %% @doc See <a href="http://www.wxwidgets.org/manuals/2.8.12/wx_wxwindow.html#wxwindowsetlabel">external documentation</a>.
--spec setLabel(This, Label) -> ok when
+-spec setLabel(This, Label) -> 'ok' when
 	This::wxWindow(), Label::unicode:chardata().
 setLabel(#wx_ref{type=ThisT,ref=ThisRef},Label)
- when is_list(Label) ->
+ when ?is_chardata(Label) ->
   ?CLASS(ThisT,wxWindow),
   Label_UC = unicode:characters_to_binary([Label,0]),
   wxe_util:cast(?wxWindow_SetLabel,
   <<ThisRef:32/?UI,(byte_size(Label_UC)):32/?UI,(Label_UC)/binary, 0:(((8- ((0+byte_size(Label_UC)) band 16#7)) band 16#7))/unit:8>>).
 
 %% @doc See <a href="http://www.wxwidgets.org/manuals/2.8.12/wx_wxwindow.html#wxwindowsetname">external documentation</a>.
--spec setName(This, Name) -> ok when
+-spec setName(This, Name) -> 'ok' when
 	This::wxWindow(), Name::unicode:chardata().
 setName(#wx_ref{type=ThisT,ref=ThisRef},Name)
- when is_list(Name) ->
+ when ?is_chardata(Name) ->
   ?CLASS(ThisT,wxWindow),
   Name_UC = unicode:characters_to_binary([Name,0]),
   wxe_util:cast(?wxWindow_SetName,
   <<ThisRef:32/?UI,(byte_size(Name_UC)):32/?UI,(Name_UC)/binary, 0:(((8- ((0+byte_size(Name_UC)) band 16#7)) band 16#7))/unit:8>>).
 
 %% @doc See <a href="http://www.wxwidgets.org/manuals/2.8.12/wx_wxwindow.html#wxwindowsetpalette">external documentation</a>.
--spec setPalette(This, Pal) -> ok when
+-spec setPalette(This, Pal) -> 'ok' when
 	This::wxWindow(), Pal::wxPalette:wxPalette().
 setPalette(#wx_ref{type=ThisT,ref=ThisRef},#wx_ref{type=PalT,ref=PalRef}) ->
   ?CLASS(ThisT,wxWindow),
@@ -1483,7 +1494,7 @@ setPalette(#wx_ref{type=ThisT,ref=ThisRef},#wx_ref{type=PalT,ref=PalRef}) ->
   <<ThisRef:32/?UI,PalRef:32/?UI>>).
 
 %% @equiv setScrollbar(This,Orient,Pos,ThumbVisible,Range, [])
--spec setScrollbar(This, Orient, Pos, ThumbVisible, Range) -> ok when
+-spec setScrollbar(This, Orient, Pos, ThumbVisible, Range) -> 'ok' when
 	This::wxWindow(), Orient::integer(), Pos::integer(), ThumbVisible::integer(), Range::integer().
 
 setScrollbar(This,Orient,Pos,ThumbVisible,Range)
@@ -1491,9 +1502,9 @@ setScrollbar(This,Orient,Pos,ThumbVisible,Range)
   setScrollbar(This,Orient,Pos,ThumbVisible,Range, []).
 
 %% @doc See <a href="http://www.wxwidgets.org/manuals/2.8.12/wx_wxwindow.html#wxwindowsetscrollbar">external documentation</a>.
--spec setScrollbar(This, Orient, Pos, ThumbVisible, Range, [Option]) -> ok when
+-spec setScrollbar(This, Orient, Pos, ThumbVisible, Range, [Option]) -> 'ok' when
 	This::wxWindow(), Orient::integer(), Pos::integer(), ThumbVisible::integer(), Range::integer(),
-	Option :: {refresh, boolean()}.
+	Option :: {'refresh', boolean()}.
 setScrollbar(#wx_ref{type=ThisT,ref=ThisRef},Orient,Pos,ThumbVisible,Range, Options)
  when is_integer(Orient),is_integer(Pos),is_integer(ThumbVisible),is_integer(Range),is_list(Options) ->
   ?CLASS(ThisT,wxWindow),
@@ -1504,7 +1515,7 @@ setScrollbar(#wx_ref{type=ThisT,ref=ThisRef},Orient,Pos,ThumbVisible,Range, Opti
   <<ThisRef:32/?UI,Orient:32/?UI,Pos:32/?UI,ThumbVisible:32/?UI,Range:32/?UI, 0:32,BinOpt/binary>>).
 
 %% @equiv setScrollPos(This,Orient,Pos, [])
--spec setScrollPos(This, Orient, Pos) -> ok when
+-spec setScrollPos(This, Orient, Pos) -> 'ok' when
 	This::wxWindow(), Orient::integer(), Pos::integer().
 
 setScrollPos(This,Orient,Pos)
@@ -1512,9 +1523,9 @@ setScrollPos(This,Orient,Pos)
   setScrollPos(This,Orient,Pos, []).
 
 %% @doc See <a href="http://www.wxwidgets.org/manuals/2.8.12/wx_wxwindow.html#wxwindowsetscrollpos">external documentation</a>.
--spec setScrollPos(This, Orient, Pos, [Option]) -> ok when
+-spec setScrollPos(This, Orient, Pos, [Option]) -> 'ok' when
 	This::wxWindow(), Orient::integer(), Pos::integer(),
-	Option :: {refresh, boolean()}.
+	Option :: {'refresh', boolean()}.
 setScrollPos(#wx_ref{type=ThisT,ref=ThisRef},Orient,Pos, Options)
  when is_integer(Orient),is_integer(Pos),is_list(Options) ->
   ?CLASS(ThisT,wxWindow),
@@ -1526,12 +1537,12 @@ setScrollPos(#wx_ref{type=ThisT,ref=ThisRef},Orient,Pos, Options)
 
 %% @doc See <a href="http://www.wxwidgets.org/manuals/2.8.12/wx_wxwindow.html#wxwindowsetsize">external documentation</a>.
 %% <br /> Also:<br />
-%% setSize(This, Size) -> ok when<br />
+%% setSize(This, Size) -> 'ok' when<br />
 %% 	This::wxWindow(), Size::{W::integer(), H::integer()}.<br />
 %% 
--spec setSize(This, Rect) -> ok when
+-spec setSize(This, Rect) -> 'ok' when
 	This::wxWindow(), Rect::{X::integer(), Y::integer(), W::integer(), H::integer()};
-      (This, Size) -> ok when
+      (This, Size) -> 'ok' when
 	This::wxWindow(), Size::{W::integer(), H::integer()}.
 
 setSize(This,Rect={RectX,RectY,RectW,RectH})
@@ -1545,15 +1556,15 @@ setSize(#wx_ref{type=ThisT,ref=ThisRef},{SizeW,SizeH})
 
 %% @doc See <a href="http://www.wxwidgets.org/manuals/2.8.12/wx_wxwindow.html#wxwindowsetsize">external documentation</a>.
 %% <br /> Also:<br />
-%% setSize(This, Rect, [Option]) -> ok when<br />
+%% setSize(This, Rect, [Option]) -> 'ok' when<br />
 %% 	This::wxWindow(), Rect::{X::integer(), Y::integer(), W::integer(), H::integer()},<br />
-%% 	Option :: {sizeFlags, integer()}.<br />
+%% 	Option :: {'sizeFlags', integer()}.<br />
 %% 
--spec setSize(This, Width, Height) -> ok when
+-spec setSize(This, Width, Height) -> 'ok' when
 	This::wxWindow(), Width::integer(), Height::integer();
-      (This, Rect, [Option]) -> ok when
+      (This, Rect, [Option]) -> 'ok' when
 	This::wxWindow(), Rect::{X::integer(), Y::integer(), W::integer(), H::integer()},
-	Option :: {sizeFlags, integer()}.
+	Option :: {'sizeFlags', integer()}.
 setSize(#wx_ref{type=ThisT,ref=ThisRef},Width,Height)
  when is_integer(Width),is_integer(Height) ->
   ?CLASS(ThisT,wxWindow),
@@ -1569,7 +1580,7 @@ setSize(#wx_ref{type=ThisT,ref=ThisRef},{RectX,RectY,RectW,RectH}, Options)
   <<ThisRef:32/?UI,RectX:32/?UI,RectY:32/?UI,RectW:32/?UI,RectH:32/?UI, 0:32,BinOpt/binary>>).
 
 %% @equiv setSize(This,X,Y,Width,Height, [])
--spec setSize(This, X, Y, Width, Height) -> ok when
+-spec setSize(This, X, Y, Width, Height) -> 'ok' when
 	This::wxWindow(), X::integer(), Y::integer(), Width::integer(), Height::integer().
 
 setSize(This,X,Y,Width,Height)
@@ -1577,9 +1588,9 @@ setSize(This,X,Y,Width,Height)
   setSize(This,X,Y,Width,Height, []).
 
 %% @doc See <a href="http://www.wxwidgets.org/manuals/2.8.12/wx_wxwindow.html#wxwindowsetsize">external documentation</a>.
--spec setSize(This, X, Y, Width, Height, [Option]) -> ok when
+-spec setSize(This, X, Y, Width, Height, [Option]) -> 'ok' when
 	This::wxWindow(), X::integer(), Y::integer(), Width::integer(), Height::integer(),
-	Option :: {sizeFlags, integer()}.
+	Option :: {'sizeFlags', integer()}.
 setSize(#wx_ref{type=ThisT,ref=ThisRef},X,Y,Width,Height, Options)
  when is_integer(X),is_integer(Y),is_integer(Width),is_integer(Height),is_list(Options) ->
   ?CLASS(ThisT,wxWindow),
@@ -1590,7 +1601,7 @@ setSize(#wx_ref{type=ThisT,ref=ThisRef},X,Y,Width,Height, Options)
   <<ThisRef:32/?UI,X:32/?UI,Y:32/?UI,Width:32/?UI,Height:32/?UI, 0:32,BinOpt/binary>>).
 
 %% @equiv setSizeHints(This,MinSize, [])
--spec setSizeHints(This, MinSize) -> ok when
+-spec setSizeHints(This, MinSize) -> 'ok' when
 	This::wxWindow(), MinSize::{W::integer(), H::integer()}.
 
 setSizeHints(This,MinSize={MinSizeW,MinSizeH})
@@ -1599,17 +1610,17 @@ setSizeHints(This,MinSize={MinSizeW,MinSizeH})
 
 %% @doc See <a href="http://www.wxwidgets.org/manuals/2.8.12/wx_wxwindow.html#wxwindowsetsizehints">external documentation</a>.
 %% <br /> Also:<br />
-%% setSizeHints(This, MinSize, [Option]) -> ok when<br />
+%% setSizeHints(This, MinSize, [Option]) -> 'ok' when<br />
 %% 	This::wxWindow(), MinSize::{W::integer(), H::integer()},<br />
-%% 	Option :: {maxSize, {W::integer(), H::integer()}}<br />
-%% 		 | {incSize, {W::integer(), H::integer()}}.<br />
+%% 	Option :: {'maxSize', {W::integer(), H::integer()}}<br />
+%% 		 | {'incSize', {W::integer(), H::integer()}}.<br />
 %% 
--spec setSizeHints(This, MinW, MinH) -> ok when
+-spec setSizeHints(This, MinW, MinH) -> 'ok' when
 	This::wxWindow(), MinW::integer(), MinH::integer();
-      (This, MinSize, [Option]) -> ok when
+      (This, MinSize, [Option]) -> 'ok' when
 	This::wxWindow(), MinSize::{W::integer(), H::integer()},
-	Option :: {maxSize, {W::integer(), H::integer()}}
-		 | {incSize, {W::integer(), H::integer()}}.
+	Option :: {'maxSize', {W::integer(), H::integer()}}
+		 | {'incSize', {W::integer(), H::integer()}}.
 
 setSizeHints(This,MinW,MinH)
  when is_record(This, wx_ref),is_integer(MinW),is_integer(MinH) ->
@@ -1625,12 +1636,12 @@ setSizeHints(#wx_ref{type=ThisT,ref=ThisRef},{MinSizeW,MinSizeH}, Options)
   <<ThisRef:32/?UI,MinSizeW:32/?UI,MinSizeH:32/?UI, 0:32,BinOpt/binary>>).
 
 %% @doc See <a href="http://www.wxwidgets.org/manuals/2.8.12/wx_wxwindow.html#wxwindowsetsizehints">external documentation</a>.
--spec setSizeHints(This, MinW, MinH, [Option]) -> ok when
+-spec setSizeHints(This, MinW, MinH, [Option]) -> 'ok' when
 	This::wxWindow(), MinW::integer(), MinH::integer(),
-	Option :: {maxW, integer()}
-		 | {maxH, integer()}
-		 | {incW, integer()}
-		 | {incH, integer()}.
+	Option :: {'maxW', integer()}
+		 | {'maxH', integer()}
+		 | {'incW', integer()}
+		 | {'incH', integer()}.
 setSizeHints(#wx_ref{type=ThisT,ref=ThisRef},MinW,MinH, Options)
  when is_integer(MinW),is_integer(MinH),is_list(Options) ->
   ?CLASS(ThisT,wxWindow),
@@ -1644,7 +1655,7 @@ setSizeHints(#wx_ref{type=ThisT,ref=ThisRef},MinW,MinH, Options)
   <<ThisRef:32/?UI,MinW:32/?UI,MinH:32/?UI, 0:32,BinOpt/binary>>).
 
 %% @equiv setSizer(This,Sizer, [])
--spec setSizer(This, Sizer) -> ok when
+-spec setSizer(This, Sizer) -> 'ok' when
 	This::wxWindow(), Sizer::wxSizer:wxSizer().
 
 setSizer(This,Sizer)
@@ -1652,9 +1663,9 @@ setSizer(This,Sizer)
   setSizer(This,Sizer, []).
 
 %% @doc See <a href="http://www.wxwidgets.org/manuals/2.8.12/wx_wxwindow.html#wxwindowsetsizer">external documentation</a>.
--spec setSizer(This, Sizer, [Option]) -> ok when
+-spec setSizer(This, Sizer, [Option]) -> 'ok' when
 	This::wxWindow(), Sizer::wxSizer:wxSizer(),
-	Option :: {deleteOld, boolean()}.
+	Option :: {'deleteOld', boolean()}.
 setSizer(#wx_ref{type=ThisT,ref=ThisRef},#wx_ref{type=SizerT,ref=SizerRef}, Options)
  when is_list(Options) ->
   ?CLASS(ThisT,wxWindow),
@@ -1666,7 +1677,7 @@ setSizer(#wx_ref{type=ThisT,ref=ThisRef},#wx_ref{type=SizerT,ref=SizerRef}, Opti
   <<ThisRef:32/?UI,SizerRef:32/?UI, BinOpt/binary>>).
 
 %% @equiv setSizerAndFit(This,Sizer, [])
--spec setSizerAndFit(This, Sizer) -> ok when
+-spec setSizerAndFit(This, Sizer) -> 'ok' when
 	This::wxWindow(), Sizer::wxSizer:wxSizer().
 
 setSizerAndFit(This,Sizer)
@@ -1674,9 +1685,9 @@ setSizerAndFit(This,Sizer)
   setSizerAndFit(This,Sizer, []).
 
 %% @doc See <a href="http://www.wxwidgets.org/manuals/2.8.12/wx_wxwindow.html#wxwindowsetsizerandfit">external documentation</a>.
--spec setSizerAndFit(This, Sizer, [Option]) -> ok when
+-spec setSizerAndFit(This, Sizer, [Option]) -> 'ok' when
 	This::wxWindow(), Sizer::wxSizer:wxSizer(),
-	Option :: {deleteOld, boolean()}.
+	Option :: {'deleteOld', boolean()}.
 setSizerAndFit(#wx_ref{type=ThisT,ref=ThisRef},#wx_ref{type=SizerT,ref=SizerRef}, Options)
  when is_list(Options) ->
   ?CLASS(ThisT,wxWindow),
@@ -1688,7 +1699,7 @@ setSizerAndFit(#wx_ref{type=ThisT,ref=ThisRef},#wx_ref{type=SizerT,ref=SizerRef}
   <<ThisRef:32/?UI,SizerRef:32/?UI, BinOpt/binary>>).
 
 %% @doc See <a href="http://www.wxwidgets.org/manuals/2.8.12/wx_wxwindow.html#wxwindowsetthemeenabled">external documentation</a>.
--spec setThemeEnabled(This, EnableTheme) -> ok when
+-spec setThemeEnabled(This, EnableTheme) -> 'ok' when
 	This::wxWindow(), EnableTheme::boolean().
 setThemeEnabled(#wx_ref{type=ThisT,ref=ThisRef},EnableTheme)
  when is_boolean(EnableTheme) ->
@@ -1698,15 +1709,15 @@ setThemeEnabled(#wx_ref{type=ThisT,ref=ThisRef},EnableTheme)
 
 %% @doc See <a href="http://www.wxwidgets.org/manuals/2.8.12/wx_wxwindow.html#wxwindowsettooltip">external documentation</a>.
 %% <br /> Also:<br />
-%% setToolTip(This, Tip) -> ok when<br />
+%% setToolTip(This, Tip) -> 'ok' when<br />
 %% 	This::wxWindow(), Tip::wxToolTip:wxToolTip().<br />
 %% 
--spec setToolTip(This, Tip) -> ok when
+-spec setToolTip(This, Tip) -> 'ok' when
 	This::wxWindow(), Tip::unicode:chardata();
-      (This, Tip) -> ok when
+      (This, Tip) -> 'ok' when
 	This::wxWindow(), Tip::wxToolTip:wxToolTip().
 setToolTip(#wx_ref{type=ThisT,ref=ThisRef},Tip)
- when is_list(Tip) ->
+ when ?is_chardata(Tip) ->
   ?CLASS(ThisT,wxWindow),
   Tip_UC = unicode:characters_to_binary([Tip,0]),
   wxe_util:cast(?wxWindow_SetToolTip_1_0,
@@ -1718,7 +1729,7 @@ setToolTip(#wx_ref{type=ThisT,ref=ThisRef},#wx_ref{type=TipT,ref=TipRef}) ->
   <<ThisRef:32/?UI,TipRef:32/?UI>>).
 
 %% @doc See <a href="http://www.wxwidgets.org/manuals/2.8.12/wx_wxwindow.html#wxwindowsetvirtualsize">external documentation</a>.
--spec setVirtualSize(This, Size) -> ok when
+-spec setVirtualSize(This, Size) -> 'ok' when
 	This::wxWindow(), Size::{W::integer(), H::integer()}.
 setVirtualSize(#wx_ref{type=ThisT,ref=ThisRef},{SizeW,SizeH})
  when is_integer(SizeW),is_integer(SizeH) ->
@@ -1727,7 +1738,7 @@ setVirtualSize(#wx_ref{type=ThisT,ref=ThisRef},{SizeW,SizeH})
   <<ThisRef:32/?UI,SizeW:32/?UI,SizeH:32/?UI>>).
 
 %% @doc See <a href="http://www.wxwidgets.org/manuals/2.8.12/wx_wxwindow.html#wxwindowsetvirtualsize">external documentation</a>.
--spec setVirtualSize(This, X, Y) -> ok when
+-spec setVirtualSize(This, X, Y) -> 'ok' when
 	This::wxWindow(), X::integer(), Y::integer().
 setVirtualSize(#wx_ref{type=ThisT,ref=ThisRef},X,Y)
  when is_integer(X),is_integer(Y) ->
@@ -1736,7 +1747,7 @@ setVirtualSize(#wx_ref{type=ThisT,ref=ThisRef},X,Y)
   <<ThisRef:32/?UI,X:32/?UI,Y:32/?UI>>).
 
 %% @equiv setVirtualSizeHints(This,MinSize, [])
--spec setVirtualSizeHints(This, MinSize) -> ok when
+-spec setVirtualSizeHints(This, MinSize) -> 'ok' when
 	This::wxWindow(), MinSize::{W::integer(), H::integer()}.
 
 setVirtualSizeHints(This,MinSize={MinSizeW,MinSizeH})
@@ -1745,15 +1756,15 @@ setVirtualSizeHints(This,MinSize={MinSizeW,MinSizeH})
 
 %% @doc See <a href="http://www.wxwidgets.org/manuals/2.8.12/wx_wxwindow.html#wxwindowsetvirtualsizehints">external documentation</a>.
 %% <br /> Also:<br />
-%% setVirtualSizeHints(This, MinSize, [Option]) -> ok when<br />
+%% setVirtualSizeHints(This, MinSize, [Option]) -> 'ok' when<br />
 %% 	This::wxWindow(), MinSize::{W::integer(), H::integer()},<br />
-%% 	Option :: {maxSize, {W::integer(), H::integer()}}.<br />
+%% 	Option :: {'maxSize', {W::integer(), H::integer()}}.<br />
 %% 
--spec setVirtualSizeHints(This, MinW, MinH) -> ok when
+-spec setVirtualSizeHints(This, MinW, MinH) -> 'ok' when
 	This::wxWindow(), MinW::integer(), MinH::integer();
-      (This, MinSize, [Option]) -> ok when
+      (This, MinSize, [Option]) -> 'ok' when
 	This::wxWindow(), MinSize::{W::integer(), H::integer()},
-	Option :: {maxSize, {W::integer(), H::integer()}}.
+	Option :: {'maxSize', {W::integer(), H::integer()}}.
 
 setVirtualSizeHints(This,MinW,MinH)
  when is_record(This, wx_ref),is_integer(MinW),is_integer(MinH) ->
@@ -1768,10 +1779,10 @@ setVirtualSizeHints(#wx_ref{type=ThisT,ref=ThisRef},{MinSizeW,MinSizeH}, Options
   <<ThisRef:32/?UI,MinSizeW:32/?UI,MinSizeH:32/?UI, 0:32,BinOpt/binary>>).
 
 %% @doc See <a href="http://www.wxwidgets.org/manuals/2.8.12/wx_wxwindow.html#wxwindowsetvirtualsizehints">external documentation</a>.
--spec setVirtualSizeHints(This, MinW, MinH, [Option]) -> ok when
+-spec setVirtualSizeHints(This, MinW, MinH, [Option]) -> 'ok' when
 	This::wxWindow(), MinW::integer(), MinH::integer(),
-	Option :: {maxW, integer()}
-		 | {maxH, integer()}.
+	Option :: {'maxW', integer()}
+		 | {'maxH', integer()}.
 setVirtualSizeHints(#wx_ref{type=ThisT,ref=ThisRef},MinW,MinH, Options)
  when is_integer(MinW),is_integer(MinH),is_list(Options) ->
   ?CLASS(ThisT,wxWindow),
@@ -1783,7 +1794,7 @@ setVirtualSizeHints(#wx_ref{type=ThisT,ref=ThisRef},MinW,MinH, Options)
   <<ThisRef:32/?UI,MinW:32/?UI,MinH:32/?UI, 0:32,BinOpt/binary>>).
 
 %% @doc See <a href="http://www.wxwidgets.org/manuals/2.8.12/wx_wxwindow.html#wxwindowsetwindowstyle">external documentation</a>.
--spec setWindowStyle(This, Style) -> ok when
+-spec setWindowStyle(This, Style) -> 'ok' when
 	This::wxWindow(), Style::integer().
 setWindowStyle(#wx_ref{type=ThisT,ref=ThisRef},Style)
  when is_integer(Style) ->
@@ -1792,7 +1803,7 @@ setWindowStyle(#wx_ref{type=ThisT,ref=ThisRef},Style)
   <<ThisRef:32/?UI,Style:32/?UI>>).
 
 %% @doc See <a href="http://www.wxwidgets.org/manuals/2.8.12/wx_wxwindow.html#wxwindowsetwindowstyleflag">external documentation</a>.
--spec setWindowStyleFlag(This, Style) -> ok when
+-spec setWindowStyleFlag(This, Style) -> 'ok' when
 	This::wxWindow(), Style::integer().
 setWindowStyleFlag(#wx_ref{type=ThisT,ref=ThisRef},Style)
  when is_integer(Style) ->
@@ -1802,7 +1813,7 @@ setWindowStyleFlag(#wx_ref{type=ThisT,ref=ThisRef},Style)
 
 %% @doc See <a href="http://www.wxwidgets.org/manuals/2.8.12/wx_wxwindow.html#wxwindowsetwindowvariant">external documentation</a>.
 %%<br /> Variant = ?wxWINDOW_VARIANT_NORMAL | ?wxWINDOW_VARIANT_SMALL | ?wxWINDOW_VARIANT_MINI | ?wxWINDOW_VARIANT_LARGE | ?wxWINDOW_VARIANT_MAX
--spec setWindowVariant(This, Variant) -> ok when
+-spec setWindowVariant(This, Variant) -> 'ok' when
 	This::wxWindow(), Variant::wx:wx_enum().
 setWindowVariant(#wx_ref{type=ThisT,ref=ThisRef},Variant)
  when is_integer(Variant) ->
@@ -1829,7 +1840,7 @@ show(This)
 %% @doc See <a href="http://www.wxwidgets.org/manuals/2.8.12/wx_wxwindow.html#wxwindowshow">external documentation</a>.
 -spec show(This, [Option]) -> boolean() when
 	This::wxWindow(),
-	Option :: {show, boolean()}.
+	Option :: {'show', boolean()}.
 show(#wx_ref{type=ThisT,ref=ThisRef}, Options)
  when is_list(Options) ->
   ?CLASS(ThisT,wxWindow),
@@ -1840,7 +1851,7 @@ show(#wx_ref{type=ThisT,ref=ThisRef}, Options)
   <<ThisRef:32/?UI, 0:32,BinOpt/binary>>).
 
 %% @doc See <a href="http://www.wxwidgets.org/manuals/2.8.12/wx_wxwindow.html#wxwindowthaw">external documentation</a>.
--spec thaw(This) -> ok when
+-spec thaw(This) -> 'ok' when
 	This::wxWindow().
 thaw(#wx_ref{type=ThisT,ref=ThisRef}) ->
   ?CLASS(ThisT,wxWindow),
@@ -1864,7 +1875,7 @@ transferDataToWindow(#wx_ref{type=ThisT,ref=ThisRef}) ->
   <<ThisRef:32/?UI>>).
 
 %% @doc See <a href="http://www.wxwidgets.org/manuals/2.8.12/wx_wxwindow.html#wxwindowupdate">external documentation</a>.
--spec update(This) -> ok when
+-spec update(This) -> 'ok' when
 	This::wxWindow().
 update(#wx_ref{type=ThisT,ref=ThisRef}) ->
   ?CLASS(ThisT,wxWindow),
@@ -1872,7 +1883,7 @@ update(#wx_ref{type=ThisT,ref=ThisRef}) ->
   <<ThisRef:32/?UI>>).
 
 %% @equiv updateWindowUI(This, [])
--spec updateWindowUI(This) -> ok when
+-spec updateWindowUI(This) -> 'ok' when
 	This::wxWindow().
 
 updateWindowUI(This)
@@ -1880,9 +1891,9 @@ updateWindowUI(This)
   updateWindowUI(This, []).
 
 %% @doc See <a href="http://www.wxwidgets.org/manuals/2.8.12/wx_wxwindow.html#wxwindowupdatewindowui">external documentation</a>.
--spec updateWindowUI(This, [Option]) -> ok when
+-spec updateWindowUI(This, [Option]) -> 'ok' when
 	This::wxWindow(),
-	Option :: {flags, integer()}.
+	Option :: {'flags', integer()}.
 updateWindowUI(#wx_ref{type=ThisT,ref=ThisRef}, Options)
  when is_list(Options) ->
   ?CLASS(ThisT,wxWindow),
@@ -1901,7 +1912,7 @@ validate(#wx_ref{type=ThisT,ref=ThisRef}) ->
   <<ThisRef:32/?UI>>).
 
 %% @doc See <a href="http://www.wxwidgets.org/manuals/2.8.12/wx_wxwindow.html#wxwindowwarppointer">external documentation</a>.
--spec warpPointer(This, X, Y) -> ok when
+-spec warpPointer(This, X, Y) -> 'ok' when
 	This::wxWindow(), X::integer(), Y::integer().
 warpPointer(#wx_ref{type=ThisT,ref=ThisRef},X,Y)
  when is_integer(X),is_integer(Y) ->
@@ -1909,8 +1920,50 @@ warpPointer(#wx_ref{type=ThisT,ref=ThisRef},X,Y)
   wxe_util:cast(?wxWindow_WarpPointer,
   <<ThisRef:32/?UI,X:32/?UI,Y:32/?UI>>).
 
+%% @doc See <a href="http://www.wxwidgets.org/manuals/2.8.12/wx_wxwindow.html#wxwindowsettransparent">external documentation</a>.
+-spec setTransparent(This, Alpha) -> boolean() when
+	This::wxWindow(), Alpha::integer().
+setTransparent(#wx_ref{type=ThisT,ref=ThisRef},Alpha)
+ when is_integer(Alpha) ->
+  ?CLASS(ThisT,wxWindow),
+  wxe_util:call(?wxWindow_SetTransparent,
+  <<ThisRef:32/?UI,Alpha:32/?UI>>).
+
+%% @doc See <a href="http://www.wxwidgets.org/manuals/2.8.12/wx_wxwindow.html#wxwindowcansettransparent">external documentation</a>.
+-spec canSetTransparent(This) -> boolean() when
+	This::wxWindow().
+canSetTransparent(#wx_ref{type=ThisT,ref=ThisRef}) ->
+  ?CLASS(ThisT,wxWindow),
+  wxe_util:call(?wxWindow_CanSetTransparent,
+  <<ThisRef:32/?UI>>).
+
+%% @doc See <a href="http://www.wxwidgets.org/manuals/2.8.12/wx_wxwindow.html#wxwindowisdoublebuffered">external documentation</a>.
+-spec isDoubleBuffered(This) -> boolean() when
+	This::wxWindow().
+isDoubleBuffered(#wx_ref{type=ThisT,ref=ThisRef}) ->
+  ?CLASS(ThisT,wxWindow),
+  wxe_util:call(?wxWindow_IsDoubleBuffered,
+  <<ThisRef:32/?UI>>).
+
+%% @doc See <a href="http://www.wxwidgets.org/manuals/2.8.12/wx_wxwindow.html#wxwindowsetdoublebuffered">external documentation</a>.
+-spec setDoubleBuffered(This, On) -> 'ok' when
+	This::wxWindow(), On::boolean().
+setDoubleBuffered(#wx_ref{type=ThisT,ref=ThisRef},On)
+ when is_boolean(On) ->
+  ?CLASS(ThisT,wxWindow),
+  wxe_util:cast(?wxWindow_SetDoubleBuffered,
+  <<ThisRef:32/?UI,(wxe_util:from_bool(On)):32/?UI>>).
+
+%% @doc See <a href="http://www.wxwidgets.org/manuals/2.8.12/wx_wxwindow.html#wxwindowgetcontentscalefactor">external documentation</a>.
+-spec getContentScaleFactor(This) -> number() when
+	This::wxWindow().
+getContentScaleFactor(#wx_ref{type=ThisT,ref=ThisRef}) ->
+  ?CLASS(ThisT,wxWindow),
+  wxe_util:call(?wxWindow_GetContentScaleFactor,
+  <<ThisRef:32/?UI>>).
+
 %% @doc Destroys this object, do not use object again
--spec destroy(This::wxWindow()) -> ok.
+-spec destroy(This::wxWindow()) -> 'ok'.
 destroy(Obj=#wx_ref{type=Type}) ->
   ?CLASS(Type,wxWindow),
   wxe_util:destroy(?DESTROY_OBJECT,Obj),

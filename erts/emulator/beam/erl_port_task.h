@@ -1,18 +1,19 @@
 /*
  * %CopyrightBegin%
  * 
- * Copyright Ericsson AB 2006-2013. All Rights Reserved.
+ * Copyright Ericsson AB 2006-2016. All Rights Reserved.
  * 
- * The contents of this file are subject to the Erlang Public License,
- * Version 1.1, (the "License"); you may not use this file except in
- * compliance with the License. You should have received a copy of the
- * Erlang Public License along with this software. If not, it can be
- * retrieved online at http://www.erlang.org/.
- * 
- * Software distributed under the License is distributed on an "AS IS"
- * basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See
- * the License for the specific language governing rights and limitations
- * under the License.
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  * 
  * %CopyrightEnd%
  */
@@ -156,7 +157,7 @@ erts_port_task_handle_init(ErtsPortTaskHandle *pthp)
 ERTS_GLB_INLINE int
 erts_port_task_is_scheduled(ErtsPortTaskHandle *pthp)
 {
-    return ((void *) erts_smp_atomic_read_nob(pthp)) != NULL;
+    return ((void *) erts_smp_atomic_read_acqb(pthp)) != NULL;
 }
 
 ERTS_GLB_INLINE void erts_port_task_pre_init_sched(ErtsPortTaskSched *ptsp,
@@ -268,6 +269,8 @@ int erts_port_task_schedule(Eterm,
 void erts_port_task_free_port(Port *);
 int erts_port_is_scheduled(Port *);
 ErtsProc2PortSigData *erts_port_task_alloc_p2p_sig_data(void);
+ErtsProc2PortSigData *erts_port_task_alloc_p2p_sig_data_extra(size_t extra, void **extra_ptr);
+void erts_port_task_free_p2p_sig_data(ErtsProc2PortSigData *sigdp);
 
 #ifdef ERTS_SMP
 void erts_enqueue_port(ErtsRunQueue *rq, Port *pp);

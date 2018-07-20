@@ -1,18 +1,19 @@
 %%
 %% %CopyrightBegin%
 %% 
-%% Copyright Ericsson AB 2005-2013. All Rights Reserved.
+%% Copyright Ericsson AB 2005-2016. All Rights Reserved.
 %% 
-%% The contents of this file are subject to the Erlang Public License,
-%% Version 1.1, (the "License"); you may not use this file except in
-%% compliance with the License. You should have received a copy of the
-%% Erlang Public License along with this software. If not, it can be
-%% retrieved online at http://www.erlang.org/.
-%% 
-%% Software distributed under the License is distributed on an "AS IS"
-%% basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See
-%% the License for the specific language governing rights and limitations
-%% under the License.
+%% Licensed under the Apache License, Version 2.0 (the "License");
+%% you may not use this file except in compliance with the License.
+%% You may obtain a copy of the License at
+%%
+%%     http://www.apache.org/licenses/LICENSE-2.0
+%%
+%% Unless required by applicable law or agreed to in writing, software
+%% distributed under the License is distributed on an "AS IS" BASIS,
+%% WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+%% See the License for the specific language governing permissions and
+%% limitations under the License.
 %% 
 %% %CopyrightEnd%
 %%
@@ -89,19 +90,23 @@ parse_lines(<<C1, C2, C3, ?WHITE_SPACE, Bin/binary>>, Lines, start) ->
     parse_lines(Bin, [?WHITE_SPACE, C3, C2, C1 | Lines], finish);
 
 %% Last line found
-parse_lines(<<C1, C2, C3, ?WHITE_SPACE, Rest/binary>>, Lines, {C1, C2, C3}) ->
-    parse_lines(Rest, [?WHITE_SPACE, C3, C2, C1 | Lines], finish);
+parse_lines(<<?CR, ?LF, C1, C2, C3, ?WHITE_SPACE, Rest/binary>>, Lines, {C1, C2, C3}) ->
+    parse_lines(Rest, [?WHITE_SPACE, C3, C2, C1, ?LF, ?CR | Lines], finish);
 %% Potential end found  wait for more data 
-parse_lines(<<C1, C2, C3>> = Bin, Lines, {C1, C2, C3}) ->
+parse_lines(<<?CR, ?LF, C1, C2, C3>> = Bin, Lines, {C1, C2, C3}) ->
     {continue, {Bin, Lines, {C1, C2, C3}}};
 %% Intermidate line begining with status code
-parse_lines(<<C1, C2, C3, Rest/binary>>, Lines, {C1, C2, C3}) ->
-    parse_lines(Rest, [C3, C2, C1 | Lines], {C1, C2, C3});
+parse_lines(<<?CR, ?LF, C1, C2, C3, Rest/binary>>, Lines, {C1, C2, C3}) ->
+    parse_lines(Rest, [C3, C2, C1, ?LF, ?CR  | Lines], {C1, C2, C3});
 
 %% Potential last line wait for more data
-parse_lines(<<C1, C2>> = Data, Lines, {C1, C2, _} = StatusCode) ->
+parse_lines(<<?CR, ?LF, C1, C2>> = Data, Lines, {C1, C2, _} = StatusCode) ->
     {continue, {Data, Lines, StatusCode}};
-parse_lines(<<C1>> = Data, Lines, {C1, _, _} = StatusCode) ->
+parse_lines(<<?CR, ?LF, C1>> = Data, Lines, {C1, _, _} = StatusCode) ->
+    {continue, {Data, Lines, StatusCode}};
+parse_lines(<<?CR, ?LF>> = Data, Lines, {_,_,_} = StatusCode) ->
+    {continue, {Data, Lines, StatusCode}};
+parse_lines(<<?LF>> = Data, Lines, {_,_,_} = StatusCode) ->
     {continue, {Data, Lines, StatusCode}};
 parse_lines(<<>> = Data, Lines, {_,_,_} = StatusCode) ->
     {continue, {Data, Lines, StatusCode}};
@@ -193,5 +198,6 @@ interpret_status(?TRANS_NEG_COMPL,_,_)            -> trans_neg_compl;
 interpret_status(?PERM_NEG_COMPL,?FILE_SYSTEM,0)  -> epath;
 interpret_status(?PERM_NEG_COMPL,?FILE_SYSTEM,2)  -> epnospc;
 interpret_status(?PERM_NEG_COMPL,?FILE_SYSTEM,3)  -> efnamena; 
+interpret_status(?PERM_NEG_COMPL,?AUTH_ACC,0)     -> elogin; 
 interpret_status(?PERM_NEG_COMPL,_,_)             -> perm_neg_compl.
 

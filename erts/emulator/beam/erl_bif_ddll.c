@@ -1,18 +1,19 @@
 /*
  * %CopyrightBegin%
  * 
- * Copyright Ericsson AB 2006-2013. All Rights Reserved.
+ * Copyright Ericsson AB 2006-2016. All Rights Reserved.
  * 
- * The contents of this file are subject to the Erlang Public License,
- * Version 1.1, (the "License"); you may not use this file except in
- * compliance with the License. You should have received a copy of the
- * Erlang Public License along with this software. If not, it can be
- * retrieved online at http://www.erlang.org/.
- * 
- * Software distributed under the License is distributed on an "AS IS"
- * basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See
- * the License for the specific language governing rights and limitations
- * under the License.
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  * 
  * %CopyrightEnd%
  */
@@ -45,7 +46,9 @@
 #include "big.h"
 #include "dist.h"
 #include "erl_version.h"
+#include "erl_bif_unique.h"
 #include "dtrace-wrapper.h"
+#include "lttng-wrapper.h"
 
 #ifdef ERTS_SMP
 #define DDLL_SMP 1
@@ -1307,7 +1310,7 @@ static Eterm notify_when_loaded(Process *p, Eterm name_term, char *name, ErtsPro
     case ERL_DE_FORCE_RELOAD:
 	break;
     default:
-	erl_exit(1,"Internal error, unknown state %u in dynamic driver.", drv->handle->status);
+	erts_exit(ERTS_ERROR_EXIT,"Internal error, unknown state %u in dynamic driver.", drv->handle->status);
     }
     p->flags |= F_USING_DDLL;
     r = add_monitor(p, drv->handle, ERL_DE_PROC_AWAIT_LOAD);
@@ -1617,6 +1620,7 @@ static int do_unload_driver_entry(DE_Handle *dh, Eterm *save_name)
 	    if (q->finish) {
 		int fpe_was_unmasked = erts_block_fpe();
 		DTRACE1(driver_finish, q->name);
+                LTTNG1(driver_finish, q->name);
 		(*(q->finish))();
 		erts_unblock_fpe(fpe_was_unmasked);
 	    }
@@ -1705,18 +1709,19 @@ static void notify_proc(Process *proc, Eterm ref, Eterm driver_name, Eterm type,
     Eterm mess;
     Eterm r;
     Eterm *hp;
-    ErlHeapFragment *bp;
-    ErlOffHeap *ohp;
+    ErtsMessage *mp;
     ErtsProcLocks rp_locks = 0;
+    ErlOffHeap *ohp;
     ERTS_SMP_CHK_NO_PROC_LOCKS;
 
     assert_drv_list_rwlocked();
     if (errcode != 0) {
 	int need = load_error_need(errcode);
 	Eterm e;
-	hp = erts_alloc_message_heap(6 /* tuple */ + 3 /* Error tuple */ + 
-				     REF_THING_SIZE + need, &bp, &ohp, 
-				     proc, &rp_locks);
+	mp = erts_alloc_message_heap(proc, &rp_locks,
+				     (6 /* tuple */ + 3 /* Error tuple */ + 
+				      REF_THING_SIZE + need),
+				     &hp, &ohp);
 	r = copy_ref(ref,hp);
 	hp += REF_THING_SIZE;
 	e = build_load_error_hp(hp, errcode);
@@ -1725,16 +1730,14 @@ static void notify_proc(Process *proc, Eterm ref, Eterm driver_name, Eterm type,
 	hp += 3;
 	mess = TUPLE5(hp,type,r,am_driver,driver_name,mess);
     } else {	
-	hp = erts_alloc_message_heap(6 /* tuple */ + REF_THING_SIZE, &bp, &ohp, proc, &rp_locks);
+	mp = erts_alloc_message_heap(proc, &rp_locks,
+				     6 /* tuple */ + REF_THING_SIZE,
+				     &hp, &ohp);
 	r = copy_ref(ref,hp);
 	hp += REF_THING_SIZE;
 	mess = TUPLE5(hp,type,r,am_driver,driver_name,tag);
     }
-    erts_queue_message(proc, &rp_locks, bp, mess, am_undefined
-#ifdef USE_VM_PROBES
-		       , NIL
-#endif
-		       );
+    erts_queue_message(proc, rp_locks, mp, mess, am_system);
     erts_smp_proc_unlock(proc, rp_locks);
     ERTS_SMP_CHK_NO_PROC_LOCKS;
 }

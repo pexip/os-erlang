@@ -2,18 +2,19 @@
 %%-----------------------------------------------------------------------
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2008-2014. All Rights Reserved.
+%% Copyright Ericsson AB 2008-2015. All Rights Reserved.
 %%
-%% The contents of this file are subject to the Erlang Public License,
-%% Version 1.1, (the "License"); you may not use this file except in
-%% compliance with the License. You should have received a copy of the
-%% Erlang Public License along with this software. If not, it can be
-%% retrieved online at http://www.erlang.org/.
+%% Licensed under the Apache License, Version 2.0 (the "License");
+%% you may not use this file except in compliance with the License.
+%% You may obtain a copy of the License at
 %%
-%% Software distributed under the License is distributed on an "AS IS"
-%% basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See
-%% the License for the specific language governing rights and limitations
-%% under the License.
+%%     http://www.apache.org/licenses/LICENSE-2.0
+%%
+%% Unless required by applicable law or agreed to in writing, software
+%% distributed under the License is distributed on an "AS IS" BASIS,
+%% WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+%% See the License for the specific language governing permissions and
+%% limitations under the License.
 %%
 %% %CopyrightEnd%
 %%
@@ -85,33 +86,34 @@
 -type race_tag()   :: 'whereis_register' | 'whereis_unregister'
                     | 'ets_lookup_insert' | 'mnesia_dirty_read_write'.
 
-%% The following type is similar to the dial_warning() type but has a
+%% The following type is similar to the raw_warning() type but has a
 %% tag which is local to this module and is not propagated to outside
--type dial_race_warning() :: {race_warn_tag(), file_line(), {atom(), [term()]}}.
+-type dial_race_warning() :: {race_warn_tag(), warning_info(), {atom(), [term()]}}.
 -type race_warn_tag() :: ?WARN_WHEREIS_REGISTER | ?WARN_WHEREIS_UNREGISTER
                       | ?WARN_ETS_LOOKUP_INSERT | ?WARN_MNESIA_DIRTY_READ_WRITE.
 
--record(beg_clause, {arg        :: var_to_map1(),
-                     pats       :: var_to_map1(),
-                     guard      :: cerl:cerl()}).
--record(end_clause, {arg        :: var_to_map1(),
-                     pats       :: var_to_map1(),
-                     guard      :: cerl:cerl()}).
+-record(beg_clause, {arg        :: var_to_map1() | 'undefined',
+                     pats       :: var_to_map1() | 'undefined',
+                     guard      :: cerl:cerl() | 'undefined'}).
+-record(end_clause, {arg        :: var_to_map1() | 'undefined',
+                     pats       :: var_to_map1() | 'undefined',
+                     guard      :: cerl:cerl() | 'undefined'}).
 -record(end_case,   {clauses    :: [#end_clause{}]}).
--record(curr_fun,   {status     :: 'in' | 'out',
-                     mfa        :: dialyzer_callgraph:mfa_or_funlbl(),
-                     label      :: label(),
-                     def_vars   :: [core_vars()],
-                     arg_types  :: [erl_types:erl_type()],
-                     call_vars  :: [core_vars()],
-                     var_map    :: dict:dict()}).
+-record(curr_fun,   {status     :: 'in' | 'out' | 'undefined',
+                     mfa        :: dialyzer_callgraph:mfa_or_funlbl()
+                                 | 'undefined',
+                     label      :: label() | 'undefined',
+                     def_vars   :: [core_vars()] | 'undefined',
+                     arg_types  :: [erl_types:erl_type()] | 'undefined',
+                     call_vars  :: [core_vars()] | 'undefined',
+                     var_map    :: dict:dict() | 'undefined'}).
 -record(dep_call,   {call_name  :: dep_calls(),
-                     args       :: args(),
+                     args       :: args() | 'undefined',
                      arg_types  :: [erl_types:erl_type()],
                      vars       :: [core_vars()],
                      state      :: dialyzer_dataflow:state(),
                      file_line  :: file_line(),
-                     var_map    :: dict:dict()}).
+                     var_map    :: dict:dict() | 'undefined'}).
 -record(fun_call,   {caller     :: dialyzer_callgraph:mfa_or_funlbl(),
                      callee     :: dialyzer_callgraph:mfa_or_funlbl(),
                      arg_types  :: [erl_types:erl_type()],
@@ -120,7 +122,7 @@
                      arg        :: var_to_map1()}).
 -record(warn_call,  {call_name  :: warn_calls(),
                      args       :: args(),
-                     var_map    :: dict:dict()}).
+                     var_map    :: dict:dict() | 'undefined'}).
 
 -type case_tags()  :: 'beg_case' | #beg_clause{} | #end_clause{} | #end_case{}.
 -type code()       :: [#dep_call{} | #fun_call{} | #warn_call{} |
@@ -138,8 +140,9 @@
                      fun_mfa    :: dialyzer_callgraph:mfa_or_funlbl(),
                      fun_label  :: label()}).
 
--record(races, {curr_fun                :: dialyzer_callgraph:mfa_or_funlbl(),
-                curr_fun_label          :: label(),
+-record(races, {curr_fun                :: dialyzer_callgraph:mfa_or_funlbl()
+                                         | 'undefined',
+                curr_fun_label          :: label() | 'undefined',
                 curr_fun_args = 'empty' :: core_args(),
                 new_table = 'no_t'      :: table(),
                 race_list = []          :: code(),
@@ -312,10 +315,13 @@ race(State) ->
         DepList = fixup_race_list(RaceWarnTag, VarArgs, State1),
         {State2, RaceWarn} =
           get_race_warn(Fun, Args, ArgTypes, DepList, State),
+        {File, Line} = FileLine,
+        CurrMFA = dialyzer_dataflow:state__find_function(CurrFun, State),
+        WarningInfo = {File, Line, CurrMFA},
         race(
           state__add_race_warning(
             state__renew_race_tags(T, State2), RaceWarn, RaceWarnTag,
-            FileLine))
+            WarningInfo))
     end,
   state__renew_race_tags([], RetState).
 
@@ -2324,7 +2330,7 @@ get_race_warnings_helper(Warnings, State) ->
     [] ->
       {dialyzer_dataflow:state__get_races(State), State};
     [H|T] ->
-      {RaceWarnTag, FileLine, {race_condition, [M, F, A, AT, S, DepList]}} = H,
+      {RaceWarnTag, WarningInfo, {race_condition, [M, F, A, AT, S, DepList]}} = H,
       Reason =
         case RaceWarnTag of
           ?WARN_WHEREIS_REGISTER ->
@@ -2347,7 +2353,7 @@ get_race_warnings_helper(Warnings, State) ->
                        "caused by its combination with ")
         end,
       W =
-        {?WARN_RACE_CONDITION, FileLine,
+        {?WARN_RACE_CONDITION, WarningInfo,
          {race_condition,
           [M, F, dialyzer_dataflow:format_args(A, AT, S), Reason]}},
       get_race_warnings_helper(T,
@@ -2377,12 +2383,12 @@ get_reason(DependencyList, Reason) ->
       end
   end.
 
-state__add_race_warning(State, RaceWarn, RaceWarnTag, FileLine) ->
+state__add_race_warning(State, RaceWarn, RaceWarnTag, WarningInfo) ->
   case RaceWarn of
     no_race -> State;
     _Else ->
       Races = dialyzer_dataflow:state__get_races(State),
-      Warn = {RaceWarnTag, FileLine, RaceWarn},
+      Warn = {RaceWarnTag, WarningInfo, RaceWarn},
       dialyzer_dataflow:state__put_races(add_race_warning(Warn, Races), State)
   end.
 

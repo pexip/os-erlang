@@ -58,8 +58,8 @@ find $DIR -type f | \
 PACKAGES='asn1 common-test corba crypto debugger dialyzer diameter
 	  edoc eldap erl-docgen et eunit gs ic-java ic inets jinterface megaco mnesia
 	  observer odbc os-mon parsetools percept public-key reltool
-	  runtime-tools snmp ssh ssl syntax-tools test-server tools
-	  typer webtool wx xmerl'
+	  runtime-tools snmp ssh ssl syntax-tools tools
+	  typer wx xmerl'
 
 CMD='grep -v -E -e ./usr/lib/erlang/usr/include |
      grep -v -E -f debian/patterns/erlang-base.patterns |

@@ -1,18 +1,19 @@
 %%
 %% %CopyrightBegin%
 %% 
-%% Copyright Ericsson AB 2002-2013. All Rights Reserved.
+%% Copyright Ericsson AB 2002-2016. All Rights Reserved.
 %% 
-%% The contents of this file are subject to the Erlang Public License,
-%% Version 1.1, (the "License"); you may not use this file except in
-%% compliance with the License. You should have received a copy of the
-%% Erlang Public License along with this software. If not, it can be
-%% retrieved online at http://www.erlang.org/.
-%% 
-%% Software distributed under the License is distributed on an "AS IS"
-%% basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See
-%% the License for the specific language governing rights and limitations
-%% under the License.
+%% Licensed under the Apache License, Version 2.0 (the "License");
+%% you may not use this file except in compliance with the License.
+%% You may obtain a copy of the License at
+%%
+%%     http://www.apache.org/licenses/LICENSE-2.0
+%%
+%% Unless required by applicable law or agreed to in writing, software
+%% distributed under the License is distributed on an "AS IS" BASIS,
+%% WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+%% See the License for the specific language governing permissions and
+%% limitations under the License.
 %% 
 %% %CopyrightEnd%
 %%
@@ -223,8 +224,9 @@ transform_from_shell(Dialect, Clauses, BoundEnvironment) ->
 %% Called when translating during compiling
 %%
 
--spec parse_transform(Forms, Options) -> Forms when
-      Forms :: [erl_parse:abstract_form()],
+-spec parse_transform(Forms, Options) -> Forms2 when
+      Forms :: [erl_parse:abstract_form() | erl_parse:form_info()],
+      Forms2 :: [erl_parse:abstract_form() | erl_parse:form_info()],
       Options :: term().
 
 parse_transform(Forms, _Options) ->
@@ -306,14 +308,17 @@ cleanup_filename({Old,OldRec,OldWarnings}) ->
 
 add_record_definition({Name,FieldList}) ->
     {KeyList,_} = lists:foldl(
-		    fun({record_field,_,{atom,Line0,FieldName}},{L,C}) ->
-			    {[{FieldName,C,{atom,Line0,undefined}}|L],C+1};
-		       ({record_field,_,{atom,_,FieldName},Def},{L,C}) ->
-			    {[{FieldName,C,Def}|L],C+1}
-		    end,
+                    fun(F, {L,C}) -> {[record_field(F, C)|L],C+1} end,
 		    {[],2},
 		    FieldList),
     put_records([{Name,KeyList}|get_records()]).
+
+record_field({record_field,_,{atom,Line0,FieldName}}, C) ->
+    {FieldName,C,{atom,Line0,undefined}};
+record_field({record_field,_,{atom,_,FieldName},Def}, C) ->
+    {FieldName,C,Def};
+record_field({typed_record_field,Field,_Type}, C) ->
+    record_field(Field, C).
 
 forms([F0|Fs0]) ->
     F1 = form(F0),
@@ -445,6 +450,8 @@ check_type(_,[{tuple,_,_}],ets) ->
 check_type(_,[{record,_,_,_}],ets) ->
     ok;
 check_type(_,[{cons,_,_,_}],dbg) ->
+    ok;
+check_type(_,[{nil,_}],dbg) ->
     ok;
 check_type(Line0,[{match,_,{var,_,_},X}],Any) ->
     check_type(Line0,[X],Any);
@@ -725,10 +732,10 @@ transform_head([V],OuterBound) ->
     th(NewV,NewBind,OuterBound).
 
 
-toplevel_head_match({match,Line,{var,_,VName},Expr},B,OB) ->
+toplevel_head_match({match,_,{var,Line,VName},Expr},B,OB) ->
     warn_var_clash(Line,VName,OB),
     {Expr,new_bind({VName,'$_'},B)};
-toplevel_head_match({match,Line,Expr,{var,_,VName}},B,OB) ->
+toplevel_head_match({match,_,Expr,{var,Line,VName}},B,OB) ->
     warn_var_clash(Line,VName,OB),
     {Expr,new_bind({VName,'$_'},B)};
 toplevel_head_match(Other,B,_OB) ->
@@ -822,9 +829,10 @@ th(T,B,OB) when is_tuple(T) ->
 th(Nonstruct,B,_OB) ->
     {Nonstruct,B}.
 
-warn_var_clash(Line,Name,OuterBound) ->
+warn_var_clash(Anno,Name,OuterBound) ->
     case gb_sets:is_member(Name,OuterBound) of
 	true ->
+            Line = erl_anno:line(Anno),
 	    add_warning(Line,{?WARN_SHADOW_VAR,Name});
 	_ ->
 	    ok
@@ -1079,6 +1087,12 @@ normalise({cons,_,Head,Tail}) ->
     [normalise(Head)|normalise(Tail)];
 normalise({tuple,_,Args}) ->
     list_to_tuple(normalise_list(Args));
+normalise({map,_,Pairs0}) ->
+    Pairs1 = lists:map(fun ({map_field_exact,_,K,V}) ->
+                               {normalise(K),normalise(V)}
+                       end,
+                       Pairs0),
+    maps:from_list(Pairs1);
 %% Special case for unary +/-.
 normalise({op,_,'+',{char,_,I}}) -> I;
 normalise({op,_,'+',{integer,_,I}}) -> I;

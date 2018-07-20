@@ -1,18 +1,19 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2011-2013. All Rights Reserved.
+%% Copyright Ericsson AB 2011-2016. All Rights Reserved.
 %%
-%% The contents of this file are subject to the Erlang Public License,
-%% Version 1.1, (the "License"); you may not use this file except in
-%% compliance with the License. You should have received a copy of the
-%% Erlang Public License along with this software. If not, it can be
-%% retrieved online at http://www.erlang.org/.
+%% Licensed under the Apache License, Version 2.0 (the "License");
+%% you may not use this file except in compliance with the License.
+%% You may obtain a copy of the License at
 %%
-%% Software distributed under the License is distributed on an "AS IS"
-%% basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See
-%% the License for the specific language governing rights and limitations
-%% under the License.
+%%     http://www.apache.org/licenses/LICENSE-2.0
+%%
+%% Unless required by applicable law or agreed to in writing, software
+%% distributed under the License is distributed on an "AS IS" BASIS,
+%% WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+%% See the License for the specific language governing permissions and
+%% limitations under the License.
 %%
 %% %CopyrightEnd%
 %%
@@ -29,7 +30,8 @@
 	 pre_init_per_suite/3, pre_end_per_suite/3, post_end_per_suite/4,
 	 pre_init_per_group/3, post_init_per_group/4,
 	 pre_end_per_group/3, post_end_per_group/4,
-	 pre_init_per_testcase/3, post_end_per_testcase/4]).
+	 pre_init_per_testcase/3, post_init_per_testcase/4,
+	 pre_end_per_testcase/3, post_end_per_testcase/4]).
 
 %% Event handler Callbacks
 -export([init/1,
@@ -88,6 +90,12 @@ pre_init_per_testcase(TC, Config, State) ->
     set_curr_func(TC, Config),
     {Config, State}.
 
+post_init_per_testcase(_TC, _Config, Return, State) ->
+    {Return, State}.
+
+pre_end_per_testcase(_TC, Config, State) ->
+    {Config, State}.
+
 post_end_per_testcase(_TC, _Config, Result, State) ->
     %% Make sure that the event queue is flushed
     %% before ending this test case.
@@ -119,19 +127,34 @@ handle_event(Event, #eh_state{log_func = LogFunc} = State) ->
 	_Else ->
 	    {ok, ErrLogType} = application:get_env(sasl, errlog_type),
 	    SReport = sasl_report:format_report(group_leader(), ErrLogType,
-						tag_event(Event)),
+						tag_event(Event, local)),
 	    if is_list(SReport) ->
 		    SaslHeader = format_header(State),
-		    ct_logs:LogFunc(sasl, ?STD_IMPORTANCE, SaslHeader, SReport, []);
+		    case LogFunc of
+			tc_log ->
+			    ct_logs:tc_log(sasl, ?STD_IMPORTANCE,
+					   SaslHeader, SReport, [], []);
+			tc_log_async ->
+			    ct_logs:tc_log_async(sasl, ?STD_IMPORTANCE,
+						 SaslHeader, SReport, [])
+		    end;
 	       true -> %% Report is an atom if no logging is to be done
 		    ignore
 	    end
     end,
+    %% note that error_logger (unlike sasl) expects UTC time
     EReport = error_logger_tty_h:write_event(
-		tag_event(Event),io_lib),
+		tag_event(Event, utc), io_lib),
     if is_list(EReport) ->
 	    ErrHeader = format_header(State),
-	    ct_logs:LogFunc(error_logger, ?STD_IMPORTANCE, ErrHeader, EReport, []);
+	    case LogFunc of
+		tc_log ->
+		    ct_logs:tc_log(error_logger, ?STD_IMPORTANCE,
+				   ErrHeader, EReport, [], []);
+		tc_log_async ->
+		    ct_logs:tc_log_async(error_logger, ?STD_IMPORTANCE,
+					 ErrHeader, EReport, [])
+	    end;
        true -> %% Report is an atom if no logging is to be done
 	    ignore
     end,
@@ -198,7 +221,9 @@ terminate(_) ->
 terminate(_Arg, _State) ->
     ok.
 
-tag_event(Event) ->
+tag_event(Event, utc) ->
+    {calendar:universal_time(), Event};
+tag_event(Event, _) ->
     {calendar:local_time(), Event}.
 
 set_curr_func(CurrFunc, Config) ->
