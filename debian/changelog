@@ -1,3 +1,15 @@
+erlang (1:19.2.1+dfsg-2+deb9u2) stretch; urgency=medium
+
+  [ Andreas Beckmann ]
+  * Non-maintainer upload.
+  * Backport removal of xemacs21 support from 1:21.2+dfsg-2.
+
+  [ Sergei Golovan ]
+  * Do not install Erlang mode for XEmacs since it isn't supposed to work
+    with it (closes: #909387).
+
+ -- Andreas Beckmann <anbe@debian.org>  Fri, 08 Feb 2019 23:28:34 +0100
+
 erlang (1:19.2.1+dfsg-2+deb9u1) stretch-security; urgency=high
 
   * Applied a patch from the upstream which fixes CVE-2017-1000385
