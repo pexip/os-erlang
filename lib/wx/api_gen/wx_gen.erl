@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2008-2016. All Rights Reserved.
+%% Copyright Ericsson AB 2008-2018. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -47,9 +47,9 @@ safe(What, QuitOnErr) ->
 	What(),
 	io:format("Completed successfully~n~n", []),
 	QuitOnErr andalso gen_util:halt(0)
-    catch Err:Reason ->
+    catch Err:Reason:Stacktrace ->
 	    io:format("Error in ~p ~p~n", [get(current_class),get(current_func)]),
-	    erlang:display({Err,Reason, erlang:get_stacktrace()}),
+	    erlang:display({Err,Reason,Stacktrace}),
 	    catch gen_util:close(),
 	    QuitOnErr andalso gen_util:halt(1)
     end.
@@ -93,9 +93,10 @@ mangle_info(E={not_const,List}) ->
     put(not_const,  [atom_to_list(M) || M <- List]),
     E;
 mangle_info(E={gvars,List}) ->
-    A2L = fun({N,{T,C}}) -> {atom_to_list(N), {T,atom_to_list(C)}};
+    A2L = fun({N,{test_if,C}}) -> {atom_to_list(N), {test_if,C}};
+             ({N,{T,C}}) -> {atom_to_list(N), {T,atom_to_list(C)}};
 	     ({N,C}) ->     {atom_to_list(N), atom_to_list(C)}
-	  end,    
+	  end,
     put(gvars, map(A2L,List)),
     E;
 mangle_info({class,CN,P,O,FL}) ->
@@ -501,10 +502,11 @@ parse_member2(_, _,M0) ->
     M0.
 
 add_param(InParam, Opts, M0) ->
-    Param0 = case InParam#param.name of
-		 undefined -> InParam#param{name="val"};
+    Param0 = case {InParam#param.name, InParam#param.type} of
+                 {undefined, void} -> InParam#param{where=nowhere};
+		 {undefined,_} -> InParam#param{name="val"};
 		 _ -> InParam
-	     end,  
+	     end,
     Param = case Param0#param.type of
 		#type{base={comp,_,_Comp}} ->   Param0;
 		#type{base={class,_Class}} -> Param0;

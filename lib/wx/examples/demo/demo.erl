@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %% 
-%% Copyright Ericsson AB 2009-2016. All Rights Reserved.
+%% Copyright Ericsson AB 2009-2017. All Rights Reserved.
 %% 
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -243,6 +243,9 @@ handle_event(#wx{id = Id,
 	    %% If you are going to printout mainly text it is easier if
 	    %% you generate HTML code and use a wxHtmlEasyPrint
 	    %% instead of using DCs
+
+            %% Printpreview doesn't work in >2.9 without this
+            wxIdleEvent:setMode(?wxIDLE_PROCESS_ALL),
 	    Module = "ex_" ++ wxListBox:getStringSelection(State#state.selector) ++ ".erl",
 	    HEP = wxHtmlEasyPrinting:new([{name, "Print"},
 					  {parentWindow, State#state.win}]),
@@ -408,7 +411,7 @@ find(Ed) ->
 
 keyWords() ->
     L = ["after","begin","case","try","cond","catch","andalso","orelse",
-	 "end","fun","if","let","of","query","receive","when","bnot","not",
+	 "end","fun","if","let","of","receive","when","bnot","not",
 	 "div","rem","band","and","bor","bxor","bsl","bsr","or","xor"],
     lists:flatten([K ++ " " || K <- L] ++ [0]).
 

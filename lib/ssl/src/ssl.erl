@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 1999-2016. All Rights Reserved.
+%% Copyright Ericsson AB 1999-2018. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -23,31 +23,10 @@
 %%% Purpose : Main API module for SSL see also tls.erl and dtls.erl
 
 -module(ssl).
--include("ssl_internal.hrl").
+
 -include_lib("public_key/include/public_key.hrl").
 
-%% Application handling
--export([start/0, start/1, stop/0, clear_pem_cache/0]).
-
-%% Socket handling
--export([connect/3, connect/2, connect/4,
-	 listen/2, transport_accept/1, transport_accept/2,
-	 ssl_accept/1, ssl_accept/2, ssl_accept/3,
-	 controlling_process/2, peername/1, peercert/1, sockname/1,
-	 close/1, close/2, shutdown/2, recv/2, recv/3, send/2,
-	 getopts/2, setopts/2, getstat/1, getstat/2
-	]).
-%% SSL/TLS protocol handling
--export([cipher_suites/0, cipher_suites/1, eccs/0, eccs/1,
-	 connection_info/1, versions/0, session_info/1, format_error/1,
-     renegotiate/1, prf/5, negotiated_protocol/1, negotiated_next_protocol/1,
-	 connection_information/1, connection_information/2]).
-%% Misc
--export([handle_options/2, tls_version/1]).
-
--deprecated({negotiated_next_protocol, 1, next_major_release}).
--deprecated({connection_info, 1, next_major_release}).
-
+-include("ssl_internal.hrl").
 -include("ssl_api.hrl").
 -include("ssl_internal.hrl").
 -include("ssl_record.hrl").
@@ -55,7 +34,32 @@
 -include("ssl_handshake.hrl").
 -include("ssl_srp.hrl").
 
--include_lib("public_key/include/public_key.hrl"). 
+%% Application handling
+-export([start/0, start/1, stop/0, clear_pem_cache/0]).
+
+%% Socket handling
+-export([connect/3, connect/2, connect/4,
+	 listen/2, transport_accept/1, transport_accept/2,
+	 handshake/1, handshake/2, handshake/3, handshake_continue/2,
+         handshake_continue/3, handshake_cancel/1,
+         ssl_accept/1, ssl_accept/2, ssl_accept/3,
+	 controlling_process/2, peername/1, peercert/1, sockname/1,
+	 close/1, close/2, shutdown/2, recv/2, recv/3, send/2,
+	 getopts/2, setopts/2, getstat/1, getstat/2
+	]).
+
+%% SSL/TLS protocol handling
+-export([cipher_suites/0, cipher_suites/1, cipher_suites/2, filter_cipher_suites/2,
+         prepend_cipher_suites/2, append_cipher_suites/2,
+         eccs/0, eccs/1, versions/0, 
+         format_error/1, renegotiate/1, prf/5, negotiated_protocol/1, 
+	 connection_information/1, connection_information/2]).
+%% Misc
+-export([handle_options/2, tls_version/1, new_ssl_options/3, suite_to_str/1]).
+
+-deprecated({ssl_accept, 1, eventually}).
+-deprecated({ssl_accept, 2, eventually}).
+-deprecated({ssl_accept, 3, eventually}).
 
 %%--------------------------------------------------------------------
 -spec start() -> ok  | {error, reason()}.
@@ -115,7 +119,7 @@ connect(Host, Port, Options) ->
 
 connect(Host, Port, Options, Timeout) when (is_integer(Timeout) andalso Timeout >= 0) or (Timeout == infinity) ->
     try
-	{ok, Config} = handle_options(Options, client),
+	{ok, Config} = handle_options(Options, client, Host),
 	case Config#config.connection_cb of
 	    tls_connection ->
 		tls_socket:connect(Host,Port,Config,Timeout);
@@ -171,34 +175,73 @@ transport_accept(#sslsocket{pid = {ListenSocket,
 			ok | {ok, #sslsocket{}} | {error, reason()}.
 
 -spec ssl_accept(#sslsocket{} | port(), [ssl_option()] | [ssl_option()| transport_option()], timeout()) ->
-			{ok, #sslsocket{}} | {error, reason()}.
+			ok | {ok, #sslsocket{}} | {error, reason()}.
 %%
 %% Description: Performs accept on an ssl listen socket. e.i. performs
 %%              ssl handshake.
 %%--------------------------------------------------------------------
 ssl_accept(ListenSocket) ->
-    ssl_accept(ListenSocket, infinity).
+    ssl_accept(ListenSocket, [], infinity).
+ssl_accept(Socket, Timeout)  when  (is_integer(Timeout) andalso Timeout >= 0) or (Timeout == infinity) ->
+    ssl_accept(Socket, [], Timeout);
+ssl_accept(ListenSocket, SslOptions) when is_port(ListenSocket) ->
+    ssl_accept(ListenSocket, SslOptions, infinity);
+ssl_accept(Socket, Timeout) ->
+    ssl_accept(Socket, [], Timeout).
+ssl_accept(Socket, SslOptions, Timeout) when is_port(Socket) ->
+    handshake(Socket, SslOptions, Timeout);
+ssl_accept(Socket, SslOptions, Timeout) ->
+     case handshake(Socket, SslOptions, Timeout) of
+        {ok, _} ->
+            ok;
+        Error ->
+            Error
+     end.
+%%--------------------------------------------------------------------
+-spec handshake(#sslsocket{}) -> {ok, #sslsocket{}} | {error, reason()}.
+-spec handshake(#sslsocket{} | port(), timeout()| [ssl_option()
+						    | transport_option()]) ->
+                       {ok, #sslsocket{}} | {error, reason()}.
 
-ssl_accept(#sslsocket{} = Socket, Timeout) when  (is_integer(Timeout) andalso Timeout >= 0) or (Timeout == infinity) ->
+-spec handshake(#sslsocket{} | port(), [ssl_option()] | [ssl_option()| transport_option()], timeout()) ->
+			{ok, #sslsocket{}} | {error, reason()}.
+%%
+%% Description: Performs accept on an ssl listen socket. e.i. performs
+%%              ssl handshake.
+%%--------------------------------------------------------------------
+handshake(ListenSocket) ->
+    handshake(ListenSocket, infinity).
+
+handshake(#sslsocket{} = Socket, Timeout) when  (is_integer(Timeout) andalso Timeout >= 0) or 
+                                                (Timeout == infinity) ->
     ssl_connection:handshake(Socket, Timeout);
 
-ssl_accept(ListenSocket, SslOptions)  when is_port(ListenSocket) ->
-    ssl_accept(ListenSocket, SslOptions, infinity).
+handshake(ListenSocket, SslOptions)  when is_port(ListenSocket) ->
+    handshake(ListenSocket, SslOptions, infinity).
 
-ssl_accept(#sslsocket{} = Socket, [], Timeout) when (is_integer(Timeout) andalso Timeout >= 0) or (Timeout == infinity)->
-    ssl_accept(Socket, Timeout);
-ssl_accept(#sslsocket{fd = {_, _, _, Tracker}} = Socket, SslOpts0, Timeout) when
+handshake(#sslsocket{} = Socket, [], Timeout) when (is_integer(Timeout) andalso Timeout >= 0) or 
+                                                    (Timeout == infinity)->
+    handshake(Socket, Timeout);
+handshake(#sslsocket{fd = {_, _, _, Tracker}} = Socket, SslOpts, Timeout) when
       (is_integer(Timeout) andalso Timeout >= 0) or (Timeout == infinity)->
     try
-	{ok, EmOpts, InheritedSslOpts} = tls_socket:get_all_opts(Tracker),
-	SslOpts = handle_options(SslOpts0, InheritedSslOpts),
+	{ok, EmOpts, _} = tls_socket:get_all_opts(Tracker),
 	ssl_connection:handshake(Socket, {SslOpts, 
 					  tls_socket:emulated_socket_options(EmOpts, #socket_options{})}, Timeout)
     catch
 	Error = {error, _Reason} -> Error
     end;
-ssl_accept(Socket, SslOptions, Timeout) when is_port(Socket),
-					     (is_integer(Timeout) andalso Timeout >= 0) or (Timeout == infinity) ->
+handshake(#sslsocket{pid = [Pid|_], fd = {_, _, _}} = Socket, SslOpts, Timeout) when
+      (is_integer(Timeout) andalso Timeout >= 0) or (Timeout == infinity)->
+    try
+        {ok, EmOpts, _} = dtls_packet_demux:get_all_opts(Pid),
+	ssl_connection:handshake(Socket, {SslOpts,  
+                                          tls_socket:emulated_socket_options(EmOpts, #socket_options{})}, Timeout)
+    catch
+	Error = {error, _Reason} -> Error
+    end;
+handshake(Socket, SslOptions, Timeout) when is_port(Socket),
+                                            (is_integer(Timeout) andalso Timeout >= 0) or (Timeout == infinity) ->
     {Transport,_,_,_} =
 	proplists:get_value(cb_info, SslOptions, {gen_tcp, tcp, tcp_closed, tcp_error}),
     EmulatedOptions = tls_socket:emulated_options(),
@@ -208,21 +251,50 @@ ssl_accept(Socket, SslOptions, Timeout) when is_port(Socket),
 	{ok, #config{transport_info = CbInfo, ssl = SslOpts, emulated = EmOpts}} ->
 	    ok = tls_socket:setopts(Transport, Socket, tls_socket:internal_inet_values()),
 	    {ok, Port} = tls_socket:port(Transport, Socket),
-	    ssl_connection:ssl_accept(ConnetionCb, Port, Socket,
-				      {SslOpts, 
-				       tls_socket:emulated_socket_options(EmOpts, #socket_options{}), undefined},
-				      self(), CbInfo, Timeout)
+	    ssl_connection:handshake(ConnetionCb, Port, Socket,
+                                     {SslOpts, 
+                                      tls_socket:emulated_socket_options(EmOpts, #socket_options{}), undefined},
+                                     self(), CbInfo, Timeout)
     catch
 	Error = {error, _Reason} -> Error
     end.
+
+
+%%--------------------------------------------------------------------
+-spec handshake_continue(#sslsocket{}, [ssl_option()]) -> 
+                                {ok, #sslsocket{}} | {error, reason()}.
+%%
+%%
+%% Description: Continues the handshke possible with newly supplied options.
+%%--------------------------------------------------------------------
+handshake_continue(Socket, SSLOptions) ->
+    handshake_continue(Socket, SSLOptions, infinity).
+%%--------------------------------------------------------------------
+-spec handshake_continue(#sslsocket{}, [ssl_option()], timeout()) -> 
+                                {ok, #sslsocket{}} | {error, reason()}.
+%%
+%%
+%% Description: Continues the handshke possible with newly supplied options.
+%%--------------------------------------------------------------------
+handshake_continue(Socket, SSLOptions, Timeout) ->
+    ssl_connection:handshake_continue(Socket, SSLOptions, Timeout).
+%%--------------------------------------------------------------------
+-spec  handshake_cancel(#sslsocket{}) -> term().
+%%
+%% Description: Cancels the handshakes sending a close alert.
+%%--------------------------------------------------------------------
+handshake_cancel(Socket) ->
+    ssl_connection:handshake_cancel(Socket).
 
 %%--------------------------------------------------------------------
 -spec  close(#sslsocket{}) -> term().
 %%
 %% Description: Close an ssl connection
 %%--------------------------------------------------------------------
-close(#sslsocket{pid = Pid}) when is_pid(Pid) ->
+close(#sslsocket{pid = [Pid|_]}) when is_pid(Pid) ->
     ssl_connection:close(Pid, {close, ?DEFAULT_TIMEOUT});
+close(#sslsocket{pid = {dtls, #config{dtls_handler = {Pid, _}}}}) ->
+   dtls_packet_demux:close(Pid);
 close(#sslsocket{pid = {ListenSocket, #config{transport_info={Transport,_, _, _}}}}) ->
     Transport:close(ListenSocket).
 
@@ -231,12 +303,12 @@ close(#sslsocket{pid = {ListenSocket, #config{transport_info={Transport,_, _, _}
 %%
 %% Description: Close an ssl connection
 %%--------------------------------------------------------------------
-close(#sslsocket{pid = TLSPid},
+close(#sslsocket{pid = [TLSPid|_]},
       {Pid, Timeout} = DownGrade) when is_pid(TLSPid),
 				       is_pid(Pid),
 				       (is_integer(Timeout) andalso Timeout >= 0) or (Timeout == infinity) ->
     ssl_connection:close(TLSPid, {close, DownGrade});
-close(#sslsocket{pid = TLSPid}, Timeout) when is_pid(TLSPid),
+close(#sslsocket{pid = [TLSPid|_]}, Timeout) when is_pid(TLSPid),
 					      (is_integer(Timeout) andalso Timeout >= 0) or (Timeout == infinity) ->
     ssl_connection:close(TLSPid, {close, Timeout});
 close(#sslsocket{pid = {ListenSocket, #config{transport_info={Transport,_, _, _}}}}, _) ->
@@ -247,10 +319,14 @@ close(#sslsocket{pid = {ListenSocket, #config{transport_info={Transport,_, _, _}
 %%
 %% Description: Sends data over the ssl connection
 %%--------------------------------------------------------------------
-send(#sslsocket{pid = Pid}, Data) when is_pid(Pid) ->
+send(#sslsocket{pid = [Pid]}, Data) when is_pid(Pid) ->
     ssl_connection:send(Pid, Data);
-send(#sslsocket{pid = {_, #config{transport_info={gen_udp, _, _, _}}}}, _) ->
+send(#sslsocket{pid = [_, Pid]}, Data) when is_pid(Pid) ->
+    tls_sender:send_data(Pid,  erlang:iolist_to_binary(Data));
+send(#sslsocket{pid = {_, #config{transport_info={_, udp, _, _}}}}, _) ->
     {error,enotconn}; %% Emulate connection behaviour
+send(#sslsocket{pid = {dtls,_}}, _) ->
+    {error,enotconn};  %% Emulate connection behaviour
 send(#sslsocket{pid = {ListenSocket, #config{transport_info={Transport, _, _, _}}}}, Data) ->
     Transport:send(ListenSocket, Data). %% {error,enotconn}
 
@@ -262,9 +338,11 @@ send(#sslsocket{pid = {ListenSocket, #config{transport_info={Transport, _, _, _}
 %%--------------------------------------------------------------------
 recv(Socket, Length) ->
     recv(Socket, Length, infinity).
-recv(#sslsocket{pid = Pid}, Length, Timeout) when is_pid(Pid),
+recv(#sslsocket{pid = [Pid|_]}, Length, Timeout) when is_pid(Pid),
 						  (is_integer(Timeout) andalso Timeout >= 0) or (Timeout == infinity)->
     ssl_connection:recv(Pid, Length, Timeout);
+recv(#sslsocket{pid = {dtls,_}}, _, _) ->
+    {error,enotconn};
 recv(#sslsocket{pid = {Listen,
 		       #config{transport_info = {Transport, _, _, _}}}}, _,_) when is_port(Listen)->
     Transport:recv(Listen, 0). %% {error,enotconn}
@@ -275,12 +353,16 @@ recv(#sslsocket{pid = {Listen,
 %% Description: Changes process that receives the messages when active = true
 %% or once.
 %%--------------------------------------------------------------------
-controlling_process(#sslsocket{pid = Pid}, NewOwner) when is_pid(Pid), is_pid(NewOwner) ->
+controlling_process(#sslsocket{pid = [Pid|_]}, NewOwner) when is_pid(Pid), is_pid(NewOwner) ->
     ssl_connection:new_user(Pid, NewOwner);
+controlling_process(#sslsocket{pid = {dtls, _}},
+		    NewOwner) when is_pid(NewOwner) ->
+    ok; %% Meaningless but let it be allowed to conform with TLS 
 controlling_process(#sslsocket{pid = {Listen,
 				      #config{transport_info = {Transport, _, _, _}}}},
 		    NewOwner) when is_port(Listen),
 				   is_pid(NewOwner) ->
+     %% Meaningless but let it be allowed to conform with normal sockets  
     Transport:controlling_process(Listen, NewOwner).
 
 
@@ -289,23 +371,25 @@ controlling_process(#sslsocket{pid = {Listen,
 %%
 %% Description: Return SSL information for the connection
 %%--------------------------------------------------------------------
-connection_information(#sslsocket{pid = Pid}) when is_pid(Pid) -> 
-    case ssl_connection:connection_information(Pid) of
+connection_information(#sslsocket{pid = [Pid|_]}) when is_pid(Pid) -> 
+    case ssl_connection:connection_information(Pid, false) of
 	{ok, Info} ->
 	    {ok, [Item || Item = {_Key, Value} <- Info,  Value =/= undefined]};
 	Error ->
             Error
     end;
 connection_information(#sslsocket{pid = {Listen, _}}) when is_port(Listen) -> 
-    {error, enotconn}.
+    {error, enotconn};
+connection_information(#sslsocket{pid = {dtls,_}}) ->
+    {error,enotconn}. 
 
 %%--------------------------------------------------------------------
 -spec connection_information(#sslsocket{}, [atom()]) -> {ok, list()} | {error, reason()}.
 %%
 %% Description: Return SSL information for the connection
 %%--------------------------------------------------------------------
-connection_information(#sslsocket{} = SSLSocket, Items) -> 
-    case connection_information(SSLSocket) of
+connection_information(#sslsocket{pid = [Pid|_]}, Items) when is_pid(Pid) -> 
+    case ssl_connection:connection_information(Pid, include_security_info(Items)) of
         {ok, Info} ->
             {ok, [Item || Item = {Key, Value} <- Info,  lists:member(Key, Items),
 			  Value =/= undefined]};
@@ -314,42 +398,35 @@ connection_information(#sslsocket{} = SSLSocket, Items) ->
     end.
 
 %%--------------------------------------------------------------------
-%% Deprecated
--spec connection_info(#sslsocket{}) -> 	{ok, {tls_record:tls_atom_version(), ssl_cipher:erl_cipher_suite()}} |
-					{error, reason()}.
-%%
-%% Description: Returns ssl protocol and cipher used for the connection
-%%--------------------------------------------------------------------
-connection_info(#sslsocket{} = SSLSocket) ->
-    case connection_information(SSLSocket) of
-        {ok, Result} ->
-            {ok, {proplists:get_value(protocol, Result), proplists:get_value(cipher_suite, Result)}};
-        Error ->
-            Error
-    end.
-
-%%--------------------------------------------------------------------
 -spec peername(#sslsocket{}) -> {ok, {inet:ip_address(), inet:port_number()}} | {error, reason()}.
 %%
 %% Description: same as inet:peername/1.
 %%--------------------------------------------------------------------
-peername(#sslsocket{pid = Pid, fd = {Transport, Socket, _, _}}) when is_pid(Pid)->
+peername(#sslsocket{pid = [Pid|_], fd = {Transport, Socket, _}}) when is_pid(Pid)->
+    dtls_socket:peername(Transport, Socket);
+peername(#sslsocket{pid = [Pid|_], fd = {Transport, Socket, _, _}}) when is_pid(Pid)->
     tls_socket:peername(Transport, Socket);
+peername(#sslsocket{pid = {dtls, #config{dtls_handler = {_Pid, _}}}}) ->
+    dtls_socket:peername(dtls, undefined);
 peername(#sslsocket{pid = {ListenSocket,  #config{transport_info = {Transport,_,_,_}}}}) ->
-    tls_socket:peername(Transport, ListenSocket). %% Will return {error, enotconn}
+    tls_socket:peername(Transport, ListenSocket); %% Will return {error, enotconn}
+peername(#sslsocket{pid = {dtls,_}}) ->
+    {error,enotconn}.
 
 %%--------------------------------------------------------------------
 -spec peercert(#sslsocket{}) ->{ok, DerCert::binary()} | {error, reason()}.
 %%
 %% Description: Returns the peercert.
 %%--------------------------------------------------------------------
-peercert(#sslsocket{pid = Pid}) when is_pid(Pid) ->
+peercert(#sslsocket{pid = [Pid|_]}) when is_pid(Pid) ->
     case ssl_connection:peer_certificate(Pid) of
 	{ok, undefined} ->
 	    {error, no_peercert};
         Result ->
 	    Result
     end;
+peercert(#sslsocket{pid = {dtls, _}}) ->
+    {error, enotconn};
 peercert(#sslsocket{pid = {Listen, _}}) when is_port(Listen) ->
     {error, enotconn}.
 
@@ -359,41 +436,100 @@ peercert(#sslsocket{pid = {Listen, _}}) when is_port(Listen) ->
 %% Description: Returns the protocol that has been negotiated. If no
 %% protocol has been negotiated will return {error, protocol_not_negotiated}
 %%--------------------------------------------------------------------
-negotiated_protocol(#sslsocket{pid = Pid}) ->
+negotiated_protocol(#sslsocket{pid = [Pid|_]}) when is_pid(Pid) ->
     ssl_connection:negotiated_protocol(Pid).
 
 %%--------------------------------------------------------------------
--spec negotiated_next_protocol(#sslsocket{}) -> {ok, binary()} | {error, reason()}.
-%%
-%% Description: Returns the next protocol that has been negotiated. If no
-%% protocol has been negotiated will return {error, next_protocol_not_negotiated}
-%%--------------------------------------------------------------------
-negotiated_next_protocol(Socket) ->
-    case negotiated_protocol(Socket) of
-        {error, protocol_not_negotiated} ->
-            {error, next_protocol_not_negotiated};
-        Res ->
-            Res
-    end.
-
-%%--------------------------------------------------------------------
--spec cipher_suites() -> [ssl_cipher:erl_cipher_suite()] | [string()].
+-spec cipher_suites() -> [ssl_cipher_format:old_erl_cipher_suite()] | [string()].
 %%--------------------------------------------------------------------
 cipher_suites() ->
     cipher_suites(erlang).
 %%--------------------------------------------------------------------
--spec cipher_suites(erlang | openssl | all) -> [ssl_cipher:erl_cipher_suite()] |
-					       [string()].
+-spec cipher_suites(erlang | openssl | all) -> 
+                           [ssl_cipher_format:old_erl_cipher_suite() | string()].
 %% Description: Returns all supported cipher suites.
 %%--------------------------------------------------------------------
 cipher_suites(erlang) ->
-    [ssl_cipher:erl_suite_definition(Suite) || Suite <- available_suites(default)];
+    [ssl_cipher_format:erl_suite_definition(Suite) || Suite <- available_suites(default)];
 
 cipher_suites(openssl) ->
-    [ssl_cipher:openssl_suite_name(Suite) || Suite <- available_suites(default)];
+    [ssl_cipher_format:openssl_suite_name(Suite) ||
+        Suite <- available_suites(default)];
 
 cipher_suites(all) ->
-    [ssl_cipher:erl_suite_definition(Suite) || Suite <- available_suites(all)].
+    [ssl_cipher_format:erl_suite_definition(Suite) || Suite <- available_suites(all)].
+
+%%--------------------------------------------------------------------
+-spec cipher_suites(default | all | anonymous, tls_record:tls_version() | dtls_record:dtls_version() |
+                    tls_record:tls_atom_version() |  dtls_record:dtls_atom_version()) -> 
+                           [ssl_cipher_format:erl_cipher_suite()].
+%% Description: Returns all default and all supported cipher suites for a
+%% TLS/DTLS version
+%%--------------------------------------------------------------------
+cipher_suites(Base, Version) when Version == 'tlsv1.2';
+                                  Version == 'tlsv1.1';
+                                  Version == tlsv1;
+                                  Version == sslv3 ->
+    cipher_suites(Base, tls_record:protocol_version(Version));
+cipher_suites(Base, Version)  when Version == 'dtlsv1.2';
+                                   Version == 'dtlsv1'->
+    cipher_suites(Base, dtls_record:protocol_version(Version));                   
+cipher_suites(Base, Version) ->
+    [ssl_cipher_format:suite_definition(Suite) || Suite <- supported_suites(Base, Version)].
+
+%%--------------------------------------------------------------------
+-spec filter_cipher_suites([ssl_cipher_format:erl_cipher_suite()], 
+                           [{key_exchange | cipher | mac | prf, fun()}] | []) -> 
+                                  [ssl_cipher_format:erl_cipher_suite()].
+%% Description: Removes cipher suites if any of the filter functions returns false
+%% for any part of the cipher suite. This function also calls default filter functions
+%% to make sure the cipher suite are supported by crypto.
+%%--------------------------------------------------------------------
+filter_cipher_suites(Suites, Filters0) ->
+    #{key_exchange_filters := KexF,
+      cipher_filters := CipherF,
+      mac_filters := MacF,
+      prf_filters := PrfF}
+        = ssl_cipher:crypto_support_filters(),
+    Filters = #{key_exchange_filters => add_filter(proplists:get_value(key_exchange, Filters0), KexF),
+                cipher_filters => add_filter(proplists:get_value(cipher, Filters0), CipherF),
+                mac_filters => add_filter(proplists:get_value(mac, Filters0), MacF),
+                prf_filters => add_filter(proplists:get_value(prf, Filters0), PrfF)},
+    ssl_cipher:filter_suites(Suites, Filters).
+%%--------------------------------------------------------------------
+-spec prepend_cipher_suites([ssl_cipher_format:erl_cipher_suite()] | 
+                            [{key_exchange | cipher | mac | prf, fun()}],
+                            [ssl_cipher_format:erl_cipher_suite()]) -> 
+                                   [ssl_cipher_format:erl_cipher_suite()].
+%% Description: Make <Preferred> suites become the most prefered
+%%      suites that is put them at the head of the cipher suite list
+%%      and remove them from <Suites> if present. <Preferred> may be a
+%%      list of cipher suits or a list of filters in which case the
+%%      filters are use on Suites to extract the the preferred
+%%      cipher list.
+%% --------------------------------------------------------------------
+prepend_cipher_suites([First | _] = Preferred, Suites0) when is_map(First) ->
+    Suites = Preferred ++ (Suites0 -- Preferred),
+    Suites;
+prepend_cipher_suites(Filters, Suites) ->
+    Preferred = filter_cipher_suites(Suites, Filters), 
+    Preferred ++ (Suites -- Preferred).
+%%--------------------------------------------------------------------
+-spec append_cipher_suites(Deferred :: [ssl_cipher_format:erl_cipher_suite()] | 
+                                       [{key_exchange | cipher | mac | prf, fun()}],
+                           [ssl_cipher_format:erl_cipher_suite()]) -> 
+                                  [ssl_cipher_format:erl_cipher_suite()].
+%% Description: Make <Deferred> suites suites become the 
+%% least prefered suites that is put them at the end of the cipher suite list
+%% and removed them from <Suites> if present.
+%%
+%%--------------------------------------------------------------------
+append_cipher_suites([First | _] = Deferred, Suites0) when is_map(First)->
+    Suites = (Suites0 -- Deferred) ++ Deferred,
+    Suites;
+append_cipher_suites(Filters, Suites) ->
+    Deferred = filter_cipher_suites(Suites, Filters), 
+    (Suites -- Deferred) ++  Deferred.
 
 %%--------------------------------------------------------------------
 -spec eccs() -> tls_v1:curves().
@@ -404,8 +540,9 @@ eccs() ->
     eccs_filter_supported(Curves).
 
 %%--------------------------------------------------------------------
--spec eccs(tls_record:tls_version() | tls_record:tls_atom_version()) ->
-    tls_v1:curves().
+-spec eccs(tls_record:tls_version() | tls_record:tls_atom_version() |
+           dtls_record:dtls_version() | dtls_record:dtls_atom_version()) ->
+                  tls_v1:curves().
 %% Description: returns the curves supported for a given version of
 %% ssl/tls.
 %%--------------------------------------------------------------------
@@ -414,8 +551,16 @@ eccs({3,0}) ->
 eccs({3,_}) ->
     Curves = tls_v1:ecc_curves(all),
     eccs_filter_supported(Curves);
-eccs(AtomVersion) when is_atom(AtomVersion) ->
-    eccs(tls_record:protocol_version(AtomVersion)).
+eccs({254,_} = Version) ->
+    eccs(dtls_v1:corresponding_tls_version(Version));
+eccs(Version) when Version == 'tlsv1.2';
+                   Version == 'tlsv1.1';
+                   Version == tlsv1;
+                   Version == sslv3 ->
+    eccs(tls_record:protocol_version(Version));
+eccs(Version) when Version == 'dtlsv1.2';
+                   Version == 'dtlsv1'->
+    eccs(dtls_v1:corresponding_tls_version(dtls_record:protocol_version(Version))).
 
 eccs_filter_supported(Curves) ->
     CryptoCurves = crypto:ec_curves(),
@@ -428,8 +573,18 @@ eccs_filter_supported(Curves) ->
 %%
 %% Description: Gets options
 %%--------------------------------------------------------------------
-getopts(#sslsocket{pid = Pid}, OptionTags) when is_pid(Pid), is_list(OptionTags) ->
+getopts(#sslsocket{pid = [Pid|_]}, OptionTags) when is_pid(Pid), is_list(OptionTags) ->
     ssl_connection:get_opts(Pid, OptionTags);
+getopts(#sslsocket{pid = {dtls, #config{transport_info = {Transport,_,_,_}}}} = ListenSocket, OptionTags) when is_list(OptionTags) ->
+    try dtls_socket:getopts(Transport, ListenSocket, OptionTags) of
+        {ok, _} = Result ->
+            Result;
+	{error, InetError} ->
+	    {error, {options, {socket_options, OptionTags, InetError}}}
+    catch
+	_:Error ->
+	    {error, {options, {socket_options, OptionTags, Error}}}
+    end;
 getopts(#sslsocket{pid = {_,  #config{transport_info = {Transport,_,_,_}}}} = ListenSocket,
 	OptionTags) when is_list(OptionTags) ->
     try tls_socket:getopts(Transport, ListenSocket, OptionTags) of
@@ -449,7 +604,26 @@ getopts(#sslsocket{}, OptionTags) ->
 %%
 %% Description: Sets options
 %%--------------------------------------------------------------------
-setopts(#sslsocket{pid = Pid}, Options0) when is_pid(Pid), is_list(Options0)  ->
+setopts(#sslsocket{pid = [Pid, Sender]}, Options0) when is_pid(Pid), is_list(Options0)  ->
+    try proplists:expand([{binary, [{mode, binary}]},
+			  {list, [{mode, list}]}], Options0) of
+        Options ->
+            case proplists:get_value(packet, Options, undefined) of
+                undefined ->
+                    ssl_connection:set_opts(Pid, Options);
+                PacketOpt ->
+                    case tls_sender:setopts(Sender, [{packet, PacketOpt}]) of
+                        ok ->
+                            ssl_connection:set_opts(Pid, Options);
+                        Error ->
+                            Error
+                    end
+            end
+    catch
+        _:_ ->
+            {error, {options, {not_a_proplist, Options0}}}
+    end;
+setopts(#sslsocket{pid = [Pid|_]}, Options0) when is_pid(Pid), is_list(Options0)  ->
     try proplists:expand([{binary, [{mode, binary}]},
 			  {list, [{mode, list}]}], Options0) of
 	Options ->
@@ -458,7 +632,16 @@ setopts(#sslsocket{pid = Pid}, Options0) when is_pid(Pid), is_list(Options0)  ->
 	_:_ ->
 	    {error, {options, {not_a_proplist, Options0}}}
     end;
-
+setopts(#sslsocket{pid = {dtls, #config{transport_info = {Transport,_,_,_}}}} = ListenSocket, Options) when is_list(Options) ->
+    try dtls_socket:setopts(Transport, ListenSocket, Options) of
+	ok ->
+	    ok;
+	{error, InetError} ->
+	    {error, {options, {socket_options, Options, InetError}}}
+    catch
+	_:Error ->
+	    {error, {options, {socket_options, Options, Error}}}
+    end;
 setopts(#sslsocket{pid = {_, #config{transport_info = {Transport,_,_,_}}}} = ListenSocket, Options) when is_list(Options) ->
     try tls_socket:setopts(Transport, ListenSocket, Options) of
 	ok ->
@@ -495,7 +678,7 @@ getstat(Socket) ->
 getstat(#sslsocket{pid = {Listen,  #config{transport_info = {Transport, _, _, _}}}}, Options) when is_port(Listen), is_list(Options) ->
     tls_socket:getstat(Transport, Listen, Options);
 
-getstat(#sslsocket{pid = Pid, fd = {Transport, Socket, _, _}}, Options) when is_pid(Pid), is_list(Options) ->
+getstat(#sslsocket{pid = [Pid|_], fd = {Transport, Socket, _, _}}, Options) when is_pid(Pid), is_list(Options) ->
     tls_socket:getstat(Transport, Socket, Options).
 
 %%---------------------------------------------------------------
@@ -506,7 +689,9 @@ getstat(#sslsocket{pid = Pid, fd = {Transport, Socket, _, _}}, Options) when is_
 shutdown(#sslsocket{pid = {Listen, #config{transport_info = {Transport,_, _, _}}}},
 	 How) when is_port(Listen) ->
     Transport:shutdown(Listen, How);
-shutdown(#sslsocket{pid = Pid}, How) ->
+shutdown(#sslsocket{pid = {dtls,_}},_) ->
+    {error, enotconn};
+shutdown(#sslsocket{pid = [Pid|_]}, How) when is_pid(Pid) ->
     ssl_connection:shutdown(Pid, How).
 
 %%--------------------------------------------------------------------
@@ -516,36 +701,32 @@ shutdown(#sslsocket{pid = Pid}, How) ->
 %%--------------------------------------------------------------------
 sockname(#sslsocket{pid = {Listen,  #config{transport_info = {Transport, _, _, _}}}}) when is_port(Listen) ->
     tls_socket:sockname(Transport, Listen);
-sockname(#sslsocket{pid = {udp, #config{udp_handler = {Pid, _}}}}) ->
-    dtls_udp_listener:sockname(Pid);
-sockname(#sslsocket{pid = Pid, fd = {gen_udp= Transport, Socket, _, _}}) when is_pid(Pid) ->
+sockname(#sslsocket{pid = {dtls, #config{dtls_handler = {Pid, _}}}}) ->
+    dtls_packet_demux:sockname(Pid);
+sockname(#sslsocket{pid = [Pid|_], fd = {Transport, Socket, _}}) when is_pid(Pid) ->
     dtls_socket:sockname(Transport, Socket);
-sockname(#sslsocket{pid = Pid, fd = {Transport, Socket, _, _}}) when is_pid(Pid) ->
+sockname(#sslsocket{pid = [Pid| _], fd = {Transport, Socket, _, _}}) when is_pid(Pid) ->
     tls_socket:sockname(Transport, Socket).
 
 %%---------------------------------------------------------------
--spec session_info(#sslsocket{}) -> {ok, list()} | {error, reason()}.
-%%
-%% Description: Returns list of session info currently [{session_id, session_id(),
-%% {cipher_suite, cipher_suite()}]
-%%--------------------------------------------------------------------
-session_info(#sslsocket{pid = Pid}) when is_pid(Pid) ->
-    ssl_connection:session_info(Pid);
-session_info(#sslsocket{pid = {Listen,_}}) when is_port(Listen) ->
-    {error, enotconn}.
-
-%%---------------------------------------------------------------
 -spec versions() -> [{ssl_app, string()} | {supported, [tls_record:tls_atom_version()]} |
-		     {available, [tls_record:tls_atom_version()]}].
+                     {supported_dtls, [dtls_record:dtls_atom_version()]} |
+		     {available, [tls_record:tls_atom_version()]} |
+                     {available_dtls, [dtls_record:dtls_atom_version()]}].
 %%
 %% Description: Returns a list of relevant versions.
 %%--------------------------------------------------------------------
 versions() ->
-    Vsns = tls_record:supported_protocol_versions(),
-    SupportedVsns = [tls_record:protocol_version(Vsn) || Vsn <- Vsns],
-    AvailableVsns = ?ALL_AVAILABLE_VERSIONS,
-    %% TODO Add DTLS versions when supported
-    [{ssl_app, ?VSN}, {supported, SupportedVsns}, {available, AvailableVsns}].
+    TLSVsns = tls_record:supported_protocol_versions(),
+    DTLSVsns = dtls_record:supported_protocol_versions(),
+    SupportedTLSVsns = [tls_record:protocol_version(Vsn) || Vsn <- TLSVsns],
+    SupportedDTLSVsns = [dtls_record:protocol_version(Vsn) || Vsn <- DTLSVsns],
+    AvailableTLSVsns = ?ALL_AVAILABLE_VERSIONS,
+    AvailableDTLSVsns = ?ALL_AVAILABLE_DATAGRAM_VERSIONS,
+    [{ssl_app, ?VSN}, {supported, SupportedTLSVsns}, 
+     {supported_dtls, SupportedDTLSVsns}, 
+     {available, AvailableTLSVsns}, 
+     {available_dtls, AvailableDTLSVsns}].
 
 
 %%---------------------------------------------------------------
@@ -553,21 +734,33 @@ versions() ->
 %%
 %% Description: Initiates a renegotiation.
 %%--------------------------------------------------------------------
-renegotiate(#sslsocket{pid = Pid}) when is_pid(Pid) ->
+renegotiate(#sslsocket{pid = [Pid, Sender |_]}) when is_pid(Pid),
+                                                     is_pid(Sender) ->
+    case tls_sender:renegotiate(Sender) of
+        {ok, Write} ->
+            tls_connection:renegotiation(Pid, Write);
+        Error ->
+            Error
+    end;
+renegotiate(#sslsocket{pid = [Pid |_]}) when is_pid(Pid) ->
     ssl_connection:renegotiation(Pid);
+renegotiate(#sslsocket{pid = {dtls,_}}) ->
+    {error, enotconn};
 renegotiate(#sslsocket{pid = {Listen,_}}) when is_port(Listen) ->
     {error, enotconn}.
 
 %%--------------------------------------------------------------------
 -spec prf(#sslsocket{}, binary() | 'master_secret', binary(),
-	  binary() | prf_random(), non_neg_integer()) ->
+	  [binary() | prf_random()], non_neg_integer()) ->
 		 {ok, binary()} | {error, reason()}.
 %%
 %% Description: use a ssl sessions TLS PRF to generate key material
 %%--------------------------------------------------------------------
-prf(#sslsocket{pid = Pid},
+prf(#sslsocket{pid = [Pid|_]},
     Secret, Label, Seed, WantedLength) when is_pid(Pid) ->
     ssl_connection:prf(Pid, Secret, Label, Seed, WantedLength);
+prf(#sslsocket{pid = {dtls,_}}, _,_,_,_) ->
+    {error, enotconn};
 prf(#sslsocket{pid = {Listen,_}}, _,_,_,_) when is_port(Listen) ->
     {error, enotconn}.
 
@@ -577,7 +770,7 @@ prf(#sslsocket{pid = {Listen,_}}, _,_,_,_) when is_port(Listen) ->
 %% Description: Clear the PEM cache
 %%--------------------------------------------------------------------
 clear_pem_cache() ->
-    ssl_manager:clear_pem_cache().
+    ssl_pem_cache:clear().
 
 %%---------------------------------------------------------------
 -spec format_error({error, term()}) -> list().
@@ -618,30 +811,49 @@ tls_version({3, _} = Version) ->
 tls_version({254, _} = Version) ->
     dtls_v1:corresponding_tls_version(Version).
 
+
+%%--------------------------------------------------------------------
+-spec suite_to_str(ssl_cipher_format:erl_cipher_suite()) -> string().
+%%
+%% Description: Return the string representation of a cipher suite.
+%%--------------------------------------------------------------------
+suite_to_str(Cipher) ->
+    ssl_cipher_format:suite_to_str(Cipher).
+
+
 %%%--------------------------------------------------------------
 %%% Internal functions
 %%%--------------------------------------------------------------------
-
 %% Possible filters out suites not supported by crypto 
 available_suites(default) ->  
     Version = tls_record:highest_protocol_version([]),			  
     ssl_cipher:filter_suites(ssl_cipher:suites(Version));
-
 available_suites(all) ->  
     Version = tls_record:highest_protocol_version([]),			  
     ssl_cipher:filter_suites(ssl_cipher:all_suites(Version)).
 
+supported_suites(default, Version) ->  
+    ssl_cipher:suites(Version);
+supported_suites(all, Version) ->  
+    ssl_cipher:all_suites(Version);
+supported_suites(anonymous, Version) -> 
+    ssl_cipher:anonymous_suites(Version).
+
 do_listen(Port, #config{transport_info = {Transport, _, _, _}} = Config, tls_connection) ->
     tls_socket:listen(Transport, Port, Config);
 
-do_listen(Port,  #config{transport_info = {Transport, _, _, _}} = Config, dtls_connection) ->
-    dtls_socket:listen(Transport, Port, Config).
+do_listen(Port,  Config, dtls_connection) ->
+    dtls_socket:listen(Port, Config).
 	
 %% Handle extra ssl options given to ssl_accept
 -spec handle_options([any()], #ssl_options{}) -> #ssl_options{}
       ;             ([any()], client | server) -> {ok, #config{}}.
+handle_options(Opts, Role) ->
+    handle_options(Opts, Role, undefined).   
+
+
 handle_options(Opts0, #ssl_options{protocol = Protocol, cacerts = CaCerts0,
-				   cacertfile = CaCertFile0} = InheritedSslOpts) ->
+				   cacertfile = CaCertFile0} = InheritedSslOpts, _) ->
     RecordCB = record_cb(Protocol),
     CaCerts = handle_option(cacerts, Opts0, CaCerts0),
     {Verify, FailIfNoPeerCert, CaCertDefault, VerifyFun, PartialChainHanlder,
@@ -674,7 +886,7 @@ handle_options(Opts0, #ssl_options{protocol = Protocol, cacerts = CaCerts0,
     end;
 
 %% Handle all options in listen and connect
-handle_options(Opts0, Role) ->
+handle_options(Opts0, Role, Host) ->
     Opts = proplists:expand([{binary, [{mode, binary}]},
 			     {list, [{mode, list}]}], Opts0),
     assert_proplist(Opts),
@@ -696,8 +908,15 @@ handle_options(Opts0, Role) ->
 		       [RecordCb:protocol_version(Vsn) || Vsn <- Vsns]
 	       end,
 
-    Protocol = proplists:get_value(protocol, Opts, tls),
+    Protocol = handle_option(protocol, Opts, tls),
 
+    case Versions of
+        [{3, 0}] ->
+            reject_alpn_next_prot_options(Opts);
+        _ ->
+            ok
+    end,
+   
     SSLOptions = #ssl_options{
 		    versions   = Versions,
 		    verify     = validate_option(verify, Verify),
@@ -729,7 +948,7 @@ handle_options(Opts0, Role) ->
 		    %% Server side option
 		    reuse_session = handle_option(reuse_session, Opts, ReuseSessionFun),
 		    reuse_sessions = handle_option(reuse_sessions, Opts, true),
-		    secure_renegotiate = handle_option(secure_renegotiate, Opts, false),
+		    secure_renegotiate = handle_option(secure_renegotiate, Opts, true),
 		    client_renegotiation = handle_option(client_renegotiation, Opts, 
 							 default_option_role(server, true, Role), 
 							 server, Role),
@@ -746,7 +965,9 @@ handle_options(Opts0, Role) ->
 			make_next_protocol_selector(
 			  handle_option(client_preferred_next_protocols, Opts, undefined)),
 		    log_alert = handle_option(log_alert, Opts, true),
-		    server_name_indication = handle_option(server_name_indication, Opts, undefined),
+		    server_name_indication = handle_option(server_name_indication, Opts, 
+                                                           default_option_role(client,
+                                                                               server_name_indication_default(Host), Role)),
 		    sni_hosts = handle_option(sni_hosts, Opts, []),
 		    sni_fun = handle_option(sni_fun, Opts, undefined),
 		    honor_cipher_order = handle_option(honor_cipher_order, Opts, 
@@ -755,7 +976,7 @@ handle_options(Opts0, Role) ->
 		    honor_ecc_order = handle_option(honor_ecc_order, Opts,
 						       default_option_role(server, false, Role),
 						       server, Role),
-		    protocol = Protocol, 
+		    protocol = Protocol,
 		    padding_check =  proplists:get_value(padding_check, Opts, true),
 		    beast_mitigation = handle_option(beast_mitigation, Opts, one_n_minus_one),
 		    fallback = handle_option(fallback, Opts,
@@ -765,7 +986,9 @@ handle_options(Opts0, Role) ->
 					     client, Role),
 		    crl_check = handle_option(crl_check, Opts, false),
 		    crl_cache = handle_option(crl_cache, Opts, {ssl_crl_cache, {internal, []}}),
-		    v2_hello_compatible = handle_option(v2_hello_compatible, Opts, false)
+                    max_handshake_size = handle_option(max_handshake_size, Opts, ?DEFAULT_MAX_HANDSHAKE_SIZE),
+                    handshake = handle_option(handshake, Opts, full),
+                    customize_hostname_check = handle_option(customize_hostname_check, Opts, [])
 		   },
 
     CbInfo  = proplists:get_value(cb_info, Opts, default_cb_info(Protocol)),
@@ -780,8 +1003,8 @@ handle_options(Opts0, Role) ->
 		  alpn_preferred_protocols, next_protocols_advertised,
 		  client_preferred_next_protocols, log_alert,
 		  server_name_indication, honor_cipher_order, padding_check, crl_check, crl_cache,
-		  fallback, signature_algs, eccs, honor_ecc_order, beast_mitigation, v2_hello_compatible],
-
+		  fallback, signature_algs, eccs, honor_ecc_order, beast_mitigation,
+                  max_handshake_size, handshake, customize_hostname_check],
     SockOpts = lists:foldl(fun(Key, PropList) ->
 				   proplists:delete(Key, PropList)
 			   end, Opts, SslOptions),
@@ -790,10 +1013,8 @@ handle_options(Opts0, Role) ->
     ConnetionCb = connection_cb(Opts),
 
     {ok, #config{ssl = SSLOptions, emulated = Emulated, inet_ssl = Sock,
-		 inet_user = SockOpts, transport_info = CbInfo, connection_cb = ConnetionCb
+		 inet_user = Sock, transport_info = CbInfo, connection_cb = ConnetionCb
 		}}.
-
-
 
 handle_option(OptionName, Opts, Default, Role, Role) ->
     handle_option(OptionName, Opts, Default);
@@ -870,7 +1091,8 @@ validate_option(key, {KeyType, Value}) when is_binary(Value),
 					    KeyType == 'ECPrivateKey';
 					    KeyType == 'PrivateKeyInfo' ->
     {KeyType, Value};
-
+validate_option(key, #{algorithm := _} = Value) ->
+    Value;
 validate_option(keyfile, undefined) ->
    <<>>;
 validate_option(keyfile, Value) when is_binary(Value) ->
@@ -937,63 +1159,52 @@ validate_option(hibernate_after, Value) when is_integer(Value), Value >= 0 ->
 
 validate_option(erl_dist,Value) when is_boolean(Value) ->
     Value;
-validate_option(Opt, Value)
-  when Opt =:= alpn_advertised_protocols orelse Opt =:= alpn_preferred_protocols,
-       is_list(Value) ->
-    case tls_record:highest_protocol_version([]) of
-	{3,0} ->
-	    throw({error, {options, {not_supported_in_sslv3, {Opt, Value}}}});
-	_ ->
-	    validate_binary_list(Opt, Value),
-	    Value
-    end;
+validate_option(Opt, Value) when Opt =:= alpn_advertised_protocols orelse Opt =:= alpn_preferred_protocols,
+                                 is_list(Value) ->
+    validate_binary_list(Opt, Value),
+    Value;
 validate_option(Opt, Value)
   when Opt =:= alpn_advertised_protocols orelse Opt =:= alpn_preferred_protocols,
        Value =:= undefined ->
     undefined;
-validate_option(client_preferred_next_protocols = Opt, {Precedence, PreferredProtocols} = Value)
+validate_option(client_preferred_next_protocols, {Precedence, PreferredProtocols})
   when is_list(PreferredProtocols) ->
-    case tls_record:highest_protocol_version([]) of
-	{3,0} ->
-	    throw({error, {options, {not_supported_in_sslv3, {Opt, Value}}}});
-	_ ->
-	    validate_binary_list(client_preferred_next_protocols, PreferredProtocols),
-	    validate_npn_ordering(Precedence),
-	    {Precedence, PreferredProtocols, ?NO_PROTOCOL}
-    end;
-validate_option(client_preferred_next_protocols = Opt, {Precedence, PreferredProtocols, Default} = Value)
-      when is_list(PreferredProtocols), is_binary(Default),
-           byte_size(Default) > 0, byte_size(Default) < 256 ->
-    case tls_record:highest_protocol_version([]) of
-	{3,0} ->
-	    throw({error, {options, {not_supported_in_sslv3, {Opt, Value}}}});
-	_ ->
-	    validate_binary_list(client_preferred_next_protocols, PreferredProtocols),
-	    validate_npn_ordering(Precedence),
-	    Value
-    end;
-
+    validate_binary_list(client_preferred_next_protocols, PreferredProtocols),
+    validate_npn_ordering(Precedence),
+    {Precedence, PreferredProtocols, ?NO_PROTOCOL};
+validate_option(client_preferred_next_protocols, {Precedence, PreferredProtocols, Default} = Value)
+  when is_list(PreferredProtocols), is_binary(Default),
+       byte_size(Default) > 0, byte_size(Default) < 256 ->
+    validate_binary_list(client_preferred_next_protocols, PreferredProtocols),
+    validate_npn_ordering(Precedence),
+    Value;
 validate_option(client_preferred_next_protocols, undefined) ->
     undefined;
 validate_option(log_alert, Value) when is_boolean(Value) ->
     Value;
-validate_option(next_protocols_advertised = Opt, Value) when is_list(Value) ->
-    case tls_record:highest_protocol_version([]) of
-	{3,0} ->
-	    throw({error, {options, {not_supported_in_sslv3, {Opt, Value}}}});
-	_ ->
-	    validate_binary_list(next_protocols_advertised, Value),
-	    Value
-    end;
-
+validate_option(next_protocols_advertised, Value) when is_list(Value) ->
+    validate_binary_list(next_protocols_advertised, Value),
+    Value;
 validate_option(next_protocols_advertised, undefined) ->
     undefined;
 validate_option(server_name_indication, Value) when is_list(Value) ->
+    %% RFC 6066, Section 3: Currently, the only server names supported are
+    %% DNS hostnames
+    %% case inet_parse:domain(Value) of
+    %%     false ->
+    %%         throw({error, {options, {{Opt, Value}}}});
+    %%     true ->
+    %%         Value
+    %% end;
+    %%
+    %% But the definition seems very diffuse, so let all strings through
+    %% and leave it up to public_key to decide...
     Value;
-validate_option(server_name_indication, disable) ->
-    disable;
 validate_option(server_name_indication, undefined) ->
     undefined;
+validate_option(server_name_indication, disable) ->
+    disable;
+
 validate_option(sni_hosts, []) ->
     [];
 validate_option(sni_hosts, [{Hostname, SSLOptions} | Tail]) when is_list(Hostname) ->
@@ -1026,20 +1237,30 @@ validate_option(beast_mitigation, Value) when Value == one_n_minus_one orelse
                                               Value == zero_n orelse
                                               Value == disabled ->
   Value;
-validate_option(v2_hello_compatible, Value) when is_boolean(Value)  ->
+validate_option(max_handshake_size, Value) when is_integer(Value)  andalso Value =< ?MAX_UNIT24 ->
+    Value;
+validate_option(protocol, Value = tls) ->
+    Value;
+validate_option(protocol, Value = dtls) ->
+    Value;
+validate_option(handshake, hello = Value) ->
+    Value;
+validate_option(handshake, full = Value) ->
+    Value;
+validate_option(customize_hostname_check, Value) when is_list(Value) ->
     Value;
 validate_option(Opt, Value) ->
     throw({error, {options, {Opt, Value}}}).
 
-handle_hashsigns_option(Value, {Major, Minor} = Version) when is_list(Value) 
-							      andalso Major >= 3 andalso Minor >= 3->
+handle_hashsigns_option(Value, Version) when is_list(Value) 
+                                             andalso Version >= {3, 3} ->
     case tls_v1:signature_algs(Version, Value) of
 	[] ->
 	    throw({error, {options, no_supported_algorithms, {signature_algs, Value}}});
 	_ ->	
 	    Value
     end;
-handle_hashsigns_option(_, {Major, Minor} = Version) when Major >= 3 andalso Minor >= 3->
+handle_hashsigns_option(_, Version) when Version >= {3, 3} ->
     handle_hashsigns_option(tls_v1:default_signature_algs(Version), Version);
 handle_hashsigns_option(_, _Version) ->
     undefined.
@@ -1065,34 +1286,36 @@ validate_binary_list(Opt, List) ->
            (Bin) ->
             throw({error, {options, {Opt, {invalid_protocol, Bin}}}})
         end, List).
-
 validate_versions([], Versions) ->
     Versions;
 validate_versions([Version | Rest], Versions) when Version == 'tlsv1.2';
                                                    Version == 'tlsv1.1';
                                                    Version == tlsv1;
                                                    Version == sslv3 ->
-    validate_versions(Rest, Versions);
+    tls_validate_versions(Rest, Versions);                                      
+validate_versions([Version | Rest], Versions) when Version == 'dtlsv1';
+                                                   Version == 'dtlsv1.2'->
+    dtls_validate_versions(Rest, Versions);
 validate_versions([Ver| _], Versions) ->
     throw({error, {options, {Ver, {versions, Versions}}}}).
 
-validate_inet_option(mode, Value)
-  when Value =/= list, Value =/= binary ->
-    throw({error, {options, {mode,Value}}});
-validate_inet_option(packet, Value)
-  when not (is_atom(Value) orelse is_integer(Value)) ->
-    throw({error, {options, {packet,Value}}});
-validate_inet_option(packet_size, Value)
-  when not is_integer(Value) ->
-    throw({error, {options, {packet_size,Value}}});
-validate_inet_option(header, Value)
-  when not is_integer(Value) ->
-    throw({error, {options, {header,Value}}});
-validate_inet_option(active, Value)
-  when Value =/= true, Value =/= false, Value =/= once ->
-    throw({error, {options, {active,Value}}});
-validate_inet_option(_, _) ->
-    ok.
+tls_validate_versions([], Versions) ->
+    Versions;
+tls_validate_versions([Version | Rest], Versions) when Version == 'tlsv1.2';
+                                                   Version == 'tlsv1.1';
+                                                   Version == tlsv1;
+                                                   Version == sslv3 ->
+    tls_validate_versions(Rest, Versions);                  
+tls_validate_versions([Ver| _], Versions) ->
+    throw({error, {options, {Ver, {versions, Versions}}}}).
+
+dtls_validate_versions([], Versions) ->
+    Versions;
+dtls_validate_versions([Version | Rest], Versions) when  Version == 'dtlsv1';
+                                                         Version == 'dtlsv1.2'->
+    dtls_validate_versions(Rest, Versions);
+dtls_validate_versions([Ver| _], Versions) ->
+    throw({error, {options, {Ver, {versions, Versions}}}}).
 
 %% The option cacerts overrides cacertsfile
 ca_cert_default(_,_, [_|_]) ->
@@ -1108,30 +1331,10 @@ ca_cert_default(verify_peer, undefined, _) ->
 emulated_options(Protocol, Opts) ->
     case Protocol of
 	tls ->
-	    emulated_options(Opts, tls_socket:internal_inet_values(), tls_socket:default_inet_values());
+	    tls_socket:emulated_options(Opts);
 	dtls ->
-	    emulated_options(Opts, dtls_socket:internal_inet_values(), dtls_socket:default_inet_values())
+	    dtls_socket:emulated_options(Opts)
     end.
-
-emulated_options([{mode, Value} = Opt |Opts], Inet, Emulated) ->
-    validate_inet_option(mode, Value),
-    emulated_options(Opts, Inet, [Opt | proplists:delete(mode, Emulated)]);
-emulated_options([{header, Value} = Opt | Opts], Inet, Emulated) ->
-    validate_inet_option(header, Value),
-    emulated_options(Opts, Inet,  [Opt | proplists:delete(header, Emulated)]);
-emulated_options([{active, Value} = Opt |Opts], Inet, Emulated) ->
-    validate_inet_option(active, Value),
-    emulated_options(Opts, Inet, [Opt | proplists:delete(active, Emulated)]);
-emulated_options([{packet, Value} = Opt |Opts], Inet, Emulated) ->
-    validate_inet_option(packet, Value),
-    emulated_options(Opts, Inet, [Opt | proplists:delete(packet, Emulated)]);
-emulated_options([{packet_size, Value} = Opt | Opts], Inet, Emulated) ->
-    validate_inet_option(packet_size, Value),
-    emulated_options(Opts, Inet, [Opt | proplists:delete(packet_size, Emulated)]);
-emulated_options([Opt|Opts], Inet, Emulated) ->
-    emulated_options(Opts, [Opt|Inet], Emulated);
-emulated_options([], Inet,Emulated) ->
-    {Inet, Emulated}.
 
 handle_cipher_option(Value, Version)  when is_list(Value) ->
     try binary_cipher_suites(Version, Value) of
@@ -1147,31 +1350,59 @@ handle_cipher_option(Value, Version)  when is_list(Value) ->
 binary_cipher_suites(Version, []) -> 
     %% Defaults to all supported suites that does
     %% not require explicit configuration
-    ssl_cipher:filter_suites(ssl_cipher:suites(Version));
-binary_cipher_suites(Version, [Tuple|_] = Ciphers0) when is_tuple(Tuple) ->
-    Ciphers = [ssl_cipher:suite(C) || C <- Ciphers0],
+    default_binary_suites(Version);
+binary_cipher_suites(Version, [Map|_] = Ciphers0) when is_map(Map) ->
+    Ciphers = [ssl_cipher_format:suite(C) || C <- Ciphers0],
     binary_cipher_suites(Version, Ciphers);
-
+binary_cipher_suites(Version, [Tuple|_] = Ciphers0) when is_tuple(Tuple) ->
+    Ciphers = [ssl_cipher_format:suite(tuple_to_map(C)) || C <- Ciphers0],
+    binary_cipher_suites(Version, Ciphers);
 binary_cipher_suites(Version, [Cipher0 | _] = Ciphers0) when is_binary(Cipher0) ->
-    All = ssl_cipher:all_suites(Version),
+    All = ssl_cipher:all_suites(Version) ++ 
+        ssl_cipher:anonymous_suites(Version),
     case [Cipher || Cipher <- Ciphers0, lists:member(Cipher, All)] of
 	[] ->
 	    %% Defaults to all supported suites that does
 	    %% not require explicit configuration
-	    ssl_cipher:filter_suites(ssl_cipher:suites(Version));
+	    default_binary_suites(Version);
 	Ciphers ->
 	    Ciphers
     end;
 binary_cipher_suites(Version, [Head | _] = Ciphers0) when is_list(Head) ->
     %% Format: ["RC4-SHA","RC4-MD5"]
-    Ciphers = [ssl_cipher:openssl_suite(C) || C <- Ciphers0],
+    Ciphers = [ssl_cipher_format:openssl_suite(C) || C <- Ciphers0],
     binary_cipher_suites(Version, Ciphers);
 binary_cipher_suites(Version, Ciphers0)  ->
     %% Format: "RC4-SHA:RC4-MD5"
-    Ciphers = [ssl_cipher:openssl_suite(C) || C <- string:tokens(Ciphers0, ":")],
+    Ciphers = [ssl_cipher_format:openssl_suite(C) || C <- string:lexemes(Ciphers0, ":")],
     binary_cipher_suites(Version, Ciphers).
 
-handle_eccs_option(Value, {_Major, Minor}) when is_list(Value) ->
+default_binary_suites(Version) ->
+    ssl_cipher:filter_suites(ssl_cipher:suites(Version)).
+
+tuple_to_map({Kex, Cipher, Mac}) ->
+    #{key_exchange => Kex,
+      cipher => Cipher,
+      mac => Mac,
+      prf => default_prf};
+tuple_to_map({Kex, Cipher, Mac, Prf}) ->
+    #{key_exchange => Kex,
+      cipher => Cipher,
+      mac => tuple_to_map_mac(Cipher, Mac),
+      prf => Prf}.
+
+%% Backwards compatible
+tuple_to_map_mac(aes_128_gcm, _) -> 
+    aead;
+tuple_to_map_mac(aes_256_gcm, _) -> 
+    aead;
+tuple_to_map_mac(chacha20_poly1305, _) ->
+    aead;
+tuple_to_map_mac(_, MAC) ->
+    MAC.
+
+handle_eccs_option(Value, Version) when is_list(Value) ->
+    {_Major, Minor} = tls_version(Version),
     try tls_v1:ecc_curves(Minor, Value) of
         Curves -> #elliptic_curves{elliptic_curve_list = Curves}
     catch
@@ -1344,7 +1575,10 @@ new_ssl_options([{signature_algs, Value} | Rest], #ssl_options{} = Opts, RecordC
 					 handle_hashsigns_option(Value, 
 								 tls_version(RecordCB:highest_protocol_version()))}, 
 		    RecordCB);
-
+new_ssl_options([{protocol, dtls = Value} | Rest], #ssl_options{} = Opts, dtls_record = RecordCB) -> 
+    new_ssl_options(Rest, Opts#ssl_options{protocol = Value}, RecordCB);
+new_ssl_options([{protocol, tls = Value} | Rest], #ssl_options{} = Opts, tls_record = RecordCB) -> 
+    new_ssl_options(Rest, Opts#ssl_options{protocol = Value}, RecordCB);
 new_ssl_options([{Key, Value} | _Rest], #ssl_options{}, _) -> 
     throw({error, {options, {Key, Value}}}).
 
@@ -1411,3 +1645,42 @@ default_cb_info(tls) ->
     {gen_tcp, tcp, tcp_closed, tcp_error};
 default_cb_info(dtls) ->
     {gen_udp, udp, udp_closed, udp_error}.
+
+include_security_info([]) ->
+    false;
+include_security_info([Item | Items]) ->
+    case lists:member(Item, [client_random, server_random, master_secret]) of
+        true ->
+            true;
+        false  ->
+            include_security_info(Items)
+    end.
+
+server_name_indication_default(Host) when is_list(Host) ->
+    Host;
+server_name_indication_default(_) ->
+    undefined.
+
+
+reject_alpn_next_prot_options(Opts) ->
+    AlpnNextOpts = [alpn_advertised_protocols,
+                    alpn_preferred_protocols,
+                    next_protocols_advertised,
+                    next_protocol_selector,
+                    client_preferred_next_protocols],
+    reject_alpn_next_prot_options(AlpnNextOpts, Opts).
+
+reject_alpn_next_prot_options([], _) ->
+    ok;
+reject_alpn_next_prot_options([Opt| AlpnNextOpts], Opts) ->
+    case lists:keyfind(Opt, 1, Opts) of
+        {Opt, Value} ->
+            throw({error, {options, {not_supported_in_sslv3, {Opt, Value}}}});
+        false ->
+            reject_alpn_next_prot_options(AlpnNextOpts, Opts)
+    end.
+
+add_filter(undefined, Filters) ->
+    Filters;
+add_filter(Filter, Filters) ->
+    [Filter | Filters].
