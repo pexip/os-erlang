@@ -1,7 +1,7 @@
 /*
  * %CopyrightBegin%
  *
- * Copyright Ericsson AB 2013-2016. All Rights Reserved.
+ * Copyright Ericsson AB 2013-2018. All Rights Reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -93,11 +93,6 @@ typedef struct {
 #define ERTS_MMAP_INIT_LITERAL_INITER \
     {{NULL, NULL}, {NULL, NULL}, ERTS_LITERAL_VIRTUAL_AREA_SIZE, 1, (1 << 10), 0}
 
-#define ERTS_HIPE_EXEC_VIRTUAL_AREA_SIZE (UWORD_CONSTANT(512)*1024*1024)
-
-#define ERTS_MMAP_INIT_HIPE_EXEC_INITER \
-    {{NULL, NULL}, {NULL, NULL}, ERTS_HIPE_EXEC_VIRTUAL_AREA_SIZE, 1, (1 << 10), 0}
-
 
 #define ERTS_SUPERALIGNED_SIZE \
     (1 << ERTS_MMAP_SUPERALIGNED_BITS)
@@ -140,7 +135,7 @@ void *erts_mmap(ErtsMemMapper*, Uint32 flags, UWord *sizep);
 void erts_munmap(ErtsMemMapper*, Uint32 flags, void *ptr, UWord size);
 void *erts_mremap(ErtsMemMapper*, Uint32 flags, void *ptr, UWord old_size, UWord *sizep);
 int erts_mmap_in_supercarrier(ErtsMemMapper*, void *ptr);
-void erts_mmap_init(ErtsMemMapper*, ErtsMMapInit*, int executable);
+void erts_mmap_init(ErtsMemMapper*, ErtsMMapInit*);
 struct erts_mmap_info_struct
 {
     UWord sizes[6];
@@ -158,12 +153,14 @@ Eterm erts_mmap_info_options(ErtsMemMapper*,
 #  include "erl_alloc_types.h"
 
 extern ErtsMemMapper erts_dflt_mmapper;
-#  if defined(ARCH_64) && defined(ERTS_HAVE_OS_PHYSICAL_MEMORY_RESERVATION)
+
+# if defined(ERTS_HAVE_OS_PHYSICAL_MEMORY_RESERVATION)
+
+#  if defined(ARCH_64)
 extern ErtsMemMapper erts_literal_mmapper;
 #  endif
-#  ifdef ERTS_ALC_A_EXEC
-extern ErtsMemMapper erts_exec_mmapper;
-#  endif
+
+# endif /* ERTS_HAVE_OS_PHYSICAL_MEMORY_RESERVATION */
 #endif /* ERTS_WANT_MEM_MAPPERS */
 
 /*#define HARD_DEBUG_MSEG*/

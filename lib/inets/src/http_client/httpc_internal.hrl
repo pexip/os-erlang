@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2005-2016. All Rights Reserved.
+%% Copyright Ericsson AB 2005-2018. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -83,10 +83,11 @@
 	 max_sessions          = ?HTTP_MAX_TCP_SESSIONS,
 	 cookies               = disabled, % enabled | disabled | verify
 	 verbose               = false,   % boolean(),
-	 ipfamily              = inet,    % inet | inet6 | inet6fb4
+	 ipfamily              = inet,    % inet | inet6 | inet6fb4 | local
 	 ip                    = default, % specify local interface
 	 port                  = default, % specify local port
-	 socket_opts           = []       % other socket options
+	 socket_opts           = [],      % other socket options
+	 unix_socket           = undefined % Local unix socket
 	}
        ).
 -type options() :: #options{}.
@@ -115,6 +116,7 @@
 			 % request
 	  timer         :: undefined | reference(),
 	  socket_opts,   % undefined | [socket_option()]
+	  unix_socket,   % undefined | string()
 	  ipv6_host_with_brackets % boolean()
 	}
        ).

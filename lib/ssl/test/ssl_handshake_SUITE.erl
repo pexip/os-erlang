@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2008-2016. All Rights Reserved.
+%% Copyright Ericsson AB 2008-2018. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -25,6 +25,7 @@
 -compile(export_all).
 
 -include_lib("common_test/include/ct.hrl").
+-include("ssl_handshake.hrl").
 -include("ssl_internal.hrl").
 -include("tls_handshake.hrl").
 -include_lib("public_key/include/public_key.hrl").
@@ -40,7 +41,9 @@ all() -> [decode_hello_handshake,
 	  decode_single_hello_sni_extension_correctly,
 	  decode_empty_server_sni_correctly,
 	  select_proper_tls_1_2_rsa_default_hashsign,
-	  ignore_hassign_extension_pre_tls_1_2].
+	  ignore_hassign_extension_pre_tls_1_2,
+	  unorded_chain,
+	  encode_decode_srp].
 
 %%--------------------------------------------------------------------
 init_per_suite(Config) ->
@@ -100,11 +103,12 @@ decode_hello_handshake(_Config) ->
 	
     Version = {3, 0},
     {Records, _Buffer} = tls_handshake:get_tls_handshake(Version, HelloPacket, <<>>, 
-							 #ssl_options{v2_hello_compatible = false}),
+							 #ssl_options{}),
 
     {Hello, _Data} = hd(Records),
     #renegotiation_info{renegotiated_connection = <<0>>}
 	= (Hello#server_hello.extensions)#hello_extensions.renegotiation_info.
+
 
 decode_single_hello_extension_correctly(_Config) -> 
     Renegotiation = <<?UINT16(?RENEGOTIATION_EXT), ?UINT16(1), 0>>,
@@ -148,7 +152,7 @@ decode_single_hello_sni_extension_correctly(_Config) ->
     Exts = Decoded.
 
 decode_empty_server_sni_correctly(_Config) ->
-    Exts = #hello_extensions{sni = ""},
+    Exts = #hello_extensions{sni = #sni{hostname = ""}},
     SNI = <<?UINT16(?SNI_EXT),?UINT16(0)>>,
     Decoded = ssl_handshake:decode_hello_extensions(SNI),
     Exts = Decoded.
@@ -171,6 +175,54 @@ ignore_hassign_extension_pre_tls_1_2(Config) ->
     %%% Ignore
     {md5sha, rsa} = ssl_handshake:select_hashsign(HashSigns, Cert, ecdhe_rsa, tls_v1:default_signature_algs({3,2}), {3,2}),
     {md5sha, rsa} = ssl_handshake:select_hashsign(HashSigns, Cert, ecdhe_rsa, tls_v1:default_signature_algs({3,0}), {3,0}).
+
+unorded_chain(Config) when is_list(Config) ->
+    DefConf = ssl_test_lib:default_cert_chain_conf(),
+    CertChainConf = ssl_test_lib:gen_conf(rsa, rsa, DefConf, DefConf),
+    #{server_config := ServerConf,
+      client_config := _ClientConf} = public_key:pkix_test_data(CertChainConf),
+    PeerCert = proplists:get_value(cert, ServerConf),
+    CaCerts = [_, C1, C2] = proplists:get_value(cacerts, ServerConf),
+    {ok,  ExtractedCerts} = ssl_pkix_db:extract_trusted_certs({der, CaCerts}),
+    UnordedChain = case public_key:pkix_is_self_signed(C1) of
+                       true ->
+                           [C1, C2];
+                       false ->
+                           [C2, C1]
+                   end,
+    OrderedChain = [PeerCert | lists:reverse(UnordedChain)],
+    {ok, _, OrderedChain} = 
+        ssl_certificate:certificate_chain(PeerCert, ets:new(foo, []), ExtractedCerts, UnordedChain).
+
+encode_decode_srp(_Config) ->
+    Exts = #hello_extensions{
+              srp = #srp{username = <<"foo">>},
+              sni = #sni{hostname = "bar"},
+              renegotiation_info = undefined,
+              signature_algs = undefined,
+              alpn = undefined,
+              next_protocol_negotiation = undefined,
+              ec_point_formats = undefined,
+              elliptic_curves = undefined
+             },
+    EncodedExts = <<0,20,          % Length
+                    0,0,           % SNI extension
+                    0,8,           % Length
+                    0,6,           % ServerNameLength
+                    0,             % NameType (host_name)
+                    0,3,           % HostNameLength
+                    98,97,114,     % hostname = "bar"
+                    0,12,          % SRP extension
+                    0,4,           % Length
+                    3,             % srp_I length
+                    102,111,111>>, % username = "foo"
+    EncodedExts = ssl_handshake:encode_hello_extensions(Exts),
+    Exts = ssl_handshake:decode_hello_extensions({client, EncodedExts}).
+
+
+%%--------------------------------------------------------------------
+%% Internal functions ------------------------------------------------
+%%--------------------------------------------------------------------
 
 is_supported(Hash) ->
     Algos = crypto:supports(),

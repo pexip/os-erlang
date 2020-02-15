@@ -1,7 +1,7 @@
 /*
  * %CopyrightBegin%
  * 
- * Copyright Ericsson AB 2005-2016. All Rights Reserved.
+ * Copyright Ericsson AB 2005-2018. All Rights Reserved.
  * 
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -44,6 +44,7 @@ struct erts_dsprintf_buf_t_ {
 typedef int (*fmtfn_t)(void*, char*, size_t);
 
 int erts_write_fd(void *vfdp, char* buf, size_t len);
+int erts_write_fp(void *vfdp, char* buf, size_t len);
 int erts_write_ds(void *vdsbufp, char* buf, size_t len);
 
 int erts_printf(const char *, ...);

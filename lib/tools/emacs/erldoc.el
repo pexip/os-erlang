@@ -2,7 +2,7 @@
 
 ;; %CopyrightBegin%
 ;;
-;; Copyright Ericsson AB 2016. All Rights Reserved.
+;; Copyright Ericsson AB 2016-2017. All Rights Reserved.
 ;;
 ;; Licensed under the Apache License, Version 2.0 (the "License");
 ;; you may not use this file except in compliance with the License.
@@ -23,8 +23,8 @@
 ;; Crawl Erlang/OTP HTML documentation and generate lookup tables.
 ;;
 ;; This package depends on `cl-lib', `pcase' and
-;; `libxml-parse-html-region'; emacs 24+ compiled with libxml2 should
-;; work. On emacs 24.1 and 24.2 do `M-x package-install RET cl-lib
+;; `libxml-parse-html-region'.  Emacs 24+ compiled with libxml2 should
+;; work.  On Emacs 24.1 and 24.2 do `M-x package-install RET cl-lib
 ;; RET' to install `cl-lib'.
 ;;
 ;; Please customise `erldoc-man-index' to point to your local OTP
@@ -407,7 +407,7 @@ up the indexing."
 (defvar erldoc-user-guides nil)
 
 (defvar erldoc-missing-user-guides
-  '("compiler" "hipe" "kernel" "os_mon" "parsetools" "typer")
+  '("compiler" "hipe" "kernel" "os_mon" "parsetools")
   "List of standard Erlang applications with no user guides.")
 
 ;; Search in `code:lib_dir/0' using find LIB_DIR -type f -name
@@ -417,7 +417,7 @@ up the indexing."
                              "runtime_tools" "sasl" "snmp"
                              "ssl" "test_server"
                              ("ssh" . "SSH") ("stdlib" . "STDLIB")
-                             ("hipe" . "HiPE") ("typer" . "TypEr"))
+                             ("hipe" . "HiPE"))
   "List of applications that come with a manual.")
 
 (defun erldoc-user-guide-chapters (user-guide)
@@ -505,4 +505,10 @@ up the indexing."
   (browse-url (cdr (assoc topic (erldoc-user-guides)))))
 
 (provide 'erldoc)
+
+;; Local variables:
+;; coding: utf-8
+;; indent-tabs-mode: nil
+;; End:
+
 ;;; erldoc.el ends here

@@ -1,8 +1,4 @@
 %% -*- erlang-indent-level: 2 -*-
-%%--------------------------------------------------------------------
-%% %CopyrightBegin%
-%%
-%% Copyright Ericsson AB 2006-2016. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -15,9 +11,6 @@
 %% WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 %% See the License for the specific language governing permissions and
 %% limitations under the License.
-%%
-%% %CopyrightEnd%
-%%
 
 %%%-------------------------------------------------------------------
 %%% File    : dialyzer_dataflow.erl
@@ -1347,7 +1340,7 @@ do_clause(C, Arg, ArgType0, OrigArgType, Map, State) ->
 		{{Tag, PatTypes}, false};
 	      false ->
 		%% Try to find out if this is a default clause in a list
-		%% comprehension and supress this. A real Hack(tm)
+		%% comprehension and suppress this. A real Hack(tm)
 		Force0 =
 		  case is_compiler_generated(cerl:get_ann(C)) of
 		    true ->

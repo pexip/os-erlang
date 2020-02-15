@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 1998-2016. All Rights Reserved.
+%% Copyright Ericsson AB 1998-2018. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -27,7 +27,7 @@
 -export([send/3, listen/3, accept/3, socket/5, connect/4, upgrade/3,
 	 setopts/3, getopts/3, getstat/3, peername/2, sockname/2, port/2]).
 -export([split_options/1, get_socket_opts/3]).
--export([emulated_options/0, internal_inet_values/0, default_inet_values/0,
+-export([emulated_options/0, emulated_options/1, internal_inet_values/0, default_inet_values/0,
 	 init/1, start_link/3, terminate/2, inherit_tracker/3, 
 	 emulated_socket_options/2, get_emulated_opts/1, 
 	 set_emulated_opts/2, get_all_opts/1, handle_call/3, handle_cast/2,
@@ -64,11 +64,12 @@ accept(ListenSocket, #config{transport_info = {Transport,_,_,_} = CbInfo,
 	{ok, Socket} ->
 	    {ok, EmOpts} = get_emulated_opts(Tracker),
 	    {ok, Port} = tls_socket:port(Transport, Socket),
-	    ConnArgs = [server, "localhost", Port, Socket,
+            {ok, Sender} = tls_sender:start(),
+            ConnArgs = [server, Sender, "localhost", Port, Socket,
 			{SslOpts, emulated_socket_options(EmOpts, #socket_options{}), Tracker}, self(), CbInfo],
 	    case tls_connection_sup:start_child(ConnArgs) of
 		{ok, Pid} ->
-		    ssl_connection:socket_control(ConnectionCb, Socket, Pid, Transport, Tracker);
+		    ssl_connection:socket_control(ConnectionCb, Socket, [Pid, Sender], Transport, Tracker);
 		{error, Reason} ->
 		    {error, Reason}
 	    end;
@@ -112,8 +113,8 @@ connect(Address, Port,
 	    {error, {options, {socket_options, UserOpts}}}
     end.
 
-socket(Pid, Transport, Socket, ConnectionCb, Tracker) ->
-    #sslsocket{pid = Pid, 
+socket(Pids, Transport, Socket, ConnectionCb, Tracker) ->
+    #sslsocket{pid = Pids, 
 	       %% "The name "fd" is keept for backwards compatibility
 	       fd = {Transport, Socket, ConnectionCb, Tracker}}.
 setopts(gen_tcp, #sslsocket{pid = {ListenSocket, #config{emulated = Tracker}}}, Options) ->
@@ -169,6 +170,9 @@ port(Transport, Socket) ->
 
 emulated_options() ->
     [mode, packet, active, header, packet_size].
+
+emulated_options(Opts) ->
+      emulated_options(Opts, internal_inet_values(), default_inet_values()).
 
 internal_inet_values() ->
     [{packet_size,0}, {packet, 0}, {header, 0}, {active, false}, {mode,binary}].
@@ -328,3 +332,41 @@ emulated_socket_options(InetValues, #socket_options{
        packet = proplists:get_value(packet, InetValues, Packet),
        packet_size = proplists:get_value(packet_size, InetValues, Size)
       }.
+
+emulated_options([{mode, Value} = Opt |Opts], Inet, Emulated) ->
+    validate_inet_option(mode, Value),
+    emulated_options(Opts, Inet, [Opt | proplists:delete(mode, Emulated)]);
+emulated_options([{header, Value} = Opt | Opts], Inet, Emulated) ->
+    validate_inet_option(header, Value),
+    emulated_options(Opts, Inet,  [Opt | proplists:delete(header, Emulated)]);
+emulated_options([{active, Value} = Opt |Opts], Inet, Emulated) ->
+    validate_inet_option(active, Value),
+    emulated_options(Opts, Inet, [Opt | proplists:delete(active, Emulated)]);
+emulated_options([{packet, Value} = Opt |Opts], Inet, Emulated) ->
+    validate_inet_option(packet, Value),
+    emulated_options(Opts, Inet, [Opt | proplists:delete(packet, Emulated)]);
+emulated_options([{packet_size, Value} = Opt | Opts], Inet, Emulated) ->
+    validate_inet_option(packet_size, Value),
+    emulated_options(Opts, Inet, [Opt | proplists:delete(packet_size, Emulated)]);
+emulated_options([Opt|Opts], Inet, Emulated) ->
+    emulated_options(Opts, [Opt|Inet], Emulated);
+emulated_options([], Inet,Emulated) ->
+    {Inet, Emulated}.
+
+validate_inet_option(mode, Value)
+  when Value =/= list, Value =/= binary ->
+    throw({error, {options, {mode,Value}}});
+validate_inet_option(packet, Value)
+  when not (is_atom(Value) orelse is_integer(Value)) ->
+    throw({error, {options, {packet,Value}}});
+validate_inet_option(packet_size, Value)
+  when not is_integer(Value) ->
+    throw({error, {options, {packet_size,Value}}});
+validate_inet_option(header, Value)
+  when not is_integer(Value) ->
+    throw({error, {options, {header,Value}}});
+validate_inet_option(active, Value)
+  when Value =/= true, Value =/= false, Value =/= once ->
+    throw({error, {options, {active,Value}}});
+validate_inet_option(_, _) ->
+    ok.
