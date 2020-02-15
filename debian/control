@@ -15,7 +15,7 @@ Build-Conflicts: autoconf2.13, libwxgtk2.4-dev, libwxgtk2.6-dev, libwxgtk2.8-dev
 Homepage: http://www.erlang.org/
 Vcs-Svn: svn://anonscm.debian.org/pkg-erlang/erlang/trunk/
 Vcs-Browser: http://anonscm.debian.org/viewvc/pkg-erlang/erlang/trunk/
-XS-Pexip-Upstream: http://ftp.debian.org/debian/ stretch
+XS-Pexip-Upstream: http://ftp.debian.org/debian/ buster
 
 Package: erlang-base
 Architecture: any
