@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2016-2016. All Rights Reserved.
+%% Copyright Ericsson AB 2016-2018. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -22,33 +22,33 @@
 -include("ssl_internal.hrl").
 -include("ssl_api.hrl").
 
--export([send/3, listen/3, accept/3, connect/4, socket/4, setopts/3, getopts/3, getstat/3, 
+-export([send/3, listen/2, accept/3, connect/4, socket/4, setopts/3, getopts/3, getstat/3, 
 	 peername/2, sockname/2, port/2, close/2]).
--export([emulated_options/0, internal_inet_values/0, default_inet_values/0, default_cb_info/0]).
+-export([emulated_options/0, emulated_options/1, internal_inet_values/0, default_inet_values/0, default_cb_info/0]).
 
 send(Transport, {{IP,Port},Socket}, Data) ->
     Transport:send(Socket, IP, Port, Data).
 
-listen(gen_udp = Transport, Port, #config{transport_info = {Transport, _, _, _},
-					  ssl = SslOpts, 
-					  emulated = EmOpts,
-					  inet_user = Options} = Config) ->
+listen(Port, #config{transport_info = TransportInfo,
+                           ssl = SslOpts, 
+                           emulated = EmOpts,
+                           inet_user = Options} = Config) ->
     
     
-    case dtls_udp_sup:start_child([Port, emulated_socket_options(EmOpts, #socket_options{}), 
+    case dtls_listener_sup:start_child([Port, TransportInfo, emulated_socket_options(EmOpts, #socket_options{}), 
 				   Options ++ internal_inet_values(), SslOpts]) of
 	{ok, Pid} ->
-	    {ok, #sslsocket{pid = {udp, Config#config{udp_handler = {Pid, Port}}}}};
+	    {ok, #sslsocket{pid = {dtls, Config#config{dtls_handler = {Pid, Port}}}}};
 	Err = {error, _} ->
 	    Err
     end.
 
-accept(udp, #config{transport_info = {Transport = gen_udp,_,_,_},
+accept(dtls, #config{transport_info = {Transport,_,_,_},
 		    connection_cb = ConnectionCb,
-		    udp_handler = {Listner, _}}, _Timeout) -> 
-    case dtls_udp_listener:accept(Listner, self()) of
+		    dtls_handler = {Listner, _}}, _Timeout) -> 
+    case dtls_packet_demux:accept(Listner, self()) of
 	{ok, Pid, Socket} ->
-	    {ok, socket(Pid, Transport, {Listner, Socket}, ConnectionCb)};
+	    {ok, socket([Pid], Transport, {Listner, Socket}, ConnectionCb)};
 	{error, Reason} ->
 	    {error, Reason}
     end.
@@ -69,37 +69,43 @@ connect(Address, Port, #config{transport_info = {Transport, _, _, _} = CbInfo,
     end.
 
 close(gen_udp, {_Client, _Socket}) ->
-    ok.
+    ok;
+close(Transport, {_Client, Socket}) ->
+    Transport:close(Socket).
 
-socket(Pid, Transport, Socket, ConnectionCb) ->
-    #sslsocket{pid = Pid, 
+socket(Pids, gen_udp = Transport, {{_, _}, Socket}, ConnectionCb) ->
+    #sslsocket{pid = Pids, 
 	       %% "The name "fd" is keept for backwards compatibility
-	       fd = {Transport, Socket, ConnectionCb}}.	
-
-%% Vad göra med emulerade
-setopts(gen_udp, #sslsocket{pid = {Socket, _}}, Options) ->
-    {SockOpts, _} = tls_socket:split_options(Options),
-    inet:setopts(Socket, SockOpts);
-setopts(_, #sslsocket{pid = {ListenSocket, #config{transport_info = {Transport,_,_,_}}}}, Options) ->
-    {SockOpts, _} = tls_socket:split_options(Options),
-    Transport:setopts(ListenSocket, SockOpts);
+	       fd = {Transport, Socket, ConnectionCb}};
+socket(Pids, Transport, Socket, ConnectionCb) ->
+    #sslsocket{pid = Pids, 
+	       %% "The name "fd" is keept for backwards compatibility
+	       fd = {Transport, Socket, ConnectionCb}}.
+setopts(_, #sslsocket{pid = {dtls, #config{dtls_handler = {ListenPid, _}}}}, Options) ->
+    SplitOpts = tls_socket:split_options(Options),
+    dtls_packet_demux:set_sock_opts(ListenPid, SplitOpts);
 %%% Following clauses will not be called for emulated options, they are  handled in the connection process
 setopts(gen_udp, Socket, Options) ->
     inet:setopts(Socket, Options);
 setopts(Transport, Socket, Options) ->
     Transport:setopts(Socket, Options).
 
+getopts(_, #sslsocket{pid = {dtls, #config{dtls_handler = {ListenPid, _}}}}, Options) ->
+    SplitOpts = tls_socket:split_options(Options),
+    dtls_packet_demux:get_sock_opts(ListenPid, SplitOpts);
 getopts(gen_udp,  #sslsocket{pid = {Socket, #config{emulated = EmOpts}}}, Options) ->
     {SockOptNames, EmulatedOptNames} = tls_socket:split_options(Options),
     EmulatedOpts = get_emulated_opts(EmOpts, EmulatedOptNames),
     SocketOpts = tls_socket:get_socket_opts(Socket, SockOptNames, inet),
     {ok, EmulatedOpts ++ SocketOpts}; 
-getopts(Transport,  #sslsocket{pid = {ListenSocket, #config{emulated = EmOpts}}}, Options) ->
+getopts(_Transport,  #sslsocket{pid = {Socket, #config{emulated = EmOpts}}}, Options) ->
     {SockOptNames, EmulatedOptNames} = tls_socket:split_options(Options),
     EmulatedOpts = get_emulated_opts(EmOpts, EmulatedOptNames),
-    SocketOpts = tls_socket:get_socket_opts(ListenSocket, SockOptNames, Transport),
+    SocketOpts = tls_socket:get_socket_opts(Socket, SockOptNames, inet),
     {ok, EmulatedOpts ++ SocketOpts}; 
 %%% Following clauses will not be called for emulated options, they are  handled in the connection process
+getopts(gen_udp, {_,{{_, _},Socket}}, Options) ->
+    inet:getopts(Socket, Options);
 getopts(gen_udp, {_,Socket}, Options) ->
     inet:getopts(Socket, Options);
 getopts(Transport, Socket, Options) ->
@@ -108,11 +114,15 @@ getstat(gen_udp, {_,Socket}, Options) ->
 	inet:getstat(Socket, Options);
 getstat(Transport, Socket, Options) ->
 	Transport:getstat(Socket, Options).
+peername(_, undefined) ->
+    {error, enotconn};
 peername(gen_udp, {_, {Client, _Socket}}) ->
     {ok, Client};
 peername(Transport, Socket) ->
     Transport:peername(Socket).
-sockname(gen_udp, {_,Socket}) ->
+sockname(gen_udp, {_, {_,Socket}}) ->
+    inet:sockname(Socket);
+sockname(gen_udp, Socket) ->
     inet:sockname(Socket);
 sockname(Transport, Socket) ->
     Transport:sockname(Socket).
@@ -125,11 +135,14 @@ port(Transport, Socket) ->
 emulated_options() ->
     [mode, active,  packet, packet_size].
 
+emulated_options(Opts) ->
+      emulated_options(Opts, internal_inet_values(), default_inet_values()).
+
 internal_inet_values() ->
     [{active, false}, {mode,binary}].
 
 default_inet_values() ->
-    [{active, true}, {mode, list}].
+    [{active, true}, {mode, list}, {packet, 0}, {packet_size, 0}].
 
 default_cb_info() ->
     {gen_udp, udp, udp_closed, udp_error}.
@@ -141,8 +154,38 @@ get_emulated_opts(EmOpts, EmOptNames) ->
 
 emulated_socket_options(InetValues, #socket_options{
 				       mode   = Mode,
+                                       packet = Packet,
+                                       packet_size = PacketSize,
 				       active = Active}) ->
     #socket_options{
        mode   = proplists:get_value(mode, InetValues, Mode),
+       packet = proplists:get_value(packet, InetValues, Packet),
+       packet_size = proplists:get_value(packet_size, InetValues, PacketSize),
        active = proplists:get_value(active, InetValues, Active)
       }.
+
+emulated_options([{mode, Value} = Opt |Opts], Inet, Emulated) ->
+    validate_inet_option(mode, Value),
+    emulated_options(Opts, Inet, [Opt | proplists:delete(mode, Emulated)]);
+emulated_options([{header, _} = Opt | _], _, _) ->
+    throw({error, {options, {not_supported, Opt}}});
+emulated_options([{active, Value} = Opt |Opts], Inet, Emulated) ->
+    validate_inet_option(active, Value),
+    emulated_options(Opts, Inet, [Opt | proplists:delete(active, Emulated)]);
+emulated_options([{packet, _} = Opt | _], _, _) ->
+    throw({error, {options, {not_supported, Opt}}});
+emulated_options([{packet_size, _} = Opt | _], _, _) ->
+    throw({error, {options, {not_supported, Opt}}});
+emulated_options([Opt|Opts], Inet, Emulated) ->
+    emulated_options(Opts, [Opt|Inet], Emulated);
+emulated_options([], Inet,Emulated) ->
+    {Inet, Emulated}.
+
+validate_inet_option(mode, Value)
+  when Value =/= list, Value =/= binary ->
+    throw({error, {options, {mode,Value}}});
+validate_inet_option(active, Value)
+  when Value =/= true, Value =/= false, Value =/= once ->
+    throw({error, {options, {active,Value}}});
+validate_inet_option(_, _) ->
+    ok.

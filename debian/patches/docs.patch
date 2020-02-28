@@ -5,7 +5,7 @@ Last-modified: Thu, 09 Dec 2010 10:45:56 +0300
 
 --- a/lib/erl_docgen/priv/xsl/db_man.xsl
 +++ b/lib/erl_docgen/priv/xsl/db_man.xsl
-@@ -517,7 +517,7 @@
+@@ -523,7 +523,7 @@
          <xsl:text>&#10;.RS 2</xsl:text>
          <xsl:text>&#10;.LP&#10;</xsl:text>
          <xsl:value-of select="$content"/>
@@ -14,7 +14,7 @@ Last-modified: Thu, 09 Dec 2010 10:45:56 +0300
        </xsl:otherwise>
      </xsl:choose>
    </xsl:template>
-@@ -853,7 +853,7 @@
+@@ -859,7 +859,7 @@
    <xsl:template match="desc">
      <xsl:text>&#10;.RS</xsl:text>
      <xsl:apply-templates/>
@@ -25,7 +25,7 @@ Last-modified: Thu, 09 Dec 2010 10:45:56 +0300
  
 --- a/lib/megaco/doc/src/Makefile
 +++ b/lib/megaco/doc/src/Makefile
-@@ -170,8 +170,6 @@
+@@ -159,8 +159,6 @@
  	$(INSTALL_DATA) $(INFO_FILE) "$(RELSYSDIR)"
  	$(INSTALL_DIR) "$(RELEASE_PATH)/man/man3"
  	$(INSTALL_DATA) $(MAN3DIR)/* "$(RELEASE_PATH)/man/man3"
@@ -36,7 +36,7 @@ Last-modified: Thu, 09 Dec 2010 10:45:56 +0300
  
 --- a/lib/stdlib/doc/src/re.xml
 +++ b/lib/stdlib/doc/src/re.xml
-@@ -573,7 +573,7 @@
+@@ -594,7 +594,7 @@
                to match before it. Setting this without <c>multiline</c> (at
                compile time) causes circumflex never to match. This option only
                affects the behavior of the circumflex metacharacter. It does not
@@ -45,7 +45,7 @@ Last-modified: Thu, 09 Dec 2010 10:45:56 +0300
            </item>
            <tag><c>noteol</c></tag>
            <item>
-@@ -582,7 +582,7 @@
+@@ -603,7 +603,7 @@
                in multiline mode) a newline immediately before it. Setting this
                without <c>multiline</c> (at compile time) causes dollar never to
                match. This option affects only the behavior of the dollar

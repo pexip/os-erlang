@@ -5,7 +5,7 @@ section 3.
 
 --- a/lib/tools/emacs/erlang.el
 +++ b/lib/tools/emacs/erlang.el
-@@ -507,8 +507,8 @@
+@@ -511,8 +511,8 @@
  (defvar erlang-man-dirs
    '(("Man - Commands" "/man/man1" t)
      ("Man - Modules" "/man/man3" t)
@@ -13,38 +13,10 @@ section 3.
 -    ("Man - Applications" "/man/man6" t))
 +    ("Man - Files" "/man/man5" t)
 +    ("Man - Applications" "/man/man7" t))
-   "*The man directories displayed in the Erlang menu.
+   "The man directories displayed in the Erlang menu.
  
  Each item in the list should be a list with three elements, the first
-@@ -1313,23 +1313,22 @@
- (or (fboundp 'eval-when-compile)
-     (defmacro eval-when-compile (&rest rest) nil))
- 
--;; These umm...functions are new in Emacs 20. And, yes, until version
--;; 19.27 Emacs backquotes were this ugly.
-+;; These umm...functions are new in Emacs 20.
- 
- (or (fboundp 'unless)
-     (defmacro unless (condition &rest body)
-       "(unless CONDITION BODY...): If CONDITION is false, do BODY, else return nil."
--      `((if (, condition) nil ,@body))))
-+      (cons 'if  (cons condition (cons nil body)))))
- 
- (or (fboundp 'when)
-     (defmacro when (condition &rest body)
-       "(when CONDITION BODY...): If CONDITION is true, do BODY, else return nil."
--      `((if (, condition) (progn ,@body) nil))))
-+      (list 'if condition (cons 'progn body) nil)))
- 
- (or (fboundp 'char-before)
-     (defmacro char-before (&optional pos)
-       "Return the character in the current buffer just before POS."
--      `( (char-after (1- (or ,pos (point)))))))
-+      (list 'char-after (list '1- (list 'or  pos '(point))))))
- 
- ;; defvar some obsolete variables, which we still support for
- ;; backwards compatibility reasons.
-@@ -2060,7 +2059,7 @@
+@@ -1970,7 +1970,7 @@
  
  (defun erlang-man-make-menu-item (file)
    "Create a menu item containing the name of the man page."
@@ -53,7 +25,7 @@ section 3.
         (let ((page (substring file (match-beginning 1) (match-end 1))))
           (list (capitalize page)
                 (list 'lambda '()
-@@ -2071,7 +2070,7 @@
+@@ -1981,7 +1981,7 @@
  
  (defun erlang-man-get-files (dir)
    "Return files in directory DIR."
@@ -62,24 +34,30 @@ section 3.
  
  
  (defun erlang-man-module (&optional module)
-@@ -2091,7 +2090,7 @@
-   (if (or (null module) (string= module ""))
-       (error "No Erlang module name given"))
+@@ -2003,7 +2003,7 @@
+     (error "No Erlang module name given"))
    (let ((dir-list erlang-man-dirs)
--        (pat (concat "/" (regexp-quote module) "\\.\\([124-9]\\|3\\(erl\\)?\\)\\(\\.gz\\)?$"))
-+        (pat (concat "/" (regexp-quote module) "\\.\\(3\\(erl\\)\\)\\(\\.gz\\)?$"))
+         (pat (concat "/" (regexp-quote module)
+-                     "\\.\\([124-9]\\|3\\(erl\\)?\\)\\(\\.gz\\)?$"))
++                     "\\.\\(3\\(erl\\)\\)\\(\\.gz\\)?$"))
          (file nil)
          file-list)
      (while (and dir-list (null file))
-@@ -2232,9 +2231,9 @@
-     (error nil))
-   (if file
+@@ -2130,7 +2130,7 @@
+                 (message "Could not find function `%s'" func)))))))
+ 
+ (defvar erlang-man-file-regexp
+-  "\\(.*\\)/man[^/]*/\\([^.]+\\)\\.\\([124-9]\\|3\\(erl\\)?\\)\\(\\.gz\\)?$")
++  "\\(.*\\)/man[^/]*/\\([^.]+\\)\\.\\([124-9]\\|3\\(erl\\)\\)\\(\\.gz\\)?$")
+ 
+ (defun erlang-man-display (file)
+   "Display FILE as a `man' file.
+@@ -2142,7 +2142,7 @@
        (let ((process-environment (copy-sequence process-environment)))
--        (if (string-match "\\(.*\\)/man[^/]*/\\([^.]+\\)\\.\\([124-9]\\|3\\(erl\\)?\\)\\(\\.gz\\)?$" file)
-+        (if (string-match "\\(.*\\)/man[^/]*/\\([^.]+\\)\\.\\([124-9]\\|3\\(erl\\)\\)\\(\\.gz\\)?$" file)
+         (if (string-match erlang-man-file-regexp file)
              (let ((dir (substring file (match-beginning 1) (match-end 1)))
 -                  (page (substring file (match-beginning 2) (match-end 2))))
 +                  (page (concat (substring file (match-beginning 2) (match-end 2)) "(" (substring file (match-beginning 3) (match-end 3)) ")")))
-               (if (fboundp 'setenv)
-                   (setenv "MANPATH" dir)
-                 ;; Emacs 18
+               (setenv "MANPATH" dir)
+               (manual-entry page))
+           (error "Can't find man page for %s\n" file)))))

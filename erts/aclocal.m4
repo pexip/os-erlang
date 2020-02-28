@@ -1,7 +1,7 @@
 dnl
 dnl %CopyrightBegin%
 dnl
-dnl Copyright Ericsson AB 1998-2016. All Rights Reserved.
+dnl Copyright Ericsson AB 1998-2018. All Rights Reserved.
 dnl
 dnl Licensed under the Apache License, Version 2.0 (the "License");
 dnl you may not use this file except in compliance with the License.
@@ -1524,6 +1524,13 @@ ETHR_LIB_NAME=
 
 ethr_modified_default_stack_size=
 
+AC_ARG_WITH(threadnames,
+AS_HELP_STRING([--with-threadnames], [use pthread_setname to set the thread names (default)])
+AS_HELP_STRING([--without-threadnames],
+               [do not set any thread names]),
+[],
+[with_threadnames=yes])
+
 dnl Name of lib where ethread implementation is located
 ethr_lib_name=ethread
 
@@ -1704,6 +1711,25 @@ case "$THR_LIB_NAME" in
 			AC_DEFINE(ETHR_TIME_WITH_SYS_TIME, 1, \
 [Define if you can safely include both <sys/time.h> and <time.h>.]))
 
+	AC_MSG_CHECKING([for usable PTHREAD_STACK_MIN])
+	pthread_stack_min=no
+	AC_TRY_COMPILE([
+#include <limits.h>
+#if defined(ETHR_NEED_NPTL_PTHREAD_H)
+#include <nptl/pthread.h>
+#elif defined(ETHR_HAVE_MIT_PTHREAD_H)
+#include <pthread/mit/pthread.h>
+#elif defined(ETHR_HAVE_PTHREAD_H)
+#include <pthread.h>
+#endif
+			], 
+			[return PTHREAD_STACK_MIN;],
+			[pthread_stack_min=yes])
+
+	AC_MSG_RESULT([$pthread_stack_min])
+	test $pthread_stack_min != yes || {
+	     AC_DEFINE(ETHR_HAVE_USABLE_PTHREAD_STACK_MIN, 1, [Define if you can use PTHREAD_STACK_MIN])
+	}
 
 	dnl
 	dnl Check for functions
@@ -1895,12 +1921,12 @@ case "$THR_LIB_NAME" in
                     [pthread_setname_np("name");],
                     pthread_setname=darwin)
         AC_MSG_RESULT([$pthread_setname])
-        case $pthread_setname in
-             linux) AC_DEFINE(ETHR_HAVE_PTHREAD_SETNAME_NP_2, 1,
+        case $with_threadnames-$pthread_setname in
+             yes-linux) AC_DEFINE(ETHR_HAVE_PTHREAD_SETNAME_NP_2, 1,
                           [Define if you have linux style pthread_setname_np]);;
-             bsd) AC_DEFINE(ETHR_HAVE_PTHREAD_SET_NAME_NP_2, 1,
+             yes-bsd) AC_DEFINE(ETHR_HAVE_PTHREAD_SET_NAME_NP_2, 1,
                           [Define if you have bsd style pthread_set_name_np]);;
-             darwin) AC_DEFINE(ETHR_HAVE_PTHREAD_SETNAME_NP_1, 1,
+             yes-darwin) AC_DEFINE(ETHR_HAVE_PTHREAD_SETNAME_NP_1, 1,
                           [Define if you have darwin style pthread_setname_np]);;
              *) ;;
 	esac
@@ -2619,7 +2645,7 @@ case $erl_gethrvtime in
 	dnl Check if clock_gettime (linux) is working
 	dnl
 
-	AC_MSG_CHECKING([if clock_gettime can be used to get process CPU time])
+	AC_MSG_CHECKING([if clock_gettime can be used to get thread CPU time])
 	save_libs=$LIBS
 	LIBS="-lrt"
 	AC_TRY_RUN([
@@ -2633,11 +2659,11 @@ case $erl_gethrvtime in
 	    int i;
 	    struct timespec tp;
 
-	    if (clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &tp) < 0)
+	    if (clock_gettime(CLOCK_THREAD_CPUTIME_ID, &tp) < 0)
 	      exit(1);
 	    start = ((long long)tp.tv_sec * 1000000000LL) + (long long)tp.tv_nsec;
 	    for (i = 0; i < 100; i++)
-	      clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &tp);
+	      clock_gettime(CLOCK_THREAD_CPUTIME_ID, &tp);
 	    stop = ((long long)tp.tv_sec * 1000000000LL) + (long long)tp.tv_nsec;
 	    if (start == 0)
 	      exit(4);
@@ -2660,7 +2686,7 @@ case $erl_gethrvtime in
 	case $erl_clock_gettime_cpu_time in
 		yes)
 			AC_DEFINE(HAVE_CLOCK_GETTIME_CPU_TIME,[],
-				  [define if clock_gettime() works for getting process time])
+				  [define if clock_gettime() works for getting thread time])
 			LIBRT=-lrt
 			;;
 		cross)
@@ -2700,6 +2726,21 @@ AC_DEFUN([LM_TRY_ENABLE_CFLAG], [
     fi
 ])
 
+AC_DEFUN([LM_CHECK_ENABLE_CFLAG], [
+    AC_MSG_CHECKING([whether $CC accepts $1...])
+    saved_CFLAGS=$CFLAGS;
+    CFLAGS="$1 $CFLAGS";
+    AC_TRY_COMPILE([],[return 0;],can_enable_flag=true,can_enable_flag=false)
+    CFLAGS=$saved_CFLAGS;
+    if test "X$can_enable_flag" = "Xtrue"; then
+        AS_VAR_SET($2, true)
+        AC_MSG_RESULT([yes])
+    else
+        AS_VAR_SET($2, false)
+        AC_MSG_RESULT([no])
+    fi
+])
+
 dnl ERL_TRY_LINK_JAVA(CLASSES, FUNCTION-BODY
 dnl                   [ACTION_IF_FOUND [, ACTION-IF-NOT-FOUND]])
 dnl Freely inspired by AC_TRY_LINK. (Maybe better to create a 
@@ -2729,3 +2770,89 @@ rm -f conftest*])
 #define UNSAFE_MASK  0xc0000000 /* Mask for bits that must be constant */
 
 
+dnl ----------------------------------------------------------------------
+dnl
+dnl LM_HARDWARE_ARCH
+dnl
+dnl Determine target hardware in ARCH
+dnl
+AC_DEFUN([LM_HARDWARE_ARCH], [
+    AC_MSG_CHECKING([target hardware architecture])
+    if test "x$host_alias" != "x" -a "x$host_cpu" != "x"; then
+        chk_arch_=$host_cpu
+    else
+        chk_arch_=`uname -m`
+    fi
+
+    case $chk_arch_ in
+    sun4u)	ARCH=ultrasparc;;
+    sparc64)	ARCH=sparc64;;
+    sun4v)	ARCH=ultrasparc;;
+    i86pc)	ARCH=x86;;
+    i386)	ARCH=x86;;
+    i486)	ARCH=x86;;
+    i586)	ARCH=x86;;
+    i686)	ARCH=x86;;
+    x86_64)	ARCH=amd64;;
+    amd64)	ARCH=amd64;;
+    macppc)	ARCH=ppc;;
+    powerpc)	ARCH=ppc;;
+    ppc)	ARCH=ppc;;
+    ppc64)	ARCH=ppc64;;
+    ppc64le)	ARCH=ppc64le;;
+    "Power Macintosh")	ARCH=ppc;;
+    armv5b)	ARCH=arm;;
+    armv5teb)	ARCH=arm;;
+    armv5tel)	ARCH=arm;;
+    armv5tejl)	ARCH=arm;;
+    armv6l)	ARCH=arm;;
+    armv6hl)	ARCH=arm;;
+    armv7l)	ARCH=arm;;
+    armv7hl)	ARCH=arm;;
+    tile)	ARCH=tile;;
+    e2k)        ARCH=e2k;;
+    *)	 	ARCH=noarch;;
+    esac
+    AC_MSG_RESULT($ARCH)
+
+    dnl
+    dnl Convert between x86 and amd64 based on the compiler's mode.
+    dnl Ditto between ultrasparc and sparc64.
+    dnl
+    AC_MSG_CHECKING(whether compilation mode forces ARCH adjustment)
+    case "$ARCH-$ac_cv_sizeof_void_p" in
+    x86-8)
+	AC_MSG_RESULT(yes: adjusting ARCH=x86 to ARCH=amd64)
+	ARCH=amd64
+	;;
+    amd64-4)
+	AC_MSG_RESULT(yes: adjusting ARCH=amd64 to ARCH=x86)
+	ARCH=x86
+	;;
+    ultrasparc-8)
+	AC_MSG_RESULT(yes: adjusting ARCH=ultrasparc to ARCH=sparc64)
+	ARCH=sparc64
+	;;
+    sparc64-4)
+	AC_MSG_RESULT(yes: adjusting ARCH=sparc64 to ARCH=ultrasparc)
+	ARCH=ultrasparc
+	;;
+    ppc64-4)
+	AC_MSG_RESULT(yes: adjusting ARCH=ppc64 to ARCH=ppc)
+	ARCH=ppc
+	;;
+    ppc-8)
+	AC_MSG_RESULT(yes: adjusting ARCH=ppc to ARCH=ppc64)
+	ARCH=ppc64
+	;;
+    arm-8)
+	AC_MSG_RESULT(yes: adjusting ARCH=arm to ARCH=noarch)
+	ARCH=noarch
+	;;
+    *)
+	AC_MSG_RESULT(no: ARCH is $ARCH)
+	;;
+    esac
+
+    AC_SUBST(ARCH)
+])

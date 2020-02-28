@@ -1,7 +1,7 @@
 /*
  * %CopyrightBegin%
  *
- * Copyright Ericsson AB 2008-2016. All Rights Reserved.
+ * Copyright Ericsson AB 2008-2018. All Rights Reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -6147,18 +6147,18 @@ case wxGraphicsObject_IsNull: { // wxGraphicsObject::IsNull
 case wxGraphicsContext_Create_1_1: { // wxGraphicsContext::Create
  wxWindowDC * dc = (wxWindowDC *) getPtr(bp,memenv); bp += 4;
  wxGraphicsContext * Result = (wxGraphicsContext*)wxGraphicsContext::Create(*dc);
- rt.addRef(getRef((void *)Result,memenv), "wxGraphicsContext");
+ rt.addRef(getRef((void *)Result,memenv,8), "wxGraphicsContext");
  break;
 }
 case wxGraphicsContext_Create_1_0: { // wxGraphicsContext::Create
  wxWindow *window = (wxWindow *) getPtr(bp,memenv); bp += 4;
  wxGraphicsContext * Result = (wxGraphicsContext*)wxGraphicsContext::Create(window);
- rt.addRef(getRef((void *)Result,memenv), "wxGraphicsContext");
+ rt.addRef(getRef((void *)Result,memenv,8), "wxGraphicsContext");
  break;
 }
 case wxGraphicsContext_Create_0: { // wxGraphicsContext::Create
  wxGraphicsContext * Result = (wxGraphicsContext*)wxGraphicsContext::Create();
- rt.addRef(getRef((void *)Result,memenv), "wxGraphicsContext");
+ rt.addRef(getRef((void *)Result,memenv,8), "wxGraphicsContext");
  break;
 }
 case wxGraphicsContext_CreatePen: { // wxGraphicsContext::CreatePen
@@ -6177,7 +6177,6 @@ case wxGraphicsContext_CreateBrush: { // wxGraphicsContext::CreateBrush
  rt.addRef(getRef((void *)Result,memenv), "wxGraphicsBrush");
  break;
 }
-#if !wxCHECK_VERSION(2,9,0)
 case wxGraphicsContext_CreateRadialGradientBrush: { // wxGraphicsContext::CreateRadialGradientBrush
  wxGraphicsContext *This = (wxGraphicsContext *) getPtr(bp,memenv); bp += 4;
  bp += 4; /* Align */
@@ -6201,8 +6200,6 @@ case wxGraphicsContext_CreateRadialGradientBrush: { // wxGraphicsContext::Create
  rt.addRef(getRef((void *)Result,memenv), "wxGraphicsBrush");
  break;
 }
-#endif
-#if !wxCHECK_VERSION(2,9,0)
 case wxGraphicsContext_CreateLinearGradientBrush: { // wxGraphicsContext::CreateLinearGradientBrush
  wxGraphicsContext *This = (wxGraphicsContext *) getPtr(bp,memenv); bp += 4;
  bp += 4; /* Align */
@@ -6225,7 +6222,6 @@ case wxGraphicsContext_CreateLinearGradientBrush: { // wxGraphicsContext::Create
  rt.addRef(getRef((void *)Result,memenv), "wxGraphicsBrush");
  break;
 }
-#endif
 case wxGraphicsContext_CreateFont: { // wxGraphicsContext::CreateFont
  wxColour col= *wxBLACK;
  wxGraphicsContext *This = (wxGraphicsContext *) getPtr(bp,memenv); bp += 4;
@@ -7003,7 +6999,7 @@ case wxGraphicsRenderer_CreateContext_1_1: { // wxGraphicsRenderer::CreateContex
  wxWindowDC * dc = (wxWindowDC *) getPtr(bp,memenv); bp += 4;
  if(!This) throw wxe_badarg(0);
  wxGraphicsContext * Result = (wxGraphicsContext*)This->CreateContext(*dc);
- rt.addRef(getRef((void *)Result,memenv), "wxGraphicsContext");
+ rt.addRef(getRef((void *)Result,memenv,8), "wxGraphicsContext");
  break;
 }
 case wxGraphicsRenderer_CreateContext_1_0: { // wxGraphicsRenderer::CreateContext
@@ -7011,16 +7007,44 @@ case wxGraphicsRenderer_CreateContext_1_0: { // wxGraphicsRenderer::CreateContex
  wxWindow *window = (wxWindow *) getPtr(bp,memenv); bp += 4;
  if(!This) throw wxe_badarg(0);
  wxGraphicsContext * Result = (wxGraphicsContext*)This->CreateContext(window);
- rt.addRef(getRef((void *)Result,memenv), "wxGraphicsContext");
+ rt.addRef(getRef((void *)Result,memenv,8), "wxGraphicsContext");
  break;
 }
-case wxGraphicsRenderer_CreatePen: { // wxGraphicsRenderer::CreatePen
+
+case wxGraphicsRenderer_CreatePen: { // wxGraphicsRenderer::CreatePen taylormade
  wxGraphicsRenderer *This = (wxGraphicsRenderer *) getPtr(bp,memenv); bp += 4;
  wxPen *pen = (wxPen *) getPtr(bp,memenv); bp += 4;
  if(!This) throw wxe_badarg(0);
- wxGraphicsPen * Result = new wxGraphicsPen(This->CreatePen(*pen)); newPtr((void *) Result,4, memenv);;
+#if !wxCHECK_VERSION(3,1,1)
+ wxGraphicsPen * Result = new wxGraphicsPen(This->CreatePen(*pen)); newPtr((void *) Result,4, memenv);
  rt.addRef(getRef((void *)Result,memenv), "wxGraphicsPen");
  break;
+#else
+ wxGraphicsPenInfo info = wxGraphicsPenInfo()
+   .Colour(pen->GetColour())
+   .Width(pen->GetWidth())
+   .Style(pen->GetStyle())
+   .Join(pen->GetJoin())
+   .Cap(pen->GetCap())
+   ;
+
+ if ( info.GetStyle() == wxPENSTYLE_USER_DASH )
+ {
+   wxDash *dashes;
+   if ( int nb_dashes = pen->GetDashes(&dashes) )
+     info.Dashes(nb_dashes, dashes);
+ }
+
+ if ( info.GetStyle() == wxPENSTYLE_STIPPLE )
+ {
+   if ( wxBitmap* const stipple = pen->GetStipple() )
+     info.Stipple(*stipple);
+ }
+ wxGraphicsPen * Result = new wxGraphicsPen(This->CreatePen(info));
+ newPtr((void *) Result,4, memenv);
+ rt.addRef(getRef((void *)Result,memenv), "wxGraphicsPen");
+ break;
+#endif
 }
 case wxGraphicsRenderer_CreateBrush: { // wxGraphicsRenderer::CreateBrush
  wxGraphicsRenderer *This = (wxGraphicsRenderer *) getPtr(bp,memenv); bp += 4;

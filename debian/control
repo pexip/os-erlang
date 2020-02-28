@@ -4,17 +4,17 @@ XSBC-Pexip-Original-Maintainer: Debian Erlang Packagers <pkg-erlang-devel@lists.
 XSBC-Pexip-Original-Uploaders: Sergei Golovan <sgolovan@debian.org>
 Section: interpreters
 Priority: optional
-Standards-Version: 3.9.8
-Build-Depends: debhelper (>= 8.0.0), autoconf (>= 2.50), openssl, libssl1.0-dev, m4,
- libncurses5-dev, autotools-dev, unixodbc-dev, bison, flex, ed,
- dctrl-tools, xsltproc,
+Standards-Version: 4.3.0
+Build-Depends: debhelper (>= 10.0.0), autoconf (>= 2.50), openssl, libssl1.0-dev, m4,
+ libncurses5-dev, unixodbc-dev, bison, flex, ed,
+ libwxgtk3.0-dev, dctrl-tools, xsltproc,
  libgl1-mesa-dev | libgl-dev, libglu1-mesa-dev | libglu-dev,
- libsctp-dev [linux-any], libsystemd-dev [linux-any], dh-systemd
+ libsctp-dev [linux-any], libsystemd-dev [linux-any], erlang-base:native <cross>
 Build-Depends-Indep: libxml2-utils, fop, default-jdk | sun-java6-jdk
 Build-Conflicts: autoconf2.13, libwxgtk2.4-dev, libwxgtk2.6-dev, libwxgtk2.8-dev
 Homepage: http://www.erlang.org/
-Vcs-Svn: svn://anonscm.debian.org/pkg-erlang/erlang/trunk/
-Vcs-Browser: http://anonscm.debian.org/viewvc/pkg-erlang/erlang/trunk/
+Vcs-Browser: https://salsa.debian.org/erlang-team/packages/erlang
+Vcs-Git: https://salsa.debian.org/erlang-team/packages/erlang.git
 XS-Pexip-Upstream: http://ftp.debian.org/debian/ buster
 
 Package: erlang-base
@@ -23,8 +23,9 @@ Depends: procps, adduser, ${shlibs:Depends}, ${misc:Depends}
 Recommends: ${libsctp:Version}, erlang-crypto (= ${binary:Version}), erlang-syntax-tools (= ${binary:Version})
 Suggests: erlang-tools (= ${binary:Version}),  erlang, erlang-manpages, erlang-doc
 Conflicts: erlang (<< ${source:Version}), erlang-base-hipe, erlang-doc (<< ${source:Upstream-Version}), erlang-doc (>> ${source:Upstream-Version}-999), erlang-manpages (<= 1:11.b.1-2), erlang-doc-html (<< 1:13.b.4)
-Replaces: erlang (<< ${source:Version}), erlang-base-hipe, erlang-nox (<< ${source:Version}), erlang-x11 (<< ${source:Version}), erlang-src (<< ${source:Version}), erlang-dev (<< ${binary:Version}), erlang-examples (<< ${source:Version}), erlang-mode (<< 1:12.b.1-dfsg-2), erlang-doc (<< ${source:Upstream-Version}), erlang-doc (>> ${source:Upstream-Version}-999), erlang-manpages (<= 1:11.b.1-2), erlang-doc-html (<< 1:13.b.4)
-Provides: erlang-abi-17.0, erlang-abi-15.b
+Replaces: erlang (<< ${source:Version}), erlang-base-hipe, erlang-nox (<< ${source:Version}), erlang-x11 (<< ${source:Version}), erlang-src (<< ${source:Version}), erlang-dev (<< ${binary:Version}), erlang-examples (<< ${source:Version}), erlang-typer (<< 1:20.0+dfsg), erlang-mode (<< 1:12.b.1-dfsg-2), erlang-doc (<< ${source:Upstream-Version}), erlang-doc (>> ${source:Upstream-Version}-999), erlang-manpages (<= 1:11.b.1-2), erlang-doc-html (<< 1:13.b.4)
+Provides: erlang-abi-17.0
+Breaks: rabbitmq-server (<< 3.7.7)
 Description: Erlang/OTP virtual machine and base applications
  This package contains the Erlang/OTP runtime implementation, which is
  configured and built without HiPE support (compiles to byte-code only),
@@ -39,13 +40,13 @@ Description: Erlang/OTP virtual machine and base applications
 
 Package: erlang-base-hipe
 Architecture: amd64 i386 powerpc ppc64 ppc64el sparc solaris-i386
-Priority: extra
 Depends: procps, adduser, ${shlibs:Depends}, ${misc:Depends}
 Recommends: ${libsctp:Version}, erlang-crypto (= ${binary:Version}), erlang-syntax-tools (= ${binary:Version})
 Suggests: erlang-tools (= ${binary:Version}), erlang, erlang-manpages, erlang-doc
 Conflicts: erlang (<< ${source:Version}), erlang-base, erlang-doc (<< ${source:Upstream-Version}), erlang-doc (>> ${source:Upstream-Version}-999), erlang-manpages (<= 1:11.b.1-2), erlang-doc-html (<< 1:13.b.4)
-Replaces: erlang (<< ${source:Version}), erlang-base, erlang-nox (<< ${source:Version}), erlang-x11 (<< ${source:Version}), erlang-src (<< ${source:Version}), erlang-dev (<< ${binary:Version}), erlang-examples (<< ${source:Version}), erlang-mode (<< 1:12.b.1-dfsg-2), erlang-doc (<< ${source:Upstream-Version}), erlang-doc (>> ${source:Upstream-Version}-999), erlang-manpages (<= 1:11.b.1-2), erlang-doc-html (<< 1:13.b.4)
-Provides: erlang-abi-17.0, erlang-abi-15.b
+Replaces: erlang (<< ${source:Version}), erlang-base, erlang-nox (<< ${source:Version}), erlang-x11 (<< ${source:Version}), erlang-src (<< ${source:Version}), erlang-dev (<< ${binary:Version}), erlang-examples (<< ${source:Version}), erlang-typer (<< 1:20.0+dfsg), erlang-mode (<< 1:12.b.1-dfsg-2), erlang-doc (<< ${source:Upstream-Version}), erlang-doc (>> ${source:Upstream-Version}-999), erlang-manpages (<= 1:11.b.1-2), erlang-doc-html (<< 1:13.b.4)
+Provides: erlang-abi-17.0
+Breaks: rabbitmq-server (<< 3.7.7)
 Description: Erlang/OTP HiPE enabled virtual machine and base applications
  This package contains the Erlang/OTP runtime implementation, which is
  configured and built with HiPE support (allows compiling to native code),
@@ -70,7 +71,7 @@ Description: Erlang/OTP modules for ASN.1 support
 
 Package: erlang-common-test
 Architecture: any
-Depends: ${erlang-base}, erlang-crypto (= ${binary:Version}), erlang-debugger (= ${binary:Version}), erlang-inets (= ${binary:Version}), erlang-observer (= ${binary:Version}), erlang-runtime-tools (= ${binary:Version}), erlang-snmp (= ${binary:Version}), erlang-ssh (= ${binary:Version}), erlang-syntax-tools (= ${binary:Version}), erlang-tools (= ${binary:Version}), erlang-xmerl (= ${binary:Version}), libjs-jquery, libjs-jquery-tablesorter, ${shlibs:Depends}, ${misc:Depends}
+Depends: ${erlang-base}, erlang-crypto (= ${binary:Version}), erlang-debugger (= ${binary:Version}), erlang-ftp (= ${binary:Version}), erlang-inets (= ${binary:Version}), erlang-observer (= ${binary:Version}), erlang-runtime-tools (= ${binary:Version}), erlang-snmp (= ${binary:Version}), erlang-ssh (= ${binary:Version}), erlang-syntax-tools (= ${binary:Version}), erlang-tools (= ${binary:Version}), erlang-xmerl (= ${binary:Version}), libjs-jquery, libjs-jquery-tablesorter, ${shlibs:Depends}, ${misc:Depends}
 Suggests: erlang, erlang-manpages, erlang-doc
 Replaces: erlang (<< ${source:Version}), erlang-base (<< ${binary:Version}), erlang-base-hipe (<< ${binary:Version}), erlang-nox (<< ${source:Version}), erlang-x11 (<< ${binary:Version}), erlang-src (<< ${source:Version}), erlang-dev (<< ${binary:Version}), erlang-examples (<< ${source:Version}), erlang-mode (<< 1:12.b.1-dfsg-2), erlang-doc (<< ${source:Upstream-Version}), erlang-doc (>> ${source:Upstream-Version}-999), erlang-manpages (<= 1:11.b.1-2)
 Description: Erlang/OTP application for automated testing
@@ -84,37 +85,6 @@ Description: Erlang/OTP application for automated testing
  calling the target API functions directly from the test case functions.
  Common Test also integrates usage of the OTP cover tool for code
  coverage analysis of Erlang/OTP programs.
-
-
-Package: erlang-corba
-Architecture: any
-Depends: ${erlang-base}, erlang-inets (= ${binary:Version}), erlang-mnesia (= ${binary:Version}), erlang-ssl (= ${binary:Version}), ${misc:Depends}
-Suggests: erlang, erlang-manpages, erlang-doc
-Replaces: erlang (<< ${source:Version}), erlang-base (<< ${binary:Version}), erlang-base-hipe (<< ${binary:Version}), erlang-nox (<< ${source:Version}), erlang-x11 (<< ${binary:Version}), erlang-src (<< ${source:Version}), erlang-dev (<< ${binary:Version}), erlang-examples (<< ${source:Version}), erlang-mode (<< 1:12.b.1-dfsg-2), erlang-doc (<< ${source:Upstream-Version}), erlang-doc (>> ${source:Upstream-Version}-999), erlang-manpages (<= 1:11.b.1-2)
-Description: Erlang/OTP applications for CORBA support
- The Orber application is an Erlang implementation of a CORBA
- Object Request Broker.
- .
- The cosEvent application is an Erlang implementation of a CORBA
- Service CosEvent.
- .
- The cosEventDomain application is an Erlang implementation of a
- CORBA Service CosEventDomainAdmin.
- .
- The cosFileTransfer Application is an Erlang implementation of
- the OMG CORBA File Transfer Service.
- .
- The cosNotification application is an Erlang implementation of
- the OMG CORBA Notification Service.
- .
- The cosProperty Application is an Erlang implementation of the
- OMG CORBA Property Service.
- .
- The cosTime application is an Erlang implementation of the OMG
- CORBA Time and TimerEvent Services.
- .
- The cosTransactions application is an Erlang implementation of
- the OMG CORBA Transaction Service.
 
 
 Package: erlang-crypto
@@ -225,53 +195,24 @@ Description: Erlang/OTP module for unit testing
  The EUnit application contains modules with support for unit testing.
 
 
-Package: erlang-gs
+Package: erlang-ftp
 Architecture: any
-Depends: ${erlang-base}, ${misc:Depends}, tk | wish
+Depends: ${erlang-base}, erlang-runtime-tools (= ${binary:Version}), erlang-ssl (= ${binary:Version}), ${misc:Depends}
 Suggests: erlang, erlang-manpages, erlang-doc
-Replaces: erlang (<< ${source:Version}), erlang-base (<< ${binary:Version}), erlang-base-hipe (<< ${binary:Version}), erlang-nox (<< ${source:Version}), erlang-x11 (<< ${binary:Version}), erlang-src (<< ${source:Version}), erlang-dev (<< ${binary:Version}), erlang-examples (<< ${source:Version}), erlang-mode (<< 1:12.b.1-dfsg-2), erlang-doc (<< ${source:Upstream-Version}), erlang-doc (>> ${source:Upstream-Version}-999), erlang-manpages (<= 1:11.b.1-2)
-Description: Erlang/OTP graphics system
- The Graphics System application, GS, is a library of routines for
- writing graphical user interfaces. Programs written using GS work
- on all Erlang platforms and do not depend upon the underlying
- windowing system. It uses Tk widgets for visualization.
-
-
-Package: erlang-ic
-Architecture: any
-Depends: ${erlang-base}, ${misc:Depends}
-Suggests: erlang-ic-java, erlang, erlang-manpages, erlang-doc
-Replaces: erlang (<< ${source:Version}), erlang-base (<< ${binary:Version}), erlang-base-hipe (<< ${binary:Version}), erlang-nox (<< ${source:Version}), erlang-x11 (<< ${binary:Version}), erlang-src (<< ${source:Version}), erlang-dev (<< ${binary:Version}), erlang-examples (<< ${source:Version}), erlang-mode (<< 1:12.b.1-dfsg-2), erlang-doc (<< ${source:Upstream-Version}), erlang-doc (>> ${source:Upstream-Version}-999), erlang-manpages (<= 1:11.b.1-2)
-Description: Erlang/OTP IDL compiler
- The IC application is an Erlang implementation of an IDL (CORBA Interface
- Definition Language) compiler. Depending on the choice of back-end the
- code will map to Erlang, C, or Java. The compiler generates client stubs
- and server skeletons.
-
-
-Package: erlang-ic-java
-Architecture: all
-Depends: erlang-jinterface, erlang-ic (>= ${binary:Version}), erlang-ic (<< ${binary:Version}.0), ${misc:Depends}
-Suggests: erlang, erlang-manpages, erlang-doc
-Replaces: erlang (<< ${source:Version}), erlang-base (<< ${binary:Version}), erlang-base-hipe (<< ${binary:Version}), erlang-nox (<< ${source:Version}), erlang-x11 (<< ${binary:Version}), erlang-src (<< ${source:Version}), erlang-dev (<< ${binary:Version}), erlang-examples (<< ${source:Version}), erlang-mode (<< 1:12.b.1-dfsg-2), erlang-doc (<< ${source:Upstream-Version}), erlang-doc (>> ${source:Upstream-Version}-999), erlang-manpages (<= 1:11.b.1-2)
-Description: Erlang/OTP IDL compiler (Java classes)
- The IC application is an Erlang implementation of an IDL (CORBA Interface
- Definition Language) compiler. Depending on the choice of back-end the
- code will map to Erlang, C, or Java. The compiler generates client stubs
- and server skeletons.
- .
- This package includes classes for Java-Erlang communication.
+Replaces: erlang (<< ${source:Version}), erlang-base (<< ${binary:Version}), erlang-base-hipe (<< ${binary:Version}), erlang-nox (<< ${source:Version}), erlang-x11 (<< ${binary:Version}), erlang-src (<< ${source:Version}), erlang-dev (<< ${binary:Version}), erlang-examples (<< ${source:Version}), erlang-mode (<< 1:12.b.1-dfsg-2), erlang-doc (<< ${source:Upstream-Version}), erlang-doc (>> ${source:Upstream-Version}-999), erlang-manpages (<= 1:11.b.1-2), erlang-inets (<< 1:21.0~rc1)
+Description: Erlang/OTP FTP client
+ The ftp application implements a client for file transfer
+ according to a subset of the File Transfer Protocol (FTP).
 
 
 Package: erlang-inets
 Architecture: any
-Depends: ${erlang-base}, erlang-mnesia (= ${binary:Version}), erlang-runtime-tools (= ${binary:Version}), erlang-ssl (= ${binary:Version}), ${misc:Depends}
+Depends: ${erlang-base}, erlang-ftp (= ${binary:Version}), erlang-mnesia (= ${binary:Version}), erlang-runtime-tools (= ${binary:Version}), erlang-ssl (= ${binary:Version}), erlang-tftp (= ${binary:Version}), ${misc:Depends}
 Suggests: erlang, erlang-manpages, erlang-doc
 Replaces: erlang (<< ${source:Version}), erlang-base (<< ${binary:Version}), erlang-base-hipe (<< ${binary:Version}), erlang-nox (<< ${source:Version}), erlang-x11 (<< ${binary:Version}), erlang-src (<< ${source:Version}), erlang-dev (<< ${binary:Version}), erlang-examples (<< ${source:Version}), erlang-mode (<< 1:12.b.1-dfsg-2), erlang-doc (<< ${source:Upstream-Version}), erlang-doc (>> ${source:Upstream-Version}-999), erlang-manpages (<= 1:11.b.1-2)
 Description: Erlang/OTP Internet clients and servers
  Inets is a container for Internet clients and servers. Currently
- a FTP client, a HTTP client and server, and a TFTP client and
- server are provided in Inets.
+ a HTTP client and server are provided in Inets.
 
 
 Package: erlang-manpages
@@ -310,7 +251,7 @@ Description: Erlang/OTP distributed relational/object hybrid database
 
 Package: erlang-observer
 Architecture: any
-Depends: ${erlang-base}, erlang-et (= ${binary:Version}), erlang-inets (= ${binary:Version}), erlang-runtime-tools (= ${binary:Version}), erlang-webtool (= ${binary:Version}), ${misc:Depends}
+Depends: ${erlang-base}, erlang-et (= ${binary:Version}), erlang-runtime-tools (= ${binary:Version}), erlang-wx (= ${binary:Version}), ${misc:Depends}
 Suggests: erlang, erlang-manpages, erlang-doc
 Replaces: erlang (<< ${source:Version}), erlang-base (<< ${binary:Version}), erlang-base-hipe (<< ${binary:Version}), erlang-nox (<< ${source:Version}), erlang-x11 (<< ${binary:Version}), erlang-src (<< ${source:Version}), erlang-dev (<< ${binary:Version}), erlang-examples (<< ${source:Version}), erlang-mode (<< 1:12.b.1-dfsg-2), erlang-doc (<< ${source:Upstream-Version}), erlang-doc (>> ${source:Upstream-Version}-999), erlang-manpages (<= 1:11.b.1-2)
 Description: Erlang/OTP application for investigating distributed systems
@@ -350,16 +291,6 @@ Description: Erlang/OTP parsing tools
  it includes yecc module. Yecc is an LALR-1 parser generator for Erlang,
  similar to yacc. Yecc takes a BNF grammar definition as input, and
  produces Erlang code for a parser as output.
-
-
-Package: erlang-percept
-Architecture: any
-Depends: ${erlang-base}, erlang-inets (= ${binary:Version}), erlang-runtime-tools (= ${binary:Version}), ${misc:Depends}
-Suggests: erlang, erlang-manpages, erlang-doc
-Replaces: erlang (<< ${source:Version}), erlang-base (<< ${binary:Version}), erlang-base-hipe (<< ${binary:Version}), erlang-nox (<< ${source:Version}), erlang-x11 (<< ${binary:Version}), erlang-src (<< ${source:Version}), erlang-dev (<< ${binary:Version}), erlang-examples (<< ${source:Version}), erlang-mode (<< 1:12.b.1-dfsg-2), erlang-doc (<< ${source:Upstream-Version}), erlang-doc (>> ${source:Upstream-Version}-999), erlang-manpages (<= 1:11.b.1-2)
-Description: Erlang/OTP concurrency profiling tool
- Percept is a tool which visualizes application level concurrency and
- helps to identify concurrency bottlenecks.
 
 
 Package: erlang-public-key
@@ -421,7 +352,7 @@ Description: Erlang/OTP implementation of SSH protocol
 
 Package: erlang-ssl
 Architecture: any
-Depends: ${erlang-base}, erlang-crypto (= ${binary:Version}), erlang-public-key (= ${binary:Version}), ${misc:Depends}
+Depends: ${erlang-base}, erlang-crypto (= ${binary:Version}), erlang-public-key (= ${binary:Version}), erlang-runtime-tools (= ${binary:Version}), ${misc:Depends}
 Suggests: erlang-inets (= ${binary:Version}), erlang, erlang-manpages, erlang-doc
 Replaces: erlang (<< ${source:Version}), erlang-base (<< ${binary:Version}), erlang-base-hipe (<< ${binary:Version}), erlang-nox (<< ${source:Version}), erlang-x11 (<< ${binary:Version}), erlang-src (<< ${source:Version}), erlang-dev (<< ${binary:Version}), erlang-examples (<< ${source:Version}), erlang-mode (<< 1:12.b.1-dfsg-2), erlang-doc (<< ${source:Upstream-Version}), erlang-doc (>> ${source:Upstream-Version}-999), erlang-manpages (<= 1:11.b.1-2)
 Description: Erlang/OTP implementation of SSL
@@ -440,6 +371,16 @@ Description: Erlang/OTP modules for handling abstract Erlang syntax trees
  files in unusual ways and pretty-printing syntax trees. Also it
  includes a module merger and renamer called Igor, as well as an
  automatic code-cleaner.
+
+
+Package: erlang-tftp
+Architecture: any
+Depends: ${erlang-base}, ${misc:Depends}
+Suggests: erlang, erlang-manpages, erlang-doc
+Replaces: erlang (<< ${source:Version}), erlang-base (<< ${binary:Version}), erlang-base-hipe (<< ${binary:Version}), erlang-nox (<< ${source:Version}), erlang-x11 (<< ${binary:Version}), erlang-src (<< ${source:Version}), erlang-dev (<< ${binary:Version}), erlang-examples (<< ${source:Version}), erlang-mode (<< 1:12.b.1-dfsg-2), erlang-doc (<< ${source:Upstream-Version}), erlang-doc (>> ${source:Upstream-Version}-999), erlang-manpages (<= 1:11.b.1-2), erlang-inets (<< 1:21.0~rc1)
+Description: Erlang/OTP TFTP client and server
+ The tftp application implements client and server for file
+ transfer according to the Trivial File Transfer Protocol (TFTP).
 
 
 Package: erlang-tools
@@ -469,17 +410,7 @@ Description: Erlang/OTP various tools
     between functions, modules, applications and releases.
 
 
-Package: erlang-typer
-Architecture: any
-Depends: ${erlang-base}, erlang-dialyzer (= ${binary:Version}), ${shlibs:Depends}, ${misc:Depends}
-Suggests: erlang, erlang-manpages, erlang-doc
-Replaces: erlang (<< ${source:Version}), erlang-base (<< ${binary:Version}), erlang-base-hipe (<< ${binary:Version}), erlang-nox (<< ${source:Version}), erlang-x11 (<< ${binary:Version}), erlang-src (<< ${source:Version}), erlang-dev (<< ${binary:Version}), erlang-examples (<< ${source:Version}), erlang-mode (<< 1:12.b.1-dfsg-2), erlang-doc (<< ${source:Upstream-Version}), erlang-doc (>> ${source:Upstream-Version}-999), erlang-manpages (<= 1:11.b.1-2)
-Description: Erlang/OTP code type annotator
- TypEr is a tool that displays and automatically inserts type annotations
- in Erlang code. It uses Dialyzer to infer variable types.
-
-
-Package: erlang-webtool
+Package: erlang-wx
 Architecture: any
 Depends: ${erlang-base}, erlang-inets (= ${binary:Version}), ${misc:Depends}
 Suggests: erlang-observer (= ${binary:Version}), erlang, erlang-manpages, erlang-doc
@@ -509,18 +440,6 @@ Description: Erlang/OTP development libraries and headers
  libraries.
 
 
-Package: erlang-dbg
-Section: debug
-Priority: extra
-Architecture: any
-Depends: erlang-base (= ${binary:Version}), ${misc:Depends}
-Suggests: erlang, erlang-manpages, erlang-doc
-Description: Erlang/OTP symbol files
- The files containing debug symbols for binaries and libraries in Erlang
- to help in debugging applications build with them. You will not normally
- need to install this package.
-
-
 Package: erlang-src
 Architecture: all
 Depends: erlang-base (>= ${binary:Version}) | erlang-base-hipe (>= ${binary:Version}), erlang-base (<< ${binary:Version}.0) | erlang-base-hipe (<< ${binary:Version}.0), ${misc:Depends}
@@ -535,8 +454,8 @@ Description: Erlang/OTP applications sources
 Package: erlang-examples
 Architecture: all
 Depends: erlang-base (>= ${binary:Version}) | erlang-base-hipe (>= ${binary:Version}), erlang-base (<< ${binary:Version}.0) | erlang-base-hipe (<< ${binary:Version}.0), ${misc:Depends}
-Recommends: erlang-crypto, erlang-gs, erlang-inets, erlang-megaco, erlang-public-key, erlang-snmp, erlang-ssh, erlang-ssl, erlang-syntax-tools
-Suggests: erlang, erlang-manpages, erlang-doc
+Recommends: erlang-crypto, erlang-inets, erlang-megaco, erlang-public-key, erlang-snmp, erlang-ssh, erlang-ssl, erlang-syntax-tools
+Suggests: erlang-wx, erlang, erlang-manpages, erlang-doc
 Replaces: erlang (<< ${binary:Version}), erlang-base (<< ${binary:Version}), erlang-base-hipe (<< ${binary:Version}), erlang-nox (<< ${binary:Version}), erlang-x11 (<< ${binary:Version}), erlang-dev (<< ${binary:Version}), erlang-src (<< ${binary:Version}), erlang-mode (<< 1:12.b.1-dfsg-2)
 Description: Erlang/OTP application examples
  The examples, included in the Erlang/OTP system distribution.
@@ -565,12 +484,12 @@ Description: Erlang major editing mode for Emacs
 
 Package: erlang-nox
 Architecture: all
-Depends: erlang-base | erlang-base-hipe, erlang-asn1, erlang-corba, erlang-crypto,
+Depends: erlang-base | erlang-base-hipe, erlang-asn1, erlang-crypto,
  erlang-diameter, erlang-edoc, erlang-eldap, erlang-erl-docgen, erlang-eunit,
- erlang-ic, erlang-inets, erlang-mnesia, erlang-odbc, erlang-os-mon,
- erlang-parsetools, erlang-percept, erlang-public-key, erlang-runtime-tools,
- erlang-snmp, erlang-ssh, erlang-ssl, erlang-syntax-tools, erlang-tools,
- erlang-xmerl, ${misc:Depends}
+ erlang-ftp, erlang-inets, erlang-mnesia, erlang-odbc, erlang-os-mon,
+ erlang-parsetools, erlang-public-key, erlang-runtime-tools,
+ erlang-snmp, erlang-ssh, erlang-ssl, erlang-syntax-tools, erlang-tftp,
+ erlang-tools, erlang-xmerl, ${misc:Depends}
 Suggests: erlang, erlang-manpages, erlang-doc
 Description: Erlang/OTP applications that don't require X Window System
  This package is a dummy package which will install all Erlang/OTP
@@ -580,9 +499,9 @@ Description: Erlang/OTP applications that don't require X Window System
 Package: erlang-x11
 Architecture: all
 Depends: erlang-base | erlang-base-hipe, erlang-nox,
- erlang-common-test, erlang-debugger, erlang-dialyzer, erlang-et, erlang-gs,
+ erlang-common-test, erlang-debugger, erlang-dialyzer, erlang-et,
  erlang-megaco, erlang-observer, erlang-reltool,
- erlang-test-server, erlang-typer,
+ erlang-wx,
  ${misc:Depends}
 Suggests: erlang, erlang-manpages, erlang-doc
 Description: Erlang/OTP applications that require X Window System
@@ -594,16 +513,15 @@ Description: Erlang/OTP applications that require X Window System
 Package: erlang
 Architecture: all
 Depends: erlang-base | erlang-base-hipe, erlang-dev, erlang-asn1,
- erlang-common-test, erlang-corba, erlang-crypto, erlang-debugger,
+ erlang-common-test, erlang-crypto, erlang-debugger,
  erlang-dialyzer, erlang-diameter, erlang-edoc, erlang-eldap,
- erlang-erl-docgen, erlang-et, erlang-eunit, erlang-gs, erlang-ic, erlang-inets,
+ erlang-erl-docgen, erlang-et, erlang-eunit, erlang-ftp, erlang-inets,
  erlang-megaco, erlang-mnesia, erlang-observer, erlang-odbc,
- erlang-os-mon, erlang-parsetools, erlang-percept,
+ erlang-os-mon, erlang-parsetools,
  erlang-public-key, erlang-reltool, erlang-runtime-tools, erlang-snmp,
- erlang-ssh, erlang-ssl, erlang-syntax-tools, erlang-test-server,
- erlang-tools, erlang-typer, erlang-webtool,
- erlang-xmerl, ${misc:Depends}
-Recommends: erlang-jinterface, erlang-ic-java, erlang-mode, erlang-src,
+ erlang-ssh, erlang-ssl, erlang-syntax-tools, erlang-tftp,
+ erlang-tools, erlang-wx, erlang-xmerl, ${misc:Depends}
+Recommends: erlang-jinterface, erlang-mode, erlang-src,
  erlang-examples
 Suggests: erlang-manpages, erlang-doc
 Description: Concurrent, real-time, distributed functional language

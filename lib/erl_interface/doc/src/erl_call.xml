@@ -4,7 +4,7 @@
 <comref>
   <header>
     <copyright>
-      <year>1996</year><year>2016</year>
+      <year>1996</year><year>2017</year>
       <holder>Ericsson AB. All Rights Reserved.</holder>
     </copyright>
     <legalnotice>
@@ -193,7 +193,7 @@ erl_call -s -a 'erlang halt' -n madonna
     <p>To apply with many arguments:</p>
 
     <code type="none"><![CDATA[
-erl_call -s -a 'lists map [{math,sqrt},[1,4,9,16,25]]' -n madonna
+erl_call -s -a 'lists seq [1,10]' -n madonna
     ]]></code>
 
     <p>To evaluate some expressions
