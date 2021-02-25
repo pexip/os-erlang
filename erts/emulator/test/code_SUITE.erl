@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %% 
-%% Copyright Ericsson AB 1999-2018. All Rights Reserved.
+%% Copyright Ericsson AB 1999-2020. All Rights Reserved.
 %% 
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -332,6 +332,7 @@ constant_pools(Config) when is_list(Config) ->
     A = literals:a(),
     B = literals:b(),
     C = literals:huge_bignum(),
+    D = literals:funs(),
     process_flag(trap_exit, true),
     Self = self(),
 
@@ -345,10 +346,27 @@ constant_pools(Config) when is_list(Config) ->
     true = erlang:purge_module(literals),
     NoOldHeap ! done,
     receive
-        {'EXIT',NoOldHeap,{A,B,C}} ->
+        {'EXIT',NoOldHeap,{A,B,C,D}} ->
             ok;
-        Other ->
-            ct:fail({unexpected,Other})
+        Other_NoOldHeap ->
+            ct:fail({unexpected,Other_NoOldHeap})
+    end,
+    {module,literals} = erlang:load_module(literals, Code),
+
+    %% Have a process with an inconsistent heap (legal while GC is disabled)
+    %% that references the literals in the 'literals' module.
+    InconsistentHeap = spawn_link(fun() -> inconsistent_heap(Self) end),
+    receive go -> ok end,
+    true = erlang:delete_module(literals),
+    false = erlang:check_process_code(InconsistentHeap, literals),
+    erlang:check_process_code(self(), literals),
+    true = erlang:purge_module(literals),
+    InconsistentHeap ! done,
+    receive
+        {'EXIT',InconsistentHeap,{A,B,C}} ->
+            ok;
+        Other_InconsistentHeap ->
+            ct:fail({unexpected,Other_InconsistentHeap})
     end,
     {module,literals} = erlang:load_module(literals, Code),
 
@@ -362,7 +380,7 @@ constant_pools(Config) when is_list(Config) ->
     erlang:purge_module(literals),
     OldHeap ! done,
     receive
-	{'EXIT',OldHeap,{A,B,C,[1,2,3|_]=Seq}} when length(Seq) =:= 16 ->
+	{'EXIT',OldHeap,{A,B,C,D,[1,2,3|_]=Seq}} when length(Seq) =:= 16 ->
 	    ok
     end,
 
@@ -390,17 +408,20 @@ constant_pools(Config) when is_list(Config) ->
 	{'DOWN', Mon, process, Hib, Reason} ->
 	    {undef, [{no_module,
 		      no_function,
-		      [{A,B,C,[1,2,3|_]=Seq}], _}]} = Reason,
+		      [{A,B,C,D,[1,2,3|_]=Seq}], _}]} = Reason,
 	    16 = length(Seq)
     end,
     HeapSz = TotHeapSz, %% Ensure restored to hibernated state...
     true = HeapSz > OldHeapSz,
+    literal_area_collector_test:check_idle(5000),
     ok.
 
 no_old_heap(Parent) ->
     A = literals:a(),
     B = literals:b(),
-    Res = {A,B,literals:huge_bignum()},
+    C = literals:huge_bignum(),
+    D = literals:funs(),
+    Res = {A,B,C,D},
     Parent ! go,
     receive
         done ->
@@ -410,9 +431,32 @@ no_old_heap(Parent) ->
 old_heap(Parent) ->
     A = literals:a(),
     B = literals:b(),
-    Res = {A,B,literals:huge_bignum(),lists:seq(1, 16)},
+    C = literals:huge_bignum(),
+    D = literals:funs(),
+    Res = {A,B,C,D,lists:seq(1, 16)},
     create_old_heap(),
     Parent ! go,
+    receive
+        done ->
+            exit(Res)
+    end.
+
+inconsistent_heap(Parent) ->
+    A = literals:a(),
+    B = literals:b(),
+    C = literals:huge_bignum(),
+    Res = {A,B,C},
+    Parent ! go,
+
+    %% Disable the GC and return a tuple whose arity and contents are broken
+    BrokenTerm = erts_debug:set_internal_state(inconsistent_heap, start),
+    receive
+    after 5000 ->
+        %% Fix the tuple and enable the GC again
+        ok = erts_debug:set_internal_state(inconsistent_heap, BrokenTerm),
+        erlang:garbage_collect()
+    end,
+
     receive
         done ->
             exit(Res)
@@ -421,7 +465,9 @@ old_heap(Parent) ->
 hibernated(Parent) ->
     A = literals:a(),
     B = literals:b(),
-    Res = {A,B,literals:huge_bignum(),lists:seq(1, 16)},
+    C = literals:huge_bignum(),
+    D = literals:funs(),
+    Res = {A,B,C,D,lists:seq(1, 16)},
     Parent ! go,
     erlang:hibernate(no_module, no_function, [Res]).
 
@@ -755,7 +801,8 @@ t_copy_literals_frags(Config) when is_list(Config) ->
                                           0, 1, 2, 3, 4, 5, 6, 7,
                                           8, 9,10,11,12,13,14,15,
                                           0, 1, 2, 3, 4, 5, 6, 7,
-                                          8, 9,10,11,12,13,14,15>>}]),
+                                          8, 9,10,11,12,13,14,15>>},
+                        {f, fun ?MODULE:all/0}]),
 
     {module, ?mod} = erlang:load_module(?mod, Bin),
     N = 6000,
@@ -796,6 +843,7 @@ literal_receiver() ->
             C = ?mod:c(),
             D = ?mod:d(),
             E = ?mod:e(),
+            F = ?mod:f(),
             literal_receiver();
         {Pid, sender_confirm} ->
             io:format("sender confirm ~w~n", [Pid]),
@@ -811,7 +859,8 @@ literal_sender(N, Recv) ->
                           ?mod:b(),
                           ?mod:c(),
                           ?mod:d(),
-                          ?mod:e()]},
+                          ?mod:e(),
+                          ?mod:f()]},
     literal_sender(N - 1, Recv).
 
 literal_switcher() ->

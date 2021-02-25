@@ -48,7 +48,8 @@
          fun_mfa/1, fun_mfa_r14/1,
          fun_mfa_vars/1, qlc/1]).
 
--export([analyze/1, basic/1, md/1, q/1, variables/1, unused_locals/1]).
+-export([analyze/1, basic/1, md/1, q/1, variables/1, unused_locals/1,
+         behaviour/1]).
 
 -export([format_error/1, otp_7423/1, otp_7831/1, otp_10192/1, otp_13708/1,
          otp_14464/1, otp_14344/1]).
@@ -83,7 +84,7 @@ groups() ->
        fun_mfa_r14, fun_mfa_vars, qlc]},
      {analyses, [],
 
-      [analyze, basic, md, q, variables, unused_locals]},
+      [analyze, basic, md, q, variables, unused_locals, behaviour]},
      {misc, [], [format_error, otp_7423, otp_7831, otp_10192, otp_13708,
                  otp_14464, otp_14344]}].
 
@@ -1098,10 +1099,8 @@ read_expected(Version) ->
           {POS4+5,{FF,{spm,spf,2}}},
           {POS4+6,{FF,{dist,func,2}}},
           {POS4+6,{FF,{erlang,spawn_link,4}}},
-          {POS4+7,{FF,{erlang,spawn_opt,4}}},
           {POS4+7,{FF,{read,bi,0}}},
           {POS4+7,{FF,{spm,spf,2}}},
-          {POS4+8,{FF,{erlang,spawn_opt,4}}},
           {POS4+8,{FF,{read,bi,0}}},
           {POS5+1,{FF,{erlang,spawn,1}}},
           {POS5+2,{FF,{erlang,spawn,1}}},
@@ -1109,7 +1108,6 @@ read_expected(Version) ->
           {POS6+1,{FF,{erlang,spawn,2}}},
           {POS6+2,{FF,{erlang,spawn_link,2}}},
           {POS7+1,{FF,{erlang,spawn,4}}},
-          {POS7+2,{FF,{erlang,spawn_opt,4}}},
           {POS8+1,{FF,{hej,san,1}}},
           {POS8+4,{FF,{a,b,1}}},
           {POS8+6,{FF,{m,f,1}}},
@@ -1150,7 +1148,10 @@ read_expected(Version) ->
             {POS3+2, {FF,{erlang,spawn,3}}},
             {POS3+3,  {FF,{erlang,spawn_link,3}}},
             {POS3+4, {FF,{erlang,spawn_link,3}}},
+            {POS4+7, {FF,{erlang,spawn_opt,4}}},
+            {POS4+8, {FF,{erlang,spawn_opt,4}}},
             {POS6+4, {FF,{erlang,spawn,3}}},
+            {POS7+2, {FF,{erlang,spawn_opt,4}}},
             {POS8+4,{FF,{erlang,apply,2}}},
             {POS8+5,{FF,{erlang,apply,2}}},
             {POS8+6,{FF,{erlang,apply,3}}},
@@ -1479,12 +1480,13 @@ deprecated(Conf) when is_list(Conf) ->
 
     Test2= <<"-module(depr).
 
-              -export([t/0,f/1,bar/2,f/2,g/3]).
+              -export([t/0,f/1,bar/2,f/2,g/3,string/0]).
 
               -deprecated([{'_','_',eventually}]).            % DF_3
               -deprecated([{f,'_',next_major_release}]).      % DF_2
               -deprecated([{g,'_',next_version}]).            % DF_1
               -deprecated([{bar,2}]).                         % DF
+              -deprecated([{string,0,\"hello\"}]).            % DF
 
               t() ->
                   g(1,2, 3),
@@ -1499,6 +1501,9 @@ deprecated(Conf) when is_list(Conf) ->
               g(F, G, H) ->
                   ?MODULE:bar(F, {G,H}).
 
+              string() ->
+                  ?MODULE:string().
+
               bar(_, _) ->
                   ?MODULE:t().
              ">>,
@@ -1512,7 +1517,8 @@ deprecated(Conf) when is_list(Conf) ->
     M = depr,
     DFa_1 = usort([{{M,f,2},{M,g,3}}]),
     DFa_2 = usort(DFa_1++[{{M,f,1},{M,f,2}},{{M,t,0},{M,f,1}}]),
-    DFa_3 = usort(DFa_2++[{{M,bar,2},{M,t,0}},{{M,g,3},{M,bar,2}}]),
+    DFa_3 = usort(DFa_2++[{{M,bar,2},{M,t,0}},{{M,g,3},{M,bar,2}},
+                          {{M,string,0},{M,string,0}}]),
     DFa = DFa_3,
 
     {ok,DFa} = xref:analyze(s, deprecated_function_calls),
@@ -2449,8 +2455,9 @@ otp_14344(Conf) when is_list(Conf) ->
     MFile1 = fname(Dir, "a"),
     Beam1 = fname(Dir, "a.beam"),
     Test1 = <<"-module(a).
-               -on_load(doit/0).
-               doit() -> ok.
+               -on_load(init/0).
+               init() -> do_init().
+               do_init() -> ok.
               ">>,
     ok = file:write_file(File1, Test1),
     {ok, a} = compile:file(File1, [debug_info,{outdir,Dir}]),
@@ -2458,12 +2465,90 @@ otp_14344(Conf) when is_list(Conf) ->
     {ok, _} = xref:start(s),
     {ok, a} = xref:add_module(s, MFile1),
 
-    {ok, [{a,doit,0}]} = xref:q(s, "OL"),
+    {ok, [{a,init,0}]} = xref:q(s, "OL"),
     {ok, []} = xref:analyze(s, locals_not_used),
 
     xref:stop(s),
     ok = file:delete(File1),
     ok = file:delete(Beam1).
+
+%% PR-2752, ERL-1353, ERL-1476, GH-4192.
+behaviour(Config) ->
+    ModMode = [{xref_mode, modules}],
+    FunMode = [],
+
+    Test1 = [{a, <<"-module(a).
+                    -callback a() -> ok.
+                    ">>}],
+    {Undef1, UnusedExports1} = behaviour_test(Test1, Config, FunMode),
+    [] = Undef1,
+    [] = UnusedExports1,
+    {Undef1m, UnusedExports1m} = behaviour_test(Test1, Config, ModMode),
+    [] = Undef1m,
+    [] = UnusedExports1m,
+
+    Test2 = [{a, <<"-module(a).
+                    -export([behaviour_info/1]).
+                    behaviour_info(_) ->
+                        ok.
+                   ">>}],
+    {Undef2, UnusedExports2} = behaviour_test(Test2, Config, FunMode),
+    [] = Undef2,
+    [{a,behaviour_info,1}] = UnusedExports2,
+    {Undef2m, UnusedExports2m} = behaviour_test(Test2, Config, ModMode),
+    [] = Undef2m,
+    %% Without abstract code it is not possible to determine if
+    %% M:behaviour_info/1 is generated or not. The best we can do is
+    %% to assume it is generated since it would otherwise always be
+    %% returned as unused.
+    [] = UnusedExports2m,
+
+    Test3 = [{a, <<"-module(a).
+                    -export([behaviour_info/1]).
+                    behaviour_info(_) ->
+                        ok.
+               ">>},
+             {b, <<"-module(b).
+                    -export([bar/0]).
+                    bar() -> a:behaviour_info(callbacks).
+                   ">>}],
+    {Undef3, UnusedExports3} = behaviour_test(Test3, Config, FunMode),
+    [] = Undef3,
+    [{b,bar,0}] = UnusedExports3,
+    {Undef3m, UnusedExports3m} = behaviour_test(Test3, Config, ModMode),
+    [] = Undef3m,
+    [{b,bar,0}] = UnusedExports3m,
+    ok.
+
+behaviour_test(Tests, Conf, Opts) ->
+    {ok, _} = xref:start(s, Opts),
+    add_modules(Tests, Conf),
+    case lists:keyfind(xref_mode, 1, Opts) of
+        {xref_mode, modules} ->
+            UndefinedFunctionCalls = [];
+        _ ->
+            {ok, UndefinedFunctionCalls} =
+                xref:analyze(s, undefined_function_calls)
+    end,
+    {ok, ExportsNotUsed} = xref:analyze(s, exports_not_used),
+    xref:stop(s),
+    {UndefinedFunctionCalls, ExportsNotUsed}.
+
+add_modules([], _Conf) ->
+    ok;
+add_modules([{Mod, Test} |Tests], Conf) ->
+    Dir = ?copydir,
+    Name = atom_to_list(Mod),
+    File = fname(Dir, Name ++ ".erl"),
+    MFile = fname(Dir, Name),
+    Beam = fname(Dir, Name ++ ".beam"),
+    ok = file:write_file(File, Test),
+    {ok, Mod} = compile:file(File, [debug_info,{outdir,Dir}]),
+    {ok, Mod} = xref:add_module(s, MFile),
+    check_state(s),
+    ok = file:delete(File),
+    ok = file:delete(Beam),
+    add_modules(Tests, Conf).
 
 %%%
 %%% Utilities

@@ -647,6 +647,13 @@ trans_fun([{put_tuple,_Size,Reg}|Instructions], Env) ->
   Primop = hipe_icode:mk_primop(Dest,mktuple,Src),
   Moves ++ [Primop | trans_fun(Instructions2,Env2)];
 %%--- put --- SHOULD NOT REALLY EXIST HERE; put INSTRUCTIONS ARE HANDLED ABOVE.
+%%--- put_tuple2 ---
+trans_fun([{put_tuple2,Reg,{list,Elements}}|Instructions], Env) ->
+  Dest = [mk_var(Reg)],
+  {Moves,Vars,Env2} = trans_elements(Elements, [], [], Env),
+  Src = lists:reverse(Vars),
+  Primop = hipe_icode:mk_primop(Dest, mktuple, Src),
+  Moves ++ [Primop | trans_fun(Instructions, Env2)];
 %%--- badmatch ---
 trans_fun([{badmatch,Arg}|Instructions], Env) ->
   BadVar = trans_arg(Arg),
@@ -682,8 +689,8 @@ trans_fun([{call_fun,N}|Instructions], Env) ->
   Dst = [mk_var({r,0})],
   [hipe_icode:mk_comment('call_fun'),
    hipe_icode:mk_primop(Dst,call_fun,Args) | trans_fun(Instructions,Env)];
-%%--- patched_make_fun --- make_fun/make_fun2 after fixes
-trans_fun([{patched_make_fun,MFA,Magic,FreeVarNum,Index}|Instructions], Env) ->
+%%--- make_fun2 ---
+trans_fun([{make_fun2,MFA,Index,Magic,FreeVarNum}|Instructions], Env) ->
   Args = extract_fun_args(FreeVarNum),
   Dst = [mk_var({r,0})],
   Fun = hipe_icode:mk_primop(Dst,
@@ -1139,9 +1146,10 @@ trans_fun([{test,has_map_fields,{f,Lbl},Map,{list,Keys}}|Instructions], Env) ->
 		    lists:flatten([[K, {r, 0}] || K <- Keys])),
   [MapMove, TestInstructions | trans_fun(Instructions, Env2)];
 trans_fun([{get_map_elements,{f,Lbl},Map,{list,KVPs}}|Instructions], Env) ->
+  KVPs1 = overwrite_map_last(Map, KVPs),
   {MapMove, MapVar, Env1} = mk_move_and_var(Map, Env),
   {TestInstructions, GetInstructions, Env2} =
-    trans_map_query(MapVar, map_label(Lbl), Env1, KVPs),
+    trans_map_query(MapVar, map_label(Lbl), Env1, KVPs1),
   [MapMove, TestInstructions, GetInstructions | trans_fun(Instructions, Env2)];
 %%--- put_map_assoc ---
 trans_fun([{put_map_assoc,{f,Lbl},Map,Dst,_N,{list,Pairs}}|Instructions], Env) ->
@@ -1181,12 +1189,41 @@ trans_fun([raw_raise|Instructions], Env) ->
   [hipe_icode:mk_primop(Dst,raw_raise,Vars) |
    trans_fun(Instructions, Env)];
 %%--------------------------------------------------------------------
+%% New binary matching added in OTP 22.
+%%--------------------------------------------------------------------
+%%--- bs_get_tail ---
+trans_fun([{bs_get_tail=Name,_,_,_}|_Instructions], _Env) ->
+  nyi(Name);
+%%--- bs_start_match3 ---
+trans_fun([{bs_start_match3=Name,_,_,_,_}|_Instructions], _Env) ->
+  nyi(Name);
+%%--- bs_get_position ---
+trans_fun([{bs_get_position=Name,_,_,_}|_Instructions], _Env) ->
+  nyi(Name);
+%%--- bs_set_position ---
+trans_fun([{bs_set_position=Name,_,_}|_Instructions], _Env) ->
+  nyi(Name);
+%%--------------------------------------------------------------------
+%% New instructions added in OTP 23.
+%%--------------------------------------------------------------------
+%%--- swap ---
+trans_fun([{swap,Reg1,Reg2}|Instructions], Env) ->
+  Var1 = mk_var(Reg1),
+  Var2 = mk_var(Reg2),
+  Temp = mk_var(new),
+  [hipe_icode:mk_move(Temp, Var1),
+   hipe_icode:mk_move(Var1, Var2),
+   hipe_icode:mk_move(Var2, Temp) | trans_fun(Instructions, Env)];
+%%--------------------------------------------------------------------
 %%--- ERROR HANDLING ---
 %%--------------------------------------------------------------------
 trans_fun([X|_], _) ->
   ?EXIT({'trans_fun/2',X});
 trans_fun([], _) ->
   [].
+
+nyi(Name) ->
+  throw({unimplemented_instruction,Name}).
 
 %%--------------------------------------------------------------------
 %% trans_call and trans_enter generate correct Icode calls/tail-calls,
@@ -1563,6 +1600,21 @@ trans_type_test2(function2, Lbl, Arg, Arity, Env) ->
 			 hipe_icode:label_name(True), map_label(Lbl)),
   {[Move1,Move2,I,True],Env2}.
 
+
+%%
+%% Makes sure that if a get_map_elements instruction will overwrite
+%% the map source, it will be done last.
+%%
+overwrite_map_last(Map, KVPs) ->
+  overwrite_map_last2(Map, KVPs, []).
+
+overwrite_map_last2(Map, [Key,Map|KVPs], _Last) ->
+  overwrite_map_last2(Map, KVPs, [Key,Map]);
+overwrite_map_last2(Map, [Key,Val|KVPs], Last) ->
+  [Key,Val|overwrite_map_last2(Map, KVPs, Last)];
+overwrite_map_last2(_Map, [], Last) ->
+  Last.
+
 %%
 %% Handles the get_map_elements instruction and the has_map_fields
 %% test instruction.
@@ -1682,6 +1734,19 @@ trans_puts([{put,X}|Code], Vars, Moves, Env) ->
   end;
 trans_puts(Code, Vars, Moves, Env) ->    %% No more put operations
   {Moves, Code, Vars, Env}.
+
+trans_elements([X|Code], Vars, Moves, Env) ->
+  case type(X) of
+    var ->
+      Var = mk_var(X),
+      trans_elements(Code, [Var|Vars], Moves, Env);
+    #beam_const{value=C} ->
+      Var = mk_var(new),
+      Move = hipe_icode:mk_move(Var, hipe_icode:mk_const(C)),
+      trans_elements(Code, [Var|Vars], [Move|Moves], Env)
+  end;
+trans_elements([], Vars, Moves, Env) ->
+  {Moves, Vars, Env}.
 
 %%-----------------------------------------------------------------------
 %% The code for this instruction is a bit large because we are treating
@@ -1892,7 +1957,7 @@ mod_find_closure_info([FunCode|Fs], CI) ->
 mod_find_closure_info([], CI) ->
   CI.
 
-find_closure_info([{patched_make_fun,MFA={_M,_F,A},_Magic,FreeVarNum,_Index}|BeamCode],
+find_closure_info([{make_fun2,{_M,_F,A}=MFA,_Index,_Magic,FreeVarNum}|BeamCode],
 		  ClosureInfo) ->
   NewClosure = %% A-FreeVarNum+1 (The real arity + 1 for the closure)
     #closure_info{mfa=MFA, arity=A-FreeVarNum+1, fv_arity=FreeVarNum},
@@ -1970,41 +2035,8 @@ split_params(N, [ArgN|OrgArgs], Args) ->
 %%-----------------------------------------------------------------------
 
 preprocess_code(ModuleCode) ->
-  PatchedCode = patch_R7_funs(ModuleCode),
-  ClosureInfo = find_closure_info(PatchedCode),
-  {PatchedCode, ClosureInfo}.
-
-%%-----------------------------------------------------------------------
-%% Patches the "make_fun" BEAM instructions of R7 so that they also
-%% contain the index that the BEAM loader generates for funs.
-%% 
-%% The index starts from 0 and is incremented by 1 for each make_fun
-%% instruction encountered.
-%%
-%% Retained only for compatibility with BEAM code prior to R8.
-%%
-%% Temporarily, it also rewrites R8-PRE-RELEASE "make_fun2"
-%% instructions, since their embedded indices don't work.
-%%-----------------------------------------------------------------------
-
-patch_R7_funs(ModuleCode) ->
-  patch_make_funs(ModuleCode, 0).
-
-patch_make_funs([FunCode0|Fs], FunIndex0) ->
-  {PatchedFunCode,FunIndex} = patch_make_funs(FunCode0, FunIndex0, []),
-  [PatchedFunCode|patch_make_funs(Fs, FunIndex)];
-patch_make_funs([], _) -> [].
-
-patch_make_funs([{make_fun,MFA,Magic,FreeVarNum}|Is], FunIndex, Acc) ->
-  Patched = {patched_make_fun,MFA,Magic,FreeVarNum,FunIndex},
-  patch_make_funs(Is, FunIndex+1, [Patched|Acc]);
-patch_make_funs([{make_fun2,MFA,_BogusIndex,Magic,FreeVarNum}|Is], FunIndex, Acc) ->
-  Patched = {patched_make_fun,MFA,Magic,FreeVarNum,FunIndex},
-  patch_make_funs(Is, FunIndex+1, [Patched|Acc]);
-patch_make_funs([I|Is], FunIndex, Acc) ->
-  patch_make_funs(Is, FunIndex, [I|Acc]);
-patch_make_funs([], FunIndex, Acc) ->
-  {lists:reverse(Acc),FunIndex}.
+  ClosureInfo = find_closure_info(ModuleCode),
+  {ModuleCode, ClosureInfo}.
 
 %%-----------------------------------------------------------------------
 
@@ -2249,9 +2281,7 @@ fix_catch(Type, Lbl, ContLbl, Code, HandledCatchLbls, Instr) ->
   TLbl = {Type, Lbl},
   case gb_trees:lookup(TLbl, HandledCatchLbls) of
     {value, Catch} when is_integer(Catch) ->
-      NewCode = fix_catches(Code, HandledCatchLbls),
-      Cont = hipe_icode:label_name(ContLbl),
-      [hipe_icode:mk_begin_try(Catch,Cont),ContLbl | NewCode];
+      nyi(unsafe_catch);
     none ->
       OldCatch = map_label(Lbl),
       OldCatchLbl = hipe_icode:mk_label(OldCatch),
@@ -2306,9 +2336,8 @@ catch_handler('catch', [TagVar,ValueVar,TraceVar], OldCatchLbl) ->
 				       ValueVar]),
    hipe_icode:mk_goto(Cont),
    ErrorLbl,
-   %% We use the trace variable to hold the symbolic trace. Its previous
-   %% value is just that in p->ftrace, so get_stacktrace() works fine.
-   hipe_icode:mk_call([TraceVar],erlang,get_stacktrace,[],remote),
+   %% We use the trace variable to hold the symbolic trace.
+   hipe_icode:mk_primop([TraceVar],build_stacktrace,[TraceVar]),
    hipe_icode:mk_primop([ValueVar],mktuple, [ValueVar, TraceVar]),
    hipe_icode:mk_goto(hipe_icode:label_name(ExitLbl)),
    OldCatchLbl,  % normal execution paths must go through end_try

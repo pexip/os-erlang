@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 1997-2018. All Rights Reserved.
+%% Copyright Ericsson AB 1997-2020. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -24,6 +24,7 @@
 -export([all/0, suite/0,groups/0,init_per_suite/1, end_per_suite/1, 
 	 init_per_group/2,end_per_group/2, 
 	 gregorian_days/1,
+	 big_gregorian_days/1,
 	 gregorian_seconds/1,
 	 day_of_the_week/1,
 	 day_of_the_week_calibrate/1,
@@ -36,13 +37,16 @@
 -define(START_YEAR, 1947).			
 -define(END_YEAR, 2012).
 
+-define(BIG_START_YEAR, 20000000).
+-define(BIG_END_YEAR, 20000020).
+
 suite() -> [{ct_hooks,[ts_install_cth]}].
 
 all() -> 
     [gregorian_days, gregorian_seconds, day_of_the_week,
      day_of_the_week_calibrate, leap_years,
      last_day_of_the_month, local_time_to_universal_time_dst,
-     iso_week_number, system_time, rfc3339].
+     iso_week_number, system_time, rfc3339, big_gregorian_days].
 
 groups() -> 
     [].
@@ -65,6 +69,14 @@ end_per_group(_GroupName, Config) ->
 gregorian_days(Config) when is_list(Config) ->
     Days = calendar:date_to_gregorian_days({?START_YEAR, 1, 1}),
     MaxDays = calendar:date_to_gregorian_days({?END_YEAR, 1, 1}),
+    check_gregorian_days(Days, MaxDays).
+
+%% Tests that date_to_gregorian_days and gregorian_days_to_date
+%% are each others inverses from ?BIG_START_YEAR-01-01 up to ?BIG_END_YEAR-01-01.
+%% At the same time valid_date is tested.
+big_gregorian_days(Config) when is_list(Config) ->
+    Days = calendar:date_to_gregorian_days({?BIG_START_YEAR, 1, 1}),
+    MaxDays = calendar:date_to_gregorian_days({?BIG_END_YEAR, 1, 1}),
     check_gregorian_days(Days, MaxDays).
 
 %% Tests that datetime_to_gregorian_seconds and
@@ -211,6 +223,7 @@ rfc3339(Config) when is_list(Config) ->
     {'EXIT', _} = (catch do_format_z(253402300799+1, [])),
     {'EXIT', _} = (catch do_parse("9999-12-31T23:59:60Z", [])),
     {'EXIT', _} = (catch do_format_z(253402300799*1000000000+999999999+1, Ns)),
+    {'EXIT', _} = (catch do_parse("2010-04-11T22:35:41", [])), % OTP-16514
     253402300799 = do_parse("9999-12-31T23:59:59Z", []),
 
     "0000-01-01T00:00:00Z" = test_parse("0000-01-01T00:00:00.0+00:00"),

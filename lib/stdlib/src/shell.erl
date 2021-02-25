@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 1996-2018. All Rights Reserved.
+%% Copyright Ericsson AB 1996-2020. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -1496,8 +1496,8 @@ catch_exception(Bool) ->
       PromptFunc :: 'default' | {module(),atom()},
       PromptFunc2 :: 'default' | {module(),atom()}.
 
-prompt_func(String) ->
-    set_env(stdlib, shell_prompt_func, String, ?DEF_PROMPT_FUNC).
+prompt_func(PromptFunc) ->
+    set_env(stdlib, shell_prompt_func, PromptFunc, ?DEF_PROMPT_FUNC).
 
 -spec strings(Strings) -> Strings2 when
       Strings :: boolean(),

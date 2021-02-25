@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2013-2018. All Rights Reserved.
+%% Copyright Ericsson AB 2013-2019. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -25,6 +25,7 @@
 -module(ssl_record).
 
 -include("ssl_record.hrl").
+-include("ssl_connection.hrl").
 -include("ssl_internal.hrl").
 -include("ssl_cipher.hrl").
 -include("ssl_alert.hrl").
@@ -39,20 +40,24 @@
 	 set_renegotiation_flag/2,
 	 set_client_verify_data/3,
 	 set_server_verify_data/3,
-	 empty_connection_state/2, initial_connection_state/2, record_protocol_role/1]).
+         set_max_fragment_length/2,
+	 empty_connection_state/2, initial_connection_state/2, record_protocol_role/1,
+         step_encryption_state/1]).
 
 %% Compression
 -export([compress/3, uncompress/3, compressions/0]).
 
 %% Payload encryption/decryption
--export([cipher/4, decipher/4, cipher_aead/4, decipher_aead/5, is_correct_mac/2, nonce_seed/3]).
+-export([cipher/4, cipher/5, decipher/4,
+         cipher_aead/4, cipher_aead/5, decipher_aead/5,
+         is_correct_mac/2, nonce_seed/3]).
 
 -export_type([ssl_version/0, ssl_atom_version/0, connection_states/0, connection_state/0]).
 
 -type ssl_version()       :: {integer(), integer()}.
 -type ssl_atom_version() :: tls_record:tls_atom_version().
--type connection_states() :: term(). %% Map
--type connection_state() :: term(). %% Map
+-type connection_states() :: map(). %% Map
+-type connection_state() :: map(). %% Map
 
 %%====================================================================
 %% Connection state handling
@@ -83,7 +88,8 @@ pending_connection_state(ConnectionStates, write) ->
     maps:get(pending_write, ConnectionStates).
 
 %%--------------------------------------------------------------------
--spec activate_pending_connection_state(connection_states(), read | write, tls_connection | dtls_connection) ->
+-spec activate_pending_connection_state(connection_states(), read | write, 
+                                        tls_gen_connection | dtls_gen_connection) ->
 					       connection_states().
 %%
 %% Description: Creates a new instance of the connection_states record
@@ -116,6 +122,22 @@ activate_pending_connection_state(#{current_write := Current,
     States#{current_write => NewCurrent,
 	    pending_write => NewPending
 	   }.
+
+%%--------------------------------------------------------------------
+-spec step_encryption_state(#state{}) -> #state{}.
+%%
+%% Description: Activates the next encyrption state (e.g. handshake
+%% encryption).
+%%--------------------------------------------------------------------
+step_encryption_state(#state{connection_states =
+                                 #{pending_read := PendingRead,
+                                   pending_write := PendingWrite} = ConnStates} = State) ->
+    NewRead = PendingRead#{sequence_number => 0},
+    NewWrite = PendingWrite#{sequence_number => 0},
+    State#state{connection_states =
+                    ConnStates#{current_read => NewRead,
+                                current_write => NewWrite}}.
+
 
 %%--------------------------------------------------------------------
 -spec set_security_params(#security_parameters{}, #security_parameters{},
@@ -181,6 +203,33 @@ set_renegotiation_flag(Flag, #{current_read := CurrentRead0,
 		      current_write => CurrentWrite,
 		      pending_read => PendingRead,
 		      pending_write => PendingWrite}.
+
+%%--------------------------------------------------------------------
+-spec set_max_fragment_length(term(), connection_states()) -> connection_states().
+%%
+%% Description: Set maximum fragment length in all connection states
+%%--------------------------------------------------------------------
+set_max_fragment_length(#max_frag_enum{enum = MaxFragEnum},
+                        #{current_read := CurrentRead0,
+                          current_write := CurrentWrite0,
+                          pending_read := PendingRead0,
+                          pending_write := PendingWrite0}
+                        = ConnectionStates) ->
+    MaxFragmentLength = if MaxFragEnum == 1 -> ?MAX_FRAGMENT_LENGTH_BYTES_1;
+                           MaxFragEnum == 2 -> ?MAX_FRAGMENT_LENGTH_BYTES_2;
+                           MaxFragEnum == 3 -> ?MAX_FRAGMENT_LENGTH_BYTES_3;
+                           MaxFragEnum == 4 -> ?MAX_FRAGMENT_LENGTH_BYTES_4
+                        end,
+    CurrentRead = CurrentRead0#{max_fragment_length => MaxFragmentLength},
+    CurrentWrite = CurrentWrite0#{max_fragment_length => MaxFragmentLength},
+    PendingRead = PendingRead0#{max_fragment_length => MaxFragmentLength},
+    PendingWrite = PendingWrite0#{max_fragment_length => MaxFragmentLength},
+    ConnectionStates#{current_read => CurrentRead,
+		      current_write => CurrentWrite,
+		      pending_read => PendingRead,
+		      pending_write => PendingWrite};
+set_max_fragment_length(_,ConnectionStates) ->
+    ConnectionStates.
 
 %%--------------------------------------------------------------------
 -spec set_client_verify_data(current_read | current_write | current_both,
@@ -278,13 +327,12 @@ compress(?NULL, Data, CS) ->
     {Data, CS}.
 
 %%--------------------------------------------------------------------
--spec compressions() -> [binary()].
+-spec compressions() -> [integer()].
 %%
 %% Description: return a list of compressions supported (currently none)
 %%--------------------------------------------------------------------
 compressions() ->
-    [?byte(?NULL)].
-
+    [?NULL].
 
 %%====================================================================
 %% Payload encryption/decryption
@@ -302,25 +350,47 @@ cipher(Version, Fragment,
 	     #security_parameters{bulk_cipher_algorithm =
 				      BulkCipherAlgo}
 	} = WriteState0, MacHash) ->
-    
+    %%
     {CipherFragment, CipherS1} =
 	ssl_cipher:cipher(BulkCipherAlgo, CipherS0, MacHash, Fragment, Version),
     {CipherFragment,  WriteState0#{cipher_state => CipherS1}}.
+
+%%--------------------------------------------------------------------
+-spec cipher(ssl_version(), iodata(), #cipher_state{}, MacHash::binary(), #security_parameters{}) ->
+		    {CipherFragment::binary(), #cipher_state{}}.
+%%
+%% Description: Payload encryption
+%%--------------------------------------------------------------------
+cipher(Version, Fragment, CipherS0, MacHash,
+       #security_parameters{bulk_cipher_algorithm = BulkCipherAlgo}) ->
+    %%
+    ssl_cipher:cipher(BulkCipherAlgo, CipherS0, MacHash, Fragment, Version).
+
 %%--------------------------------------------------------------------
 -spec cipher_aead(ssl_version(), iodata(), connection_state(), AAD::binary()) ->
  			 {CipherFragment::binary(), connection_state()}.
 
 %% Description: Payload encryption
 %% %%--------------------------------------------------------------------
-cipher_aead(Version, Fragment,
+cipher_aead(_Version, Fragment,
 	    #{cipher_state := CipherS0,
 	      security_parameters :=
 		  #security_parameters{bulk_cipher_algorithm =
 					   BulkCipherAlgo}
 	     } = WriteState0, AAD) ->
     {CipherFragment, CipherS1} =
-	cipher_aead(BulkCipherAlgo, CipherS0, AAD, Fragment, Version),
+	do_cipher_aead(BulkCipherAlgo, Fragment, CipherS0, AAD),
     {CipherFragment,  WriteState0#{cipher_state => CipherS1}}.
+
+%%--------------------------------------------------------------------
+-spec cipher_aead(ssl_version(), iodata(), #cipher_state{}, AAD::binary(), #security_parameters{}) ->
+                         {CipherFragment::binary(), #cipher_state{}}.
+
+%% Description: Payload encryption
+%% %%--------------------------------------------------------------------
+cipher_aead(_Version, Fragment, CipherS, AAD,
+            #security_parameters{bulk_cipher_algorithm = BulkCipherAlgo}) ->
+    do_cipher_aead(BulkCipherAlgo, Fragment, CipherS, AAD).
 
 %%--------------------------------------------------------------------
 -spec decipher(ssl_version(), binary(), connection_state(), boolean()) ->
@@ -343,9 +413,8 @@ decipher(Version, CipherFragment,
 	    Alert
     end.
 %%--------------------------------------------------------------------
--spec decipher_aead(ssl_cipher:cipher_enum(),  #cipher_state{}, 
-                    binary(), binary(), ssl_record:ssl_version()) ->
-			   {binary(), #cipher_state{}} | #alert{}.
+-spec decipher_aead(ssl_cipher:cipher_enum(),  #cipher_state{}, binary(), binary(), ssl_record:ssl_version()) ->
+			   binary() | #alert{}.
 %%
 %% Description: Decrypts the data and checks the associated data (AAD) MAC using
 %% cipher described by cipher_enum() and updating the cipher state.
@@ -355,9 +424,9 @@ decipher_aead(Type, #cipher_state{key = Key} = CipherState, AAD0, CipherFragment
     try
         Nonce = decrypt_nonce(Type, CipherState, CipherFragment),
         {AAD, CipherText, CipherTag} = aead_ciphertext_split(Type, CipherState, CipherFragment, AAD0),
-	case ssl_cipher:aead_decrypt(Type, Key, Nonce, CipherText, CipherTag, AAD) of
+        case ssl_cipher:aead_decrypt(Type, Key, Nonce, CipherText, CipherTag, AAD) of
 	    Content when is_binary(Content) ->
-		{Content, CipherState};
+		Content;
 	    _ ->
                 ?ALERT_REC(?FATAL, ?BAD_RECORD_MAC, decryption_failed)
 	end
@@ -384,7 +453,8 @@ empty_connection_state(ConnectionEnd, BeastMitigation) ->
       mac_secret  => undefined,
       secure_renegotiation => undefined,
       client_verify_data => undefined,
-      server_verify_data => undefined
+      server_verify_data => undefined,
+      max_fragment_length => undefined
      }.
 
 empty_security_params(ConnectionEnd = ?CLIENT) ->
@@ -399,11 +469,13 @@ random() ->
     Random_28_bytes = ssl_cipher:random_bytes(28),
     <<?UINT32(Secs_since_1970), Random_28_bytes/binary>>.
 
+-compile({inline, [is_correct_mac/2]}).
 is_correct_mac(Mac, Mac) ->
     true;
 is_correct_mac(_M,_H) ->
     false.
 
+-compile({inline, [record_protocol_role/1]}).
 record_protocol_role(client) ->
     ?CLIENT;
 record_protocol_role(server) ->
@@ -419,7 +491,8 @@ initial_connection_state(ConnectionEnd, BeastMitigation) ->
       mac_secret  => undefined,
       secure_renegotiation => undefined,
       client_verify_data => undefined,
-      server_verify_data => undefined
+      server_verify_data => undefined,
+      max_fragment_length => undefined
      }.
 
 initial_security_params(ConnectionEnd) ->
@@ -427,37 +500,45 @@ initial_security_params(ConnectionEnd) ->
 				     compression_algorithm = ?NULL},
     ssl_cipher:security_parameters(?TLS_NULL_WITH_NULL_NULL, SecParams).
 
-cipher_aead(?CHACHA20_POLY1305 = Type, #cipher_state{key=Key} = CipherState, AAD0, Fragment, _Version) ->
-    AAD = end_additional_data(AAD0, erlang:iolist_size(Fragment)),
-    Nonce = encrypt_nonce(Type, CipherState),
-    {Content, CipherTag} = ssl_cipher:aead_encrypt(Type, Key, Nonce, Fragment, AAD),
+-define(end_additional_data(AAD, Len), << (begin(AAD)end)/binary, ?UINT16(begin(Len)end) >>).
+
+do_cipher_aead(?CHACHA20_POLY1305 = Type, Fragment, #cipher_state{key=Key, tag_len = TagLen} = CipherState, AAD0) ->
+    AAD = ?end_additional_data(AAD0, erlang:iolist_size(Fragment)),
+    Nonce = chacha_nonce(CipherState),
+    {Content, CipherTag} = ssl_cipher:aead_encrypt(Type, Key, Nonce, Fragment, AAD, TagLen),
     {<<Content/binary, CipherTag/binary>>, CipherState};
-cipher_aead(Type, #cipher_state{key=Key, nonce = ExplicitNonce} = CipherState, AAD0, Fragment, _Version) ->
-    AAD = end_additional_data(AAD0, erlang:iolist_size(Fragment)),
+do_cipher_aead(Type, Fragment, #cipher_state{key=Key, tag_len = TagLen, nonce = ExplicitNonce} = CipherState, AAD0) ->
+    AAD = ?end_additional_data(AAD0, erlang:iolist_size(Fragment)),
     Nonce = encrypt_nonce(Type, CipherState),
-    {Content, CipherTag} = ssl_cipher:aead_encrypt(Type, Key, Nonce, Fragment, AAD),
+    {Content, CipherTag} = ssl_cipher:aead_encrypt(Type, Key, Nonce, Fragment, AAD, TagLen),
     {<<ExplicitNonce:64/integer, Content/binary, CipherTag/binary>>, CipherState#cipher_state{nonce = ExplicitNonce + 1}}.
 
-encrypt_nonce(?CHACHA20_POLY1305, #cipher_state{nonce = Nonce, iv = IV}) ->
-    crypto:exor(<<?UINT32(0), Nonce/binary>>, IV);
-encrypt_nonce(?AES_GCM, #cipher_state{iv = IV, nonce = ExplicitNonce}) ->
+
+chacha_nonce(#cipher_state{nonce = Nonce, iv = IV}) ->
+    crypto:exor(<<?UINT32(0), Nonce/binary>>, IV).
+
+encrypt_nonce(Type, #cipher_state{iv = IV, nonce = ExplicitNonce}) when  Type == ?AES_GCM;
+                                                                         Type == ?AES_CCM;
+                                                                         Type == ?AES_CCM_8 ->
     <<Salt:4/bytes, _/binary>> = IV,
     <<Salt/binary, ExplicitNonce:64/integer>>.
 
-decrypt_nonce(?CHACHA20_POLY1305, #cipher_state{nonce = Nonce, iv = IV}, _) ->
-    crypto:exor(<<Nonce:96/unsigned-big-integer>>, IV);
-decrypt_nonce(?AES_GCM, #cipher_state{iv = <<Salt:4/bytes, _/binary>>}, <<ExplicitNonce:8/bytes, _/binary>>) ->   
-     <<Salt/binary, ExplicitNonce/binary>>.
+decrypt_nonce(?CHACHA20_POLY1305, CipherState, _) ->
+    chacha_nonce(CipherState);
+decrypt_nonce(Type, #cipher_state{iv = <<Salt:4/bytes, _/binary>>}, <<ExplicitNonce:8/bytes, _/binary>>) when 
+      Type == ?AES_GCM; 
+      Type == ?AES_CCM; 
+      Type == ?AES_CCM_8 ->
+    <<Salt/binary, ExplicitNonce/binary>>.
 
+-compile({inline, [aead_ciphertext_split/4]}).
 aead_ciphertext_split(?CHACHA20_POLY1305, #cipher_state{tag_len = Len}, CipherTextFragment, AAD) ->
-    CipherLen = size(CipherTextFragment) - Len,
+    CipherLen = byte_size(CipherTextFragment) - Len,
     <<CipherText:CipherLen/bytes, CipherTag:Len/bytes>> = CipherTextFragment,
-    {end_additional_data(AAD, CipherLen), CipherText, CipherTag};
-aead_ciphertext_split(?AES_GCM,  #cipher_state{tag_len = Len}, CipherTextFragment, AAD) ->
-    CipherLen = size(CipherTextFragment) - (Len + 8), %% 8 is length of explicit Nonce
+    {?end_additional_data(AAD, CipherLen), CipherText, CipherTag};
+aead_ciphertext_split(Type,  #cipher_state{tag_len = Len}, CipherTextFragment, AAD) when Type == ?AES_GCM;
+                                                                                         Type == ?AES_CCM;
+                                                                                         Type == ?AES_CCM_8 ->
+    CipherLen = byte_size(CipherTextFragment) - (Len + 8), %% 8 is length of explicit Nonce
     << _:8/bytes, CipherText:CipherLen/bytes, CipherTag:Len/bytes>> = CipherTextFragment,
-    {end_additional_data(AAD, CipherLen), CipherText, CipherTag}.
-
-end_additional_data(AAD, Len) ->
-    <<AAD/binary, ?UINT16(Len)>>.
-        
+    {?end_additional_data(AAD, CipherLen), CipherText, CipherTag}.

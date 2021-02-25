@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2008-2018. All Rights Reserved.
+%% Copyright Ericsson AB 2008-2020. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -40,13 +40,15 @@
 	 sign/3, sign/4, verify/4, verify/5,
 	 generate_key/1,
 	 compute_key/2, compute_key/3,
-	 pkix_sign/2, pkix_verify/2,	 
+	 pkix_sign/2, pkix_verify/2,
+	 pkix_hash_type/1,
 	 pkix_sign_types/1,
 	 pkix_is_self_signed/1, 
 	 pkix_is_fixed_dh_cert/1,
 	 pkix_is_issuer/2,
 	 pkix_issuer_id/2,
-	 pkix_normalize_name/1,
+	 pkix_subject_id/1,
+         pkix_normalize_name/1,
 	 pkix_path_validation/3,
 	 pkix_verify_hostname/2, pkix_verify_hostname/3,
          pkix_verify_hostname_match_fun/1,
@@ -61,18 +63,22 @@
 	 pkix_crl_issuer/1,
 	 short_name_hash/1,
          pkix_test_data/1,
-         pkix_test_root_cert/2
+         pkix_test_root_cert/2,
+         pkix_ocsp_validate/5,
+         ocsp_responder_id/1,
+         ocsp_extensions/1
 	]).
 
 -export_type([public_key/0, private_key/0, pem_entry/0,
 	      pki_asn1_type/0, asn1_type/0, ssh_file/0, der_encoded/0,
-              key_params/0, digest_type/0]).
+              key_params/0, digest_type/0, issuer_name/0, cert_id/0, oid/0]).
 
--type public_key()           ::  rsa_public_key() | dsa_public_key() | ec_public_key() | ed_public_key() .
--type private_key()          ::  rsa_private_key() | dsa_private_key() | ec_private_key() | ed_private_key() .
-
+-type public_key()           ::  rsa_public_key() | rsa_pss_public_key() | dsa_public_key() | ec_public_key() | ed_public_key() .
+-type private_key()          ::  rsa_private_key() | rsa_pss_private_key() | dsa_private_key() | ec_private_key() | ed_private_key() .
 -type rsa_public_key()       ::  #'RSAPublicKey'{}.
--type rsa_private_key()      ::  #'RSAPrivateKey'{}.
+-type rsa_private_key()      ::  #'RSAPrivateKey'{}. 
+-type rsa_pss_public_key()   ::  {#'RSAPublicKey'{}, #'RSASSA-PSS-params'{}}.
+-type rsa_pss_private_key()  ::  { #'RSAPrivateKey'{}, #'RSASSA-PSS-params'{}}.
 -type dsa_private_key()      ::  #'DSAPrivateKey'{}.
 -type dsa_public_key()       :: {integer(), #'Dss-Parms'{}}.
 -type ecpk_parameters() :: {ecParameters, #'ECParameters'{}} | {namedCurve, Oid::tuple()}.
@@ -112,6 +118,7 @@
 -type ssh_file()             :: openssh_public_key | rfc4716_public_key | known_hosts |
 				auth_keys.
 -type digest_type()          :: none % None is for backwards compatibility
+                              | sha1 % Backwards compatibility
                               | crypto:rsa_digest_type()
                               | crypto:dss_digest_type()
                               | crypto:ecdsa_digest_type().
@@ -120,8 +127,7 @@
 -type oid()                  :: tuple().
 -type chain_type()           :: server_chain | client_chain.
 
--type issuer_id()            :: {SerialNr::integer(), issuer_name()} .
-
+-type cert_id()              :: {SerialNr::integer(), issuer_name()} .
 -type issuer_name()          :: {rdnSequence,[#'AttributeTypeAndValue'{}]} .
 
 
@@ -292,6 +298,12 @@ der_priv_key_decode({'PrivateKeyInfo', v1,
 	{'PrivateKeyInfo_privateKeyAlgorithm', ?'rsaEncryption', _}, PrivKey, _}) ->
 	der_decode('RSAPrivateKey', PrivKey);
 der_priv_key_decode({'PrivateKeyInfo', v1,
+                     {'PrivateKeyInfo_privateKeyAlgorithm', ?'id-RSASSA-PSS', 
+                      {asn1_OPENTYPE, Parameters}}, PrivKey, _}) ->
+    Key = der_decode('RSAPrivateKey', PrivKey),
+    Params = der_decode('RSASSA-PSS-params', Parameters),
+    {Key, Params};
+der_priv_key_decode({'PrivateKeyInfo', v1,
 	{'PrivateKeyInfo_privateKeyAlgorithm', ?'id-dsa', {asn1_OPENTYPE, Parameters}}, PrivKey, _}) ->
 	{params, #'Dss-Parms'{p=P, q=Q, g=G}} = der_decode('DSAParams', Parameters),
 	X = der_decode('Prime-p', PrivKey),
@@ -306,34 +318,40 @@ der_priv_key_decode(PKCS8Key) ->
 %%
 %% Description: Encodes a public key entity with asn1 DER encoding.
 %%--------------------------------------------------------------------
-
 der_encode('PrivateKeyInfo', #'DSAPrivateKey'{p=P, q=Q, g=G, x=X}) ->
     der_encode('PrivateKeyInfo',
-	{'PrivateKeyInfo', v1,
-	    {'PrivateKeyInfo_privateKeyAlgorithm', ?'id-dsa',
-		{asn1_OPENTYPE, der_encode('Dss-Parms', #'Dss-Parms'{p=P, q=Q, g=G})}},
+               {'PrivateKeyInfo', v1,
+                {'PrivateKeyInfo_privateKeyAlgorithm', ?'id-dsa',
+                 {asn1_OPENTYPE, der_encode('Dss-Parms', #'Dss-Parms'{p=P, q=Q, g=G})}},
 		der_encode('Prime-p', X), asn1_NOVALUE});
 der_encode('PrivateKeyInfo', #'RSAPrivateKey'{} = PrivKey) ->
     der_encode('PrivateKeyInfo',
-	{'PrivateKeyInfo', v1,
-	    {'PrivateKeyInfo_privateKeyAlgorithm', ?'rsaEncryption', {asn1_OPENTYPE, ?DER_NULL}},
-		der_encode('RSAPrivateKey', PrivKey), asn1_NOVALUE});
+               {'PrivateKeyInfo', v1,
+                {'PrivateKeyInfo_privateKeyAlgorithm', ?'rsaEncryption', 
+                 {asn1_OPENTYPE, ?DER_NULL}},
+                der_encode('RSAPrivateKey', PrivKey), asn1_NOVALUE});
+der_encode('PrivateKeyInfo', {#'RSAPrivateKey'{} = PrivKey, Parameters}) ->
+    der_encode('PrivateKeyInfo',
+               {'PrivateKeyInfo', v1,
+                {'PrivateKeyInfo_privateKeyAlgorithm', ?'id-RSASSA-PSS', 
+                 {asn1_OPENTYPE, der_encode('RSASSA-PSS-params', Parameters)}},
+                der_encode('RSAPrivateKey', PrivKey), asn1_NOVALUE});
 der_encode('PrivateKeyInfo', #'ECPrivateKey'{parameters = Parameters} = PrivKey) ->
     der_encode('PrivateKeyInfo',
-	    {'PrivateKeyInfo', v1,
+               {'PrivateKeyInfo', v1,
 		{'PrivateKeyInfo_privateKeyAlgorithm', ?'id-ecPublicKey',
-		{asn1_OPENTYPE, der_encode('EcpkParameters', Parameters)}},
-	der_encode('ECPrivateKey', PrivKey#'ECPrivateKey'{parameters = asn1_NOVALUE}), asn1_NOVALUE});
+                 {asn1_OPENTYPE, der_encode('EcpkParameters', Parameters)}},
+                der_encode('ECPrivateKey', PrivKey#'ECPrivateKey'{parameters = asn1_NOVALUE}), 
+                asn1_NOVALUE});
 der_encode(Asn1Type, Entity) when (Asn1Type == 'PrivateKeyInfo') or
 				  (Asn1Type == 'EncryptedPrivateKeyInfo') ->
      try
-	{ok, Encoded} = 'PKCS-FRAME':encode(Asn1Type, Entity),
-	Encoded
-    catch
+         {ok, Encoded} = 'PKCS-FRAME':encode(Asn1Type, Entity),
+         Encoded
+     catch
 	error:{badmatch, {error, _}} = Error ->
-	    erlang:error(Error)
-    end;
-
+             erlang:error(Error)
+     end;
 der_encode(Asn1Type, Entity) when is_atom(Asn1Type) ->
     try 
 	{ok, Encoded} = 'OTP-PUB-KEY':encode(Asn1Type, Entity),
@@ -406,8 +424,7 @@ decrypt_private(CipherText,
 		Options)
   when is_binary(CipherText),
        is_list(Options) ->
-    Padding = proplists:get_value(rsa_pad, Options, rsa_pkcs1_padding),
-    crypto:private_decrypt(rsa, CipherText, format_rsa_private_key(Key), Padding).
+    crypto:private_decrypt(rsa, CipherText, format_rsa_private_key(Key), default_options(Options)).
 
 %%--------------------------------------------------------------------
 %% Description: Public key decryption using the public key.
@@ -428,8 +445,7 @@ decrypt_public(CipherText, Key) ->
                                      PlainText :: binary() .
 decrypt_public(CipherText, #'RSAPublicKey'{modulus = N, publicExponent = E}, 
 	       Options) when is_binary(CipherText), is_list(Options)  ->
-    Padding = proplists:get_value(rsa_pad, Options, rsa_pkcs1_padding),
-    crypto:public_decrypt(rsa, CipherText,[E, N], Padding).
+    crypto:public_decrypt(rsa, CipherText,[E, N], default_options(Options)).
 
 %%--------------------------------------------------------------------
 %% Description: Public key encryption using the public key.
@@ -451,8 +467,7 @@ encrypt_public(PlainText, Key) ->
                                        CipherText :: binary() .
 encrypt_public(PlainText, #'RSAPublicKey'{modulus=N,publicExponent=E}, 
 	       Options) when is_binary(PlainText), is_list(Options) ->
-    Padding = proplists:get_value(rsa_pad, Options, rsa_pkcs1_padding),
-    crypto:public_encrypt(rsa, PlainText, [E,N], Padding).
+    crypto:public_encrypt(rsa, PlainText, [E,N], default_options(Options)).
 
 %%--------------------------------------------------------------------
 %%
@@ -480,8 +495,7 @@ encrypt_private(PlainText,
   when is_binary(PlainText),
        is_integer(N), is_integer(E), is_integer(D),
        is_list(Options) ->
-    Padding = proplists:get_value(rsa_pad, Options, rsa_pkcs1_padding),
-    crypto:private_encrypt(rsa, PlainText, format_rsa_private_key(Key), Padding).
+    crypto:private_encrypt(rsa, PlainText, format_rsa_private_key(Key), default_options(Options)).
 
 %%--------------------------------------------------------------------
 %% Description: List available group sizes among the pre-computed dh groups
@@ -628,6 +642,22 @@ pkix_sign_types(?'ecdsa-with-SHA512') ->
     {sha512, ecdsa}.
 
 %%--------------------------------------------------------------------
+-spec pkix_hash_type(HashOid::oid()) -> DigestType:: md5 | crypto:sha1() | crypto:sha2().
+          
+pkix_hash_type(?'id-sha1') ->
+    sha;
+pkix_hash_type(?'id-sha512') ->
+    sha512;
+pkix_hash_type(?'id-sha384') ->
+    sha384;
+pkix_hash_type(?'id-sha256') ->
+    sha256;
+pkix_hash_type('id-sha224') ->
+    sha224;
+pkix_hash_type('id-md5') ->
+    md5.
+
+%%--------------------------------------------------------------------
 %% Description: Create digital signature.
 %%--------------------------------------------------------------------
 -spec sign(Msg, DigestType, Key) ->
@@ -771,12 +801,11 @@ pkix_match_dist_point(#'CertificateList'{
 %% der encoded 'Certificate'{}
 %%--------------------------------------------------------------------
 pkix_sign(#'OTPTBSCertificate'{signature = 
-				   #'SignatureAlgorithm'{algorithm = Alg} 
+				   #'SignatureAlgorithm'{} 
 			       = SigAlg} = TBSCert, Key) ->
-
     Msg = pkix_encode('OTPTBSCertificate', TBSCert, otp),
-    {DigestType, _} = pkix_sign_types(Alg),
-    Signature = sign(Msg, DigestType, Key),
+    {DigestType, _, Opts} = pubkey_cert:x509_pkix_sign_types(SigAlg),
+    Signature = sign(Msg, DigestType, format_pkix_sign_key(Key), Opts),
     Cert = #'OTPCertificate'{tbsCertificate= TBSCert,
 			     signatureAlgorithm = SigAlg,
 			     signature = Signature
@@ -798,6 +827,11 @@ pkix_verify(DerCert,  #'RSAPublicKey'{} = RSAKey)
   when is_binary(DerCert) ->
     {DigestType, PlainText, Signature} = pubkey_cert:verify_data(DerCert),
     verify(PlainText, DigestType, Signature, RSAKey);
+
+pkix_verify(DerCert,  {#'RSAPublicKey'{} = RSAKey, #'RSASSA-PSS-params'{} = Params}) 
+  when is_binary(DerCert) ->
+    {DigestType, PlainText, Signature} = pubkey_cert:verify_data(DerCert),
+    verify(PlainText, DigestType, Signature, RSAKey, rsa_opts(Params));
 
 pkix_verify(DerCert, Key = {#'ECPoint'{}, _})
   when is_binary(DerCert) ->
@@ -874,7 +908,7 @@ pkix_is_fixed_dh_cert(Cert) when is_binary(Cert) ->
 
 %%--------------------------------------------------------------------
 -spec pkix_issuer_id(Cert, IssuedBy) ->
-			    {ok, issuer_id()} | {error, Reason}
+			    {ok, ID::cert_id()} | {error, Reason}
                                 when Cert::der_encoded()| #'OTPCertificate'{},
                                      IssuedBy :: self | other,
                                      Reason :: term() .
@@ -887,6 +921,19 @@ pkix_issuer_id(#'OTPCertificate'{} = OtpCert, Signed) when (Signed == self) or
 pkix_issuer_id(Cert, Signed) when is_binary(Cert) -> 
     OtpCert = pkix_decode_cert(Cert, otp),
     pkix_issuer_id(OtpCert, Signed).
+
+%%--------------------------------------------------------------------
+-spec pkix_subject_id(Cert) -> ID
+              when Cert::der_encoded()| #'OTPCertificate'{},
+                   ID::cert_id() .
+
+%% Description: Returns the subject id.
+%%--------------------------------------------------------------------
+pkix_subject_id(#'OTPCertificate'{} = OtpCert) ->
+    pubkey_cert:subject_id(OtpCert);
+pkix_subject_id(Cert) when is_binary(Cert) -> 
+    OtpCert = pkix_decode_cert(Cert, otp),
+    pkix_subject_id(OtpCert).
 
 %%--------------------------------------------------------------------
 -spec pkix_crl_issuer(CRL| #'CertificateList'{}) -> 
@@ -914,7 +961,7 @@ pkix_normalize_name(Issuer) ->
 
 %%-------------------------------------------------------------------- 
 -spec pkix_path_validation(Cert::binary()| #'OTPCertificate'{} | atom(),
-			   CertChain :: [binary()] ,
+			   CertChain :: [binary() | #'OTPCertificate'{}] ,
 			   Options :: [{atom(),term()}]) ->
 				  {ok, {PublicKeyInfo :: term(), 
 					PolicyTree :: term()}} |
@@ -931,8 +978,8 @@ pkix_path_validation(PathErr, [Cert | Chain], Options0) when is_atom(PathErr)->
 	    Options = proplists:delete(verify_fun, Options0),
 	    pkix_path_validation(Otpcert, Chain, [{verify_fun,
 						   {VerifyFun, Userstate}}| Options]);
-	{fail, _} ->
-	    {error, Reason}
+	{fail, UserReason} ->
+	    {error, UserReason}
     catch
 	_:_ ->
 	    {error, Reason}
@@ -1230,10 +1277,82 @@ pkix_test_data(#{} = Chain) ->
 
 pkix_test_root_cert(Name, Opts) ->
     pubkey_cert:root_cert(Name, Opts).
+      
+%%--------------------------------------------------------------------
+-spec pkix_ocsp_validate(Cert, IssuerCert, OcspRespDer, 
+                         ResponderCerts, NonceExt) -> valid | {bad_cert, Reason}
+              when Cert::der_encoded() | #'OTPCertificate'{},
+                   IssuerCert::der_encoded() | #'OTPCertificate'{}, 
+                   OcspRespDer::der_encoded(),
+                   ResponderCerts::[der_encoded()],
+                   NonceExt::undefined | binary(),
+                   Reason::term().
+
+%% Description: Validate OCSP staple response
+%%--------------------------------------------------------------------
+pkix_ocsp_validate(DerCert, IssuerCert, OcspRespDer, ResponderCerts, NonceExt) when is_binary(DerCert) ->
+    pkix_ocsp_validate(pkix_decode_cert(DerCert, otp),  IssuerCert, OcspRespDer, ResponderCerts, NonceExt);
+pkix_ocsp_validate(Cert, DerIssuerCert, OcspRespDer, ResponderCerts, NonceExt) when is_binary(DerIssuerCert) ->
+    pkix_ocsp_validate(Cert, pkix_decode_cert(DerIssuerCert, otp), OcspRespDer, ResponderCerts, NonceExt);
+pkix_ocsp_validate(Cert, IssuerCert, OcspRespDer, ResponderCerts, NonceExt) ->
+    case  ocsp_responses(OcspRespDer, ResponderCerts, NonceExt) of
+        {ok, Responses} ->
+            ocsp_status(Cert, IssuerCert, Responses);
+        {error, Reason} ->
+            {bad_cert, {revocation_status_undetermined, Reason}}
+    end.
+
+%%--------------------------------------------------------------------
+-spec ocsp_extensions(undefined | binary()) -> list().
+%% Description: Get OCSP stapling extensions for request
+%%--------------------------------------------------------------------
+ocsp_extensions(Nonce) ->
+    [Extn || Extn <- [pubkey_ocsp:get_nonce_extn(Nonce),
+                      pubkey_ocsp:get_acceptable_response_types_extn()],
+             erlang:is_record(Extn, 'Extension')].
+
+%%--------------------------------------------------------------------
+-spec ocsp_responder_id(#'Certificate'{}) -> binary().
+%%
+%% Description: Get the OCSP responder ID der
+%%--------------------------------------------------------------------
+ocsp_responder_id(Cert) ->
+    pubkey_ocsp:get_ocsp_responder_id(Cert).
 
 %%--------------------------------------------------------------------
 %%% Internal functions
 %%--------------------------------------------------------------------
+default_options([]) ->
+    [{rsa_padding, rsa_pkcs1_padding}];
+default_options(Opts) ->
+    case proplists:get_value(rsa_pad, Opts) of
+        undefined ->
+            case proplists:get_value(rsa_padding, Opts) of
+                undefined ->
+                    case lists:dropwhile(fun erlang:is_tuple/1, Opts) of
+                        [Pad|_] ->
+                            set_padding(Pad, Opts);
+                        [] ->
+                            set_padding(rsa_pkcs1_padding, Opts)
+                    end;
+                Pad ->
+                    set_padding(Pad, Opts)
+            end;
+        Pad ->
+            set_padding(Pad, Opts)
+    end.
+
+set_padding(Pad, Opts) ->
+    [{rsa_padding,Pad} | [{T,V} || {T,V} <- Opts,
+                                   T =/= rsa_padding,
+                                   T =/= rsa_pad]
+    ].
+
+format_pkix_sign_key({#'RSAPrivateKey'{} = Key, _}) ->
+    %% Params are handled in option arg
+    Key;
+format_pkix_sign_key(Key) ->
+    Key.
 format_sign_key(Key = #'RSAPrivateKey'{}) ->
     {rsa, format_rsa_private_key(Key)};
 format_sign_key(#'DSAPrivateKey'{p = P, q = Q, g = G, x = X}) ->
@@ -1264,6 +1383,15 @@ format_verify_key(#'DSAPrivateKey'{y=Y, p=P, q=Q, g=G}) ->
     format_verify_key({Y, #'Dss-Parms'{p=P, q=Q, g=G}});
 format_verify_key(_) ->
     badarg.
+
+rsa_opts(#'RSASSA-PSS-params'{maskGenAlgorithm = 
+                                  #'MaskGenAlgorithm'{algorithm = ?'id-mgf1',
+                                                      parameters = #'HashAlgorithm'{algorithm = HashAlgoOid}
+                                                     }}) ->
+    HashAlgo = pkix_hash_type(HashAlgoOid),
+    [{rsa_padding, rsa_pkcs1_pss_padding},
+     {rsa_pss_saltlen, -1},
+     {rsa_mgf1_md, HashAlgo}].
 
 do_pem_entry_encode(Asn1Type, Entity, CipherInfo, Password) ->
     Der = der_encode(Asn1Type, Entity),
@@ -1316,16 +1444,16 @@ path_validation([Cert | _] = Path,
     end.
 
 validate(Cert, #path_validation_state{working_issuer_name = Issuer,
-					 working_public_key = Key,
-					 working_public_key_parameters = 
-					 KeyParams, 
-					 permitted_subtrees = Permit,
-					 excluded_subtrees = Exclude,
-					 last_cert = Last,
-					 user_state = UserState0,
-					 verify_fun = VerifyFun} =
+                                      working_public_key = Key,
+                                      working_public_key_parameters = 
+                                          KeyParams, 
+                                      permitted_subtrees = Permit,
+                                      excluded_subtrees = Exclude,
+                                      last_cert = Last,
+                                      user_state = UserState0,
+                                      verify_fun = VerifyFun} =
 	     ValidationState0) ->
-
+    
     OtpCert = otp_cert(Cert),
 
     {ValidationState1, UserState1} =
@@ -1512,6 +1640,10 @@ ec_curve_spec({ecParameters, ECParams}) ->
 	ec_curve_spec(ECParams);
 ec_curve_spec({namedCurve, OID}) when is_tuple(OID), is_integer(element(1,OID)) ->
     ec_curve_spec({namedCurve,  pubkey_cert_records:namedCurves(OID)});
+ec_curve_spec({namedCurve, x25519 = Name}) ->
+    Name;
+ec_curve_spec({namedCurve, x448 = Name}) ->
+    Name;
 ec_curve_spec({namedCurve, Name}) when is_atom(Name) ->
     crypto:ec_curve(Name).
 
@@ -1748,3 +1880,15 @@ format_details([]) ->
     no_relevant_crls;
 format_details(Details) ->
     Details.
+  
+ocsp_status(Cert, IssuerCert, Responses) ->
+    case pubkey_ocsp:find_single_response(Cert, IssuerCert, Responses) of
+        {ok, #'SingleResponse'{certStatus = CertStatus}} ->
+            pubkey_ocsp:ocsp_status(CertStatus);
+        {error, no_matched_response = Reason} ->
+            {bad_cert, {revocation_status_undetermined, Reason}}
+    end.
+
+ocsp_responses(OCSPResponseDer, ResponderCerts, Nonce) ->
+    pubkey_ocsp:verify_ocsp_response(OCSPResponseDer, 
+                                     ResponderCerts, Nonce).

@@ -1,7 +1,7 @@
 #
 # %CopyrightBegin%
 #
-# Copyright Ericsson AB 1996-2018. All Rights Reserved.
+# Copyright Ericsson AB 1996-2020. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -68,6 +68,7 @@ atom ErtsSecretAtom='3RT$'
 atom DOWN='DOWN'
 atom UP='UP'
 atom EXIT='EXIT'
+atom abandoned
 atom abort
 atom abs_path
 atom absoluteURI
@@ -116,6 +117,7 @@ atom awaiting_load
 atom awaiting_unload
 atom backtrace backtrace_depth
 atom badarg badarith badarity badfile badfun badkey badmap badmatch badsig
+atom badopt
 atom bag
 atom band
 atom big
@@ -144,6 +146,8 @@ atom bsr_unicode
 atom build_type
 atom busy
 atom busy_dist_port
+atom busy_limits_port
+atom busy_limits_msgq
 atom busy_port
 atom call
 atom call_count
@@ -193,6 +197,7 @@ atom current_location
 atom current_stacktrace
 atom data
 atom debug_flags
+atom decentralized_counters
 atom decimals
 atom default
 atom delay_trap
@@ -209,11 +214,12 @@ atom dirty_nif_finalizer
 atom disable_trace
 atom disabled
 atom discard
-atom display_items
 atom dist
 atom dist_cmd
 atom dist_ctrl_put_data
+atom dist_ctrlr
 atom dist_data
+atom dist_spawn_init
 atom Div='/'
 atom div
 atom dmonitor_node
@@ -238,16 +244,19 @@ atom eof
 atom eol
 atom Eq='=:='
 atom Eqeq='=='
+atom erl_init
 atom erl_tracer
 atom erlang
 atom erl_signal_server
 atom error_handler
 atom error_logger
+atom error_only
 atom erts_code_purger
 atom erts_debug
 atom erts_dflags
 atom erts_internal
 atom ets
+atom ets_info_binary
 atom ETS_TRANSFER='ETS-TRANSFER'
 atom exact_reductions
 atom exception_from
@@ -289,7 +298,10 @@ atom gc_minor_start
 atom Ge='>='
 atom generational
 atom get_all_trap
+atom get_iovec
+atom get_internal_state_blocked
 atom get_seq_token
+atom get_size
 atom get_tcw
 atom gather_gc_info_result
 atom gather_io_bytes
@@ -339,6 +351,8 @@ atom is_constant
 atom is_seq_trace
 atom iterator
 atom io
+atom iodata
+atom iovec
 atom keypos
 atom kill
 atom killed
@@ -402,6 +416,7 @@ atom min_bin_vheap_size
 atom minor
 atom minor_version
 atom Minus='-'
+atom MinusMinus='--'
 atom module
 atom module_info
 atom monitored_by
@@ -447,6 +462,7 @@ atom noeol
 atom noproc
 atom normal
 atom nosuspend
+atom no_fail
 atom no_float
 atom no_integer
 atom no_network
@@ -492,6 +508,7 @@ atom packet
 atom packet_size
 atom parallelism
 atom Plus='+'
+atom PlusPlus='++'
 atom pause
 atom pending
 atom pending_driver
@@ -544,9 +561,13 @@ atom register
 atom registered_name
 atom reload
 atom rem
+atom reply
+atom reply_tag
 atom report_errors
 atom reset
+atom reset_seq_trace
 atom restart
+atom resume
 atom return_from
 atom return_to
 atom return_trace
@@ -605,6 +626,10 @@ atom silent
 atom size
 atom spawn_executable
 atom spawn_driver
+atom spawn_init
+atom spawn_reply
+atom spawn_request
+atom spawn_request_yield
 atom spawned
 atom ssl_tls
 atom stack_size
@@ -615,6 +640,7 @@ atom stop
 atom stream
 atom strict_monotonic
 atom strict_monotonic_timestamp
+atom success_only
 atom sunrm
 atom suspend
 atom suspended
@@ -671,6 +697,7 @@ atom unload_cancelled
 atom value
 atom version
 atom visible
+atom wait_release_literal_area_switch
 atom waiting
 atom wall_clock
 atom warning

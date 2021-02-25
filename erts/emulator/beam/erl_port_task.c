@@ -1,7 +1,7 @@
 /*
  * %CopyrightBegin%
  *
- * Copyright Ericsson AB 2006-2018. All Rights Reserved.
+ * Copyright Ericsson AB 2006-2020. All Rights Reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -1873,7 +1873,8 @@ erts_port_task_execute(ErtsRunQueue *runq, Port **curr_port_pp)
     if (active) {
 	ErtsRunQueue *xrunq;
 
-	ASSERT(!(erts_atomic32_read_nob(&pp->state) & ERTS_PORT_SFLGS_DEAD));
+        ASSERT(!(erts_atomic32_read_nob(&pp->state)
+                 & ERTS_PORT_SFLG_INITIALIZING));
 
 	xrunq = erts_check_emigration_need(runq, ERTS_PORT_PRIO_LEVEL);
 	ERTS_LC_ASSERT(runq != xrunq);
@@ -2094,7 +2095,7 @@ begin_port_cleanup(Port *pp, ErtsPortTask **execqp, int *processing_busy_q_p)
 
 	    erts_snprintf(port_str, sizeof(DTRACE_CHARBUF_NAME(port_str)), "%T", pp->common.id);
 	    while (plp2 != NULL) {
-		erts_snprintf(pid_str, sizeof(DTRACE_CHARBUF_NAME(pid_str)), "%T", plp2->pid);
+		erts_snprintf(pid_str, sizeof(DTRACE_CHARBUF_NAME(pid_str)), "%T", plp2->u.pid);
 		DTRACE2(process_port_unblocked, pid_str, port_str);
 	    }
 	}

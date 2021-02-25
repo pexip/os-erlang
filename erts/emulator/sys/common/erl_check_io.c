@@ -1,7 +1,7 @@
 /*
  * %CopyrightBegin%
  * 
- * Copyright Ericsson AB 2006-2018. All Rights Reserved.
+ * Copyright Ericsson AB 2006-2020. All Rights Reserved.
  * 
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -44,7 +44,7 @@
 #include "erl_time.h"
 
 #if 0
-#define DEBUG_PRINT(FMT, ...) erts_printf(FMT "\r\n", ##__VA_ARGS__)
+#define DEBUG_PRINT(FMT, ...) do { erts_printf(FMT "\r\n", ##__VA_ARGS__); fflush(stdout); } while(0)
 #define DEBUG_PRINT_FD(FMT, STATE, ...)                                 \
     DEBUG_PRINT("%d: " FMT " (ev=%s, ac=%s, flg=%s)",                   \
                 (STATE) ? (STATE)->fd : (ErtsSysFdType)-1, ##__VA_ARGS__, \
@@ -184,11 +184,14 @@ int ERTS_WRITE_UNLIKELY(erts_no_pollsets) = 1;
 int ERTS_WRITE_UNLIKELY(erts_no_poll_threads) = 1;
 struct drv_ev_state_shared drv_ev_state;
 
-static ERTS_INLINE int fd_hash(ErtsSysFdType fd) {
+static ERTS_INLINE int fd_hash(ErtsSysFdType fd)
+{
+#ifdef ERTS_SYS_CONTINOUS_FD_NUMBERS
     int hash = (int)fd;
-# ifndef ERTS_SYS_CONTINOUS_FD_NUMBERS
+#else
+    int hash = (int)(SWord)fd;
     hash ^= (hash >> 9);
-# endif
+#endif
     return hash;
 }
 
@@ -534,6 +537,7 @@ erts_io_notify_port_task_executed(ErtsPortTaskType type,
             if (state->active_events & ERTS_POLL_EV_OUT)
                 oready(state->driver.select->outport, state);
             state->active_events = 0;
+            active_events = 0;
         }
     }
 
@@ -591,6 +595,96 @@ abort_tasks(ErtsDrvEventState *state, int mode)
     }
 }
 
+static void prepare_select_msg(struct erts_nif_select_event* e,
+                               enum ErlNifSelectFlags mode,
+                               Eterm recipient,
+                               ErtsResource* resource,
+                               Eterm msg,
+                               ErlNifEnv* msg_env,
+                               Eterm event_atom)
+{
+    ErtsMessage* mp;
+    Eterm* hp;
+    Uint hsz;
+
+    if (is_not_nil(e->pid)) {
+        ASSERT(e->mp);
+        erts_cleanup_messages(e->mp);
+    }
+
+    if (mode & ERL_NIF_SELECT_CUSTOM_MSG) {
+        if (msg_env) {
+            mp = erts_create_message_from_nif_env(msg_env);
+            ERL_MESSAGE_TERM(mp) = msg;
+        }
+        else {
+            hsz = size_object(msg);
+            mp = erts_alloc_message(hsz, &hp);
+            ERL_MESSAGE_TERM(mp) = copy_struct(msg, hsz, &hp, &mp->hfrag.off_heap);
+        }
+    }
+    else {
+        ErtsBinary* bin;
+        Eterm resource_term, ref_term, tuple;
+        Eterm* hp_start;
+
+         /* {select, Resource, Ref, EventAtom} */
+        hsz = 5 + ERTS_MAGIC_REF_THING_SIZE;
+        if (is_internal_ref(msg))
+            hsz += ERTS_REF_THING_SIZE;
+        else
+            ASSERT(is_immed(msg));
+
+        mp = erts_alloc_message(hsz, &hp);
+        hp_start = hp;
+
+        bin = ERTS_MAGIC_BIN_FROM_UNALIGNED_DATA(resource);
+        resource_term = erts_mk_magic_ref(&hp, &mp->hfrag.off_heap, &bin->binary);
+        if (is_internal_ref(msg)) {
+            Uint32* refn = internal_ref_numbers(msg);
+            write_ref_thing(hp, refn[0], refn[1], refn[2]);
+            ref_term = make_internal_ref(hp);
+            hp += ERTS_REF_THING_SIZE;
+        }
+        else {
+            ASSERT(is_immed(msg));
+            ref_term = msg;
+        }
+        tuple = TUPLE4(hp, am_select, resource_term, ref_term, event_atom);
+        hp += 5;
+        ERL_MESSAGE_TERM(mp) = tuple;
+        ASSERT(hp == hp_start + hsz); (void)hp_start;
+    }
+
+    ASSERT(is_not_nil(recipient));
+    e->pid = recipient;
+    e->mp = mp;
+}
+
+static ERTS_INLINE void send_select_msg(struct erts_nif_select_event* e)
+{
+    Process* rp = erts_proc_lookup(e->pid);
+
+    ASSERT(is_internal_pid(e->pid));
+    if (!rp) {
+        erts_cleanup_messages(e->mp);
+        return;
+    }
+
+    erts_queue_message(rp, 0, e->mp, ERL_MESSAGE_TERM(e->mp), am_system);
+}
+
+static void clear_select_event(struct erts_nif_select_event* e)
+{
+    if (is_not_nil(e->pid)) {
+        /* Discard unsent message */
+        ASSERT(e->mp);
+        erts_cleanup_messages(e->mp);
+        e->mp = NULL;
+        e->pid = NIL;
+    }
+}
+
 static void
 deselect(ErtsDrvEventState *state, int mode)
 {
@@ -621,8 +715,8 @@ deselect(ErtsDrvEventState *state, int mode)
         erts_io_control(state, ERTS_POLL_OP_DEL, 0);
 	switch (state->type) {
         case ERTS_EV_TYPE_NIF:
-            state->driver.nif->in.pid = NIL;
-            state->driver.nif->out.pid = NIL;
+            clear_select_event(&state->driver.nif->in);
+            clear_select_event(&state->driver.nif->out);
             enif_release_resource(state->driver.stop.resource->data);
             state->driver.stop.resource = NULL;
             break;
@@ -752,6 +846,8 @@ driver_select(ErlDrvPort ix, ErlDrvEvent e, int mode, int on)
             ret = 0;
             goto done_unknown;
         }
+        /* For some reason (don't know why), we do not clean all
+           events when doing ERL_DRV_USE_NO_CALLBACK. */
         else if ((mode&ERL_DRV_USE_NO_CALLBACK) == ERL_DRV_USE) {
             mode |= (ERL_DRV_READ | ERL_DRV_WRITE);
         }
@@ -943,12 +1039,21 @@ done_unknown:
 }
 
 int
-enif_select(ErlNifEnv* env,
-            ErlNifEvent e,
-            enum ErlNifSelectFlags mode,
-            void* obj,
-            const ErlNifPid* pid,
-            Eterm ref)
+enif_select(ErlNifEnv* env, ErlNifEvent e, enum ErlNifSelectFlags mode,
+            void* obj, const ErlNifPid* pid, Eterm msg)
+{
+    return enif_select_x(env, e, mode, obj, pid, msg, NULL);
+}
+
+
+int
+enif_select_x(ErlNifEnv* env,
+              ErlNifEvent e,
+              enum ErlNifSelectFlags mode,
+              void* obj,
+              const ErlNifPid* pid,
+              Eterm msg,
+              ErlNifEnv* msg_env)
 {
     int on;
     ErtsResource* resource = DATA_TO_RESOURCE(obj);
@@ -962,11 +1067,11 @@ enif_select(ErlNifEnv* env,
     ErtsDrvSelectDataState *free_select = NULL;
     ErtsNifSelectDataState *free_nif = NULL;
 
-    ASSERT(!resource->monitors);
+    ASSERT(!erts_dbg_is_resource_dying(resource));
 
 #ifdef ERTS_SYS_CONTINOUS_FD_NUMBERS
     if (!grow_drv_ev_state(fd)) {
-        if (fd > 0) nif_select_large_fd_error(fd, mode, resource, ref);
+        if (fd > 0) nif_select_large_fd_error(fd, mode, resource, msg);
         return INT_MIN | ERL_NIF_SELECT_INVALID_EVENT;
     }
 #endif
@@ -977,10 +1082,10 @@ enif_select(ErlNifEnv* env,
 
     DEBUG_PRINT_FD("enif_select(%T, %d, %s, %p, %T, %T)",
                    state, env->proc->common.id, fd, nifmode2str(mode), resource,
-                   pid ? pid->pid : THE_NON_VALUE, ref);
+                   pid ? pid->pid : THE_NON_VALUE, THE_NON_VALUE);
 
     if (mode & ERL_NIF_SELECT_STOP) {
-        ASSERT(resource->type->stop);
+        ASSERT(resource->type->fn.stop);
         if (IS_FD_UNKNOWN(state)) {
             /* fast track to stop callback */
             call_stop = CALL_STOP;
@@ -993,7 +1098,7 @@ enif_select(ErlNifEnv* env,
         ctl_op = ERTS_POLL_OP_DEL;
     }
     else {
-        on = 1;
+        on = !(mode & ERL_NIF_SELECT_CANCEL);
         ASSERT(mode);
         if (mode & ERL_DRV_READ) {
             ctl_events |= ERTS_POLL_EV_IN;
@@ -1012,21 +1117,21 @@ enif_select(ErlNifEnv* env,
          * Changing process and/or ref is ok (I think?).
          */
         if (state->driver.stop.resource != resource)
-            nif_select_steal(state, ERL_DRV_READ | ERL_DRV_WRITE, resource, ref);
+            nif_select_steal(state, ERL_DRV_READ | ERL_DRV_WRITE, resource, msg);
         break;
     case ERTS_EV_TYPE_DRV_SEL:
-        nif_select_steal(state, mode, resource, ref);
+        nif_select_steal(state, mode, resource, msg);
         break;
     case ERTS_EV_TYPE_STOP_USE: {
         erts_dsprintf_buf_t *dsbufp = erts_create_logger_dsbuf();
-        print_nif_select_op(dsbufp, fd, mode, resource, ref);
+        print_nif_select_op(dsbufp, fd, mode, resource, msg);
         steal_pending_stop_use(dsbufp, ERTS_INVALID_ERL_DRV_PORT, state, mode, on);
         ASSERT(state->type == ERTS_EV_TYPE_NONE);
         break;
     }
     case ERTS_EV_TYPE_STOP_NIF: {
         erts_dsprintf_buf_t *dsbufp = erts_create_logger_dsbuf();
-        print_nif_select_op(dsbufp, fd, mode, resource, ref);
+        print_nif_select_op(dsbufp, fd, mode, resource, msg);
         steal_pending_stop_nif(dsbufp, resource, state, mode, on);
         if (state->type == ERTS_EV_TYPE_STOP_NIF) {
             ret = ERL_NIF_SELECT_STOP_SCHEDULED;  /* ?? */
@@ -1082,7 +1187,7 @@ enif_select(ErlNifEnv* env,
 
     if (on) {
         const Eterm recipient = pid ? pid->pid : env->proc->common.id;
-        Uint32* refn;
+        ASSERT(is_internal_pid(recipient));
         if (!state->driver.nif)
             state->driver.nif = alloc_nif_select_data();
         if (state->type == ERTS_EV_TYPE_NONE) {
@@ -1093,64 +1198,62 @@ enif_select(ErlNifEnv* env,
         ASSERT(state->type == ERTS_EV_TYPE_NIF);
         ASSERT(state->driver.stop.resource == resource);
         if (mode & ERL_DRV_READ) {
-            state->driver.nif->in.pid = recipient;
-            if (is_immed(ref)) {
-                state->driver.nif->in.immed = ref;
-            } else {
-                ASSERT(is_internal_ref(ref));
-                refn = internal_ref_numbers(ref);
-                state->driver.nif->in.immed = THE_NON_VALUE;
-                sys_memcpy(state->driver.nif->in.refn, refn,
-                           sizeof(state->driver.nif->in.refn));
-            }
+            prepare_select_msg(&state->driver.nif->in, mode, recipient,
+                               resource, msg, msg_env, am_ready_input);
+            msg_env = NULL;
         }
         if (mode & ERL_DRV_WRITE) {
-            state->driver.nif->out.pid = recipient;
-            if (is_immed(ref)) {
-                state->driver.nif->out.immed = ref;
-            } else {
-                ASSERT(is_internal_ref(ref));
-                refn = internal_ref_numbers(ref);
-                state->driver.nif->out.immed = THE_NON_VALUE;
-                sys_memcpy(state->driver.nif->out.refn, refn,
-                           sizeof(state->driver.nif->out.refn));
-            }
+            prepare_select_msg(&state->driver.nif->out, mode, recipient,
+                               resource, msg, msg_env, am_ready_output);
         }
         ret = 0;
     }
     else { /* off */
+        ret = 0;
         if (state->type == ERTS_EV_TYPE_NIF) {
-            state->driver.nif->in.pid = NIL;
-            state->driver.nif->out.pid = NIL;
+            if (mode & ERL_NIF_SELECT_READ
+                && is_not_nil(state->driver.nif->in.pid)) {
+                clear_select_event(&state->driver.nif->in);
+                ret |= ERL_NIF_SELECT_READ_CANCELLED;
+            }
+            if (mode & ERL_NIF_SELECT_WRITE
+                && is_not_nil(state->driver.nif->out.pid)) {
+                clear_select_event(&state->driver.nif->out);
+                ret |= ERL_NIF_SELECT_WRITE_CANCELLED;
+            }
         }
-        ASSERT(state->events==0);
-        if (!wake_poller) {
-            /*
-             * Safe to close fd now as it is not in pollset
-             * or there was no need to eject fd (kernel poll)
-             */
-            if (state->type == ERTS_EV_TYPE_NIF) {
-                ASSERT(state->driver.stop.resource == resource);
-                call_stop = CALL_STOP_AND_RELEASE;
-                state->driver.stop.resource = NULL;
+        if (mode & ERL_NIF_SELECT_STOP) {
+            ASSERT(state->events==0);
+            if (!wake_poller) {
+                /*
+                 * Safe to close fd now as it is not in pollset
+                 * or there was no need to eject fd (kernel poll)
+                 */
+                if (state->type == ERTS_EV_TYPE_NIF) {
+                    ASSERT(state->driver.stop.resource == resource);
+                    call_stop = CALL_STOP_AND_RELEASE;
+                    state->driver.stop.resource = NULL;
+                }
+                else {
+                    ASSERT(!state->driver.stop.resource);
+                    call_stop = CALL_STOP;
+                }
+                state->type = ERTS_EV_TYPE_NONE;
+                ret |= ERL_NIF_SELECT_STOP_CALLED;
             }
             else {
-                ASSERT(!state->driver.stop.resource);
-                call_stop = CALL_STOP;
+                /* Not safe to close fd, postpone stop_select callback. */
+                if (state->type == ERTS_EV_TYPE_NONE) {
+                    ASSERT(!state->driver.stop.resource);
+                    state->driver.stop.resource = resource;
+                    enif_keep_resource(resource);
+                }
+                state->type = ERTS_EV_TYPE_STOP_NIF;
+                ret |= ERL_NIF_SELECT_STOP_SCHEDULED;
             }
-            state->type = ERTS_EV_TYPE_NONE;
-            ret = ERL_NIF_SELECT_STOP_CALLED;
         }
-        else {
-            /* Not safe to close fd, postpone stop_select callback. */
-            if (state->type == ERTS_EV_TYPE_NONE) {
-                ASSERT(!state->driver.stop.resource);
-                state->driver.stop.resource = resource;
-                enif_keep_resource(resource);
-            }
-            state->type = ERTS_EV_TYPE_STOP_NIF;
-            ret = ERL_NIF_SELECT_STOP_SCHEDULED;
-        }
+        else
+            ASSERT(mode & ERL_NIF_SELECT_CANCEL);
     }
 
 done:
@@ -1239,7 +1342,7 @@ print_driver_name(erts_dsprintf_buf_t *dsbufp, Eterm id)
 static void
 steal(erts_dsprintf_buf_t *dsbufp, ErtsDrvEventState *state, int mode)
 {
-    erts_dsprintf(dsbufp, "stealing control of fd=%d from ", (int) state->fd);
+    erts_dsprintf(dsbufp, "stealing control of fd=%bpd from ", (SWord) state->fd);
     switch (state->type) {
     case ERTS_EV_TYPE_DRV_SEL: {
 	int deselect_mode = 0;
@@ -1263,7 +1366,7 @@ steal(erts_dsprintf_buf_t *dsbufp, ErtsDrvEventState *state, int mode)
 	if (deselect_mode)
 	    deselect(state, deselect_mode);
 	else {
-	    erts_dsprintf(dsbufp, "no one", (int) state->fd);
+	    erts_dsprintf(dsbufp, "no one");
 	    ASSERT(0);
 	}
 	erts_dsprintf(dsbufp, "\n");
@@ -1294,7 +1397,7 @@ steal(erts_dsprintf_buf_t *dsbufp, ErtsDrvEventState *state, int mode)
 	break;
     }
     default:
-	erts_dsprintf(dsbufp, "no one\n", (int) state->fd);
+	erts_dsprintf(dsbufp, "no one\n");
 	ASSERT(0);
     }
 }
@@ -1305,10 +1408,10 @@ print_drv_select_op(erts_dsprintf_buf_t *dsbufp,
 {
     Port *pp = erts_drvport2port(ix);
     erts_dsprintf(dsbufp,
-		  "driver_select(%p, %d,%s%s%s%s, %d) "
+		  "driver_select(%p, %bpd,%s%s%s%s, %d) "
 		  "by ",
 		  ix,
-		  (int) fd,
+		  (SWord) fd,
 		  mode & ERL_DRV_READ ? " ERL_DRV_READ" : "",
 		  mode & ERL_DRV_WRITE ? " ERL_DRV_WRITE" : "",
 		  mode & ERL_DRV_USE ? " ERL_DRV_USE" : "",
@@ -1324,11 +1427,12 @@ print_nif_select_op(erts_dsprintf_buf_t *dsbufp,
                     ErtsResource* resource, Eterm ref)
 {
     erts_dsprintf(dsbufp,
-		  "enif_select(_, %d,%s%s%s, %T:%T, %T) ",
-		  (int) fd,
+		  "enif_select(_, %bpd,%s%s%s, %T:%T, %T) ",
+		  (SWord) fd,
 		  mode & ERL_NIF_SELECT_READ ? " READ" : "",
 		  mode & ERL_NIF_SELECT_WRITE ? " WRITE" : "",
-		  mode & ERL_NIF_SELECT_STOP ? " STOP" : "",
+		  (mode & ERL_NIF_SELECT_STOP ? " STOP"
+                   : (mode & ERL_NIF_SELECT_CANCEL ? " CANCEL" : "")),
 		  resource->type->module,
                   resource->type->name,
                   ref);
@@ -1531,53 +1635,6 @@ oready(Eterm id, ErtsDrvEventState *state)
     }
 }
 
-static ERTS_INLINE void
-send_event_tuple(struct erts_nif_select_event* e, ErtsResource* resource,
-                 Eterm event_atom)
-{
-    Process* rp = erts_proc_lookup(e->pid);
-    ErtsProcLocks rp_locks = 0;
-    ErtsMessage* mp;
-    ErlOffHeap* ohp;
-    ErtsBinary* bin;
-    Eterm* hp;
-    Uint hsz;
-    Eterm resource_term, ref_term, tuple;
-
-    if (!rp) {
-        return;
-    }
-
-    bin = ERTS_MAGIC_BIN_FROM_UNALIGNED_DATA(resource);
-
-     /* {select, Resource, Ref, EventAtom} */
-    if (is_value(e->immed)) {
-        hsz = 5 + ERTS_MAGIC_REF_THING_SIZE;
-    }
-    else {
-        hsz = 5 + ERTS_MAGIC_REF_THING_SIZE + ERTS_REF_THING_SIZE;
-    }
-
-    mp = erts_alloc_message_heap(rp, &rp_locks, hsz, &hp, &ohp);
-
-    resource_term = erts_mk_magic_ref(&hp, ohp, &bin->binary);
-    if (is_value(e->immed)) {
-        ASSERT(is_immed(e->immed));
-        ref_term = e->immed;
-    }
-    else {
-        write_ref_thing(hp, e->refn[0], e->refn[1], e->refn[2]);
-        ref_term = make_internal_ref(hp);
-        hp += ERTS_REF_THING_SIZE;
-    }
-    tuple = TUPLE4(hp, am_select, resource_term, ref_term, event_atom);
-
-    erts_queue_message(rp, rp_locks, mp, tuple, am_system);
-
-    if (rp_locks)
-        erts_proc_unlock(rp, rp_locks);
-}
-
 static void bad_fd_in_pollset(ErtsDrvEventState *, Eterm inport, Eterm outport);
 
 void
@@ -1601,7 +1658,7 @@ erts_create_pollset_thread(int id, ErtsThrPrgrData *tpd) {
 }
 
 void
-erts_check_io(ErtsPollThread *psi, ErtsMonotonicTime timeout_time)
+erts_check_io(ErtsPollThread *psi, ErtsMonotonicTime timeout_time, int poll_only_thread)
 {
     int pollres_len;
     int poll_ret, i;
@@ -1615,6 +1672,9 @@ erts_check_io(ErtsPollThread *psi, ErtsMonotonicTime timeout_time)
 
     pollres_len = psi->pollres_len;
 
+    if (poll_only_thread)
+        erts_thr_progress_active(psi->tpd, 0);
+
 #if ERTS_POLL_USE_FALLBACK
     if (psi->ps == get_fallback_pollset()) {
 
@@ -1625,6 +1685,9 @@ erts_check_io(ErtsPollThread *psi, ErtsMonotonicTime timeout_time)
     {
         poll_ret = erts_poll_wait(psi->ps, psi->pollres, &pollres_len, psi->tpd, timeout_time);
     }
+
+    if (poll_only_thread)
+        erts_thr_progress_active(psi->tpd, 1);
 
 #ifdef ERTS_ENABLE_LOCK_CHECK
     erts_lc_check_exact(NULL, 0); /* No locks should be locked */
@@ -1661,10 +1724,10 @@ erts_check_io(ErtsPollThread *psi, ErtsMonotonicTime timeout_time)
 	ErtsDrvEventState *state;
         ErtsPollEvents revents = ERTS_POLL_RES_GET_EVTS(&psi->pollres[i]);
 
-        /* The fd will be set to -1 if a pollset internal fd was triggered
+        /* The fd will be set to INVALID if a pollset internal fd was triggered
            that was determined to be too expensive to remove from the result.
         */
-        if (fd == -1) continue;
+        if (fd == ERTS_SYS_FD_INVALID) continue;
 
 	erts_mtx_lock(fd_mtx(fd));
 
@@ -1704,8 +1767,10 @@ erts_check_io(ErtsPollThread *psi, ErtsMonotonicTime timeout_time)
 
                 reactive_events = state->active_events;
 
-                if (state->flags & ERTS_EV_FLAG_IN_SCHEDULER)
+                if (state->flags & ERTS_EV_FLAG_IN_SCHEDULER) {
                     reactive_events &= ~ERTS_POLL_EV_IN;
+                    state->active_events |= ERTS_POLL_EV_IN;
+                }
 
                 /* Reactivate the poll op if there are still active events */
                 if (reactive_events) {
@@ -1751,7 +1816,6 @@ erts_check_io(ErtsPollThread *psi, ErtsMonotonicTime timeout_time)
         case ERTS_EV_TYPE_NIF: { /* Requested via enif_select()... */
             struct erts_nif_select_event in = {NIL};
             struct erts_nif_select_event out = {NIL};
-            ErtsResource* resource = NULL;
 
             if (revents & (ERTS_POLL_EV_IN|ERTS_POLL_EV_OUT)) {
                 if (revents & ERTS_POLL_EV_OUT) {
@@ -1759,6 +1823,7 @@ erts_check_io(ErtsPollThread *psi, ErtsMonotonicTime timeout_time)
                         out = state->driver.nif->out;
                         resource = state->driver.stop.resource;
                         state->driver.nif->out.pid = NIL;
+                        state->driver.nif->out.mp = NULL;
                     }
                 }
                 if (revents & ERTS_POLL_EV_IN) {
@@ -1766,6 +1831,7 @@ erts_check_io(ErtsPollThread *psi, ErtsMonotonicTime timeout_time)
                         in = state->driver.nif->in;
                         resource = state->driver.stop.resource;
                         state->driver.nif->in.pid = NIL;
+                        state->driver.nif->in.mp = NULL;
                     }
                 }
                 state->events &= ~revents;
@@ -1778,10 +1844,10 @@ erts_check_io(ErtsPollThread *psi, ErtsMonotonicTime timeout_time)
             erts_mtx_unlock(fd_mtx(fd));
 
             if (is_not_nil(in.pid)) {
-                send_event_tuple(&in, resource, am_ready_input);
+                send_select_msg(&in);
             }
             if (is_not_nil(out.pid)) {
-                send_event_tuple(&out, resource, am_ready_output);
+                send_select_msg(&out);
             }
             continue;
         }
@@ -1811,7 +1877,7 @@ erts_check_io(ErtsPollThread *psi, ErtsMonotonicTime timeout_time)
 	    dsbufp = erts_create_logger_dsbuf();
 	    erts_dsprintf(dsbufp,
 			  "Invalid event request type for fd in erts_poll()! "
-			  "fd=%d, event request type=%d\n", (int) state->fd,
+			  "fd=%bpd, event request type=%d\n", (SWord) state->fd,
 			  (int) state->type);
 	    ASSERT(0);
 	    deselect(state, 0);
@@ -1889,8 +1955,8 @@ bad_fd_in_pollset(ErtsDrvEventState *state, Eterm inport, Eterm outport)
 	    }
 	}
 	erts_dsprintf(dsbufp,
-		      "Bad %s fd in erts_poll()! fd=%d, ",
-		      io_str, (int) state->fd);
+		      "Bad %s fd in erts_poll()! fd=%bpd, ",
+		      io_str, (SWord) state->fd);
         if (state->type == ERTS_EV_TYPE_DRV_SEL) {
             if (is_nil(port)) {
                 ErtsPortNames *ipnp = erts_get_port_names(inport, ERTS_INVALID_ERL_DRV_PORT);
@@ -1923,7 +1989,8 @@ bad_fd_in_pollset(ErtsDrvEventState *state, Eterm inport, Eterm outport)
         }
     }
     else {
-	erts_dsprintf(dsbufp, "Bad fd in erts_poll()! fd=%d\n", (int) state->fd);
+	erts_dsprintf(dsbufp, "Bad fd in erts_poll()! fd=%bpd\n",
+		      (SWord) state->fd);
     }
     erts_send_error_to_logger_nogl(dsbufp);
 
@@ -1942,7 +2009,7 @@ stale_drv_select(Eterm id, ErtsDrvEventState *state, int mode)
 
 static SafeHashValue drv_ev_state_hash(void *des)
 {
-    SafeHashValue val = (SafeHashValue) ((ErtsDrvEventState *) des)->fd;
+    SafeHashValue val = (SafeHashValue)(SWord) ((ErtsDrvEventState *) des)->fd;
     return val ^ (val >> 8);  /* Good enough for aligned pointer values? */
 }
 
@@ -2439,6 +2506,10 @@ drvmode2str(int mode) {
     case ERL_DRV_WRITE|ERL_DRV_USE: return "WRITE|USE";
     case ERL_DRV_READ|ERL_DRV_WRITE|ERL_DRV_USE: return "READ|WRITE|USE";
     case ERL_DRV_USE: return "USE";
+    case ERL_DRV_READ|ERL_DRV_USE_NO_CALLBACK: return "READ|USE_NO_CB";
+    case ERL_DRV_WRITE|ERL_DRV_USE_NO_CALLBACK: return "WRITE|USE_NO_CB";
+    case ERL_DRV_READ|ERL_DRV_WRITE|ERL_DRV_USE_NO_CALLBACK: return "READ|WRITE|USE_NO_CB";
+    case ERL_DRV_USE_NO_CALLBACK: return "USE_NO_CB";
     case ERL_DRV_READ: return "READ";
     case ERL_DRV_WRITE: return "WRITE";
     case ERL_DRV_READ|ERL_DRV_WRITE: return "READ|WRITE";
@@ -2448,10 +2519,16 @@ drvmode2str(int mode) {
 
 static ERTS_INLINE char *
 nifmode2str(enum ErlNifSelectFlags mode) {
+    if (mode & ERL_NIF_SELECT_STOP)
+        return "STOP";
     switch (mode) {
     case ERL_NIF_SELECT_READ: return "READ";
     case ERL_NIF_SELECT_WRITE: return "WRITE";
-    case ERL_NIF_SELECT_STOP: return "STOP";
+    case ERL_NIF_SELECT_READ|ERL_NIF_SELECT_WRITE: return "READ|WRITE";
+    case ERL_NIF_SELECT_CANCEL|ERL_NIF_SELECT_READ: return "CANCEL|READ";
+    case ERL_NIF_SELECT_CANCEL|ERL_NIF_SELECT_WRITE: return "CANCEL|WRITE";
+    case ERL_NIF_SELECT_CANCEL|ERL_NIF_SELECT_READ|ERL_NIF_SELECT_WRITE:
+        return "CANCEL|READ|WRITE";
     default: return "UNKNOWN";
     }
 }
@@ -2483,8 +2560,9 @@ static int erts_debug_print_checkio_state(erts_dsprintf_buf_t *dsbufp,
 #ifdef ERTS_SYS_CONTINOUS_FD_NUMBERS
     ErtsPollEvents aio_events = state->active_events;
 #endif
-    erts_dsprintf(dsbufp, "pollset=%d fd=%d ",
-                state->flags & ERTS_EV_FLAG_FALLBACK ? -1 : get_pollset_id(fd), (int) fd);
+    erts_dsprintf(dsbufp, "pollset=%d fd=%bpd ",
+		  state->flags & ERTS_EV_FLAG_FALLBACK ? -1 : get_pollset_id(fd),
+		  (SWord) fd);
 
 #if defined(HAVE_FSTAT) && !defined(NO_FSTAT_ON_SYS_FD_TYPE)
     if (fstat((int) fd, &stat_buf) < 0)

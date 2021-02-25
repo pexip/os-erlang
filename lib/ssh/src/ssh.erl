@@ -1,7 +1,7 @@
 %
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2004-2018. All Rights Reserved.
+%% Copyright Ericsson AB 2004-2020. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -31,14 +31,18 @@
 -export([start/0, start/1, stop/0,
 	 connect/2, connect/3, connect/4,
 	 close/1, connection_info/2,
+         connection_info/1,
 	 channel_info/3,
 	 daemon/1, daemon/2, daemon/3,
-	 daemon_info/1,
+	 daemon_info/1, daemon_info/2,
+         set_sock_opts/2, get_sock_opts/2,
 	 default_algorithms/0,
          chk_algos_opts/1,
 	 stop_listener/1, stop_listener/2,  stop_listener/3,
 	 stop_daemon/1, stop_daemon/2, stop_daemon/3,
-	 shell/1, shell/2, shell/3
+	 shell/1, shell/2, shell/3,
+         tcpip_tunnel_from_server/5, tcpip_tunnel_from_server/6,
+         tcpip_tunnel_to_server/5, tcpip_tunnel_to_server/6
 	]).
 
 %%% "Deprecated" types export:
@@ -66,6 +70,8 @@
               cipher_alg/0,
               mac_alg/0,
               compression_alg/0,
+              host/0,
+              open_socket/0,
               ip_port/0
 	     ]).
 
@@ -89,6 +95,10 @@ start() ->
 start(Type) ->
     case application:ensure_all_started(ssh, Type) of
         {ok, _} ->
+            %% Clear cached default_algorithms (if exists) ...
+            ssh_transport:clear_default_algorithms_env(),
+            %% ... and rebuld them taking configure options in account
+            ssh_transport:default_algorithms(),
             ok;
         Other ->
             Other
@@ -125,15 +135,15 @@ connect(Socket, UserOptions, NegotiationTimeout) when is_port(Socket),
 	{error, Error} ->
 	    {error, Error};
 	Options ->
-            case valid_socket_to_use(Socket, ?GET_OPT(transport,Options)) of
-		ok ->
-		    {ok, {Host,_Port}} = inet:sockname(Socket),
-		    Opts = ?PUT_INTERNAL_OPT([{user_pid,self()}, {host,Host}], Options),
-		    ssh_connection_handler:start_connection(client, Socket, Opts, NegotiationTimeout);
-		{error,SockError} ->
-		    {error,SockError}
-	    end
-    end;
+           case valid_socket_to_use(Socket, ?GET_OPT(transport,Options)) of
+               ok ->
+                   connect_socket(Socket,
+                                  ?PUT_INTERNAL_OPT({connected_socket,Socket}, Options),
+                                  NegotiationTimeout);
+               {error,SockError} ->
+                   {error,SockError}
+           end
+        end;
 
 connect(Host, Port, Options) when is_integer(Port),
                                   Port>0,
@@ -147,9 +157,9 @@ connect(Host, Port, Options) when is_integer(Port),
       Options :: client_options(),
       NegotiationTimeout :: timeout().
 
-connect(Host0, Port, UserOptions, Timeout) when is_integer(Port),
-                                               Port>0,
-                                               is_list(UserOptions) ->
+connect(Host0, Port, UserOptions, NegotiationTimeout) when is_integer(Port),
+                                                           Port>0,
+                                                           is_list(UserOptions) ->
     case ssh_options:handle_options(client, UserOptions) of
 	{error, _Reason} = Error ->
 	    Error;
@@ -160,8 +170,9 @@ connect(Host0, Port, UserOptions, Timeout) when is_integer(Port),
             Host = mangle_connect_address(Host0, SocketOpts),
 	    try Transport:connect(Host, Port, SocketOpts, ConnectionTimeout) of
 		{ok, Socket} ->
-		    Opts = ?PUT_INTERNAL_OPT([{user_pid,self()}, {host,Host}], Options),
-		    ssh_connection_handler:start_connection(client, Socket, Opts, Timeout);
+                    connect_socket(Socket,
+                                   ?PUT_INTERNAL_OPT({host,Host}, Options),
+                                   NegotiationTimeout);
 		{error, Reason} ->
 		    {error, Reason}
 	    catch
@@ -171,6 +182,22 @@ connect(Host0, Port, UserOptions, Timeout) when is_integer(Port),
 		    {error, {options, {socket_options, SocketOpts}}}
 	    end
     end.
+
+
+connect_socket(Socket, Options0, NegotiationTimeout) ->
+    {ok, {Host,Port}} = inet:sockname(Socket),
+    Profile = ?GET_OPT(profile, Options0),
+
+    {ok, {SystemSup, SubSysSup}} = sshc_sup:start_system_subsystem(Host, Port, Profile, Options0),
+
+    ConnectionSup = ssh_system_sup:connection_supervisor(SystemSup),
+    Opts = ?PUT_INTERNAL_OPT([{user_pid,self()},
+                              {supervisors, [{system_sup, SystemSup},
+                                             {subsystem_sup, SubSysSup},
+                                             {connection_sup, ConnectionSup}]}
+                             ], Options0),
+    ssh_connection_handler:start_connection(client, Socket, Opts, NegotiationTimeout).
+
 
 %%--------------------------------------------------------------------
 -spec close(ConnectionRef) -> ok | {error,term()} when
@@ -183,21 +210,50 @@ close(ConnectionRef) ->
 
 %%--------------------------------------------------------------------
 %% Description: Retrieves information about a connection.
-%%--------------------------------------------------------------------
--spec connection_info(ConnectionRef, Keys) ->  ConnectionInfo when
-      ConnectionRef :: connection_ref(),
-      Keys :: [client_version | server_version | user | peer | sockname],
-      ConnectionInfo :: [{client_version, Version}
-                         | {server_version, Version}
-                         | {user,string()}
-                         | {peer, {inet:hostname(), ip_port()}}
-                         | {sockname, ip_port()}
-                        ],
-      Version :: {ProtocolVersion, VersionString::string()},
-      ProtocolVersion :: {Major::pos_integer(), Minor::non_neg_integer()} .
+%%---------------------------------------------------------------------
+-type version() :: {protocol_version(), software_version()}.
+-type protocol_version() :: {Major::pos_integer(), Minor::non_neg_integer()}.
+-type software_version() :: string().
+-type conn_info_algs() :: [{kex, kex_alg()}
+                           | {hkey, pubkey_alg()}
+                           | {encrypt, cipher_alg()}
+                           | {decrypt, cipher_alg()}
+                           | {send_mac, mac_alg()}
+                           | {recv_mac, mac_alg()}
+                           | {compress, compression_alg()}
+                           | {decompress, compression_alg()}
+                           | {send_ext_info, boolean()}
+                           | {recv_ext_info, boolean()}
+                          ].
+-type conn_info_channels() :: [proplists:proplist()].
 
-connection_info(Connection, Options) ->
-    ssh_connection_handler:connection_info(Connection, Options).
+-type connection_info_tuple() ::
+        {client_version, version()}
+      | {server_version, version()}
+      | {user, string()}
+      | {peer, {inet:hostname(), ip_port()}}
+      | {sockname, ip_port()}
+      | {options, client_options()}
+      | {algorithms, conn_info_algs()}
+      | {channels, conn_info_channels()}.
+        
+-spec connection_info(ConnectionRef) -> InfoTupleList when
+      ConnectionRef :: connection_ref(),
+      InfoTupleList :: [InfoTuple],
+      InfoTuple :: connection_info_tuple().
+
+connection_info(ConnectionRef) ->                                      
+    connection_info(ConnectionRef, []).
+
+-spec connection_info(ConnectionRef, ItemList|Item) ->  InfoTupleList|InfoTuple when
+      ConnectionRef :: connection_ref(),
+      ItemList :: [Item],
+      Item :: client_version | server_version | user | peer | sockname | options | algorithms | sockname,
+      InfoTupleList :: [InfoTuple],
+      InfoTuple :: connection_info_tuple().
+
+connection_info(ConnectionRef, Key) ->
+    ssh_connection_handler:connection_info(ConnectionRef, Key).
 
 %%--------------------------------------------------------------------
 -spec channel_info(connection_ref(), channel_id(), [atom()]) -> proplists:proplist().
@@ -319,31 +375,70 @@ daemon(_, _, _) ->
     {error, badarg}.
 
 %%--------------------------------------------------------------------
--spec daemon_info(Daemon) -> {ok, DaemonInfo} | {error,term()} when
-      Daemon :: daemon_ref(),
-      DaemonInfo :: [  {ip, inet:ip_address()}
-                       | {port, inet:port_number()}
-                       | {profile, term()}
-                    ].
+-type daemon_info_tuple() ::
+        {port, inet:port_number()}
+      | {ip, inet:ip_address()}
+      | {profile, atom()}
+      | {options, daemon_options()}.
 
-daemon_info(Pid) ->
-    case catch ssh_system_sup:acceptor_supervisor(Pid) of
+-spec daemon_info(DaemonRef) -> {ok,InfoTupleList} | {error,bad_daemon_ref} when
+      DaemonRef :: daemon_ref(),
+      InfoTupleList :: [InfoTuple],
+      InfoTuple :: daemon_info_tuple().
+
+daemon_info(DaemonRef) ->
+    case catch ssh_system_sup:acceptor_supervisor(DaemonRef) of
 	AsupPid when is_pid(AsupPid) ->
-	    [{IP,Port,Profile}] =
-		[{IP,Prt,Prf} 
+	    [{Host,Port,Profile}] =
+		[{Hst,Prt,Prf} 
                  || {{ssh_acceptor_sup,Hst,Prt,Prf},_Pid,worker,[ssh_acceptor]} 
-                        <- supervisor:which_children(AsupPid),
-                    IP <- [case inet:parse_strict_address(Hst) of
-                               {ok,IP} -> IP;
-                               _ -> Hst
-                           end]
-                ],
+                        <- supervisor:which_children(AsupPid)],
+            IP =
+                case inet:parse_strict_address(Host) of
+                    {ok,IP0} -> IP0;
+                    _ -> Host
+                end,
+
+            Opts =
+                case ssh_system_sup:get_options(DaemonRef, Host, Port, Profile) of
+                    {ok, OptMap} ->
+                        lists:sort(
+                          maps:to_list(
+                            ssh_options:keep_set_options(
+                              server,
+                              ssh_options:keep_user_options(server,OptMap))));
+                    _ ->
+                        []
+                end,
+            
 	    {ok, [{port,Port},
                   {ip,IP},
-                  {profile,Profile}
+                  {profile,Profile},
+                  {options,Opts}
                  ]};
 	_ ->
 	    {error,bad_daemon_ref}
+    end.
+
+-spec daemon_info(DaemonRef, ItemList|Item) ->  InfoTupleList|InfoTuple | {error,bad_daemon_ref} when
+      DaemonRef :: daemon_ref(),
+      ItemList :: [Item],
+      Item :: ip | port | profile | options,
+      InfoTupleList :: [InfoTuple],
+      InfoTuple :: daemon_info_tuple().
+
+daemon_info(DaemonRef, Key) when is_atom(Key) ->
+    case daemon_info(DaemonRef, [Key]) of
+        [{Key,Val}] -> {Key,Val};
+        Other -> Other
+    end;
+daemon_info(DaemonRef, Keys) ->
+    case daemon_info(DaemonRef) of
+        {ok,KVs} ->
+            [{Key,proplists:get_value(Key,KVs)} || Key <- Keys,
+                                                   lists:keymember(Key,1,KVs)];
+        _ ->
+            []
     end.
 
 %%--------------------------------------------------------------------
@@ -380,7 +475,7 @@ stop_listener(Address, Port, Profile) ->
 -spec stop_daemon(DaemonRef::daemon_ref()) -> ok.
 
 stop_daemon(SysSup) ->
-    ssh_system_sup:stop_system(SysSup).
+    ssh_system_sup:stop_system(server, SysSup).
 
 
 -spec stop_daemon(inet:ip_address(), inet:port_number()) -> ok.
@@ -393,11 +488,11 @@ stop_daemon(Address, Port) ->
 
 stop_daemon(any, Port, Profile) ->
     map_ip(fun(IP) ->
-                   ssh_system_sup:stop_system(IP, Port, Profile) 
+                   ssh_system_sup:stop_system(server, IP, Port, Profile) 
            end, [{0,0,0,0},{0,0,0,0,0,0,0,0}]);
 stop_daemon(Address, Port, Profile) ->
     map_ip(fun(IP) ->
-                   ssh_system_sup:stop_system(IP, Port, Profile) 
+                   ssh_system_sup:stop_system(server, IP, Port, Profile) 
            end, {address,Address}).
 
 %%--------------------------------------------------------------------
@@ -406,36 +501,19 @@ stop_daemon(Address, Port, Profile) ->
 %% and will not return until the remote shell is ended.(e.g. on
 %% exit from the shell)
 %%--------------------------------------------------------------------
--spec shell(open_socket() | host()) ->  _.
+-spec shell(open_socket() | host() | connection_ref()) ->  _.
 
 shell(Socket) when is_port(Socket) ->
     shell(Socket, []);
-shell(Host) ->
-    shell(Host, ?SSH_DEFAULT_PORT, []).
 
-
--spec shell(open_socket() | host(), client_options()) ->  _.
-
-shell(Socket, Options) when is_port(Socket) ->
-    start_shell( connect(Socket, Options) );
-shell(Host, Options) ->
-    shell(Host, ?SSH_DEFAULT_PORT, Options).
-
-
--spec shell(Host, Port, Options) -> _ when
-      Host :: host(),
-      Port :: inet:port_number(),
-      Options :: client_options() .
-
-shell(Host, Port, Options) ->
-    start_shell( connect(Host, Port, Options) ).
-
-
-
-start_shell({ok, ConnectionRef}) ->
+shell(ConnectionRef) when is_pid(ConnectionRef) ->
     case ssh_connection:session_channel(ConnectionRef, infinity) of
 	{ok,ChannelId}  ->
-	    success = ssh_connection:ptty_alloc(ConnectionRef, ChannelId, []),
+	    success = ssh_connection:ptty_alloc(ConnectionRef, ChannelId,
+                                                [{pty_opts, [{echo,0}]}
+                                                ]),
+            success = ssh_connection:send_environment_vars(ConnectionRef, ChannelId,
+                                                           ["LANG", "LC_ALL"]),
 	    Args = [{channel_cb, ssh_shell},
 		    {init_args,[ConnectionRef, ChannelId]},
 		    {cm, ConnectionRef}, {channel_id, ChannelId}],
@@ -450,8 +528,38 @@ start_shell({ok, ConnectionRef}) ->
 	    Error
     end;
 
-start_shell(Error) ->
-    Error.
+shell(Host) ->
+    shell(Host, ?SSH_DEFAULT_PORT, []).
+
+
+-spec shell(open_socket() | host(), client_options()) ->  _.
+
+shell(Socket, Options) when is_port(Socket) ->
+    case connect(Socket, Options) of
+        {ok,ConnectionRef} ->
+            shell(ConnectionRef),
+            close(ConnectionRef);
+        Error ->
+            Error
+    end;
+
+shell(Host, Options) ->
+    shell(Host, ?SSH_DEFAULT_PORT, Options).
+
+
+-spec shell(Host, Port, Options) -> _ when
+      Host :: host(),
+      Port :: inet:port_number(),
+      Options :: client_options() .
+
+shell(Host, Port, Options) ->
+    case connect(Host, Port, Options) of
+        {ok,ConnectionRef} ->
+            shell(ConnectionRef),
+            close(ConnectionRef);
+        Error ->
+            Error
+    end.
 
 %%--------------------------------------------------------------------
 -spec default_algorithms() -> algs_list() .
@@ -478,6 +586,132 @@ chk_algos_opts(Opts) ->
             end;
         OtherOps ->
             {error, {non_algo_opts_found,OtherOps}}
+    end.
+
+
+%%--------------------------------------------------------------------
+-spec set_sock_opts(ConnectionRef, SocketOptions) ->
+                           ok | {error, inet:posix()}  when
+      ConnectionRef :: connection_ref(),
+      SocketOptions :: [gen_tcp:option()] .
+%%--------------------------------------------------------------------
+set_sock_opts(ConnectionRef, SocketOptions) ->
+    ssh_connection_handler:set_sock_opts(ConnectionRef, SocketOptions).
+
+%%--------------------------------------------------------------------
+-spec get_sock_opts(ConnectionRef, SocketGetOptions) ->
+                           ok | {error, inet:posix()}  when
+      ConnectionRef :: connection_ref(),
+      SocketGetOptions :: [gen_tcp:option_name()] .
+%%--------------------------------------------------------------------
+get_sock_opts(ConnectionRef, SocketGetOptions) ->
+    ssh_connection_handler:get_sock_opts(ConnectionRef, SocketGetOptions).
+
+%%--------------------------------------------------------------------
+%% Ask local client to listen to ListenHost:ListenPort.  When someone
+%% connects that address, connect to ConnectToHost:ConnectToPort from
+%% the server.
+%%--------------------------------------------------------------------
+-spec tcpip_tunnel_to_server(ConnectionRef,
+                             ListenHost, ListenPort,
+                             ConnectToHost, ConnectToPort
+                          ) ->
+                                  {ok,TrueListenPort} | {error, term()} when
+      ConnectionRef :: connection_ref(),
+      ListenHost :: host(),
+      ListenPort :: inet:port_number(),
+      ConnectToHost :: host(),
+      ConnectToPort :: inet:port_number(),
+      TrueListenPort :: inet:port_number().
+
+tcpip_tunnel_to_server(ConnectionHandler, ListenHost, ListenPort, ConnectToHost, ConnectToPort) ->
+    tcpip_tunnel_to_server(ConnectionHandler, ListenHost, ListenPort, ConnectToHost, ConnectToPort, infinity).
+
+
+-spec tcpip_tunnel_to_server(ConnectionRef,
+                             ListenHost, ListenPort,
+                             ConnectToHost, ConnectToPort,
+                             Timeout) ->
+                                  {ok,TrueListenPort} | {error, term()} when
+      ConnectionRef :: connection_ref(),
+      ListenHost :: host(),
+      ListenPort :: inet:port_number(),
+      ConnectToHost :: host(),
+      ConnectToPort :: inet:port_number(),
+      Timeout :: timeout(),
+      TrueListenPort :: inet:port_number().
+
+tcpip_tunnel_to_server(ConnectionHandler, ListenHost, ListenPort, ConnectToHost0, ConnectToPort, Timeout) ->
+    SockOpts = [],
+    try
+        list_to_binary(
+          case mangle_connect_address(ConnectToHost0,SockOpts) of
+              IP when is_tuple(IP) -> inet_parse:ntoa(IP);
+              _ when is_list(ConnectToHost0) -> ConnectToHost0
+          end)
+    of
+        ConnectToHost ->
+            ssh_connection_handler:handle_direct_tcpip(ConnectionHandler,
+                                                       mangle_tunnel_address(ListenHost), ListenPort,
+                                                       ConnectToHost, ConnectToPort,
+                                                       Timeout)
+    catch
+        _:_ ->
+            {error, bad_connect_to_address}
+    end.
+
+%%--------------------------------------------------------------------
+%% Ask remote server to listen to ListenHost:ListenPort.  When someone
+%% connects that address, connect to ConnectToHost:ConnectToPort from
+%% the client.
+%%--------------------------------------------------------------------
+-spec tcpip_tunnel_from_server(ConnectionRef,
+                               ListenHost, ListenPort,
+                               ConnectToHost, ConnectToPort
+                              ) ->
+                                    {ok,TrueListenPort} | {error, term()} when
+      ConnectionRef :: connection_ref(),
+      ListenHost :: host(),
+      ListenPort :: inet:port_number(),
+      ConnectToHost :: host(),
+      ConnectToPort :: inet:port_number(),
+      TrueListenPort :: inet:port_number().
+
+tcpip_tunnel_from_server(ConnectionRef, ListenHost, ListenPort, ConnectToHost, ConnectToPort) ->
+    tcpip_tunnel_from_server(ConnectionRef, ListenHost, ListenPort, ConnectToHost, ConnectToPort, infinity).
+
+-spec tcpip_tunnel_from_server(ConnectionRef,
+                               ListenHost, ListenPort,
+                               ConnectToHost, ConnectToPort,
+                               Timeout) ->
+                                    {ok,TrueListenPort} | {error, term()} when
+      ConnectionRef :: connection_ref(),
+      ListenHost :: host(),
+      ListenPort :: inet:port_number(),
+      ConnectToHost :: host(),
+      ConnectToPort :: inet:port_number(),
+      Timeout :: timeout(),
+      TrueListenPort :: inet:port_number().
+
+tcpip_tunnel_from_server(ConnectionRef, ListenHost0, ListenPort, ConnectToHost0, ConnectToPort, Timeout) ->
+    SockOpts = [],
+    ListenHost = mangle_tunnel_address(ListenHost0),
+    ConnectToHost = mangle_connect_address(ConnectToHost0, SockOpts),
+    case ssh_connection_handler:global_request(ConnectionRef, "tcpip-forward", true, 
+                                               {ListenHost,ListenPort,ConnectToHost,ConnectToPort},
+                                               Timeout) of
+        {success,<<>>} ->
+            {ok, ListenPort};
+        {success,<<TruePort:32/unsigned-integer>>} when ListenPort==0 ->
+            {ok, TruePort};
+        {success,_} = Res ->
+            {error, {bad_result,Res}};
+        {failure,<<>>} ->
+            {error,not_accepted};
+        {failure,Error} ->
+            {error,Error};
+        Other ->
+            Other
     end.
 
 %%--------------------------------------------------------------------
@@ -597,3 +831,16 @@ mangle_connect_address1(A, _) ->
         {ok, {0,0,0,0,0,0,0,0}} -> loopback(true);
         _ -> A
     end.
+
+%%%----------------------------------------------------------------
+mangle_tunnel_address(any) -> <<"">>;
+mangle_tunnel_address(loopback) -> <<"localhost">>;
+mangle_tunnel_address({0,0,0,0}) -> <<"">>;
+mangle_tunnel_address({0,0,0,0,0,0,0,0}) -> <<"">>;
+mangle_tunnel_address(IP) when is_tuple(IP) -> list_to_binary(inet_parse:ntoa(IP));
+mangle_tunnel_address(A) when is_atom(A) -> mangle_tunnel_address(atom_to_list(A));
+mangle_tunnel_address(X) when is_list(X) -> case catch inet:parse_address(X) of
+                                     {ok, {0,0,0,0}} -> <<"">>;
+                                     {ok, {0,0,0,0,0,0,0,0}} -> <<"">>;
+                                     _ -> list_to_binary(X)
+                                 end.

@@ -34,11 +34,6 @@ MODULES= \
 	escript_SUITE \
 	ets_SUITE \
 	ets_tough_SUITE \
-	expand_test \
-	expand_test1 \
-	unicode_expand \
-	ExpandTestCaps \
-	ExpandTestCaps1 \
 	filelib_SUITE \
 	file_sorter_SUITE \
 	filename_SUITE \
@@ -55,7 +50,9 @@ MODULES= \
 	log_mf_h_SUITE \
 	math_SUITE \
 	ms_transform_SUITE \
+	pool_SUITE \
 	proc_lib_SUITE \
+	proplists_SUITE \
 	qlc_SUITE \
 	queue_SUITE \
 	rand_SUITE \
@@ -77,6 +74,7 @@ MODULES= \
 	supervisor_deadlock \
 	naughty_child \
 	shell_SUITE \
+	shell_docs_SUITE \
 	supervisor_SUITE \
 	supervisor_bridge_SUITE \
 	sys_SUITE \
@@ -99,11 +97,9 @@ MODULES= \
 	maps_SUITE \
 	zzz_SUITE
 
-ERL_FILES= $(MODULES:%=%.erl)
+ERTS_MODULES= erts_test_utils
 
-TARGET_FILES= $(MODULES:%=$(EBIN)/%.$(EMULATOR))
-
-INSTALL_PROGS= $(TARGET_FILES)
+ERL_FILES= $(MODULES:%=%.erl) $(ERTS_MODULES:%=$(ERL_TOP)/erts/emulator/test/%.erl)
 
 # ----------------------------------------------------
 # Release directory specification
@@ -128,7 +124,7 @@ COVERFILE=stdlib.cover
 # ----------------------------------------------------
 
 make_emakefile:
-	$(ERL_TOP)/make/make_emakefile $(ERL_COMPILE_FLAGS) -o$(EBIN) $(MODULES) \
+	$(ERL_TOP)/make/make_emakefile $(ERL_COMPILE_FLAGS) -o$(EBIN) $(MODULES) $(ERTS_MODULES) \
 	> $(EMAKEFILE)
 
 tests debug opt: make_emakefile

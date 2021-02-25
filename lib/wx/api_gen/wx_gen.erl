@@ -701,8 +701,13 @@ parse_type2(["wxe_cb"|R],Info,Opts, T) ->
     parse_type2(R,Info,Opts,T#type{name=int,base=wxe_cb});
 parse_type2([const|R],Info,Opts,T=#type{mod=Mod}) -> 
     parse_type2(R,Info,Opts,T#type{mod=[const|Mod]});
-parse_type2(["unsigned"|R],Info,Opts,T=#type{mod=Mod}) -> 
-    parse_type2(R,Info,Opts,T#type{mod=[unsigned|Mod]});
+parse_type2(["unsigned"|R],Info,Opts,T=#type{mod=Mod}) ->
+    case T#type.base of
+        undefined ->
+            parse_type2(R,Info,Opts,T#type{name=int, base=int, mod=[unsigned|Mod]});
+        _ ->
+            parse_type2(R,Info,Opts,T#type{mod=[unsigned|Mod]})
+    end;
 parse_type2(["int"|R],Info,Opts,  T) -> 
     parse_type2(R,Info,Opts,T#type{name=int,base=int});
 parse_type2(["wxByte"|R],Info,Opts,  T) ->
@@ -1279,7 +1284,7 @@ parse_enums(Files) ->
     DontSearch = ["wxchar","filefn", "platform", "strconv", "filename", 
 		  "buffer", "string", "debug", "platinfo"],
     %% Arg need to patch some specials, atleast for wx-2.6
-    ExtraSearch = ["gtk_2glcanvas", "generic_2splash"],
+    ExtraSearch = ["gtk_2glcanvas", "generic_2splash", "added__func"],
     parse_enums(Files ++ ExtraSearch,gb_sets:from_list(DontSearch)).
 
 parse_enums([File|Files], Parsed) ->
@@ -1429,7 +1434,7 @@ extract_def([#xmlElement{name=name,content=[#xmlText{value=Name}]}|R], _N, Skip)
 extract_def([#xmlElement{name=param}|_],Name,_) ->
     throw(Name);
 extract_def([#xmlElement{name=initializer,content=Cs}|_R],N,Skip) ->
-    Val0 = extract_def2(Cs),
+    Val0 = string:strip(strip_comment(extract_def2(Cs))),
     case Val0 of
 	"0x" ++ Val1 -> {N, list_to_integer(Val1, 16)};
 	_ ->
@@ -1453,7 +1458,7 @@ extract_def(_,N,_) ->
     throw(N).
 
 extract_def2([#xmlText{value=Val}|R]) ->
-    string:strip(strip_comment(Val)) ++ extract_def2(R);
+    string:strip(Val) ++ extract_def2(R);
 extract_def2([#xmlElement{content=Cs}|R]) ->
     extract_def2(Cs) ++ extract_def2(R);
 extract_def2([]) -> [].

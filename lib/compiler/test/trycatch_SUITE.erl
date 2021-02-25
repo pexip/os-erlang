@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %% 
-%% Copyright Ericsson AB 2003-2018. All Rights Reserved.
+%% Copyright Ericsson AB 2003-2020. All Rights Reserved.
 %% 
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -27,7 +27,9 @@
 	 nested_horrid/1,last_call_optimization/1,bool/1,
 	 plain_catch_coverage/1,andalso_orelse/1,get_in_try/1,
 	 hockey/1,handle_info/1,catch_in_catch/1,grab_bag/1,
-         stacktrace/1,nested_stacktrace/1,raise/1]).
+         stacktrace/1,nested_stacktrace/1,raise/1,
+         no_return_in_try_block/1,
+         coverage/1]).
 
 -include_lib("common_test/include/ct.hrl").
 
@@ -43,7 +45,8 @@ groups() ->
        nested_after,nested_horrid,last_call_optimization,
        bool,plain_catch_coverage,andalso_orelse,get_in_try,
        hockey,handle_info,catch_in_catch,grab_bag,
-       stacktrace,nested_stacktrace,raise]}].
+       stacktrace,nested_stacktrace,raise,
+       no_return_in_try_block,coverage]}].
 
 
 init_per_suite(Config) ->
@@ -1049,7 +1052,68 @@ grab_bag(_Config) ->
     %% Unnecessary catch.
     22 = (catch 22),
 
+    fun() ->
+            F = grab_bag_1(any),
+            true = is_function(F, 1)
+    end(),
+
+    <<>> = grab_bag_2(whatever),
+
+    {'EXIT',_} = (catch grab_bag_3()),
+
     ok.
+
+grab_bag_1(V) ->
+    %% V will be stored in y0.
+    try
+        receive
+        after 0 ->
+                %% y0 will be re-used for the catch tag.
+                %% This is safe, because there are no instructions
+                %% that can raise an exception.
+                catch 22
+        end,
+        %% beam_validator incorrectly assumed that the make_fun2
+        %% instruction could raise an exception and end up at
+        %% the catch part of the try.
+        fun id/1
+    catch
+        %% Never reached, because nothing in the try body raises any
+        %% exception.
+        _:V ->
+            ok
+    end.
+
+grab_bag_2(V) ->
+    try
+        %% y0 will be re-used for the catch tag.
+        %% This is safe, because there are no instructions
+        %% that can raise an exception.
+        catch 22,
+
+        %% beam_validator incorrectly assumed that the bs_init_writable
+        %% instruction could raise an exception and end up at
+        %% the catch part of the try.
+        <<0 || [], #{} <- []>>
+    catch
+        %% Never reached, because nothing in the try body raises any
+        %% exception.
+        error:_ ->
+            V
+    end.
+
+grab_bag_3() ->
+    try 2 of
+        true ->
+            <<
+              "" || [V0] = door
+            >>
+    catch
+        error:true:V0 ->
+            []
+            %% The default clause here (which re-throws the exception)
+            %% would not return two values as expected.
+    end =:= (V0 = 42).
 
 stacktrace(_Config) ->
     V = [make_ref()|self()],
@@ -1077,7 +1141,7 @@ stacktrace(_Config) ->
         error:{badmatch,_}:Stk2 ->
             [{?MODULE,stacktrace_2,0,_},
              {?MODULE,stacktrace,1,_}|_] = Stk2,
-            Stk2 = erlang:get_stacktrace(),
+            [] = erlang:get_stacktrace(),
             ok
     end,
 
@@ -1085,7 +1149,7 @@ stacktrace(_Config) ->
         stacktrace_3(a, b)
     catch
         error:function_clause:Stk3 ->
-            Stk3 = erlang:get_stacktrace(),
+            [] = erlang:get_stacktrace(),
             case lists:module_info(native) of
                 false ->
                     [{lists,prefix,[a,b],_}|_] = Stk3;
@@ -1106,14 +1170,16 @@ stacktrace_1(X, C1, Y) ->
             C1 -> value1
         catch
             C1:D1:Stk1 ->
-                Stk1 = erlang:get_stacktrace(),
+                [] = erlang:get_stacktrace(),
                 {caught1,D1,Stk1}
         after
             foo(Y)
         end of
         V2 -> {value2,V2}
     catch
-        C2:D2:Stk2 -> {caught2,{C2,D2},Stk2=erlang:get_stacktrace()}
+        C2:D2:Stk2 ->
+            [] = erlang:get_stacktrace(),
+            {caught2,{C2,D2},Stk2}
     end.
 
 stacktrace_2() ->
@@ -1158,12 +1224,10 @@ nested_stacktrace_1({X1,C1,V1}, {X2,C2,V2}) ->
         V1 -> value1
     catch
         C1:V1:S1 ->
-            S1 = erlang:get_stacktrace(),
             T2 = try foo(X2) of
                      V2 -> value2
                  catch
                      C2:V2:S2 ->
-                         S2 = erlang:get_stacktrace(),
                          {caught2,S2}
                  end,
             {caught1,S1,T2}
@@ -1176,7 +1240,21 @@ raise(_Config) ->
 
     badarg = bad_raise(fun() -> abs(id(x)) end),
 
+    error = stk_used_in_bin_size(<<0:42>>),
     ok.
+
+stk_used_in_bin_size(Bin) ->
+    try
+        throw(fail)
+    catch
+        throw:fail:Stk ->
+            %% The compiler would crash because the building of the
+            %% stacktrack was sunk into each case arm.
+            case Bin of
+                <<0:Stk>> -> ok;
+                _ -> error
+            end
+    end.
 
 bad_raise(Expr) ->
     try
@@ -1285,6 +1363,47 @@ do_test_raise_4(Expr) ->
         C:E:Stk ->
             %% Here the stacktrace must be built.
             erlang:raise(exit, {exception,C,E,Stk}, Stk)
+    end.
+
+no_return_in_try_block(Config) when is_list(Config) ->
+    1.0 = no_return_in_try_block_1(0),
+    1.0 = no_return_in_try_block_1(0.0),
+
+    gurka = no_return_in_try_block_1(gurka),
+    [] = no_return_in_try_block_1([]),
+
+    ok.
+
+no_return_in_try_block_1(H) ->
+    try
+        Float = if
+                    is_number(H) -> float(H);
+                    true -> no_return()
+                end,
+        Float + 1
+    catch
+        throw:no_return -> H
+    end.
+
+no_return() -> throw(no_return).
+
+coverage(_Config) ->
+    {'EXIT',{{badfun,true},[_|_]}} = (catch coverage_1()),
+    ok.
+
+%% Cover some code in beam_trim.
+coverage_1() ->
+    try
+        true
+    catch
+        law:business ->
+            program
+    after
+        head
+    end(0),
+    if
+        [2 or 1] ->
+            true
     end.
 
 

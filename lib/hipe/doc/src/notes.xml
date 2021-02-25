@@ -4,7 +4,7 @@
 <chapter>
   <header>
     <copyright>
-      <year>2006</year><year>2018</year>
+      <year>2006</year><year>2020</year>
       <holder>Ericsson AB. All Rights Reserved.</holder>
     </copyright>
     <legalnotice>
@@ -30,6 +30,171 @@
     <file>notes.xml</file>
   </header>
   <p>This document describes the changes made to HiPE.</p>
+
+<section><title>Hipe 4.0.1</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+          <p>
+	    Fixed a warning issued when building the <c>hipe</c>
+	    application.</p>
+          <p>
+	    Own Id: OTP-16737</p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>Hipe 4.0</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+	    <p>Fixed a rare miss-compilation of tuple matching.</p>
+          <p>
+	    Own Id: OTP-16470</p>
+        </item>
+      </list>
+    </section>
+
+
+    <section><title>Improvements and New Features</title>
+      <list>
+        <item>
+	    <p>The deprecated <c>erlang:get_stacktrace/0</c> BIF now
+	    returns an empty list instead of a stacktrace. To
+	    retrieve the stacktrace, use the extended try/catch
+	    syntax that was introduced in OTP 21.
+	    <c>erlang:get_stacktrace/0</c> is scheduled for removal
+	    in OTP 24.</p>
+          <p>
+	    *** POTENTIAL INCOMPATIBILITY ***</p>
+          <p>
+	    Own Id: OTP-16484</p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>Hipe 3.19.3</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+	    <p>HiPE can again handle modules with <c>catch</c> and
+	    <c>try</c> constructs.</p>
+          <p>
+	    Own Id: OTP-16418</p>
+        </item>
+        <item>
+	    <p>When the return value for try/catch was ignored, the
+	    native code compiler could crash.</p>
+          <p>
+	    Own Id: OTP-16475 Aux Id: ERL-1175 </p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>Hipe 3.19.2</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+	    <p> Correct the range type of <c>erlang:is_record/3</c>.
+	    </p>
+          <p>
+	    Own Id: OTP-16323</p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>Hipe 3.19.1</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+	    <p>The HiPE compiler would badly miscompile certain
+	    try/catch expressions, so it will now refuse to compile
+	    modules containing try or catch.</p> <p>As a consequence
+	    of this, <c>dialyzer</c> will no longer compile key
+	    modules to native code.</p>
+          <p>
+	    *** POTENTIAL INCOMPATIBILITY ***</p>
+          <p>
+	    Own Id: OTP-15949</p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>Hipe 3.19</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+          <p>
+	    Add function <c>hipe:erllvm_is_supported</c> to check for
+	    the presences of a suitable version of the LLVM tool
+	    chain as well as supported hardware architecture. The old
+	    <c>hipe:llvm_support_available</c> has been removed.</p>
+          <p>
+	    Own Id: OTP-15385 Aux Id: PR-1986 </p>
+        </item>
+        <item>
+          <p>
+	    Fix hipe LLVM for FreeBSD and other non-linux unix to use
+	    /tmp/ instead of /dev/shm/.</p>
+          <p>
+	    Own Id: OTP-15386 Aux Id: PR-1963 </p>
+        </item>
+      </list>
+    </section>
+
+
+    <section><title>Improvements and New Features</title>
+      <list>
+        <item>
+	    <p>In OTP 22, HiPE (the native code compiler) is not
+	    fully functional. The reasons for this are:</p>
+	    <p>There are new BEAM instructions for binary matching
+	    that the HiPE native code compiler does not support.</p>
+	    <p>The new optimizations in the Erlang compiler create
+	    new combination of instructions that HiPE currently does
+	    not handle correctly.</p>
+	    <p>If erlc is invoked with the <c>+native</c> option, and
+	    if any of the new binary matching instructions are used,
+	    the compiler will issue a warning and produce a BEAM file
+	    without native code.</p>
+          <p>
+	    Own Id: OTP-15596</p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>Hipe 3.18.3</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+	    <p> Fix a bug in the handling of the <c>Key</c> argument
+	    of <c>lists:{keysearch, keyfind, keymember}</c>. </p>
+          <p>
+	    Own Id: OTP-15570</p>
+        </item>
+      </list>
+    </section>
+
+</section>
 
 <section><title>Hipe 3.18.2</title>
 
@@ -264,9 +429,9 @@
 	    Own Id: OTP-13810 Aux Id: PR-1124 </p>
         </item>
         <item>
-	    <p>Replaced usage of deprecated symbolic <seealso
-	    marker="erts:erlang#type-time_unit"><c>time
-	    unit</c></seealso> representations.</p>
+	    <p>Replaced usage of deprecated symbolic <seetype
+	    marker="erts:erlang#time_unit"><c>time
+	    unit</c></seetype> representations.</p>
           <p>
 	    Own Id: OTP-13831 Aux Id: OTP-13735 </p>
         </item>
@@ -857,8 +1022,8 @@
           </taglist>
           <p>
 	    For information on how to use Maps please see Map Expressions in the
-		<seealso marker="doc/reference_manual:expressions#map_expressions">
-			Reference Manual</seealso>.</p>
+		<seeguide marker="system/reference_manual:expressions#map_expressions">
+			Reference Manual</seeguide>.</p>
           <p>
 	    The current implementation is without the following
 	    features:</p>

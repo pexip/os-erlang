@@ -1,7 +1,7 @@
 /*
  * %CopyrightBegin%
  *
- * Copyright Ericsson AB 1999-2018. All Rights Reserved.
+ * Copyright Ericsson AB 1999-2020. All Rights Reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -55,6 +55,7 @@
 #ifdef HIPE
 #include "hipe_arch.h"
 #endif
+#include "erl_global_literals.h"
 
 #ifdef ERTS_ENABLE_LOCK_COUNT
 #include "erl_lock_count.h"
@@ -75,7 +76,7 @@ static Export *gather_gc_info_res_trap;
 static Export *gather_system_check_res_trap;
 
 static Export *is_process_alive_trap;
-
+static Export *get_internal_state_blocked;
 
 #define DECL_AM(S) Eterm AM_ ## S = am_atom_put(#S, sizeof(#S) - 1)
 
@@ -151,33 +152,31 @@ static char erts_system_version[] = ("Erlang/OTP " ERLANG_OTP_RELEASE
 # define PERFMON_GETPCR			_IOR('P', 2, unsigned long long)
 #endif
 
-/* Cached, pre-built {OsType,OsFlavor} and {Major,Minor,Build} tuples */
-static Eterm os_type_tuple;
-static Eterm os_version_tuple;
-
 static Eterm
 current_function(Process* p, ErtsHeapFactory *hfact, Process* rp,
                  int full_info, Uint reserve_size, int flags);
-static Eterm current_stacktrace(ErtsHeapFactory *hfact, Process* rp,
-                                Uint reserve_size);
-
 static Eterm
-bld_bin_list(Uint **hpp, Uint *szp, ErlOffHeap* oh)
-{
-    struct erl_off_heap_header* ohh;
-    Eterm res = NIL;
-    Eterm tuple;
+current_stacktrace(Process* p, ErtsHeapFactory *hfact, Process* rp,
+                   Uint reserve_size, int flags);
 
-    for (ohh = oh->first; ohh; ohh = ohh->next) {
-	if (ohh->thing_word == HEADER_PROC_BIN) {
-	    ProcBin* pb = (ProcBin*) ohh;
-	    Eterm val = erts_bld_uword(hpp, szp, (UWord) pb->val);
-	    Eterm orig_size = erts_bld_uint(hpp, szp, pb->val->orig_size);
+Eterm
+erts_bld_bin_list(Uint **hpp, Uint *szp, ErlOffHeap* oh, Eterm tail)
+{
+    union erl_off_heap_ptr u;
+    Eterm res = tail;
+    Eterm tuple;
+    struct erts_tmp_aligned_offheap tmp;
+
+    for (u.hdr = oh->first; u.hdr; u.hdr = u.hdr->next) {
+        erts_align_offheap(&u, &tmp);
+	if (u.hdr->thing_word == HEADER_PROC_BIN) {
+	    Eterm val = erts_bld_uword(hpp, szp, (UWord) u.pb->val);
+	    Eterm orig_size = erts_bld_uint(hpp, szp, u.pb->val->orig_size);
     
 	    if (szp)
 		*szp += 4+2;
 	    if (hpp) {
-		Uint refc = (Uint) erts_refc_read(&pb->val->intern.refc, 1);
+		Uint refc = (Uint) erts_refc_read(&u.pb->val->intern.refc, 1);
 		tuple = TUPLE3(*hpp, val, orig_size, make_small(refc));
 		res = CONS(*hpp + 4, tuple, res);
 		*hpp += 4+2;
@@ -227,7 +226,7 @@ bld_magic_ref_bin_list(Uint **hpp, Uint *szp, ErlOffHeap* oh)
           }).
 */
 
-static void do_calc_mon_size(ErtsMonitor *mon, void *vpsz)
+static int do_calc_mon_size(ErtsMonitor *mon, void *vpsz, Sint reds)
 {
     ErtsMonitorData *mdp = erts_monitor_to_data(mon);
     Uint *psz = vpsz;
@@ -238,7 +237,8 @@ static void do_calc_mon_size(ErtsMonitor *mon, void *vpsz)
     else
         *psz += is_immed(mon->other.item) ? 0 : NC_HEAP_SIZE(mon->other.item);
 
-    *psz += 9; /* CONS + 6-tuple */ 
+    *psz += 9; /* CONS + 6-tuple */
+    return 1;
 }
 
 typedef struct {
@@ -248,7 +248,7 @@ typedef struct {
     Eterm tag;
 } MonListContext;
 
-static void do_make_one_mon_element(ErtsMonitor *mon, void * vpmlc)
+static int do_make_one_mon_element(ErtsMonitor *mon, void * vpmlc, Sint reds)
 {
     ErtsMonitorData *mdp = erts_monitor_to_data(mon);
     MonListContext *pmlc = vpmlc;
@@ -319,6 +319,7 @@ static void do_make_one_mon_element(ErtsMonitor *mon, void * vpmlc)
     pmlc->hp += 7;
     pmlc->res = CONS(pmlc->hp, tup, pmlc->res);
     pmlc->hp += 2;
+    return 1;
 }
 
 static Eterm 
@@ -328,7 +329,7 @@ make_monitor_list(Process *p, int tree, ErtsMonitor *root, Eterm tail)
     Uint sz = 0;
     MonListContext mlc;
     void (*foreach)(ErtsMonitor *,
-                    void (*)(ErtsMonitor *, void *),
+                    ErtsMonitorFunc,
                     void *);
 
     foreach = tree ? erts_monitor_tree_foreach : erts_monitor_list_foreach;
@@ -354,7 +355,7 @@ make_monitor_list(Process *p, int tree, ErtsMonitor *root, Eterm tail)
           }).
 */
 
-static void calc_lnk_size(ErtsLink *lnk, void *vpsz)
+static int calc_lnk_size(ErtsLink *lnk, void *vpsz, Sint reds)
 {
     Uint *psz = vpsz;
     Uint sz = 0;
@@ -364,7 +365,8 @@ static void calc_lnk_size(ErtsLink *lnk, void *vpsz)
 
     *psz += sz;
     *psz += is_immed(lnk->other.item) ? 0 : size_object(lnk->other.item);
-    *psz += 7; /* CONS + 4-tuple */ 
+    *psz += 7; /* CONS + 4-tuple */
+    return 1;
 }
 
 typedef struct {
@@ -374,7 +376,7 @@ typedef struct {
     Eterm tag;
 } LnkListContext;
 
-static void make_one_lnk_element(ErtsLink *lnk, void * vpllc)
+static int make_one_lnk_element(ErtsLink *lnk, void * vpllc, Sint reds)
 {
     LnkListContext *pllc = vpllc;
     Eterm tup, t, pid, id;
@@ -411,6 +413,7 @@ static void make_one_lnk_element(ErtsLink *lnk, void * vpllc)
     pllc->hp += 5;
     pllc->res = CONS(pllc->hp, tup, pllc->res);
     pllc->hp += 2;
+    return 1;
 }
 
 static Eterm 
@@ -420,7 +423,7 @@ make_link_list(Process *p, int tree, ErtsLink *root, Eterm tail)
     Uint sz = 0;
     LnkListContext llc;
     void (*foreach)(ErtsLink *,
-                    void (*)(ErtsLink *, void *),
+                    ErtsLinkFunc,
                     void *);
 
     foreach = tree ? erts_link_tree_foreach : erts_link_list_foreach;
@@ -519,16 +522,17 @@ do {							\
     }							\
  } while (0)
 
-static void collect_one_link(ErtsLink *lnk, void *vmicp)
+static int collect_one_link(ErtsLink *lnk, void *vmicp, Sint reds)
 {
     MonitorInfoCollection *micp = vmicp;
     EXTEND_MONITOR_INFOS(micp);
     micp->mi[micp->mi_i].entity.term = lnk->other.item;
     micp->sz += 2 + NC_HEAP_SIZE(lnk->other.item);
     micp->mi_i++;
+    return 1;
 } 
 
-static void collect_one_origin_monitor(ErtsMonitor *mon, void *vmicp)
+static int collect_one_origin_monitor(ErtsMonitor *mon, void *vmicp, Sint reds)
 {
     if (erts_monitor_is_origin(mon)) {
         MonitorInfoCollection *micp = vmicp;
@@ -542,6 +546,8 @@ static void collect_one_origin_monitor(ErtsMonitor *mon, void *vmicp)
         case ERTS_MON_TYPE_PORT:
         case ERTS_MON_TYPE_DIST_PROC:
         case ERTS_MON_TYPE_TIME_OFFSET:
+            if (mon->flags & ERTS_ML_FLG_SPAWN_PENDING)
+                break; /* Not an active monitor... */
             if (!(mon->flags & ERTS_ML_FLG_NAME)) {
                 micp->mi[micp->mi_i].named = 0;
                 micp->mi[micp->mi_i].entity.term = mon->other.item;
@@ -573,9 +579,10 @@ static void collect_one_origin_monitor(ErtsMonitor *mon, void *vmicp)
             break;
         }
     }
+    return 1;
 }
 
-static void collect_one_target_monitor(ErtsMonitor *mon, void *vmicp)
+static int collect_one_target_monitor(ErtsMonitor *mon, void *vmicp, Sint reds)
 {
     MonitorInfoCollection *micp = vmicp;
  
@@ -612,8 +619,8 @@ static void collect_one_target_monitor(ErtsMonitor *mon, void *vmicp)
         default:
             break;
         }
-
     }
+    return 1;
 }
 
 typedef struct {
@@ -653,8 +660,8 @@ do {									\
     }									\
  } while (0)
 
-static void
-collect_one_suspend_monitor(ErtsMonitor *mon, void *vsmicp)
+static int
+collect_one_suspend_monitor(ErtsMonitor *mon, void *vsmicp, Sint reds)
 {
     if (mon->type == ERTS_MON_TYPE_SUSPEND) {
         Sint count;
@@ -678,6 +685,7 @@ collect_one_suspend_monitor(ErtsMonitor *mon, void *vsmicp)
 
 	smicp->smi_i++;
     }
+    return 1;
 }
 
 /*
@@ -1062,7 +1070,7 @@ process_info_bif(Process *c_p, Eterm pid, Eterm opt, int always_wrap, int pi2)
     ERTS_CT_ASSERT(ERTS_PI_DEF_ARR_SZ > 0);
 
     if (c_p->common.id == pid) {
-        int local_only = c_p->flags & F_LOCAL_SIGS_ONLY;
+        int local_only = c_p->sig_qs.flags & FS_LOCAL_SIGS_ONLY;
         int sres, sreds, reds_left;
 
         reds_left = ERTS_BIF_REDS_LEFT(c_p);
@@ -1080,7 +1088,7 @@ process_info_bif(Process *c_p, Eterm pid, Eterm opt, int always_wrap, int pi2)
         reds_left -= sreds;
 
         if (state & ERTS_PSFLG_EXITING) {
-            c_p->flags &= ~F_LOCAL_SIGS_ONLY;
+            c_p->sig_qs.flags &= ~FS_LOCAL_SIGS_ONLY;
             goto exited;
         }
         if (!sres | (reds_left <= 0)) {
@@ -1089,11 +1097,11 @@ process_info_bif(Process *c_p, Eterm pid, Eterm opt, int always_wrap, int pi2)
              * to yield and continue. Prevent fetching of
              * more signals by setting local-sigs-only flag.
              */
-            c_p->flags |= F_LOCAL_SIGS_ONLY;
+            c_p->sig_qs.flags |= FS_LOCAL_SIGS_ONLY;
             goto yield;
         }
 
-        c_p->flags &= ~F_LOCAL_SIGS_ONLY;
+        c_p->sig_qs.flags &= ~FS_LOCAL_SIGS_ONLY;
     }
 
     if (is_atom(opt)) {
@@ -1241,9 +1249,9 @@ exited:
 
 yield:
     if (pi2)
-        ERTS_BIF_PREP_YIELD2(ret, bif_export[BIF_process_info_2], c_p, pid, opt);
+        ERTS_BIF_PREP_YIELD2(ret, &bif_trap_export[BIF_process_info_2], c_p, pid, opt);
     else
-        ERTS_BIF_PREP_YIELD1(ret, bif_export[BIF_process_info_1], c_p, pid);
+        ERTS_BIF_PREP_YIELD1(ret, &bif_trap_export[BIF_process_info_1], c_p, pid);
     goto done;
 
 send_signal: {
@@ -1376,7 +1384,7 @@ process_info_aux(Process *c_p,
 	break;
 
     case ERTS_PI_IX_CURRENT_STACKTRACE:
-	res = current_stacktrace(hfact, rp, reserve_size);
+	res = current_stacktrace(c_p, hfact, rp, reserve_size, flags);
 	break;
 
     case ERTS_PI_IX_INITIAL_CALL:
@@ -1752,7 +1760,7 @@ process_info_aux(Process *c_p,
 
 	total_heap_size += rp->mbuf_sz;
 
-        if (rp->flags & F_ON_HEAP_MSGQ) {
+        if (rp->sig_qs.flags & FS_ON_HEAP_MSGQ) {
             ErtsMessage *mp;
             ASSERT(flags & ERTS_PI_FLAG_NEED_MSGQ_LEN);
             for (mp = rp->sig_qs.first; mp; mp = mp->next) {
@@ -1857,11 +1865,25 @@ process_info_aux(Process *c_p,
 	break;
 
     case ERTS_PI_IX_BINARY: {
-	Uint sz = 0;
-	(void) bld_bin_list(NULL, &sz, &MSO(rp));
+        ErlHeapFragment *hfrag;
+        Uint sz;
+
+        res = NIL;
+        sz = 0;
+
+        (void)erts_bld_bin_list(NULL, &sz, &MSO(rp), NIL);
+        for (hfrag = rp->mbuf; hfrag != NULL; hfrag = hfrag->next) {
+            (void)erts_bld_bin_list(NULL, &sz, &hfrag->off_heap, NIL);
+        }
+
         hp = erts_produce_heap(hfact, sz, reserve_size);
-	res = bld_bin_list(&hp, NULL, &MSO(rp));
-	break;
+
+        res = erts_bld_bin_list(&hp, NULL, &MSO(rp), NIL);
+        for (hfrag = rp->mbuf; hfrag != NULL; hfrag = hfrag->next) {
+            res = erts_bld_bin_list(&hp, NULL, &hfrag->off_heap, res);
+        }
+
+        break;
     }
 
     case ERTS_PI_IX_SEQUENTIAL_TRACE_TOKEN: {
@@ -1943,11 +1965,11 @@ process_info_aux(Process *c_p,
     }
 
     case ERTS_PI_IX_MESSAGE_QUEUE_DATA:
-	switch (rp->flags & (F_OFF_HEAP_MSGQ|F_ON_HEAP_MSGQ)) {
-	case F_OFF_HEAP_MSGQ:
+	switch (rp->sig_qs.flags & (FS_OFF_HEAP_MSGQ|FS_ON_HEAP_MSGQ)) {
+	case FS_OFF_HEAP_MSGQ:
 	    res = am_off_heap;
 	    break;
-	case F_ON_HEAP_MSGQ:
+	case FS_ON_HEAP_MSGQ:
 	    res = am_on_heap;
 	    break;
 	default:
@@ -2000,19 +2022,23 @@ current_function(Process *c_p, ErtsHeapFactory *hfact, Process* rp,
     }
 
     if (c_p == rp && !(flags & ERTS_PI_FLAG_REQUEST_FOR_OTHER)) {
-	FunctionInfo fi2;
+        BeamInstr* return_address;
+        FunctionInfo caller_fi;
 
-	/*
-	 * The current function is erlang:process_info/{1,2},
-	 * which is not the answer that the application want.
-	 * We will use the function pointed into by rp->cp
-	 * instead if it can be looked up.
-	 */
-	erts_lookup_function_info(&fi2, rp->cp, full_info);
-	if (fi2.mfa) {
-	    fi = fi2;
-	    rp->current = fi2.mfa;
-	}
+        /*
+         * The current function is erlang:process_info/{1,2}, and we've
+         * historically returned the *calling* function in that case. We
+         * therefore use the continuation pointer stored at the top of the
+         * stack instead, which is safe since process_info is a "heavy" BIF
+         * that is only called through its export entry.
+         */
+        return_address = erts_printable_return_address(rp, STACK_TOP(rp));
+
+        erts_lookup_function_info(&caller_fi, return_address, full_info);
+        if (caller_fi.mfa) {
+            fi = caller_fi;
+            rp->current = caller_fi.mfa;
+        }
     }
 
     /*
@@ -2033,8 +2059,8 @@ current_function(Process *c_p, ErtsHeapFactory *hfact, Process* rp,
 }
 
 static Eterm
-current_stacktrace(ErtsHeapFactory *hfact, Process* rp,
-                   Uint reserve_size)
+current_stacktrace(Process *p, ErtsHeapFactory *hfact, Process* rp,
+                   Uint reserve_size, int flags)
 {
     Uint sz;
     struct StackTrace* s;
@@ -2051,13 +2077,14 @@ current_stacktrace(ErtsHeapFactory *hfact, Process* rp,
     sz = offsetof(struct StackTrace, trace) + sizeof(BeamInstr *)*depth;
     s = (struct StackTrace *) erts_alloc(ERTS_ALC_T_TMP, sz);
     s->depth = 0;
-    if (depth > 0 && rp->i) {
-	s->trace[s->depth++] = rp->i;
-	depth--;
-    }
-    if (depth > 0 && rp->cp != 0) {
-	s->trace[s->depth++] = rp->cp - 1;
-	depth--;
+    s->pc = NULL;
+
+    /* We skip current pc when requesting our own stack trace since it will
+     * inevitably point to process_info/1,2 */
+    if ((p != rp || (flags & ERTS_PI_FLAG_REQUEST_FOR_OTHER)) &&
+        depth > 0 && rp->i) {
+        s->trace[s->depth++] = rp->i;
+        depth--;
     }
     erts_save_stacktrace(rp, s, depth);
 
@@ -2572,6 +2599,7 @@ BIF_RETTYPE system_info_1(BIF_ALIST_1)
 
 	/* Need to be the only thread running... */
 	erts_proc_unlock(BIF_P, ERTS_PROC_LOCK_MAIN);
+        BIF_P->scheduler_data->current_process = NULL;
 	erts_thr_progress_block();
 
 	if (BIF_ARG_1 == am_info)
@@ -2585,6 +2613,7 @@ BIF_RETTYPE system_info_1(BIF_ALIST_1)
 
 	erts_thr_progress_unblock();
 	erts_proc_lock(BIF_P, ERTS_PROC_LOCK_MAIN);
+       BIF_P->scheduler_data->current_process = BIF_P;
 
 	ASSERT(dsbufp && dsbufp->str);
 	res = new_binary(BIF_P, (byte *) dsbufp->str, dsbufp->str_len);
@@ -2633,7 +2662,7 @@ BIF_RETTYPE system_info_1(BIF_ALIST_1)
 			       NIL));
     } 
     else if (BIF_ARG_1 == am_os_type) {
-	BIF_RET(os_type_tuple);
+	BIF_RET(erts_get_global_literal(ERTS_LIT_OS_TYPE));
     }
     else if (BIF_ARG_1 == am_allocator) {
 	BIF_RET(erts_allocator_options((void *) BIF_P));
@@ -2653,7 +2682,7 @@ BIF_RETTYPE system_info_1(BIF_ALIST_1)
         BIF_RET(am_false);
     }
     else if (BIF_ARG_1 == am_os_version) {
-	BIF_RET(os_version_tuple);
+	BIF_RET(erts_get_global_literal(ERTS_LIT_OS_VERSION));
     }
     else if (BIF_ARG_1 == am_version) {
 	int n = sys_strlen(ERLANG_VERSION);
@@ -2705,9 +2734,7 @@ BIF_RETTYPE system_info_1(BIF_ALIST_1)
 	    goto bld_instruction_counts;
 	}
 
-#ifdef DEBUG
 	ASSERT(endp == hp);
-#endif
 
 	BIF_RET(res);
 #endif /* #ifndef ERTS_OPCODE_COUNTER_SUPPORT */
@@ -2792,7 +2819,10 @@ BIF_RETTYPE system_info_1(BIF_ALIST_1)
     } else if (BIF_ARG_1 == am_threads) {
 	return am_true;
     } else if (BIF_ARG_1 == am_creation) {
-	return make_small(erts_this_node->creation);
+        Uint hsz = 0;
+        erts_bld_uint(NULL, &hsz, erts_this_node->creation);
+        hp = hsz ? HAlloc(BIF_P, hsz) : NULL;
+        BIF_RET(erts_bld_uint(&hp, NULL, erts_this_node->creation));
     } else if (BIF_ARG_1 == am_break_ignored) {
       extern int ignore_break;
       if (ignore_break) 
@@ -2803,7 +2833,7 @@ BIF_RETTYPE system_info_1(BIF_ALIST_1)
     /* Arguments that are unusual follow ... */
     else if (ERTS_IS_ATOM_STR("logical_processors", BIF_ARG_1)) {
 	int no;
-	erts_get_logical_processors(&no, NULL, NULL);
+	erts_get_logical_processors(&no, NULL, NULL, NULL);
 	if (no > 0)
 	    BIF_RET(make_small((Uint) no));
 	else {
@@ -2813,7 +2843,7 @@ BIF_RETTYPE system_info_1(BIF_ALIST_1)
     }
     else if (ERTS_IS_ATOM_STR("logical_processors_online", BIF_ARG_1)) {
 	int no;
-	erts_get_logical_processors(NULL, &no, NULL);
+	erts_get_logical_processors(NULL, &no, NULL, NULL);
 	if (no > 0)
 	    BIF_RET(make_small((Uint) no));
 	else {
@@ -2823,7 +2853,17 @@ BIF_RETTYPE system_info_1(BIF_ALIST_1)
     }
     else if (ERTS_IS_ATOM_STR("logical_processors_available", BIF_ARG_1)) {
 	int no;
-	erts_get_logical_processors(NULL, NULL, &no);
+	erts_get_logical_processors(NULL, NULL, &no, NULL);
+	if (no > 0)
+	    BIF_RET(make_small((Uint) no));
+	else {
+	    DECL_AM(unknown);
+	    BIF_RET(AM_unknown);
+	}
+    }
+    else if (ERTS_IS_ATOM_STR("cpu_quota", BIF_ARG_1)) {
+	int no;
+	erts_get_logical_processors(NULL, NULL, NULL, &no);
 	if (no > 0)
 	    BIF_RET(make_small((Uint) no));
 	else {
@@ -2967,7 +3007,7 @@ BIF_RETTYPE system_info_1(BIF_ALIST_1)
     } else if (ERTS_IS_ATOM_STR("context_reductions", BIF_ARG_1)) {
 	BIF_RET(make_small(CONTEXT_REDS));
     } else if (ERTS_IS_ATOM_STR("kernel_poll", BIF_ARG_1)) {
-#ifdef ERTS_ENABLE_KERNEL_POLL
+#if ERTS_ENABLE_KERNEL_POLL
 	BIF_RET(am_true);
 #else
 	BIF_RET(am_false);
@@ -3018,6 +3058,8 @@ BIF_RETTYPE system_info_1(BIF_ALIST_1)
 	BIF_RET(erts_nif_taints(BIF_P));
     } else if (ERTS_IS_ATOM_STR("reader_groups_map", BIF_ARG_1)) {
 	BIF_RET(erts_get_reader_groups_map(BIF_P));
+    } else if (ERTS_IS_ATOM_STR("decentralized_counter_groups_map", BIF_ARG_1)) {
+	BIF_RET(erts_get_decentralized_counter_groups_map(BIF_P));
     } else if (ERTS_IS_ATOM_STR("dist_buf_busy_limit", BIF_ARG_1)) {
 	Uint hsz = 0;
 
@@ -3036,6 +3078,14 @@ BIF_RETTYPE system_info_1(BIF_ALIST_1)
 	BIF_RET(res);
     } else if (ERTS_IS_ATOM_STR("ethread_info", BIF_ARG_1)) {
 	BIF_RET(erts_get_ethread_info(BIF_P));
+    }
+    else if (ERTS_IS_ATOM_STR("ethread_used_tse", BIF_ARG_1)) {
+        Uint64 no = (Uint64) ethr_no_used_tse();
+        Uint hsz = 0;
+        erts_bld_uint64(NULL, &hsz, no);
+        hp = hsz ? HAlloc(BIF_P, hsz) : NULL;
+        res = erts_bld_uint64(&hp, NULL, no);
+        BIF_RET(res);
     }
     else if (ERTS_IS_ATOM_STR("emu_args", BIF_ARG_1)) {
 	BIF_RET(erts_get_emu_args(BIF_P));
@@ -3139,19 +3189,23 @@ BIF_RETTYPE system_info_1(BIF_ALIST_1)
 	DECL_AM(tag);
 	BIF_RET(AM_tag);
 #endif
+    } else if (ERTS_IS_ATOM_STR("system_logger", BIF_ARG_1)) {
+        BIF_RET(erts_get_system_logger());
     }
 
     BIF_ERROR(BIF_P, BADARG);
 }
 
-static void monitor_size(ErtsMonitor *mon, void *vsz)
+static int monitor_size(ErtsMonitor *mon, void *vsz, Sint reds)
 {
     *((Uint *) vsz) = erts_monitor_size(mon);
+    return 1;
 }
 
-static void link_size(ErtsMonitor *lnk, void *vsz)
+static int link_size(ErtsMonitor *lnk, void *vsz, Sint reds)
 {
     *((Uint *) vsz) = erts_link_size(lnk);
+    return 1;
 }
 
 /**********************************************************************/ 
@@ -3853,8 +3907,7 @@ BIF_RETTYPE erts_debug_get_internal_state_1(BIF_ALIST_1)
 	}
 	else if (ERTS_IS_ATOM_STR("node_and_dist_references", BIF_ARG_1)) {
 	    /* Used by node_container_SUITE (emulator) */
-	    Eterm res = erts_get_node_and_dist_references(BIF_P);
-	    BIF_RET(res);
+            BIF_TRAP1(get_internal_state_blocked, BIF_P, BIF_ARG_1);
 	}
 	else if (ERTS_IS_ATOM_STR("monitoring_nodes", BIF_ARG_1)) {
 	    BIF_RET(erts_processes_monitoring_nodes(BIF_P));
@@ -4016,13 +4069,29 @@ BIF_RETTYPE erts_debug_get_internal_state_1(BIF_ALIST_1)
             BIF_RET(am_notsup);
 #endif
         }
-
+        else if (ERTS_IS_ATOM_STR("flxctr_memory_usage", BIF_ARG_1)) {
+            Sint mem = erts_flxctr_debug_memory_usage();
+            if (mem == -1) {
+                BIF_RET(am_notsup);
+            } else {
+		Uint hsz = BIG_UWORD_HEAP_SIZE((UWord)mem);
+		Eterm *hp = HAlloc(BIF_P, hsz);
+		BIF_RET(uword_to_big((UWord)mem, hp));
+            }
+        }
     }
     else if (is_tuple(BIF_ARG_1)) {
 	Eterm* tp = tuple_val(BIF_ARG_1);
 	switch (arityval(tp[0])) {
 	case 2: {
-	    if (ERTS_IS_ATOM_STR("process_status", tp[1])) {
+	    if (ERTS_IS_ATOM_STR("node_and_dist_references", tp[1])) {
+                if (tp[2] == am_blocked
+                    && erts_is_multi_scheduling_blocked() > 0) {
+                    Eterm res = erts_get_node_and_dist_references(BIF_P);
+                    BIF_RET(res);
+                }
+            }
+	    else if (ERTS_IS_ATOM_STR("process_status", tp[1])) {
 		/* Used by timer process_SUITE, timer_bif_SUITE, and
 		   node_container_SUITE (emulator) */
 		if (is_internal_pid(tp[2])) {
@@ -4052,7 +4121,7 @@ BIF_RETTYPE erts_debug_get_internal_state_1(BIF_ALIST_1)
                     erts_aint32_t state;
 		    Eterm res;
 		    Process *p;
-                    int sigs_done, local_only;
+                    int sigs_done;
 
 		    p = erts_pid2proc(BIF_P,
 				      ERTS_PROC_LOCK_MAIN,
@@ -4063,15 +4132,16 @@ BIF_RETTYPE erts_debug_get_internal_state_1(BIF_ALIST_1)
 			BIF_RET(am_undefined);
 		    }
                     
-                    local_only = 0;
+                    erts_proc_lock(p, ERTS_PROC_LOCK_MSGQ);
+                    erts_proc_sig_fetch(p);
+                    erts_proc_unlock(p, ERTS_PROC_LOCK_MSGQ);
                     do {
                         int reds = CONTEXT_REDS;
                         sigs_done = erts_proc_sig_handle_incoming(p,
                                                                   &state,
                                                                   &reds,
                                                                   CONTEXT_REDS,
-                                                                  local_only);
-                        local_only = !0;
+                                                                  !0);
                     } while (!sigs_done && !(state & ERTS_PSFLG_EXITING));
 
                     if (!(state & ERTS_PSFLG_EXITING))
@@ -4117,7 +4187,7 @@ BIF_RETTYPE erts_debug_get_internal_state_1(BIF_ALIST_1)
                     erts_aint32_t state;
 		    Process *p;
 		    Eterm res;
-                    int sigs_done, local_only;
+                    int sigs_done;
 
 		    p = erts_pid2proc(BIF_P,
 				      ERTS_PROC_LOCK_MAIN,
@@ -4128,15 +4198,16 @@ BIF_RETTYPE erts_debug_get_internal_state_1(BIF_ALIST_1)
 			BIF_RET(am_undefined);
 		    }
                     
-                    local_only = 0;
+                    erts_proc_lock(p, ERTS_PROC_LOCK_MSGQ);
+                    erts_proc_sig_fetch(p);
+                    erts_proc_unlock(p, ERTS_PROC_LOCK_MSGQ);
                     do {
                         int reds = CONTEXT_REDS;
                         sigs_done = erts_proc_sig_handle_incoming(p,
                                                                   &state,
                                                                   &reds,
                                                                   CONTEXT_REDS,
-                                                                  local_only);
-                        local_only = !0;
+                                                                  !0);
                     } while (!sigs_done && !(state & ERTS_PSFLG_EXITING));
 
                     if (!(state & ERTS_PSFLG_EXITING)) {
@@ -4220,10 +4291,13 @@ BIF_RETTYPE erts_debug_get_internal_state_1(BIF_ALIST_1)
 		}
 	    }
 	    else if (ERTS_IS_ATOM_STR("term_to_binary_tuple_fallbacks", tp[1])) {
-		Uint dflags = (TERM_TO_BINARY_DFLAGS
-                               & ~DFLAG_EXPORT_PTR_TAG
-                               & ~DFLAG_BIT_BINARIES);
-		BIF_RET(erts_term_to_binary(BIF_P, tp[2], 0, dflags));
+		Uint64 dflags = (TERM_TO_BINARY_DFLAGS
+                                 & ~DFLAG_EXPORT_PTR_TAG
+                                 & ~DFLAG_BIT_BINARIES);
+		Eterm res = erts_term_to_binary(BIF_P, tp[2], 0, dflags);
+                if (is_value(res))
+                    BIF_RET(res);
+                BIF_ERROR(BIF_P, SYSTEM_LIMIT);
 	    }
 	    else if (ERTS_IS_ATOM_STR("dist_ctrl", tp[1])) {
 		Eterm res = am_undefined;
@@ -4337,6 +4411,9 @@ BIF_RETTYPE erts_debug_get_internal_state_1(BIF_ALIST_1)
 		  break;
 	      BIF_RET(res);
 	    }
+            else if (ERTS_IS_ATOM_STR("term_to_binary", tp[1])) {
+                return erts_debug_term_to_binary(BIF_P, tp[2], tp[3]);
+            }
 	    break;
 	}
 	default:
@@ -4430,6 +4507,7 @@ BIF_RETTYPE erts_debug_set_internal_state_2(BIF_ALIST_2)
 			BIF_P->fcalls = reds;
 		    else
 			BIF_P->fcalls = reds - CONTEXT_REDS;
+                    BIF_P->scheduler_data->virtual_reds = 0;
 		}
 		BIF_RET(am_true);
 	    }
@@ -4505,6 +4583,40 @@ BIF_RETTYPE erts_debug_set_internal_state_2(BIF_ALIST_2)
 	    erts_set_gc_state(BIF_P, enable);
 	    BIF_RET(res);
 	}
+        else if (ERTS_IS_ATOM_STR("inconsistent_heap", BIF_ARG_1)) {
+            /* Used by code_SUITE (emulator) */
+            if (am_start == BIF_ARG_2) {
+                Eterm broken_term;
+                Eterm *hp;
+
+                ERTS_ASSERT(!(BIF_P->flags & F_DISABLE_GC));
+                erts_set_gc_state(BIF_P, 0);
+
+                hp = HAlloc(BIF_P, 2);
+                hp[0] = make_arityval(1234);
+                hp[1] = THE_NON_VALUE;
+
+                broken_term = make_tuple(hp);
+
+                BIF_RET(broken_term);
+            } else {
+                Eterm broken_term;
+                Eterm *hp;
+
+                broken_term = BIF_ARG_2;
+
+                hp = tuple_val(broken_term);
+                ERTS_ASSERT(hp[0] == make_arityval(1234));
+                ERTS_ASSERT(hp[1] == THE_NON_VALUE);
+                hp[0] = make_arityval(1);
+                hp[1] = am_ok;
+
+                ERTS_ASSERT(BIF_P->flags & F_DISABLE_GC);
+                erts_set_gc_state(BIF_P, 1);
+
+                BIF_RET(am_ok);
+            }
+        }
         else if (ERTS_IS_ATOM_STR("colliding_names", BIF_ARG_1)) {
 	    /* Used by ets_SUITE (stdlib) */
 	    if (is_tuple(BIF_ARG_2)) {
@@ -4555,7 +4667,7 @@ BIF_RETTYPE erts_debug_set_internal_state_2(BIF_ALIST_2)
 	    if (!flag && BIF_ARG_2 != am_false) {
 		erts_atomic_set_nob(&hipe_test_reschedule_flag, 1);
 		erts_suspend(BIF_P, ERTS_PROC_LOCK_MAIN, NULL);
-		ERTS_BIF_YIELD2(bif_export[BIF_erts_debug_set_internal_state_2],
+		ERTS_BIF_YIELD2(&bif_trap_export[BIF_erts_debug_set_internal_state_2],
 				BIF_P, BIF_ARG_1, BIF_ARG_2);
 	    }
 	    erts_atomic_set_nob(&hipe_test_reschedule_flag, !flag);
@@ -4594,20 +4706,25 @@ BIF_RETTYPE erts_debug_set_internal_state_2(BIF_ALIST_2)
 	    }
 	}
 	else if (ERTS_IS_ATOM_STR("wait", BIF_ARG_1)) {
-	    if (ERTS_IS_ATOM_STR("deallocations", BIF_ARG_2)) {
-		int flag = ERTS_DEBUG_WAIT_COMPLETED_DEALLOCATIONS;
-		if (erts_debug_wait_completed(BIF_P, flag)) {
-		    ERTS_BIF_YIELD_RETURN(BIF_P, am_ok);
-		}
-	    }
-	    if (ERTS_IS_ATOM_STR("timer_cancellations", BIF_ARG_2)) {
-		int flag = ERTS_DEBUG_WAIT_COMPLETED_TIMER_CANCELLATIONS;
-		if (erts_debug_wait_completed(BIF_P, flag)) {
-		    ERTS_BIF_YIELD_RETURN(BIF_P, am_ok);
-		}
-	    }
+            int flag = 0;
+	    if (ERTS_IS_ATOM_STR("deallocations", BIF_ARG_2))
+                flag = ERTS_DEBUG_WAIT_COMPLETED_DEALLOCATIONS;
+            else if (ERTS_IS_ATOM_STR("timer_cancellations", BIF_ARG_2))
+		flag = ERTS_DEBUG_WAIT_COMPLETED_TIMER_CANCELLATIONS;
+            else if (ERTS_IS_ATOM_STR("aux_work", BIF_ARG_2))
+                flag = ERTS_DEBUG_WAIT_COMPLETED_AUX_WORK;
+            else if (ERTS_IS_ATOM_STR("thread_progress", BIF_ARG_2))
+                flag = ERTS_DEBUG_WAIT_COMPLETED_THREAD_PROGRESS;
+
+            if (flag) {
+                if (erts_debug_wait_completed(BIF_P, flag))
+                    ERTS_BIF_YIELD_RETURN(BIF_P, am_ok);
+                else
+                    BIF_ERROR(BIF_P, SYSTEM_LIMIT);
+            }
 	}
         else if (ERTS_IS_ATOM_STR("broken_halt", BIF_ARG_1)) {
+            erts_proc_unlock(BIF_P, ERTS_PROC_LOCK_MAIN);
             broken_halt_test(BIF_ARG_2);
         }
 	else if (ERTS_IS_ATOM_STR("unique_monotonic_integer_state", BIF_ARG_1)) {
@@ -4671,9 +4788,265 @@ BIF_RETTYPE erts_debug_set_internal_state_2(BIF_ALIST_2)
             BIF_RET(am_notsup);
 #endif
         }
+        else if (ERTS_IS_ATOM_STR("ets_force_split", BIF_ARG_1)) {
+            if (is_tuple(BIF_ARG_2)) {
+                Eterm* tpl = tuple_val(BIF_ARG_2);
+
+                if (erts_ets_force_split(tpl[1], tpl[2] == am_true))
+                    BIF_RET(am_ok);
+            }
+        }
+        else if (ERTS_IS_ATOM_STR("ets_debug_random_split_join", BIF_ARG_1)) {
+            if (is_tuple(BIF_ARG_2)) {
+                Eterm* tpl = tuple_val(BIF_ARG_2);
+                if (erts_ets_debug_random_split_join(tpl[1], tpl[2] == am_true))
+                    BIF_RET(am_ok);
+            }
+        }
+        else if (ERTS_IS_ATOM_STR("mbuf", BIF_ARG_1)) {
+            Uint sz = size_object(BIF_ARG_2);
+            ErlHeapFragment* frag = new_message_buffer(sz);
+            Eterm *hp = frag->mem;
+            Eterm copy = copy_struct(BIF_ARG_2, sz, &hp, &frag->off_heap);
+            frag->next = BIF_P->mbuf;
+            BIF_P->mbuf = frag;
+            BIF_P->mbuf_sz += sz;
+            BIF_RET(copy);
+        }
+        else if (ERTS_IS_ATOM_STR("remove_hopefull_dflags", BIF_ARG_1)) {
+            int old_val, new_val;
+
+            switch (BIF_ARG_2) {
+            case am_true: new_val = !0; break;
+            case am_false: new_val = 0; break;
+            default: BIF_ERROR(BIF_P, BADARG); break;
+            }
+
+            erts_proc_unlock(BIF_P, ERTS_PROC_LOCK_MAIN);
+            erts_thr_progress_block();
+            
+            old_val = erts_dflags_test_remove_hopefull_flags;
+            erts_dflags_test_remove_hopefull_flags = new_val;
+            
+            erts_thr_progress_unblock();
+            erts_proc_lock(BIF_P, ERTS_PROC_LOCK_MAIN);
+
+            BIF_RET(old_val ? am_true : am_false);
+        }
+        else if (ERTS_IS_ATOM_STR("code_write_permission", BIF_ARG_1)) {
+            /*
+             * Warning: This is a unsafe way of seizing the "lock"
+             * as there is no automatic unlock if caller terminates.
+             */
+            switch(BIF_ARG_2) {
+            case am_true:
+                if (!erts_try_seize_code_write_permission(BIF_P)) {
+                    ERTS_BIF_YIELD2(&bif_trap_export[BIF_erts_debug_set_internal_state_2],
+                                    BIF_P, BIF_ARG_1, BIF_ARG_2);
+                }
+                BIF_RET(am_true);
+            case am_false:
+                erts_release_code_write_permission();
+                BIF_RET(am_true);
+            }
+        }
     }
 
     BIF_ERROR(BIF_P, BADARG);
+}
+
+Eterm
+erts_get_ethread_info(Process *c_p)
+{
+    Uint sz, *szp;
+    Eterm res, *hp, **hpp, *end_hp = NULL;
+
+    sz = 0;
+    szp = &sz;
+    hpp = NULL;
+
+    while (1) {
+	Eterm tup, list, name;
+#if defined(ETHR_NATIVE_ATOMIC32_IMPL)	  \
+    || defined(ETHR_NATIVE_ATOMIC64_IMPL)	\
+    || defined(ETHR_NATIVE_DW_ATOMIC_IMPL)
+	char buf[1024];
+	int i;
+	char **str;
+#endif
+
+	res = NIL;
+
+#ifdef ETHR_X86_MEMBAR_H__
+
+	tup = erts_bld_tuple(hpp, szp, 2,
+			     erts_bld_string(hpp, szp, "sse2"),
+#ifdef ETHR_X86_RUNTIME_CONF_HAVE_SSE2__
+			     erts_bld_string(hpp, szp,
+					     (ETHR_X86_RUNTIME_CONF_HAVE_SSE2__
+					      ? "yes" : "no"))
+#else
+			     erts_bld_string(hpp, szp, "yes")
+#endif
+	    );
+	res = erts_bld_cons(hpp, szp, tup, res);
+
+	tup = erts_bld_tuple(hpp, szp, 2,
+			     erts_bld_string(hpp, szp,
+					     "x86"
+#ifdef ARCH_64
+					     "_64"
+#endif
+					     " OOO"),
+			     erts_bld_string(hpp, szp,
+#ifdef ETHR_X86_OUT_OF_ORDER
+					     "yes"
+#else
+					     "no"
+#endif
+				 ));
+
+	res = erts_bld_cons(hpp, szp, tup, res);
+#endif
+
+#ifdef ETHR_SPARC_V9_MEMBAR_H__
+
+	tup = erts_bld_tuple(hpp, szp, 2,
+			     erts_bld_string(hpp, szp, "Sparc V9"),
+			     erts_bld_string(hpp, szp,
+#if defined(ETHR_SPARC_TSO)
+					     "TSO"
+#elif defined(ETHR_SPARC_PSO)
+					     "PSO"
+#elif defined(ETHR_SPARC_RMO)
+					     "RMO"
+#else
+					     "undefined"
+#endif
+				 ));
+
+	res = erts_bld_cons(hpp, szp, tup, res);
+
+#endif
+
+#ifdef ETHR_PPC_MEMBAR_H__
+
+	tup = erts_bld_tuple(hpp, szp, 2,
+			     erts_bld_string(hpp, szp, "lwsync"),
+			     erts_bld_string(hpp, szp,
+#if defined(ETHR_PPC_HAVE_LWSYNC)
+					     "yes"
+#elif defined(ETHR_PPC_HAVE_NO_LWSYNC)
+					     "no"
+#elif defined(ETHR_PPC_RUNTIME_CONF_HAVE_LWSYNC__)
+					     ETHR_PPC_RUNTIME_CONF_HAVE_LWSYNC__ ? "yes" : "no"
+#else
+					     "undefined"
+#endif
+				 ));
+
+	res = erts_bld_cons(hpp, szp, tup, res);
+
+#endif
+
+	tup = erts_bld_tuple(hpp, szp, 2,
+			     erts_bld_string(hpp, szp, "Native rw-spinlocks"),
+#ifdef ETHR_NATIVE_RWSPINLOCK_IMPL
+			     erts_bld_string(hpp, szp, ETHR_NATIVE_RWSPINLOCK_IMPL)
+#else
+			     erts_bld_string(hpp, szp, "no")
+#endif
+	    );
+	res = erts_bld_cons(hpp, szp, tup, res);
+
+	tup = erts_bld_tuple(hpp, szp, 2,
+			     erts_bld_string(hpp, szp, "Native spinlocks"),
+#ifdef ETHR_NATIVE_SPINLOCK_IMPL
+			     erts_bld_string(hpp, szp, ETHR_NATIVE_SPINLOCK_IMPL)
+#else
+			     erts_bld_string(hpp, szp, "no")
+#endif
+	    );
+	res = erts_bld_cons(hpp, szp, tup, res);
+
+
+	list = NIL;
+#ifdef ETHR_NATIVE_DW_ATOMIC_IMPL
+	if (ethr_have_native_dw_atomic()) {
+	    name = erts_bld_string(hpp, szp, ETHR_NATIVE_DW_ATOMIC_IMPL);
+	    str = ethr_native_dw_atomic_ops();
+	    for (i = 0; str[i]; i++) {
+		erts_snprintf(buf, sizeof(buf), "ethr_native_dw_atomic_%s()", str[i]);
+		list = erts_bld_cons(hpp, szp,
+				     erts_bld_string(hpp, szp, buf),
+				     list);
+	    }
+	    str = ethr_native_su_dw_atomic_ops();
+	    for (i = 0; str[i]; i++) {
+		erts_snprintf(buf, sizeof(buf), "ethr_native_su_dw_atomic_%s()", str[i]);
+		list = erts_bld_cons(hpp, szp,
+				     erts_bld_string(hpp, szp, buf),
+				     list);
+	    }
+	}
+	else 
+#endif
+	    name = erts_bld_string(hpp, szp, "no");
+
+	tup = erts_bld_tuple(hpp, szp, 3,
+			     erts_bld_string(hpp, szp, "Double word native atomics"),
+			     name,
+			     list);
+	res = erts_bld_cons(hpp, szp, tup, res);
+
+	list = NIL;
+#ifdef ETHR_NATIVE_ATOMIC64_IMPL
+	name = erts_bld_string(hpp, szp, ETHR_NATIVE_ATOMIC64_IMPL);
+	str = ethr_native_atomic64_ops();
+	for (i = 0; str[i]; i++) {
+	    erts_snprintf(buf, sizeof(buf), "ethr_native_atomic64_%s()", str[i]);
+	    list = erts_bld_cons(hpp, szp,
+				 erts_bld_string(hpp, szp, buf),
+				 list);
+	}
+#else
+	name = erts_bld_string(hpp, szp, "no");
+#endif
+	tup = erts_bld_tuple(hpp, szp, 3,
+			     erts_bld_string(hpp, szp, "64-bit native atomics"),
+			     name,
+			     list);
+	res = erts_bld_cons(hpp, szp, tup, res);
+
+	list = NIL;
+#ifdef ETHR_NATIVE_ATOMIC32_IMPL
+	name = erts_bld_string(hpp, szp, ETHR_NATIVE_ATOMIC32_IMPL);
+	str = ethr_native_atomic32_ops();
+	for (i = 0; str[i]; i++) {
+	    erts_snprintf(buf, sizeof(buf), "ethr_native_atomic32_%s()", str[i]);
+	    list = erts_bld_cons(hpp, szp,
+				erts_bld_string(hpp, szp, buf),
+				list);
+	}
+#else
+	name = erts_bld_string(hpp, szp, "no");
+#endif
+	tup = erts_bld_tuple(hpp, szp, 3,
+			     erts_bld_string(hpp, szp, "32-bit native atomics"),
+			     name,
+			     list);
+	res = erts_bld_cons(hpp, szp, tup, res);
+
+	if (hpp) {
+	    HRelease(c_p, end_hp, *hpp)
+	    return res;
+	}
+
+	hp = HAlloc(c_p, sz);
+	end_hp = hp + sz;
+	hpp = &hp;
+	szp = NULL;
+    }
 }
 
 static BIF_RETTYPE
@@ -5118,21 +5491,22 @@ static void os_info_init(void)
     int major, minor, build;
     char* buf = erts_alloc(ERTS_ALC_T_TMP, 1024); /* More than enough */
     Eterm* hp;
+    Eterm tuple;
 
     os_flavor(buf, 1024);
     flav = erts_atom_put((byte *) buf, sys_strlen(buf), ERTS_ATOM_ENC_LATIN1, 1);
     erts_free(ERTS_ALC_T_TMP, (void *) buf);
-    hp = erts_alloc(ERTS_ALC_T_LITERAL, (3+4)*sizeof(Eterm));
-    os_type_tuple = TUPLE2(hp, type, flav);
-    erts_set_literal_tag(&os_type_tuple, hp, 3);
+    hp = erts_alloc_global_literal(ERTS_LIT_OS_TYPE, 3);
+    tuple = TUPLE2(hp, type, flav);
+    erts_register_global_literal(ERTS_LIT_OS_TYPE, tuple);
 
-    hp += 3;
+    hp = erts_alloc_global_literal(ERTS_LIT_OS_VERSION, 4);
     os_version(&major, &minor, &build);
-    os_version_tuple = TUPLE3(hp,
-			      make_small(major),
-			      make_small(minor),
-			      make_small(build));
-    erts_set_literal_tag(&os_version_tuple, hp, 4);
+    tuple = TUPLE3(hp,
+                   make_small(major),
+                   make_small(minor),
+                   make_small(build));
+    erts_register_global_literal(ERTS_LIT_OS_VERSION, tuple);
 }
 
 void
@@ -5155,6 +5529,10 @@ erts_bif_info_init(void)
 	= erts_export_put(am_erts_internal, am_gather_system_check_result, 1);
 
     is_process_alive_trap = erts_export_put(am_erts_internal, am_is_process_alive, 1);
+    
+    get_internal_state_blocked = erts_export_put(am_erts_internal,
+                                                 am_get_internal_state_blocked,
+                                                 1);
 
 
     process_info_init();

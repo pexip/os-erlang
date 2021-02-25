@@ -1,7 +1,7 @@
 /*
  * %CopyrightBegin%
  *
- * Copyright Ericsson AB 1996-2018. All Rights Reserved.
+ * Copyright Ericsson AB 1996-2020. All Rights Reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -75,6 +75,7 @@
 #include "erl_check_io.h"
 #include "erl_cpu_topology.h"
 #include "erl_osenv.h"
+#include "erl_dyn_lock_check.h"
 extern int  driver_interrupt(int, int);
 extern void do_break(void);
 
@@ -276,7 +277,9 @@ erts_sys_pre_init(void)
 #ifdef ERTS_ENABLE_LOCK_CHECK
     erts_lc_init();
 #endif
-
+#ifdef ERTS_DYN_LOCK_CHECK
+    erts_dlc_init();
+#endif
 
     erts_init_sys_time_sup();
 
@@ -689,6 +692,10 @@ void
 erts_sys_unix_later_init(void)
 {
     sys_signal(SIGTERM, generic_signal_handler);
+
+    /* Ignore SIGCHLD to ensure orphaned processes don't turn into zombies on
+     * death when we're pid 1. */
+    sys_signal(SIGCHLD, SIG_IGN);
 }
 
 int sys_max_files(void)
@@ -740,10 +747,17 @@ void os_version(int *pMajor, int *pMinor, int *pBuild) {
 				 * X.Y or X.Y.Z.  */
 
     (void) uname(&uts);
+#ifdef _AIX
+    /* AIX stores the major in version and minor in release */
+    *pMajor = atoi(uts.version);
+    *pMinor = atoi(uts.release);
+    *pBuild = 0; /* XXX: get oslevel for AIX or TR on i */
+#else
     release = uts.release;
     *pMajor = get_number(&release); /* Pointer to major version. */
     *pMinor = get_number(&release); /* Pointer to minor version. */
     *pBuild = get_number(&release); /* Pointer to build number. */
+#endif
 }
 
 void erts_do_break_handling(void)

@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %% 
-%% Copyright Ericsson AB 1997-2018. All Rights Reserved.
+%% Copyright Ericsson AB 1997-2020. All Rights Reserved.
 %% 
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -158,6 +158,20 @@ append_2(Config) when is_list(Config) ->
     "abcdef"=lists:append("abc", "def"),
     [hej, du]=lists:append([hej], [du]),
     [10, [elem]]=lists:append([10], [[elem]]),
+
+    %% Trapping, both crashing and otherwise.
+    [append_trapping_1(N) || N <- lists:seq(0, 20)],
+
+    ok.
+
+append_trapping_1(N) ->
+    List = lists:duplicate(N + (1 bsl N), gurka),
+    ImproperList = List ++ crash,
+
+    {'EXIT',_} = (catch (ImproperList ++ [])),
+
+    [3, 2, 1 | List] = lists:reverse(List ++ [1, 2, 3]),
+
     ok.
 
 %% Tests the lists:reverse() implementation. The function is
@@ -1679,7 +1693,7 @@ make_fun() ->
     receive {Pid, Fun} -> Fun end.
 
 make_fun(Pid) ->
-    Pid ! {self(), fun make_fun/1}.
+    Pid ! {self(), fun (X) -> {X, Pid} end}.
 
 fun_pid(Fun) ->
     erlang:fun_info(Fun, pid).
@@ -2215,6 +2229,7 @@ sublist_2_e(Config) when is_list(Config) ->
 sublist_3(Config) when is_list(Config) ->
     [] = lists:sublist([], 1, 0),
     [] = lists:sublist([], 1, 1),
+    [] = lists:sublist([], 2, 0),
     [] = lists:sublist([a], 1, 0),
     [a] = lists:sublist([a], 1, 1),
     [a] = lists:sublist([a], 1, 2),
@@ -2228,6 +2243,7 @@ sublist_3(Config) when is_list(Config) ->
     [] = lists:sublist([a], 2, 1),
     [] = lists:sublist([a], 2, 2),
     [] = lists:sublist([a], 2, 79),
+    [] = lists:sublist([a], 3, 1),
     [] = lists:sublist([a,b|c], 1, 0),
     [] = lists:sublist([a,b|c], 2, 0),
     [a] = lists:sublist([a,b|c], 1, 1),
@@ -2586,6 +2602,15 @@ subtract(Config) when is_list(Config) ->
     [1,2,3,4,5,6,7,8,9,9999,10000,20,21,22] =
 	sub(lists:seq(1, 10000)++[20,21,22], lists:seq(10, 9998)),
 
+    %% ERL-986; an integer overflow relating to term comparison
+    %% caused subtraction to be inconsistent.
+    Ids = [2985095936,47540628,135460048,1266126295,240535295,
+           115724671,161800351,4187206564,4178142725,234897063,
+           14773162,6662515191,133150693,378034895,1874402262,
+           3507611978,22850922,415521280,253360400,71683243],
+
+    [] = id(Ids) -- id(Ids),
+
     %% Floats/integers.
     [42.0,42.0] = sub([42.0,42,42.0], [42,42,42]),
     [1,2,3,4,43.0] = sub([1,2,3,4,5,42.0,43.0], [42.0,5]),
@@ -2612,6 +2637,8 @@ subtract(Config) when is_list(Config) ->
     [sub_thresholds(N) || N <- lists:seq(0, 32)],
 
     ok.
+
+id(I) -> I.
 
 sub_non_matching(A, B) ->
     A = sub(A, B).

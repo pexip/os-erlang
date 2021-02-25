@@ -1,3 +1,363 @@
+erlang (1:23.2.6+dfsg-1) unstable; urgency=medium
+
+  * New upstream release.
+
+ -- Sergei Golovan <sgolovan@debian.org>  Thu, 25 Feb 2021 12:34:59 +0300
+
+erlang (1:23.2.5+dfsg-1) unstable; urgency=medium
+
+  * New upstream release.
+  * Refresh patches.
+
+ -- Sergei Golovan <sgolovan@debian.org>  Fri, 19 Feb 2021 11:27:52 +0300
+
+erlang (1:23.2.4+dfsg-1) unstable; urgency=medium
+
+  * New upstream release.
+
+ -- Sergei Golovan <sgolovan@debian.org>  Fri, 05 Feb 2021 09:36:40 +0300
+
+erlang (1:23.2.3+dfsg-1) unstable; urgency=medium
+
+  * New upstream release.
+
+ -- Sergei Golovan <sgolovan@debian.org>  Thu, 21 Jan 2021 11:43:21 +0300
+
+erlang (1:23.2.2+dfsg-1) unstable; urgency=medium
+
+  * New upstream release, which includes a fix for CVE-2020-35733 (the ssl
+    application 10.2 accepts and trusts an invalid X.509 certificate chain
+    to a trusted root Certification Authority, closes: #980199).
+
+ -- Sergei Golovan <sgolovan@debian.org>  Sat, 16 Jan 2021 08:50:49 +0300
+
+erlang (1:23.2.1+dfsg-1) unstable; urgency=medium
+
+  * New upstream release.
+
+ -- Sergei Golovan <sgolovan@debian.org>  Mon, 21 Dec 2020 13:16:47 +0300
+
+erlang (1:23.2+dfsg-1) unstable; urgency=medium
+
+  * New upstream release.
+  * Refresh patches.
+  * Bump standards version to 4.5.1.
+
+ -- Sergei Golovan <sgolovan@debian.org>  Wed, 16 Dec 2020 15:07:09 +0300
+
+erlang (1:23.1.5+dfsg-1) unstable; urgency=medium
+
+  * New upstream release.
+
+ -- Sergei Golovan <sgolovan@debian.org>  Mon, 07 Dec 2020 12:01:49 +0300
+
+erlang (1:23.1.4+dfsg-1) unstable; urgency=medium
+
+  * New upstream release.
+
+ -- Sergei Golovan <sgolovan@debian.org>  Sat, 21 Nov 2020 17:03:12 +0300
+
+erlang (1:23.1.2+dfsg-1) unstable; urgency=medium
+
+  * New upstream release.
+  * Refresh patches.
+
+ -- Sergei Golovan <sgolovan@debian.org>  Wed, 11 Nov 2020 11:30:20 +0300
+
+erlang (1:23.1.1+dfsg-1) unstable; urgency=medium
+
+  * New upstream release.
+  * Refresh patches.
+
+ -- Sergei Golovan <sgolovan@debian.org>  Sun, 04 Oct 2020 08:52:49 +0300
+
+erlang (1:23.1+dfsg-1) unstable; urgency=medium
+
+  * New upstream release.
+  * Refresh patches.
+
+ -- Sergei Golovan <sgolovan@debian.org>  Wed, 23 Sep 2020 22:22:49 +0300
+
+erlang (1:23.0.4+dfsg-1) unstable; urgency=medium
+
+  * New upstream release.
+
+ -- Sergei Golovan <sgolovan@debian.org>  Fri, 11 Sep 2020 10:37:31 +0300
+
+erlang (1:23.0.3+dfsg-1) unstable; urgency=medium
+
+  * New upstream release.
+  * Document IPAddressDeny and IPAddressAllow options for epmd.socket in
+    README.Debian.
+  * Remove the obsolete TODO.Debian.
+  * Override some lintian warnings about link breakouts.
+
+ -- Sergei Golovan <sgolovan@debian.org>  Tue, 21 Jul 2020 18:46:49 +0300
+
+erlang (1:23.0.2+dfsg-3) unstable; urgency=medium
+
+  * Add a patch which fixes FTBFS for GNU/Hurd.
+
+ -- Sergei Golovan <sgolovan@debian.org>  Tue, 23 Jun 2020 15:35:09 +0300
+
+erlang (1:23.0.2+dfsg-2) unstable; urgency=medium
+
+  * Upload of the new major upstream release to unstable.
+
+ -- Sergei Golovan <sgolovan@debian.org>  Sun, 21 Jun 2020 19:12:02 +0300
+
+erlang (1:23.0.2+dfsg-1) experimental; urgency=medium
+
+  * New upstream release. Upload to experimental.
+
+ -- Sergei Golovan <sgolovan@debian.org>  Fri, 29 May 2020 10:21:23 +0300
+
+erlang (1:23.0.1+dfsg-1) experimental; urgency=medium
+
+  * New upstream release. Upload to experimental.
+
+ -- Sergei Golovan <sgolovan@debian.org>  Fri, 22 May 2020 10:57:08 +0300
+
+erlang (1:23.0+dfsg-1) experimental; urgency=medium
+
+  * New upstream release. Upload to experimental.
+  * Refresh patches.
+  * Remove symlinks to no longer shipped erl_interface include files and
+    libraries.
+
+ -- Sergei Golovan <sgolovan@debian.org>  Wed, 20 May 2020 12:03:52 +0300
+
+erlang (1:22.3.3+dfsg-1) unstable; urgency=medium
+
+  * New upstream release.
+  * Switch to versioned virtual packages erlang-abi and erlang-pcre,
+    retain providing the old ones for backward compatibility.
+  * Bump the erlang-pcre version since some changes incompatible for the
+    current build of elixir-lang were introduced (closes: #958841).
+
+ -- Sergei Golovan <sgolovan@debian.org>  Tue, 28 Apr 2020 10:22:10 +0300
+
+erlang (1:22.3.2+dfsg-1) unstable; urgency=medium
+
+  * New upstream release.
+  * Refresh patches.
+
+ -- Sergei Golovan <sgolovan@debian.org>  Fri, 10 Apr 2020 16:37:16 +0300
+
+erlang (1:22.3+dfsg-1) unstable; urgency=medium
+
+  * New upstream release.
+  * Refresh patches.
+
+ -- Sergei Golovan <sgolovan@debian.org>  Wed, 18 Mar 2020 12:46:36 +0300
+
+erlang (1:22.2.8+dfsg-1) unstable; urgency=medium
+
+  * New upstream release.
+  * Move the epmd user home directory to /run/epmd from /var/run/epmd.
+
+ -- Sergei Golovan <sgolovan@debian.org>  Sat, 29 Feb 2020 11:08:45 +0300
+
+erlang (1:22.2.7+dfsg-1) unstable; urgency=medium
+
+  * New upstream release.
+
+ -- Sergei Golovan <sgolovan@debian.org>  Tue, 18 Feb 2020 14:10:08 +0300
+
+erlang (1:22.2.4+dfsg-1) unstable; urgency=medium
+
+  * New upstream release.
+
+ -- Sergei Golovan <sgolovan@debian.org>  Mon, 03 Feb 2020 00:11:55 +0300
+
+erlang (1:22.2.3+dfsg-2) unstable; urgency=medium
+
+  * Disable the builtin socket (as a nif) support for the hurd-i386
+    architecture because it cannot be built there.
+
+ -- Sergei Golovan <sgolovan@debian.org>  Sun, 26 Jan 2020 22:54:24 +0300
+
+erlang (1:22.2.3+dfsg-1) unstable; urgency=medium
+
+  * New upstream release.
+
+ -- Sergei Golovan <sgolovan@debian.org>  Mon, 20 Jan 2020 16:22:23 +0300
+
+erlang (1:22.2.2+dfsg-1) unstable; urgency=medium
+
+  * New upstream release.
+
+ -- Sergei Golovan <sgolovan@debian.org>  Tue, 14 Jan 2020 08:14:08 +0300
+
+erlang (1:22.2.1+dfsg-1) unstable; urgency=medium
+
+  * New upstream release.
+  * Explicitly add libx11-dev to build dependencies to fix building
+    of the erlang-wx package.
+
+ -- Sergei Golovan <sgolovan@debian.org>  Sat, 04 Jan 2020 14:01:08 +0300
+
+erlang (1:22.2+dfsg-1) unstable; urgency=medium
+
+  * New upstream release.
+  * Refresh patches.
+  * Remove upwards-stack.patch since it has been applied upstream.
+
+ -- Sergei Golovan <sgolovan@debian.org>  Tue, 10 Dec 2019 13:46:49 +0300
+
+erlang (1:22.1.8+dfsg-1) unstable; urgency=medium
+
+  * New upstream release.
+
+ -- Sergei Golovan <sgolovan@debian.org>  Sun, 24 Nov 2019 17:20:36 +0300
+
+erlang (1:22.1.7+dfsg-1) unstable; urgency=medium
+
+  * New upstream release.
+  * Refresh patches.
+
+ -- Sergei Golovan <sgolovan@debian.org>  Mon, 11 Nov 2019 14:47:26 +0300
+
+erlang (1:22.1.6+dfsg-1) unstable; urgency=medium
+
+  * New upstream release.
+
+ -- Sergei Golovan <sgolovan@debian.org>  Wed, 06 Nov 2019 14:18:03 +0300
+
+erlang (1:22.1.5+dfsg-1) unstable; urgency=medium
+
+  * New upstream release.
+  * Refresh patches.
+
+ -- Sergei Golovan <sgolovan@debian.org>  Tue, 29 Oct 2019 09:25:34 +0300
+
+erlang (1:22.1.1+dfsg-3) unstable; urgency=medium
+
+  * Fix a typo in the clean target of debian/rules.
+
+ -- Sergei Golovan <sgolovan@debian.org>  Thu, 03 Oct 2019 10:48:07 +0300
+
+erlang (1:22.1.1+dfsg-2) unstable; urgency=medium
+
+  * Make erlang-base and erlang-base-hipe provide the erlang-pcre-<version>
+    virtual package to help tracking if elixir-lang or any other package
+    that uses precompiled regexs needs rebuild (closes: #941124).
+  * Use the version of upwards-stack.patch which has been approved upstream.
+
+ -- Sergei Golovan <sgolovan@debian.org>  Thu, 03 Oct 2019 07:55:19 +0300
+
+erlang (1:22.1.1+dfsg-1) unstable; urgency=medium
+
+  * New upstream release.
+
+ -- Sergei Golovan <sgolovan@debian.org>  Fri, 27 Sep 2019 22:49:39 +0300
+
+erlang (1:22.1+dfsg-1) unstable; urgency=medium
+
+  * New upstream release.
+  * Refresh patches.
+  * Document the upwards-stack.patch patch.
+
+ -- Sergei Golovan <sgolovan@debian.org>  Fri, 20 Sep 2019 13:45:18 +0300
+
+erlang (1:22.0.7+dfsg-3) unstable; urgency=medium
+
+  * Add a patch which determines correctly if stack goes upwards to make
+    the re module working on hppa (closes: #939804).
+  * Bump standards version to 4.4.0.
+
+ -- Sergei Golovan <sgolovan@debian.org>  Sun, 15 Sep 2019 13:41:43 +0300
+
+erlang (1:22.0.7+dfsg-2) unstable; urgency=medium
+
+  * Switch to the GTK-3 based implementation of wxWidgets (closes: #933480).
+  * Document usage of GDK_BACKEND=x11 for wxGLCanvas in README.Debian.
+
+ -- Sergei Golovan <sgolovan@debian.org>  Sun, 08 Sep 2019 20:50:38 +0300
+
+erlang (1:22.0.7+dfsg-1) unstable; urgency=medium
+
+  * New upstream bugfix release.
+  * Override lintian error on EPMD systemd service file without init.d script
+    since it isn't required for EPMD to run.
+  * Force using system-wide zlib.
+
+ -- Sergei Golovan <sgolovan@debian.org>  Mon, 15 Jul 2019 13:57:16 +0300
+
+erlang (1:22.0.5+dfsg-2) unstable; urgency=medium
+
+  * Reupload as a source package to promote to testing.
+
+ -- Sergei Golovan <sgolovan@debian.org>  Mon, 08 Jul 2019 12:26:55 +0300
+
+erlang (1:22.0.5+dfsg-1) unstable; urgency=medium
+
+  * New upstream bugfix release.
+
+ -- Sergei Golovan <sgolovan@debian.org>  Sun, 07 Jul 2019 09:20:44 +0300
+
+erlang (1:22.0.4+dfsg-1) experimental; urgency=medium
+
+  * New upstream bugfix release. Upload to experimental.
+
+ -- Sergei Golovan <sgolovan@debian.org>  Wed, 19 Jun 2019 10:40:35 +0300
+
+erlang (1:22.0.3+dfsg-1) experimental; urgency=medium
+
+  * New upstream bugfix release. Upload to experimental.
+
+ -- Sergei Golovan <sgolovan@debian.org>  Thu, 13 Jun 2019 13:32:42 +0300
+
+erlang (1:22.0.2+dfsg-1) experimental; urgency=medium
+
+  * New upstream bugfix release. Upload to experimental.
+
+ -- Sergei Golovan <sgolovan@debian.org>  Sun, 09 Jun 2019 09:24:36 +0300
+
+erlang (1:22.0.1+dfsg-1) experimental; urgency=medium
+
+  * New upstream bugfix release. Upload to experimental.
+
+ -- Sergei Golovan <sgolovan@debian.org>  Thu, 23 May 2019 17:44:11 +0300
+
+erlang (1:22.0+dfsg-1) experimental; urgency=medium
+
+  * New upstream release. Upload to experimental.
+  * Refresh patches.
+
+ -- Sergei Golovan <sgolovan@debian.org>  Wed, 15 May 2019 13:11:33 +0300
+
+erlang (1:22.0~rc3+dfsg-1) experimental; urgency=medium
+
+  * New upstream release candidate. Upload to experimental.
+  * Refresh patches.
+  * Make all architecture-dependent binary packages multi-arch allowed
+    (closes: #926241).
+
+ -- Sergei Golovan <sgolovan@debian.org>  Wed, 24 Apr 2019 14:04:00 +0300
+
+erlang (1:22.0~rc2+dfsg-1) experimental; urgency=medium
+
+  * New upstream release candidate. Upload to experimental.
+  * Refresh patches.
+
+ -- Sergei Golovan <sgolovan@debian.org>  Wed, 27 Mar 2019 09:29:21 +0300
+
+erlang (1:22.0~rc1+dfsg-2) experimental; urgency=medium
+
+  * Fix finding the target triplet for building manpages. This fixes
+    FTBFS on kfreebsd-amd64 and kfreebsd-i386.
+
+ -- Sergei Golovan <sgolovan@debian.org>  Thu, 28 Feb 2019 14:45:49 +0300
+
+erlang (1:22.0~rc1+dfsg-1) experimental; urgency=medium
+
+  * New upstream release candidate. Upload to experimental.
+  * Refresh patches.
+  * Remove patch which disabled vfork() on the hppa architecture.
+
+ -- Sergei Golovan <sgolovan@debian.org>  Wed, 27 Feb 2019 16:57:01 +0300
+
 erlang (1:21.2.6+dfsg-1) unstable; urgency=medium
 
   * New upstream bugfix release.

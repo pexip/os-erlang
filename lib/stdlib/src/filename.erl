@@ -19,8 +19,8 @@
 %%
 -module(filename).
 
--deprecated({find_src,1,next_major_release}).
--deprecated({find_src,2,next_major_release}).
+-deprecated([{find_src,'_',"use filelib:find_source/1,3 instead"}]).
+-deprecated([{safe_relative_path,1,"use filelib:safe_relative_path/2 instead"}]).
 
 %% Purpose: Provides generic manipulation of filenames.
 %%

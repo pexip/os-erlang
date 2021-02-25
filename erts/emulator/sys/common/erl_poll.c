@@ -1,7 +1,7 @@
 /*
  * %CopyrightBegin%
  *
- * Copyright Ericsson AB 2006-2018. All Rights Reserved.
+ * Copyright Ericsson AB 2006-2020. All Rights Reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -374,6 +374,7 @@ uint32_t epoll_events(int kp_fd, int fd);
 #define ERTS_POLL_NOT_WOKEN	0
 #define ERTS_POLL_WOKEN		-1
 #define ERTS_POLL_WOKEN_INTR	1
+#define ERTS_POLL_WSTATE_UNUSED ~0
 
 static ERTS_INLINE void
 reset_wakeup_state(ErtsPollSet *ps)
@@ -384,12 +385,16 @@ reset_wakeup_state(ErtsPollSet *ps)
 static ERTS_INLINE int
 is_woken(ErtsPollSet *ps)
 {
+    if (!ERTS_POLL_USE_WAKEUP(ps))
+        return 0;
     return erts_atomic32_read_acqb(&ps->wakeup_state) != ERTS_POLL_NOT_WOKEN;
 }
 
 static ERTS_INLINE int
 is_interrupted_reset(ErtsPollSet *ps)
 {
+    if (!ERTS_POLL_USE_WAKEUP(ps))
+        return 0;
     return (erts_atomic32_xchg_acqb(&ps->wakeup_state, ERTS_POLL_NOT_WOKEN)
 	    == ERTS_POLL_WOKEN_INTR);
 }
@@ -397,7 +402,10 @@ is_interrupted_reset(ErtsPollSet *ps)
 static ERTS_INLINE void
 woke_up(ErtsPollSet *ps)
 {
-    erts_aint32_t wakeup_state = erts_atomic32_read_acqb(&ps->wakeup_state);
+    erts_aint32_t wakeup_state;
+    if (!ERTS_POLL_USE_WAKEUP(ps))
+        return;
+    wakeup_state = erts_atomic32_read_acqb(&ps->wakeup_state);
     if (wakeup_state == ERTS_POLL_NOT_WOKEN)
 	(void) erts_atomic32_cmpxchg_nob(&ps->wakeup_state,
 					 ERTS_POLL_WOKEN,
@@ -450,6 +458,7 @@ cleanup_wakeup_pipe(ErtsPollSet *ps)
     int intr = 0;
     int fd = ps->wake_fds[0];
     int res;
+    ASSERT(ERTS_POLL_USE_WAKEUP(ps));
     do {
 	char buf[32];
 	res = read(fd, buf, sizeof(buf));
@@ -475,6 +484,13 @@ create_wakeup_pipe(ErtsPollSet *ps)
     int wake_fds[2];
     ps->wake_fds[0] = -1;
     ps->wake_fds[1] = -1;
+    if (!ERTS_POLL_USE_WAKEUP(ps)) {
+        erts_atomic32_init_nob(&ps->wakeup_state,
+                               (erts_aint32_t) ERTS_POLL_WSTATE_UNUSED);
+        return;
+    }
+    erts_atomic32_init_nob(&ps->wakeup_state,
+                           (erts_aint32_t) ERTS_POLL_NOT_WOKEN);
     if (pipe(wake_fds) < 0) {
 	fatal_error("%s:%d:create_wakeup_pipe(): "
 		    "Failed to create pipe: %s (%d)\n",
@@ -483,6 +499,7 @@ create_wakeup_pipe(ErtsPollSet *ps)
 		    erl_errno_id(errno),
 		    errno);
     }
+
     SET_NONBLOCKING(wake_fds[0]);
     SET_NONBLOCKING(wake_fds[1]);
 
@@ -629,12 +646,13 @@ int erts_poll_new_table_len(int old_len, int need_len)
     }
     else {
         new_len = old_len;
+        if (new_len < ERTS_FD_TABLE_MIN_LENGTH)
+            new_len = ERTS_FD_TABLE_MIN_LENGTH;
         do {
             if (new_len < ERTS_FD_TABLE_EXP_THRESHOLD)
                 new_len *= 2;
             else
                 new_len += ERTS_FD_TABLE_EXP_THRESHOLD;
-
         } while (new_len < need_len);
     }
     ASSERT(new_len >= need_len);
@@ -872,8 +890,8 @@ update_pollset(ErtsPollSet *ps, int fd, ErtsPollOp op, ErtsPollEvents events)
         }
     }
 
-#if defined(EV_DISPATCH) && !defined(__OpenBSD__)
-    /* If we have EV_DISPATCH we use it, unless we are on OpenBSD as the
+#if defined(EV_DISPATCH) && !(defined(__OpenBSD__) || defined(__NetBSD__))
+    /* If we have EV_DISPATCH we use it, unless we are on OpenBSD/NetBSD as the
        behavior of EV_EOF seems to be edge triggered there and we need it
        to be level triggered.
 
@@ -924,7 +942,7 @@ update_pollset(ErtsPollSet *ps, int fd, ErtsPollOp op, ErtsPollEvents events)
         ERTS_EV_SET(&evts[len++], fd, EVFILT_WRITE, flags, (void *) ERTS_POLL_EV_OUT);
     }
 #else
-    uint32_t flags = EV_ADD;
+    uint32_t flags = EV_ADD|EV_ENABLE;
 
     if (ps->oneshot) flags |= EV_ONESHOT;
 
@@ -932,9 +950,27 @@ update_pollset(ErtsPollSet *ps, int fd, ErtsPollOp op, ErtsPollEvents events)
         erts_atomic_dec_nob(&ps->no_of_user_fds);
         /* We don't do anything when a delete is issued. The fds will be removed
            when they are triggered, or when they are closed. */
-        events = 0;
+        if (ps->oneshot)
+            events = 0;
+        else {
+            flags = EV_DELETE;
+            events = ERTS_POLL_EV_IN;
+        }
     } else if (op == ERTS_POLL_OP_ADD) {
         erts_atomic_inc_nob(&ps->no_of_user_fds);
+        /* Only allow EV_IN in non-oneshot poll-sets */
+        ASSERT(ps->oneshot || events == ERTS_POLL_EV_IN);
+    } else if (!ps->oneshot) {
+        ASSERT(op == ERTS_POLL_OP_MOD);
+        /* If we are not oneshot and do a mod we should disable the FD.
+           We assume that it is only the read side that is active as
+           currently only read is selected upon in the non-oneshot
+           poll-sets. */
+        if (!events)
+            flags = EV_DISABLE;
+        else
+            flags = EV_ENABLE;
+        events = ERTS_POLL_EV_IN;
     }
 
     if (events & ERTS_POLL_EV_IN) {
@@ -961,16 +997,15 @@ update_pollset(ErtsPollSet *ps, int fd, ErtsPollOp op, ErtsPollEvents events)
         for (i = 0; i < len; i++) {
             const char *flags = "UNKNOWN";
             if (evts[i].flags == (EV_DELETE)) flags = "EV_DELETE";
-            if (evts[i].flags == (EV_ADD|EV_ONESHOT)) flags = "EV_ADD|EV_ONESHOT";
             if (evts[i].flags == (EV_ADD)) flags = "EV_ADD";
-#ifdef EV_DISPATCH
-            if (evts[i].flags == (EV_ADD|EV_DISPATCH)) flags = "EV_ADD|EV_DISPATCH";
-            if (evts[i].flags == (EV_ADD|EV_DISABLE)) flags = "EV_ADD|EV_DISABLE";
-            if (evts[i].flags == (EV_ENABLE|EV_DISPATCH)) flags = "EV_ENABLE|EV_DISPATCH";
+            if (evts[i].flags == (EV_ADD|EV_ONESHOT)) flags = "EV_ADD|EV_ONESHOT";
             if (evts[i].flags == (EV_ENABLE)) flags = "EV_ENABLE";
             if (evts[i].flags == (EV_DISABLE)) flags = "EV_DISABLE";
+            if (evts[i].flags == (EV_ADD|EV_DISABLE)) flags = "EV_ADD|EV_DISABLE";
+#ifdef EV_DISPATCH
+            if (evts[i].flags == (EV_ADD|EV_DISPATCH)) flags = "EV_ADD|EV_DISPATCH";
+            if (evts[i].flags == (EV_ENABLE|EV_DISPATCH)) flags = "EV_ENABLE|EV_DISPATCH";
             if (evts[i].flags == (EV_DISABLE|EV_DISPATCH)) flags = "EV_DISABLE|EV_DISABLE";
-            if (evts[i].flags == (EV_DISABLE)) flags = "EV_DISABLE";
 #endif
 
             keventbp += sprintf(keventbp, "%s{%lu, %s, %s}",i > 0 ? ", " : "",
@@ -1442,13 +1477,13 @@ ERTS_POLL_EXPORT(save_result)(ErtsPollSet *ps, ErtsPollResFd pr[], int max_res, 
 
             if (ERTS_POLL_USE_WAKEUP(ps) && fd == wake_fd) {
                 cleanup_wakeup_pipe(ps);
-                ERTS_POLL_RES_SET_FD(&pr[i], -1);
+                ERTS_POLL_RES_SET_FD(&pr[i], ERTS_SYS_FD_INVALID);
                 ERTS_POLL_RES_SET_EVTS(&pr[i], ERTS_POLL_EV_NONE);
                 res--;
             }
 #if ERTS_POLL_USE_TIMERFD
             else if (fd == ps->timer_fd) {
-                ERTS_POLL_RES_SET_FD(&pr[i], -1);
+                ERTS_POLL_RES_SET_FD(&pr[i], ERTS_SYS_FD_INVALID);
                 ERTS_POLL_RES_SET_EVTS(&pr[i], ERTS_POLL_EV_NONE);
                 res--;
             }
@@ -1938,8 +1973,7 @@ ERTS_POLL_EXPORT(erts_poll_wait)(ErtsPollSet *ps,
         ERTS_MSACC_SET_STATE_CACHED(ERTS_MSACC_STATE_CHECK_IO);
     }
 
-    if (ERTS_POLL_USE_WAKEUP(ps))
-        woke_up(ps);
+    woke_up(ps);
 
     if (res < 0) {
 #if ERTS_POLL_USE_SELECT
@@ -2029,6 +2063,21 @@ ERTS_POLL_EXPORT(erts_poll_init)(int *concurrent_updates)
     max_fds = OPEN_MAX;
 #endif
 
+    if (max_fds < 0 && errno == 0) {
+        /* On macOS 11 and higher, it possible to have an unlimited
+         * number of open files per process.  ERTS will need an actual
+         * limit, though, so we will set it to a largish value.  The
+         * number below is the hard number of file descriptors per
+         * process as returned by `sysctl kern.maxfilesperproc`, which
+         * seems to be the limit in practice.
+         *
+         * Note: The size of the port table will be based on max_fds,
+         * so we don't want to set it to a huge value such as
+         * MAX_INT.
+         */
+        max_fds = 24576;
+    }
+
 #if ERTS_POLL_USE_SELECT && defined(FD_SETSIZE) && \
 	!defined(_DARWIN_UNLIMITED_SELECT)
     if (max_fds > FD_SETSIZE)
@@ -2117,7 +2166,6 @@ ERTS_POLL_EXPORT(erts_poll_create_pollset)(int id)
         ps->oneshot = 1;
 #endif
 
-    erts_atomic32_init_nob(&ps->wakeup_state, (erts_aint32_t) 0);
     create_wakeup_pipe(ps);
 
 #if ERTS_POLL_USE_TIMERFD
@@ -2329,7 +2377,7 @@ uint32_t epoll_events(int kp_fd, int fd)
     char s[256];
     FILE *f;
     unsigned int pos, flags, mnt_id;
-    int line = 0;
+    int hdr_lines, line = 1;
     sprintf(fname,"/proc/%d/fdinfo/%d",getpid(), kp_fd);
     f = fopen(fname,"r");
     if (!f) {
@@ -2337,13 +2385,14 @@ uint32_t epoll_events(int kp_fd, int fd)
         ASSERT(0);
         return 0;
     }
-    if (fscanf(f,"pos:\t%x\nflags:\t%x", &pos, &flags) != 2) {
+    hdr_lines = fscanf(f,"pos:\t%x\nflags:\t%x\nmnt_id:\t%x\n",
+                       &pos, &flags, &mnt_id);
+    if (hdr_lines < 2) {
         fprintf(stderr,"failed to parse file %s, errno = %d\n", fname, errno);
         ASSERT(0);
         return 0;
     }
-    if (fscanf(f,"\nmnt_id:\t%x\n", &mnt_id));
-    line += 3;
+    line += hdr_lines;
     while (fgets(s, sizeof(s) / sizeof(*s), f)) {
         /* tfd:       10 events: 40000019 data:       180000000a */
         int ev_fd;
@@ -2354,6 +2403,7 @@ uint32_t epoll_events(int kp_fd, int fd)
             fprintf(stderr,"failed to parse file %s on line %d, errno = %d\n", fname,
                     line,
                     errno);
+            fclose(f);
             return 0;
         }
         if (fd == ev_fd) {
@@ -2396,7 +2446,7 @@ ERTS_POLL_EXPORT(erts_poll_get_selected_events)(ErtsPollSet *ps,
     char s[256];
     FILE *f;
     unsigned int pos, flags, mnt_id;
-    int line = 0;
+    int hdr_lines, line = 1;
     sprintf(fname,"/proc/%d/fdinfo/%d",getpid(), ps->kp_fd);
     for (fd = 0; fd < len; fd++)
         ev[fd] = ERTS_POLL_EV_NONE;
@@ -2405,13 +2455,15 @@ ERTS_POLL_EXPORT(erts_poll_get_selected_events)(ErtsPollSet *ps,
         fprintf(stderr,"failed to open file %s, errno = %d\n", fname, errno);
         return;
     }
-    if (fscanf(f,"pos:\t%x\nflags:\t%x", &pos, &flags) != 2) {
+    hdr_lines = fscanf(f,"pos:\t%x\nflags:\t%x\nmnt_id:\t%x\n",
+                       &pos, &flags, &mnt_id);
+    if (hdr_lines < 2) {
         fprintf(stderr,"failed to parse file %s, errno = %d\n", fname, errno);
         ASSERT(0);
+        fclose(f);
         return;
     }
-    if (fscanf(f,"\nmnt_id:\t%x\n", &mnt_id));
-    line += 3;
+    line += hdr_lines;
     while (fgets(s, sizeof(s) / sizeof(*s), f)) {
         /* tfd:       10 events: 40000019 data:       180000000a */
         int fd;
@@ -2422,6 +2474,7 @@ ERTS_POLL_EXPORT(erts_poll_get_selected_events)(ErtsPollSet *ps,
             fprintf(stderr,"failed to parse file %s on line %d, errno = %d\n",
                     fname, line, errno);
             ASSERT(0);
+            fclose(f);
             return;
         }
         if (fd == ps->wake_fds[0] || fd == ps->wake_fds[1])
@@ -2437,6 +2490,7 @@ ERTS_POLL_EXPORT(erts_poll_get_selected_events)(ErtsPollSet *ps,
         ev[fd] = (ERTS_POLL_EV_IN|ERTS_POLL_EV_OUT) & ERTS_POLL_EV_N2E(events);
         line++;
     }
+    fclose(f);
 #else
     for (fd = 0; fd < len; fd++)
         ev[fd] = ERTS_POLL_EV_NONE;

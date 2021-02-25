@@ -5,7 +5,7 @@ This software is subject to the following Copyrights and Licenses:
 
 %CopyrightBegin%
 
-Copyright Ericsson AB 1997-2018. All Rights Reserved.
+Copyright Ericsson AB 1997-2020. All Rights Reserved.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -62,7 +62,7 @@ Email domain:     cam.ac.uk
 University of Cambridge Computing Service,
 Cambridge, England.
 
-Copyright (c) 1997-2018 University of Cambridge
+Copyright (c) 1997-2020 University of Cambridge
 All rights reserved.
 
 
@@ -71,9 +71,9 @@ PCRE JUST-IN-TIME COMPILATION SUPPORT
 
 Written by:       Zoltan Herczeg
 Email local part: hzmester
-Emain domain:     freemail.hu
+Email domain:     freemail.hu
 
-Copyright(c) 2010-2018 Zoltan Herczeg
+Copyright(c) 2010-2020 Zoltan Herczeg
 All rights reserved.
 
 
@@ -82,9 +82,9 @@ STACK-LESS JUST-IN-TIME COMPILER
 
 Written by:       Zoltan Herczeg
 Email local part: hzmester
-Emain domain:     freemail.hu
+Email domain:     freemail.hu
 
-Copyright(c) 2009-2018 Zoltan Herczeg
+Copyright(c) 2009-2020 Zoltan Herczeg
 All rights reserved.
 
 

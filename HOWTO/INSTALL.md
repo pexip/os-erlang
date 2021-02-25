@@ -217,6 +217,12 @@ Build the documentation.
 
     $ make docs
 
+It is possible to limit which types of documentation is build by passing the `DOC_TARGETS`
+environment variable to `make docs`. The currently available types are: `html`, `pdf`, `man` and
+`chunks`. Example:
+
+    $ make docs DOC_TARGETS=chunks
+
 #### Build Issues ####
 
 We have sometimes experienced problems with Oracle's `java` running out of
@@ -247,6 +253,8 @@ or using the `release_docs` target.
 
         $ make release_docs RELEASE_ROOT=<release dir>
 
+It is possible to limit which types of documentation is released using the same `DOC_TARGETS`
+environment variable as when building documentation.
 
 ### Accessing the Documentation ###
 
@@ -261,6 +269,8 @@ After installation you can access the documentation by
 *   Browsing the html pages by loading the page `/usr/local/lib/erlang/doc/erlang/index.html`
     or `<BaseDir>/lib/erlang/doc/erlang/index.html` if the prefix option has been used.
 
+*   Read the embedded documentation by using the built-in shell functions `h/1,2,3` or
+    `ht/1,2,3`.
 
 ### How to Install the Pre-formatted Documentation ###
 
@@ -338,6 +348,8 @@ use the `--prefix` argument like this: `./configure --prefix=<Dir>`.
 Some of the available `configure` options are:
 
 *   `--prefix=PATH` - Specify installation prefix.
+*   `--disable-parallel-configure` - Disable parallel execution of
+    `configure` scripts (parallel execution is enabled by default)
 *   `--{enable,disable}-kernel-poll` - Kernel poll support (enabled by
     default if possible)
 *   `--{enable,disable}-hipe` - HiPE support (enabled by default on supported
@@ -351,6 +363,7 @@ Some of the available `configure` options are:
     `(g)cc`
 *   `--enable-m32-build` - Build 32-bit binaries using the `-m32` flag to
     `(g)cc`
+*   `--{enable,disable}-pie` - Build position independent executable binaries.
 *   `--with-assumed-cache-line-size=SIZE` - Set assumed cache-line size in
     bytes. Default is 64. Valid values are powers of two between and
     including 16 and 8192. The runtime system use this value in order to
@@ -787,7 +800,7 @@ Use `hipe:help_options/0` to print out the available options.
    [html documentation]: http://www.erlang.org/download/otp_doc_html_%OTP-VSN%.tar.gz
    [man pages]: http://www.erlang.org/download/otp_doc_man_%OTP-VSN%.tar.gz
    [the released source tar ball]: http://www.erlang.org/download/otp_src_%OTP-VSN%.tar.gz
-   [System Principles]: ../system_principles/system_principles
+   [System Principles]: system/system_principles:system_principles
    [native build]: #How-to-Build-and-Install-ErlangOTP
    [cross build]: INSTALL-CROSS.md
    [Required Utilities]: #Required-Utilities

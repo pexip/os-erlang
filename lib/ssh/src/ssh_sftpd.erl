@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2005-2018. All Rights Reserved.
+%% Copyright Ericsson AB 2005-2020. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -38,7 +38,9 @@
 
 -export([init/1, handle_ssh_msg/2, handle_msg/2, terminate/2]).
 
--export([dbg_trace/3]).
+-behaviour(ssh_dbg).
+-export([ssh_dbg_trace_points/0, ssh_dbg_flags/1, ssh_dbg_on/1, ssh_dbg_off/1, ssh_dbg_format/2]).
+
 
 -record(state, {
 	  xf,   			% [{channel,ssh_xfer states}...]
@@ -58,7 +60,18 @@
 %%====================================================================
 %% API
 %%====================================================================
--spec subsystem_spec(list()) -> subsystem_spec().
+-spec subsystem_spec(Options) -> Spec when
+      Options :: [ {cwd, string()} |
+                   {file_handler, CbMod | {CbMod, FileState}} |
+                   {max_files, integer()} |
+                   {root, string()} |
+                   {sftpd_vsn, integer()}
+                 ],
+      Spec :: {Name, {CbMod,Options}},
+      Name :: string(),
+      CbMod :: atom(),
+      FileState :: term().
+
 
 subsystem_spec(Options) ->
     {"sftp", {?MODULE, Options}}.
@@ -508,11 +521,8 @@ close_our_file({_,Fd}, FileMod, FS0) ->
     FS1.
 
 %%% stat: do the stat
-stat(Vsn, ReqId, Data, State, F) when Vsn =< 3->
-    <<?UINT32(BLen), BPath:BLen/binary>> = Data,
-    stat(ReqId, unicode:characters_to_list(BPath), State, F);
-stat(Vsn, ReqId, Data, State, F) when Vsn >= 4->
-    <<?UINT32(BLen), BPath:BLen/binary, ?UINT32(_Flags)>> = Data,
+stat(_Vsn, ReqId, Data, State, F) ->
+    <<?UINT32(BLen), BPath:BLen/binary, _/binary>> = Data,
     stat(ReqId, unicode:characters_to_list(BPath), State, F).
 
 fstat(Vsn, ReqId, Data, State) when Vsn =< 3->
@@ -943,14 +953,19 @@ maybe_increase_recv_window(ConnectionManager, ChannelId, Options) ->
 %%%# Tracing
 %%%#
 
-dbg_trace(points,         _,  _) -> [terminate];
+ssh_dbg_trace_points() -> [terminate].
 
-dbg_trace(flags,  terminate,  _) -> [c];
-dbg_trace(on,     terminate,  _) -> dbg:tp(?MODULE,  terminate, 2, x);
-dbg_trace(off,    terminate,  _) -> dbg:ctpg(?MODULE, terminate, 2);
-dbg_trace(format, terminate, {call, {?MODULE,terminate, [Reason, State]}}) ->
+ssh_dbg_flags(terminate) -> [c].
+
+ssh_dbg_on(terminate) -> dbg:tp(?MODULE,  terminate, 2, x).
+
+ssh_dbg_off(terminate) -> dbg:ctpg(?MODULE, terminate, 2).
+
+ssh_dbg_format(terminate, {call, {?MODULE,terminate, [Reason, State]}}) ->
     ["SftpD Terminating:\n",
      io_lib:format("Reason: ~p,~nState:~n~s", [Reason, wr_record(State)])
-    ].
+    ];
+ssh_dbg_format(terminate, {return_from, {?MODULE,terminate,2}, _Ret}) ->
+    skip.
 
 ?wr_record(state).

@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 1996-2018. All Rights Reserved.
+%% Copyright Ericsson AB 1996-2020. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -26,7 +26,7 @@
 	 control_application/1,
 	 change_application_data/2, prep_config_change/0, config_change/1,
 	 which_applications/0, which_applications/1,
-	 loaded_applications/0, info/0,
+	 loaded_applications/0, info/0, set_env/2,
 	 get_pid_env/2, get_env/2, get_pid_all_env/1, get_all_env/1,
 	 get_pid_key/2, get_key/2, get_pid_all_key/1, get_all_key/1,
 	 get_master/1, get_application/1, get_application_module/1,
@@ -36,6 +36,9 @@
 %% Internal exports
 -export([handle_call/3, handle_cast/2, handle_info/2, terminate/2, 
 	 code_change/3, init_starter/4, get_loaded/1]).
+
+%% logger callback
+-export([format_log/1, format_log/2]).
 
 %% Test exports, only to be used from the test suites
 -export([test_change_apps/2]).
@@ -268,13 +271,12 @@ which_applications(Timeout) ->
     gen_server:call(?AC, which_applications, Timeout).
 
 loaded_applications() ->
-    ets:filter(ac_tab,
-	       fun([{{loaded, AppName}, #appl{descr = Descr, vsn = Vsn}}]) ->
-		       {true, {AppName, Descr, Vsn}};
-		  (_) ->
-		       false
-	       end,
-	       []).
+    ets:select(ac_tab,
+               [{
+                  {{loaded, '$1'}, #appl{descr = '$2', vsn = '$3', _ = '_'}},
+                  [],
+                  [{{'$1', '$2', '$3'}}]
+                }]).
 
 %% Returns some debug info
 info() ->
@@ -344,9 +346,6 @@ get_pid_all_env(Master) ->
 get_all_env(AppName) ->
     map(fun([Key, Val]) -> {Key, Val} end,
 	ets:match(ac_tab, {{env, AppName, '$1'}, '$2'})).
-
-
-
 
 get_pid_key(Master, Key) ->
     case ets:match(ac_tab, {{application_master, '$1'}, Master}) of
@@ -461,6 +460,15 @@ permit_application(ApplName, Flag) ->
 		    {permit_application, ApplName, Flag},
 		    infinity).
 
+set_env(Config, Opts) ->
+    case check_conf_data(Config) of
+	ok ->
+	    Timeout = proplists:get_value(timeout, Opts, 5000),
+	    gen_server:call(?AC, {set_env, Config, Opts}, Timeout);
+
+	{error, _} = Error ->
+	    Error
+    end.
 
 set_env(AppName, Key, Val) ->
     gen_server:call(?AC, {set_env, AppName, Key, Val, []}).
@@ -528,19 +536,15 @@ check_conf_data([]) ->
 check_conf_data(ConfData) when is_list(ConfData) ->
     [Application | ConfDataRem] = ConfData,
     case Application of
-	{kernel, List} when is_list(List) ->
-	    case check_para_kernel(List) of
-		ok ->
-		    check_conf_data(ConfDataRem);
-		Error1 ->
-		    Error1
-	    end;
 	{AppName, List} when is_atom(AppName), is_list(List) ->
-	    case check_para(List, atom_to_list(AppName)) of
-		ok ->
-		    check_conf_data(ConfDataRem);
-		Error2 ->
-		    Error2
+	    case lists:keymember(AppName, 1, ConfDataRem) of
+		true ->
+		    {error, "duplicate application config: " ++ atom_to_list(AppName)};
+		false ->
+		    case check_para(List, AppName) of
+			ok -> check_conf_data(ConfDataRem);
+			Error -> Error
+		    end
 	    end;
 	{AppName, List} when is_list(List)  ->
 	    ErrMsg = "application: "
@@ -553,36 +557,39 @@ check_conf_data(ConfData) when is_list(ConfData) ->
 		++ "; parameters must be a list",
 	    {error, ErrMsg};
 	Else ->
-	    ErrMsg = "invalid application name: " ++ 
-		lists:flatten(io_lib:format(" ~tp",[Else])),
+	    ErrMsg = "invalid application config: "
+		++ lists:flatten(io_lib:format("~tp",[Else])),
 	    {error, ErrMsg}
     end;
 check_conf_data(_ConfData) ->
-    {error, 'configuration must be a list ended by <dot><whitespace>'}.
-    
+    {error, "configuration must be a list ended by <dot><whitespace>"}.
+
+
+check_para([], _AppName) ->
+    ok;
+check_para([{Para, Val} | ParaList], AppName) when is_atom(Para) ->
+    case lists:keymember(Para, 1, ParaList) of
+	true ->
+	    ErrMsg =  "application: " ++ atom_to_list(AppName)
+		++ "; duplicate parameter: " ++ atom_to_list(Para),
+	    {error, ErrMsg};
+	false ->
+	    case check_para_value(Para, Val, AppName) of
+		ok -> check_para(ParaList, AppName);
+		{error, _} = Error -> Error
+	    end
+    end;
+check_para([{Para, _Val} | _ParaList], AppName) ->
+    {error, "application: " ++ atom_to_list(AppName) ++ "; invalid parameter name: " ++
+     lists:flatten(io_lib:format("~tp",[Para]))};
+check_para([Else | _ParaList], AppName) ->
+    {error, "application: " ++ atom_to_list(AppName) ++ "; invalid parameter: " ++
+     lists:flatten(io_lib:format("~tp",[Else]))}.
+
+check_para_value(distributed, Apps, kernel) -> check_distributed(Apps);
+check_para_value(_Para, _Val, _AppName) -> ok.
 
 %% Special check of distributed parameter for kernel
-check_para_kernel([]) ->
-    ok;
-check_para_kernel([{distributed, Apps} | ParaList]) when is_list(Apps) ->
-    case check_distributed(Apps) of
-	{error, _ErrorMsg} = Error ->
-	    Error;
-	_ ->
-	    check_para_kernel(ParaList)
-    end;
-check_para_kernel([{distributed, _Apps} | _ParaList]) ->
-    {error, "application: kernel; erroneous parameter: distributed"};
-check_para_kernel([{Para, _Val} | ParaList]) when is_atom(Para) ->
-    check_para_kernel(ParaList);
-check_para_kernel([{Para, _Val} | _ParaList]) ->
-    {error, "application: kernel; invalid parameter: " ++ 
-     lists:flatten(io_lib:format("~tp",[Para]))};
-check_para_kernel(Else) ->
-    {error, "application: kernel; invalid parameter list: " ++ 
-     lists:flatten(io_lib:format("~tp",[Else]))}.
-    
-
 check_distributed([]) ->
     ok;
 check_distributed([{App, List} | Apps]) when is_atom(App), is_list(List) ->
@@ -593,18 +600,6 @@ check_distributed([{App, Time, List} | Apps]) when is_atom(App), is_integer(Time
     check_distributed(Apps);
 check_distributed(_Else) ->
     {error, "application: kernel; erroneous parameter: distributed"}.
-
-
-check_para([], _AppName) ->
-    ok;
-check_para([{Para, _Val} | ParaList], AppName) when is_atom(Para) ->
-    check_para(ParaList, AppName);
-check_para([{Para, _Val} | _ParaList], AppName) ->
-    {error, "application: " ++ AppName ++ "; invalid parameter: " ++ 
-     lists:flatten(io_lib:format("~tp",[Para]))};
-check_para([Else | _ParaList], AppName) ->
-    {error, "application: " ++ AppName ++ "; invalid parameter: " ++ 
-     lists:flatten(io_lib:format("~tp",[Else]))}.
 
 
 -type calls() :: 'info' | 'prep_config_change' | 'which_applications'
@@ -862,6 +857,16 @@ handle_call(which_applications, _From, S) ->
 		       end
 	       end, S#state.running),
     {reply, Reply, S};
+
+handle_call({set_env, Config, Opts}, _From, S) ->
+    _ = [add_env(AppName, Env) || {AppName, Env} <- Config],
+
+    case proplists:get_value(persistent, Opts, false) of
+	true ->
+	    {reply, ok, S#state{conf_data = merge_env(S#state.conf_data, Config)}};
+	false ->
+	    {reply, ok, S}
+    end;
 
 handle_call({set_env, AppName, Key, Val, Opts}, _From, S) ->
     ets:insert(ac_tab, {{env, AppName, Key}, Val}),
@@ -1801,7 +1806,7 @@ check_conf() ->
     case init:get_argument(config) of
 	{ok, Files} ->
 	    {ok, lists:foldl(
-		   fun([File], Env) ->
+		   fun(File, Env) ->
 			   BFName = filename:basename(File,".config"),
 			   FName = filename:join(filename:dirname(File),
 						 BFName ++ ".config"),
@@ -1833,7 +1838,7 @@ check_conf() ->
 			       {error, {Line, _Mod, Str}} ->
 				   throw({error, {FName, Line, Str}})
 			   end
-		   end, [], Files)};
+		   end, [], lists:append(Files))};
 	_ -> {ok, []}
     end.
 
@@ -1927,9 +1932,12 @@ info_started(Name, Node) ->
                 report=>[{application, Name},
                          {started_at, Node}]},
               #{domain=>[otp,sasl],
-                report_cb=>fun logger:format_otp_report/1,
+                report_cb=>fun application_controller:format_log/2,
                 logger_formatter=>#{title=>"PROGRESS REPORT"},
-                error_logger=>#{tag=>info_report,type=>progress}}).
+                error_logger=>#{tag=>info_report,
+                                type=>progress,
+                                report_cb=>
+                                    fun application_controller:format_log/1}}).
 
 info_exited(Name, Reason, Type) ->
     ?LOG_NOTICE(#{label=>{application_controller,exit},
@@ -1937,8 +1945,140 @@ info_exited(Name, Reason, Type) ->
                            {exited, Reason},
                            {type, Type}]},
                 #{domain=>[otp],
-                  report_cb=>fun logger:format_otp_report/1,
-                  error_logger=>#{tag=>info_report,type=>std_info}}).
+                  report_cb=>fun application_controller:format_log/2,
+                error_logger=>#{tag=>info_report,
+                                type=>std_info,
+                                report_cb=>
+                                    fun application_controller:format_log/1}}).
+
+%% format_log/1 is the report callback used by Logger handler
+%% error_logger only. It is kept for backwards compatibility with
+%% legacy error_logger event handlers. This function must always
+%% return {Format,Args} compatible with the arguments in this module's
+%% calls to error_logger prior to OTP-21.0.
+format_log(LogReport) ->
+    Depth = error_logger:get_format_depth(),
+    FormatOpts = #{chars_limit => unlimited,
+                   depth => Depth,
+                   single_line => false,
+                   encoding => utf8},
+    format_log_multi(limit_report(LogReport, Depth), FormatOpts).
+
+limit_report(LogReport, unlimited) ->
+    LogReport;
+limit_report(#{label:={application_controller,progress},
+               report:=[{application,_}=Application,
+                        {started_at,Node}]}=LogReport,
+             Depth) ->
+    LogReport#{report=>[Application,
+                        {started_at,io_lib:limit_term(Node, Depth)}]};
+limit_report(#{label:={application_controller,exit},
+               report:=[{application,_}=Application,
+                        {exited,Reason},{type,Type}]}=LogReport,
+             Depth) ->
+    LogReport#{report=>[Application,
+                        {exited,io_lib:limit_term(Reason, Depth)},
+                        {type,io_lib:limit_term(Type, Depth)}]}.
+
+%% format_log/2 is the report callback for any Logger handler, except
+%% error_logger.
+format_log(Report, FormatOpts0) ->
+    Default = #{chars_limit => unlimited,
+                depth => unlimited,
+                single_line => false,
+                encoding => utf8},
+    FormatOpts = maps:merge(Default, FormatOpts0),
+    IoOpts =
+        case FormatOpts of
+            #{chars_limit:=unlimited} ->
+                [];
+            #{chars_limit:=Limit} ->
+                [{chars_limit,Limit}]
+        end,
+    {Format,Args} = format_log_single(Report, FormatOpts),
+    io_lib:format(Format, Args, IoOpts).
+
+format_log_single(#{label:={application_controller,progress},
+                    report:=[{application,Name},{started_at,Node}]},
+                  #{single_line:=true,depth:=Depth}=FormatOpts) ->
+    P = p(FormatOpts),
+    Format = "Application: "++P++". Started at: "++P++".",
+    Args =
+        case Depth of
+            unlimited ->
+                [Name,Node];
+            _ ->
+                [Name,Depth,Node,Depth]
+        end,
+    {Format,Args};
+format_log_single(#{label:={application_controller,exit},
+                    report:=[{application,Name},
+                             {exited,Reason},
+                             {type,Type}]},
+                  #{single_line:=true,depth:=Depth}=FormatOpts) ->
+    P = p(FormatOpts),
+    Format = lists:append(["Application: ",P,". Exited: ",P,
+                            ". Type: ",P,"."]),
+    Args =
+        case Depth of
+            unlimited ->
+                [Name,Reason,Type];
+            _ ->
+                [Name,Depth,Reason,Depth,Type,Depth]
+        end,
+    {Format,Args};
+format_log_single(Report,FormatOpts) ->
+    format_log_multi(Report,FormatOpts).
+
+format_log_multi(#{label:={application_controller,progress},
+                   report:=[{application,Name},
+                            {started_at,Node}]},
+                 #{depth:=Depth}=FormatOpts) ->
+    P = p(FormatOpts),
+    Format =
+        lists:append(
+          ["    application: ",P,"~n",
+           "    started_at: ",P,"~n"]),
+    Args =
+        case Depth of
+            unlimited ->
+                [Name,Node];
+            _ ->
+                [Name,Depth,Node,Depth]
+        end,
+    {Format,Args};
+format_log_multi(#{label:={application_controller,exit},
+                   report:=[{application,Name},
+                            {exited,Reason},
+                            {type,Type}]},
+                 #{depth:=Depth}=FormatOpts) ->
+    P = p(FormatOpts),
+    Format =
+        lists:append(
+          ["    application: ",P,"~n",
+           "    exited: ",P,"~n",
+           "    type: ",P,"~n"]),
+    Args =
+        case Depth of
+            unlimited ->
+                [Name,Reason,Type];
+            _ ->
+                [Name,Depth,Reason,Depth,Type,Depth]
+        end,
+    {Format,Args}.
+
+p(#{single_line:=Single,depth:=Depth,encoding:=Enc}) ->
+    "~"++single(Single)++mod(Enc)++p(Depth);
+p(unlimited) ->
+    "p";
+p(_Depth) ->
+    "P".
+
+single(true) -> "0";
+single(false) -> "".
+
+mod(latin1) -> "";
+mod(_) -> "t".
 
 %%-----------------------------------------------------------------
 %% Reply to all processes waiting this application to be started.  

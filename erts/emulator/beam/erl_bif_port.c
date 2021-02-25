@@ -1,7 +1,7 @@
 /*
  * %CopyrightBegin%
  *
- * Copyright Ericsson AB 2001-2018. All Rights Reserved.
+ * Copyright Ericsson AB 2001-2020. All Rights Reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -44,6 +44,7 @@
 #include "erl_bif_unique.h"
 #include "dtrace-wrapper.h"
 #include "erl_proc_sig_queue.h"
+#include "erl_osenv.h"
 
 static Port *open_port(Process* p, Eterm name, Eterm settings, int *err_typep, int *err_nump);
 static int merge_global_environment(erts_osenv_t *env, Eterm key_value_pairs);
@@ -210,7 +211,7 @@ BIF_RETTYPE erts_internal_port_command_3(BIF_ALIST_3)
 	    ERTS_BIF_PREP_RET(res, am_false);
 	else {
 	    erts_suspend(BIF_P, ERTS_PROC_LOCK_MAIN, prt);
-	    ERTS_BIF_PREP_YIELD3(res, bif_export[BIF_erts_internal_port_command_3],
+	    ERTS_BIF_PREP_YIELD3(res, &bif_trap_export[BIF_erts_internal_port_command_3],
 				 BIF_P, BIF_ARG_1, BIF_ARG_2, BIF_ARG_3);
 	}
 	break;
@@ -691,6 +692,10 @@ open_port(Process* p, Eterm name, Eterm settings, int *err_typep, int *err_nump)
     opts.spawn_type = ERTS_SPAWN_ANY; 
     opts.argv = NULL;
     opts.parallelism = erts_port_parallelism;
+    opts.high_watermark = 8192;
+    opts.low_watermark = opts.high_watermark / 2;
+    opts.port_watermarks_set = 0;
+    opts.msgq_watermarks_set = 0;
     erts_osenv_init(&opts.envir);
 
     linebuf = 0;
@@ -782,6 +787,62 @@ open_port(Process* p, Eterm name, Eterm settings, int *err_typep, int *err_nump)
 			opts.parallelism = 0;
 		    else
 			goto badarg;
+                } else if (option == am_busy_limits_port) {
+                    Uint high, low;
+                    if (*tp == am_disabled)
+                        low = high = ERL_DRV_BUSY_MSGQ_DISABLED;
+                    else if (!is_tuple_arity(*tp, 2))
+                        goto badarg;
+                    else {
+                        Eterm *wtp = tuple_val(*tp);
+                        if (!term_to_Uint(wtp[1], &low))
+                            goto badarg;
+                        if (!term_to_Uint(wtp[2], &high))
+                            goto badarg;
+                        if (high < ERL_DRV_BUSY_MSGQ_LIM_MIN)
+                            goto badarg;
+                        if (high > ERL_DRV_BUSY_MSGQ_LIM_MAX)
+                            goto badarg;
+                        if (low < ERL_DRV_BUSY_MSGQ_LIM_MIN)
+                            goto badarg;
+                        if (low > ERL_DRV_BUSY_MSGQ_LIM_MAX)
+                            goto badarg;
+                        if (high == ~((Uint) 0) || low == ~((Uint) 0))
+                            goto badarg;
+                        if (low > high)
+                            low = high;
+                    }
+                    opts.low_watermark = low;
+                    opts.high_watermark = high;
+                    opts.port_watermarks_set = !0;
+                } else if (option == am_busy_limits_msgq) {
+                    Uint high, low;
+                    if (*tp == am_disabled)
+                        low = high = ERL_DRV_BUSY_MSGQ_DISABLED;
+                    else if (!is_tuple_arity(*tp, 2))
+                        goto badarg;
+                    else {
+                        Eterm *wtp = tuple_val(*tp);
+                        if (!term_to_Uint(wtp[1], &low))
+                            goto badarg;
+                        if (!term_to_Uint(wtp[2], &high))
+                            goto badarg;
+                        if (high < ERL_DRV_BUSY_MSGQ_LIM_MIN)
+                            goto badarg;
+                        if (high > ERL_DRV_BUSY_MSGQ_LIM_MAX)
+                            goto badarg;
+                        if (low < ERL_DRV_BUSY_MSGQ_LIM_MIN)
+                            goto badarg;
+                        if (low > ERL_DRV_BUSY_MSGQ_LIM_MAX)
+                            goto badarg;
+                        if (high == ~((Uint) 0) || low == ~((Uint) 0))
+                            goto badarg;
+                        if (low > high)
+                            low = high;
+                    }
+                    opts.low_msgq_watermark = low;
+                    opts.high_msgq_watermark = high;
+                    opts.msgq_watermarks_set = !0;
 		} else {
 		    goto badarg;
 		}
@@ -820,6 +881,7 @@ open_port(Process* p, Eterm name, Eterm settings, int *err_typep, int *err_nump)
 	    nargs = list_val(*nargs);
 	}
     }
+
     if (opts.read_write == 0)	/* implement default */
 	opts.read_write = DO_READ|DO_WRITE;
 
@@ -827,7 +889,7 @@ open_port(Process* p, Eterm name, Eterm settings, int *err_typep, int *err_nump)
     if((linebuf && opts.packet_bytes) || 
        (opts.redir_stderr && !opts.use_stdio)) {
 	goto badarg;
-}
+    }
 
     /* If we lacked an env option, fill in the global environment without
      * changes. */
@@ -891,10 +953,6 @@ open_port(Process* p, Eterm name, Eterm settings, int *err_typep, int *err_nump)
 
 	    driver = &spawn_driver;
 	} else if (*tp == am_fd) { /* An fd port */
-	    int n;
-	    struct Sint_buf sbuf;
-	    char* p;
-
 	    if (arity != make_arityval(3)) {
 		goto badarg;
 	    }
@@ -904,15 +962,9 @@ open_port(Process* p, Eterm name, Eterm settings, int *err_typep, int *err_nump)
 	    opts.ifd = unsigned_val(tp[1]);
 	    opts.ofd = unsigned_val(tp[2]);
 
-	    /* Syntesize name from input and output descriptor. */
-	    name_buf = erts_alloc(ERTS_ALC_T_TMP,
-				  2*sizeof(struct Sint_buf) + 2); 
-	    p = Sint_to_buf(opts.ifd, &sbuf);
-	    n = sys_strlen(p);
-	    sys_strncpy(name_buf, p, n);
-	    name_buf[n] = '/';
-	    p = Sint_to_buf(opts.ofd, &sbuf);
-	    sys_strcpy(name_buf+n+1, p);
+            /* Syntesize name from input and output descriptor. */
+            name_buf = erts_alloc(ERTS_ALC_T_TMP, 256);
+            erts_snprintf(name_buf, 256, "%i/%i", opts.ifd, opts.ofd);
 
 	    driver = &fd_driver;
 	} else {
@@ -1237,22 +1289,25 @@ static int http_request_erl(void* arg, const http_atom_t* meth,
 }
 
 static int
-http_header_erl(void* arg, const http_atom_t* name, const char* name_ptr,
-                int name_len, const char* value_ptr, int value_len)
+http_header_erl(void* arg, const http_atom_t* name,
+		const char* name_ptr, int name_len,
+		const char* oname_ptr, int oname_len,
+		const char* value_ptr, int value_len)
 {
     struct packet_callback_args* pca = (struct packet_callback_args*) arg;    
-    Eterm bit_term, name_term, val_term;
+    Eterm bit_term, name_term, oname_term, val_term;
     Uint sz = 6;
     Eterm* hp;
 #ifdef DEBUG
     Eterm* hend;
 #endif
     
-    /* {http_header,Bit,Name,IValue,Value} */
+    /* {http_header,Bit,Name,Oname,Value} */
 
     if (name == NULL) {
 	http_bld_string(pca, NULL, &sz, name_ptr, name_len);
     }
+    http_bld_string(pca, NULL, &sz, oname_ptr, oname_len);
     http_bld_string(pca, NULL, &sz, value_ptr, value_len);
 
     hp = HAlloc(pca->p, sz);
@@ -1269,8 +1324,9 @@ http_header_erl(void* arg, const http_atom_t* name, const char* name_ptr,
 	name_term = http_bld_string(pca, &hp,NULL,name_ptr,name_len);
     }
 
+    oname_term = http_bld_string(pca, &hp, NULL, oname_ptr, oname_len);
     val_term = http_bld_string(pca, &hp, NULL, value_ptr, value_len);
-    pca->res = TUPLE5(hp, am_http_header, bit_term, name_term, am_undefined, val_term);
+    pca->res = TUPLE5(hp, am_http_header, bit_term, name_term, oname_term, val_term);
     ASSERT(hp+6==hend);
     return 1;
 }   

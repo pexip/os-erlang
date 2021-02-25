@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 1996-2018. All Rights Reserved.
+%% Copyright Ericsson AB 1996-2020. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -155,6 +155,7 @@ give_away(_, _, _) ->
       Tab :: tab(),
       InfoList :: [InfoTuple],
       InfoTuple :: {compressed, boolean()}
+                 | {decentralized_counters, boolean()}
                  | {heir, pid() | none}
                  | {id, tid()}
                  | {keypos, pos_integer()}
@@ -174,7 +175,7 @@ info(_) ->
 
 -spec info(Tab, Item) -> Value | undefined when
       Tab :: tab(),
-      Item :: compressed | fixed | heir | id | keypos | memory
+      Item :: binary | compressed | decentralized_counters | fixed | heir | id | keypos | memory
             | name | named_table | node | owner | protection
             | safe_fixed | safe_fixed_monotonic_time | size | stats | type
 	    | write_concurrency | read_concurrency,
@@ -311,6 +312,7 @@ member(_, _) ->
       Access :: access(),
       Tweaks :: {write_concurrency, boolean()}
               | {read_concurrency, boolean()}
+              | {decentralized_counters, boolean()}
               | compressed,
       Pos :: pos_integer(),
       HeirData :: term().

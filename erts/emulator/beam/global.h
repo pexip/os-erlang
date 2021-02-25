@@ -1,7 +1,7 @@
 /*
  * %CopyrightBegin%
  *
- * Copyright Ericsson AB 1996-2018. All Rights Reserved.
+ * Copyright Ericsson AB 1996-2020. All Rights Reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -74,9 +74,8 @@ struct enif_resource_type_t
     struct enif_resource_type_t* next;   /* list of all resource types */
     struct enif_resource_type_t* prev;
     struct erl_module_nif* owner;  /* that created this type and thus implements the destructor*/
-    ErlNifResourceDtor* dtor;      /* user destructor function */
-    ErlNifResourceStop* stop;
-    ErlNifResourceDown* down;
+    ErlNifResourceTypeInit fn;
+    ErlNifResourceTypeInit fn_real;
     erts_refc_t refc;  /* num of resources of this type (HOTSPOT warning)
                           +1 for active erl_module_nif */
     Eterm module;
@@ -110,15 +109,23 @@ typedef struct ErtsResource_
 
 extern Eterm erts_bld_resource_ref(Eterm** hp, ErlOffHeap*, ErtsResource*);
 
+extern BeamInstr* erts_call_nif_early(Process* c_p, ErtsCodeInfo* ci);
 extern void erts_pre_nif(struct enif_environment_t*, Process*,
 			 struct erl_module_nif*, Process* tracee);
 extern void erts_post_nif(struct enif_environment_t* env);
+#ifdef DEBUG
+int erts_dbg_is_resource_dying(ErtsResource*);
+#endif
 extern void erts_resource_stop(ErtsResource*, ErlNifEvent, int is_direct_call);
 void erts_fire_nif_monitor(ErtsMonitor *tmon);
 void erts_nif_demonitored(ErtsResource* resource);
 extern void erts_add_taint(Eterm mod_atom);
 extern Eterm erts_nif_taints(Process* p);
 extern void erts_print_nif_taints(fmtfn_t to, void* to_arg);
+
+/* Loads the specified NIF. The caller must have code write permission. */
+Eterm erts_load_nif(Process *c_p, BeamInstr *I, Eterm filename, Eterm args);
+
 void erts_unload_nif(struct erl_module_nif* nif);
 extern void erl_nif_init(void);
 extern int erts_nif_get_funcs(struct erl_module_nif*,
@@ -131,6 +138,7 @@ extern Eterm erts_nif_call_function(Process *p, Process *tracee,
 
 int erts_call_dirty_nif(ErtsSchedulerData *esdp, Process *c_p,
 			BeamInstr *I, Eterm *reg);
+ErtsMessage* erts_create_message_from_nif_env(ErlNifEnv* msg_env);
 
 
 /* Driver handle (wrapper for old plain handle) */
@@ -292,7 +300,6 @@ union erl_off_heap_ptr {
 /* controls warning mapping in error_logger */
 
 extern Eterm node_cookie;
-extern Uint display_items;	/* no of items to display in traces etc */
 
 extern int erts_backtrace_depth;
 extern erts_atomic32_t erts_max_gen_gcs;
@@ -875,10 +882,14 @@ erts_bld_port_info(Eterm **hpp,
 		   Uint *szp,
 		   Port *prt,
 		   Eterm item); 
+Eterm erts_bld_bin_list(Uint **hpp, Uint *szp, ErlOffHeap* oh, Eterm tail);
+
 
 void erts_bif_info_init(void);
 
 /* bif.c */
+
+void erts_write_bif_wrapper(Export *export, BeamInstr *address);
 
 void erts_queue_monitor_message(Process *,
 				ErtsProcLocks*,
@@ -892,6 +903,11 @@ void erts_init_bif(void);
 Eterm erl_send(Process *p, Eterm to, Eterm msg);
 int erts_set_group_leader(Process *proc, Eterm new_gl);
 
+/* erl_bif_guard.c */
+
+void erts_init_bif_guard(void);
+Eterm erts_trapping_length_1(Process* p, Eterm* args);
+
 /* erl_bif_op.c */
 
 Eterm erl_is_function(Process* p, Eterm arg1, Eterm arg2);
@@ -899,6 +915,12 @@ Eterm erl_is_function(Process* p, Eterm arg1, Eterm arg2);
 /* beam_bif_load.c */
 Eterm erts_check_process_code(Process *c_p, Eterm module, int *redsp, int fcalls);
 Eterm erts_proc_copy_literal_area(Process *c_p, int *redsp, int fcalls, int gc_allowed);
+
+Uint32 erts_block_release_literal_area(void);
+void erts_unblock_release_literal_area(Uint32);
+
+void erts_debug_foreach_release_literal_area_off_heap(void (*func)(ErlOffHeap *, void *),
+                                                      void *arg);
 
 typedef struct ErtsLiteralArea_ {
     struct erl_off_heap_header *off_heap;
@@ -910,6 +932,8 @@ void erts_queue_release_literals(Process *c_p, ErtsLiteralArea* literals);
 
 #define ERTS_LITERAL_AREA_ALLOC_SIZE(N) \
     (sizeof(ErtsLiteralArea) + sizeof(Eterm)*((N) - 1))
+#define ERTS_LITERAL_AREA_SIZE(AP) \
+    (ERTS_LITERAL_AREA_ALLOC_SIZE((AP)->end - (AP)->start))
 
 extern erts_atomic_t erts_copy_literal_area__;
 #define ERTS_COPY_LITERAL_AREA()					\
@@ -962,7 +986,7 @@ void init_break_handler(void);
 void erts_set_ignore_break(void);
 void erts_replace_intr(void);
 void process_info(fmtfn_t, void *);
-void print_process_info(fmtfn_t, void *, Process*);
+void print_process_info(fmtfn_t, void *, Process*, ErtsProcLocks);
 void info(fmtfn_t, void *);
 void loaded(fmtfn_t, void *);
 void erts_print_base64(fmtfn_t to, void *to_arg, byte* src, Uint size);
@@ -1064,9 +1088,34 @@ Uint size_object_x(Eterm, erts_literal_area_t*);
 #define size_object_litopt(Term,LitArea) size_object_x(Term,LitArea)
 
 Uint copy_shared_calculate(Eterm, erts_shcopy_t*);
-Eterm copy_shared_perform(Eterm, Uint, erts_shcopy_t*, Eterm**, ErlOffHeap*);
-
 Uint size_shared(Eterm);
+
+/* #define ERTS_COPY_REGISTER_LOCATION */
+
+#ifdef ERTS_COPY_REGISTER_LOCATION
+
+#define copy_shared_perform(U, V, X, Y, Z) \
+    copy_shared_perform_x((U), (V), (X), (Y), (Z), __FILE__, __LINE__)
+Eterm copy_shared_perform_x(Eterm, Uint, erts_shcopy_t*, Eterm**, ErlOffHeap*,
+                            char *file, int line);
+
+Eterm copy_struct_x(Eterm, Uint, Eterm**, ErlOffHeap*, Uint*, erts_literal_area_t*,
+                    char *file, int line);
+#define copy_struct(Obj,Sz,HPP,OH) \
+    copy_struct_x(Obj,Sz,HPP,OH,NULL,NULL,__FILE__,__LINE__)
+#define copy_struct_litopt(Obj,Sz,HPP,OH,LitArea) \
+    copy_struct_x(Obj,Sz,HPP,OH,NULL,LitArea,__FILE__,__LINE__)
+
+#define copy_shallow(R, SZ, HPP, OH) \
+    copy_shallow_x((R), (SZ), (HPP), (OH), __FILE__, __LINE__)
+Eterm copy_shallow_x(Eterm* ERTS_RESTRICT, Uint, Eterm**, ErlOffHeap*,
+                     char *file, int line);
+
+#else
+
+#define copy_shared_perform(U, V, X, Y, Z) \
+    copy_shared_perform_x((U), (V), (X), (Y), (Z))
+Eterm copy_shared_perform_x(Eterm, Uint, erts_shcopy_t*, Eterm**, ErlOffHeap*);
 
 Eterm copy_struct_x(Eterm, Uint, Eterm**, ErlOffHeap*, Uint*, erts_literal_area_t*);
 #define copy_struct(Obj,Sz,HPP,OH) \
@@ -1074,7 +1123,11 @@ Eterm copy_struct_x(Eterm, Uint, Eterm**, ErlOffHeap*, Uint*, erts_literal_area_
 #define copy_struct_litopt(Obj,Sz,HPP,OH,LitArea) \
     copy_struct_x(Obj,Sz,HPP,OH,NULL,LitArea)
 
-Eterm copy_shallow(Eterm* ERTS_RESTRICT, Uint, Eterm**, ErlOffHeap*);
+#define copy_shallow(R, SZ, HPP, OH) \
+    copy_shallow_x((R), (SZ), (HPP), (OH))
+Eterm copy_shallow_x(Eterm* ERTS_RESTRICT, Uint, Eterm**, ErlOffHeap*);
+
+#endif
 
 void erts_move_multi_frags(Eterm** hpp, ErlOffHeap*, ErlHeapFragment* first,
 			   Eterm* refs, unsigned nrefs, int literals);
@@ -1088,7 +1141,13 @@ extern int distribution_info(fmtfn_t, void *);
 extern int is_node_name_atom(Eterm a);
 
 extern int erts_net_message(Port *, DistEntry *, Uint32 conn_id,
-			    byte *, ErlDrvSizeT, byte *, ErlDrvSizeT);
+			    byte *, ErlDrvSizeT, Binary *, byte *, ErlDrvSizeT);
+
+int erts_dist_pend_spawn_exit_delete(ErtsMonitor *mon);
+int erts_dist_pend_spawn_exit_parent_setup(ErtsMonitor *mon);
+int erts_dist_pend_spawn_exit_parent_wait(Process *c_p,
+                                          ErtsProcLocks locks,
+                                          ErtsMonitor *mon);
 
 extern void init_dist(void);
 extern int stop_dist(void);
@@ -1107,6 +1166,7 @@ void erts_dirty_process_main(ErtsSchedulerData *);
 Eterm build_stacktrace(Process* c_p, Eterm exc);
 Eterm expand_error_value(Process* c_p, Uint freason, Eterm Value);
 void erts_save_stacktrace(Process* p, struct StackTrace* s, int depth);
+BeamInstr *erts_printable_return_address(Process* p, Eterm *E) ERTS_NOINLINE;
 
 /* erl_init.c */
 
@@ -1208,10 +1268,12 @@ Uint64 erts_timestamp_millis(void);
 
 Export* erts_find_function(Eterm, Eterm, unsigned int, ErtsCodeIndex);
 
-void *erts_calc_stacklimit(char *prev_c, UWord stacksize);
-int erts_check_below_limit(char *ptr, char *limit);
-int erts_check_above_limit(char *ptr, char *limit);
-void *erts_ptr_id(void *ptr);
+/* ERTS_NOINLINE prevents link-time optimization across modules */
+void *erts_calc_stacklimit(char *prev_c, UWord stacksize) ERTS_NOINLINE;
+int erts_check_below_limit(char *ptr, char *limit) ERTS_NOINLINE;
+int erts_check_above_limit(char *ptr, char *limit) ERTS_NOINLINE;
+void *erts_ptr_id(void *ptr) ERTS_NOINLINE;
+int erts_check_if_stack_grows_downwards(char *ptr) ERTS_NOINLINE;
 
 Eterm store_external_or_ref_in_proc_(Process *, Eterm);
 Eterm store_external_or_ref_(Uint **, ErlOffHeap*, Eterm);
@@ -1244,10 +1306,13 @@ Sint erts_binary_set_loop_limit(Sint limit);
 
 /* erl_bif_persistent.c */
 void erts_init_bif_persistent_term(void);
-Uint erts_persistent_term_count(void);
 void erts_init_persistent_dumping(void);
 extern ErtsLiteralArea** erts_persistent_areas;
 extern Uint erts_num_persistent_areas;
+void erts_debug_foreach_persistent_term_off_heap(void (*func)(ErlOffHeap *, void *),
+                                                 void *arg);
+int erts_debug_have_accessed_literal_area(ErtsLiteralArea *lap);
+void erts_debug_save_accessed_literal_area(ErtsLiteralArea *lap);
 
 /* external.c */
 void erts_init_external(void);
@@ -1303,14 +1368,7 @@ Sint intlist_to_buf(Eterm, char*, Sint); /* most callers pass plain char*'s */
 int erts_unicode_list_to_buf(Eterm list, byte *buf, Sint len, Sint* written);
 Sint erts_unicode_list_to_buf_len(Eterm list);
 
-struct Sint_buf {
-#if defined(ARCH_64)
-    char s[22];
-#else
-    char s[12];
-#endif
-};	
-char* Sint_to_buf(Sint, struct Sint_buf*);
+int Sint_to_buf(Sint num, int base, char **buf_p, size_t buf_size);
 
 #define ERTS_IOLIST_STATE_INITER(C_P, OBJ)	\
     {(C_P), 0, 0, (OBJ), {NULL, NULL, NULL, ERTS_ALC_T_INVALID}, 0, 0}
@@ -1451,7 +1509,8 @@ do {								\
 
 #define MatchSetGetSource(MPSP) erts_match_set_get_source(MPSP)
 
-extern Binary *erts_match_set_compile(Process *p, Eterm matchexpr, Eterm MFA);
+extern Binary *erts_match_set_compile(Process *p, Eterm matchexpr, Eterm MFA,
+                                      Uint *freasonp);
 extern void erts_match_set_release_result(Process* p);
 ERTS_GLB_INLINE void erts_match_set_release_result_trace(Process* p, Eterm);
 

@@ -1,12 +1,12 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2017. All Rights Reserved.
+%% Copyright Ericsson AB 2017-2020. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
 %% You may obtain a copy of the License at
-%5
+%%
 %%     http://www.apache.org/licenses/LICENSE-2.0
 %%
 %% Unless required by applicable law or agreed to in writing, software
@@ -21,11 +21,14 @@
 -module(persistent_term_SUITE).
 -include_lib("common_test/include/ct.hrl").
 
--export([all/0,suite/0,
+-export([all/0,suite/0,init_per_suite/1,end_per_suite/1,
 	 basic/1,purging/1,sharing/1,get_trapping/1,
+         destruction/1,
          info/1,info_trapping/1,killed_while_trapping/1,
          off_heap_values/1,keys/1,collisions/1,
-         init_restart/1]).
+         init_restart/1, put_erase_trapping/1,
+         killed_while_trapping_put/1,
+         killed_while_trapping_erase/1]).
 
 %%
 -export([test_init_restart_cmd/1]).
@@ -36,42 +39,57 @@ suite() ->
 
 all() ->
     [basic,purging,sharing,get_trapping,info,info_trapping,
+     destruction,
      killed_while_trapping,off_heap_values,keys,collisions,
-     init_restart].
+     init_restart, put_erase_trapping, killed_while_trapping_put,
+     killed_while_trapping_erase].
+
+init_per_suite(Config) ->
+    erts_debug:set_internal_state(available_internal_state, true),
+    %% Put a term in the dict so that we know that the testcases handle
+    %% stray terms left by stdlib or other test suites.
+    persistent_term:put(init_per_suite, {?MODULE}),
+    Config.
+
+end_per_suite(Config) ->
+    persistent_term:erase(init_per_suite),
+    erts_debug:set_internal_state(available_internal_state, false),
+    Config.
 
 basic(_Config) ->
     Chk = chk(),
     N = 777,
     Seq = lists:seq(1, N),
-    par(2, N, Seq),
-    seq(3, Seq),
-    seq(3, Seq),                                %Same values.
+    par(2, N, Seq, Chk),
+    seq(3, Seq, Chk),
+    seq(3, Seq, Chk),                                %Same values.
     _ = [begin
              Key = {?MODULE,{key,I}},
              true = persistent_term:erase(Key),
              false = persistent_term:erase(Key),
-             {'EXIT',{badarg,_}} = (catch persistent_term:get(Key))
+             {'EXIT',{badarg,_}} = (catch persistent_term:get(Key)),
+             {not_present,Key} = persistent_term:get(Key, {not_present,Key})
          end || I <- Seq],
-    [] = [P || {{?MODULE,_},_}=P <- persistent_term:get()],
+    [] = [P || {{?MODULE,_},_}=P <- pget(Chk)],
     chk(Chk).
 
-par(C, N, Seq) ->
+par(C, N, Seq, Chk) ->
     _ = [spawn_link(fun() ->
                             ok = persistent_term:put({?MODULE,{key,I}},
                                                      {value,C*I})
                     end) || I <- Seq],
-    Result = wait(N),
+    Result = wait(N, Chk),
     _ = [begin
              Double = C*I,
              {{?MODULE,{key,I}},{value,Double}} = Res
          end || {I,Res} <- lists:zip(Seq, Result)],
     ok.
 
-seq(C, Seq) ->
+seq(C, Seq, Chk) ->
     _ = [ok = persistent_term:put({?MODULE,{key,I}}, {value,C*I}) ||
             I <- Seq],
-    All = persistent_term:get(),
-    All = [P || {{?MODULE,_},_}=P <- persistent_term:get()],
+    All = pget(Chk),
+    All = [P || {{?MODULE,_},_}=P <- All],
     All = [{Key,persistent_term:get(Key)} || {Key,_} <- All],
     Result = lists:sort(All),
     _ = [begin
@@ -80,15 +98,15 @@ seq(C, Seq) ->
          end || {I,Res} <- lists:zip(Seq, Result)],
     ok.
 
-wait(N) ->
-    All = [P || {{?MODULE,_},_}=P <- persistent_term:get()],
+wait(N, Chk) ->
+    All = [P || {{?MODULE,_},_}=P <- pget(Chk)],
     case length(All) of
         N ->
             All = [{Key,persistent_term:get(Key)} || {Key,_} <- All],
             lists:sort(All);
         _ ->
             receive after 10 -> ok end,
-            wait(N)
+            wait(N, Chk)
     end.
 
 %% Make sure that terms that have been erased are copied into all
@@ -138,19 +156,25 @@ purging_tester(Parent, Key) ->
     receive
         {Parent,erased} ->
             {'EXIT',{badarg,_}} = (catch persistent_term:get(Key)),
-            purging_tester_1(Term);
+            purging_tester_1(Term, 1);
         {Parent,replaced} ->
             {?MODULE,new} = persistent_term:get(Key),
-            purging_tester_1(Term)
+            purging_tester_1(Term, 1)
     end.
 
 %% Wait for the term to be copied into this process.
-purging_tester_1(Term) ->
+purging_tester_1(Term, Timeout) ->
     purging_check_term(Term),
-    receive after 1 -> ok end,
+    receive after Timeout -> ok end,
     case erts_debug:size_shared(Term) of
         0 ->
-            purging_tester_1(Term);
+            case Timeout of
+                1000 ->
+                    flush_later_ops(),
+                    purging_tester_1(Term, 1);
+                _ ->
+                    purging_tester_1(Term, Timeout*10)
+            end;
         Size ->
             %% The term has been copied into this process.
             purging_check_term(Term),
@@ -159,6 +183,83 @@ purging_tester_1(Term) ->
 
 purging_check_term({term,[<<"abc",0:777/unit:8>>]}) ->
     ok.
+
+%% Make sure terms are really deallocated when overwritten or erased.
+destruction(Config) ->
+    ok = erts_test_destructor:init(Config),
+
+    NKeys = 100,
+    Keys = lists:seq(0,NKeys-1),
+    [begin
+         V = erts_test_destructor:send(self(), K),
+         persistent_term:put({?MODULE,K}, V)
+     end
+     || K <- Keys],
+
+    %% Erase or overwrite all keys in "random" order.
+    lists:foldl(fun(_, K) ->
+                        case erlang:phash2(K) band 1 of
+                            0 ->
+                                %%io:format("erase key ~p\n", [K]),
+                                persistent_term:erase({?MODULE,K});
+                            1 ->
+                                %%io:format("replace key ~p\n", [K]),
+                                persistent_term:put({?MODULE,K}, value)
+                        end,
+                        (K + 13) rem NKeys
+                end,
+                17, Keys),
+
+    destruction_1(Keys).
+
+destruction_1(Keys) ->
+    erlang:garbage_collect(),
+
+    %% Receive all destruction messages
+    MsgLst = destruction_recv(length(Keys), [], 2),
+    ok = case lists:sort(MsgLst) of
+             Keys ->
+                 ok;
+             _ ->
+                 io:format("GOT ~p\n", [MsgLst]),
+                 io:format("MISSING ~p\n", [Keys -- MsgLst]),
+                 error
+         end,
+
+    %% Cleanup all remaining
+    [persistent_term:erase({?MODULE,K}) || K <- Keys],
+    ok.
+
+destruction_recv(0, Acc, _) ->
+    Acc;
+destruction_recv(N, Acc, Flush) ->
+    receive M ->
+            destruction_recv(N-1, [M | Acc], Flush)
+    after 1000 ->
+            io:format("TIMEOUT. Missing ~p destruction messages.\n", [N]),
+            case Flush of
+                0 ->
+                    Acc;
+                _ ->
+                    io:format("Try flush last literal area cleanup...\n"),
+                    flush_later_ops(),
+                    destruction_recv(N, Acc, Flush-1)
+            end
+    end.
+
+%% Both persistent_term itself and erts_literal_are_collector use
+%% erts_schedule_thr_prgr_later_cleanup_op() to schedule purge and deallocation
+%% of literals. To avoid waiting forever on sleeping schedulers we flush
+%% all later ops to make these cleanup jobs go through.
+flush_later_ops() ->
+    try
+        erts_debug:set_internal_state(wait, thread_progress)
+    catch
+        error:system_limit ->
+            ok % already ongoing; called by other process
+    end,
+    ok.
+
 
 %% Test that sharing is preserved when storing terms.
 
@@ -200,23 +301,23 @@ get_trapping(_Config) ->
             _ -> 1000
         end,
     spawn_link(fun() -> get_trapping_create(N) end),
-    All = do_get_trapping(N, []),
+    All = do_get_trapping(N, [], Chk),
     N = get_trapping_check_result(lists:sort(All), 1),
     erlang:garbage_collect(),
     get_trapping_erase(N),
     chk(Chk).
 
-do_get_trapping(N, Prev) ->
-    case persistent_term:get() of
+do_get_trapping(N, Prev, Chk) ->
+    case pget(Chk) of
         Prev when length(Prev) >= N ->
             All = [P || {{?MODULE,{get_trapping,_}},_}=P <- Prev],
             case length(All) of
                 N -> All;
-                _ -> do_get_trapping(N, Prev)
+                _ -> do_get_trapping(N, Prev, Chk)
             end;
         New ->
             receive after 1 -> ok end,
-            do_get_trapping(N, New)
+            do_get_trapping(N, New, Chk)
     end.
 
 get_trapping_create(0) ->
@@ -331,25 +432,25 @@ info_trapping(_Config) ->
             _ -> 1000
         end,
     spawn_link(fun() -> info_trapping_create(N) end),
-    All = do_info_trapping(N, 0),
+    All = do_info_trapping(N, 0, Chk),
     N = info_trapping_check_result(lists:sort(All), 1),
     erlang:garbage_collect(),
     info_trapping_erase(N),
     chk(Chk).
 
-do_info_trapping(N, PrevMem) ->
+do_info_trapping(N, PrevMem, Chk) ->
     case info_info() of
-        {N,Mem} ->
+        {M,Mem} when M >= N ->
             true = Mem >= PrevMem,
-            All = [P || {{?MODULE,{info_trapping,_}},_}=P <- persistent_term:get()],
+            All = [P || {{?MODULE,{info_trapping,_}},_}=P <- pget(Chk)],
             case length(All) of
                 N -> All;
-                _ -> do_info_trapping(N, PrevMem)
+                _ -> do_info_trapping(N, PrevMem, Chk)
             end;
         {_,Mem} ->
             true = Mem >= PrevMem,
             receive after 1 -> ok end,
-            do_info_trapping(N, Mem)
+            do_info_trapping(N, Mem, Chk)
     end.
 
 info_trapping_create(0) ->
@@ -462,17 +563,17 @@ collisions(_Config) ->
     _ = [V = persistent_term:get(K) || {K,V} <- Kvs],
 
     %% Now delete the persistent terms in random order.
-    collisions_delete(lists:keysort(2, Kvs)),
+    collisions_delete(lists:keysort(2, Kvs), Chk),
 
     chk(Chk).
 
-collisions_delete([{Key,Val}|Kvs]) ->
+collisions_delete([{Key,Val}|Kvs], Chk) ->
     Val = persistent_term:get(Key),
     true = persistent_term:erase(Key),
-    true = lists:sort(persistent_term:get()) =:= lists:sort(Kvs),
+    true = lists:sort(pget(Chk)) =:= lists:sort(Kvs),
     _ = [V = persistent_term:get(K) || {K,V} <- Kvs],
-    collisions_delete(Kvs);
-collisions_delete([]) ->
+    collisions_delete(Kvs, Chk);
+collisions_delete([], _) ->
     ok.
 
 colliding_keys() ->
@@ -503,17 +604,12 @@ colliding_keys() ->
 
     %% Verify that the keys still collide (this will fail if the
     %% internal hash function has been changed).
-    erts_debug:set_internal_state(available_internal_state, true),
-    try
-        case erlang:system_info(wordsize) of
-            8 ->
-                verify_colliding_keys(L);
-            4 ->
-                %% Not guaranteed to collide on a 32-bit system.
-                ok
-        end
-    after
-        erts_debug:set_internal_state(available_internal_state, false)
+    case erlang:system_info(wordsize) of
+        8 ->
+            verify_colliding_keys(L);
+        4 ->
+            %% Not guaranteed to collide on a 32-bit system.
+            ok
     end,
 
     L.
@@ -589,26 +685,99 @@ do_test_init_restart_cmd(File) ->
 %% and after each test case.
 
 chk() ->
-    persistent_term:info().
+    {persistent_term:info(), persistent_term:get()}.
 
-chk(Chk) ->
-    Chk = persistent_term:info(),
+chk({Info, _Initial} = Chk) ->
+    Info = persistent_term:info(),
     Key = {?MODULE,?FUNCTION_NAME},
-    ok = persistent_term:put(Key, {term,Chk}),
+    ok = persistent_term:put(Key, {term,Info}),
     Term = persistent_term:get(Key),
     true = persistent_term:erase(Key),
-    chk_not_stuck(Term),
+    chk_not_stuck(Term, 1),
+    [persistent_term:erase(K) || {K, _} <- pget(Chk)],
     ok.
 
-chk_not_stuck(Term) ->
+chk_not_stuck(Term, Timeout) ->
     %% Hash tables to be deleted are put onto a queue.
     %% Make sure that the queue isn't stuck by a table with
     %% a non-zero ref count.
 
     case erts_debug:size_shared(Term) of
         0 ->
-            erlang:yield(),
-            chk_not_stuck(Term);
+            receive after Timeout -> ok end,
+            case Timeout of
+                1000 ->
+                    flush_later_ops(),
+                    chk_not_stuck(Term, 1);
+                _ ->
+                    chk_not_stuck(Term, Timeout*10)
+            end;
         _ ->
             ok
     end.
+
+pget({_, Initial}) ->
+    persistent_term:get() -- Initial.
+
+
+killed_while_trapping_put(_Config) ->
+    repeat(
+      fun() ->
+              NrOfPutsInChild = 10000,
+              do_puts(2500, my_value),
+              Pid =
+                  spawn(fun() ->
+                                do_puts(NrOfPutsInChild, my_value2)
+                        end),
+              timer:sleep(1),
+              erlang:exit(Pid, kill),
+              do_erases(NrOfPutsInChild)
+      end,
+      10),
+    ok.
+
+killed_while_trapping_erase(_Config) ->
+    repeat(
+      fun() ->
+              NrOfErases = 2500,
+              do_puts(NrOfErases, my_value),
+              Pid =
+                  spawn(fun() ->
+                                do_erases(NrOfErases)
+                        end),
+              timer:sleep(1),
+              erlang:exit(Pid, kill),
+              do_erases(NrOfErases)
+      end,
+      10),
+    ok.
+
+put_erase_trapping(_Config) ->
+    NrOfItems = 5000,
+    do_puts(NrOfItems, first),
+    do_puts(NrOfItems, second),
+    do_erases(NrOfItems),
+    ok.
+
+do_puts(0, _) -> ok;
+do_puts(NrOfPuts, ValuePrefix) ->
+    Key = {?MODULE, NrOfPuts},
+    Value = {ValuePrefix, NrOfPuts},
+    erts_debug:set_internal_state(reds_left, rand:uniform(250)),
+    persistent_term:put(Key, Value),
+    Value = persistent_term:get(Key),
+    do_puts(NrOfPuts - 1, ValuePrefix).
+
+do_erases(0) -> ok;
+do_erases(NrOfErases) ->
+    Key = {?MODULE,NrOfErases},
+    erts_debug:set_internal_state(reds_left, rand:uniform(500)),
+    persistent_term:erase(Key),
+    not_found = persistent_term:get(Key, not_found),
+    do_erases(NrOfErases - 1).
+
+repeat(_Fun, 0) ->
+    ok;
+repeat(Fun, N) ->
+    Fun(),
+    repeat(Fun, N-1).

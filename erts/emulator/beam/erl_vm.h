@@ -1,7 +1,7 @@
 /*
  * %CopyrightBegin%
  *
- * Copyright Ericsson AB 1996-2018. All Rights Reserved.
+ * Copyright Ericsson AB 1996-2020. All Rights Reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -41,8 +41,8 @@
 #define MAX_REG 1024            /* Max number of x(N) registers used */
 
 /*
- * The new arithmetic operations need some extra X registers in the register array.
- * so does the gc_bif's (i_gc_bif3 need 3 extra).
+ * The new trapping length/1 implementation need 3 extra registers in the
+ * register array.
  */
 #define ERTS_X_REGS_ALLOCATED (MAX_REG+3)
 
@@ -67,9 +67,10 @@
                  (unsigned long)HEAP_TOP(p),(sz),__FILE__,__LINE__)),   \
  */
 #  ifdef CHECK_FOR_HOLES
-#    define INIT_HEAP_MEM(p,sz) erts_set_hole_marker(HEAP_TOP(p), (sz))
+Eterm* erts_set_hole_marker(Eterm* ptr, Uint sz);
+#    define INIT_HEAP_MEM(p,sz) erts_set_hole_marker(p, (sz))
 #  else
-#    define INIT_HEAP_MEM(p,sz) sys_memset(HEAP_TOP(p),0x01,(sz)*sizeof(Eterm*))
+#    define INIT_HEAP_MEM(p,sz) sys_memset(p,0x01,(sz)*sizeof(Eterm*))
 #  endif
 #else
 #  define INIT_HEAP_MEM(p,sz) ((void)0)
@@ -91,7 +92,7 @@
      ErtsHAllocLockCheck(p),					      \
      (IS_FORCE_HEAP_FRAGS || (((HEAP_LIMIT(p) - HEAP_TOP(p)) < (sz))) \
       ? erts_heap_alloc((p),(sz),(xtra))                              \
-      : (INIT_HEAP_MEM(p,sz),		                              \
+      : (INIT_HEAP_MEM(HEAP_TOP(p),sz),                               \
          HEAP_TOP(p) = HEAP_TOP(p) + (sz), HEAP_TOP(p) - (sz))))
 
 #define HAlloc(P, SZ) HAllocX(P,SZ,0)
@@ -146,6 +147,21 @@
       (HEAP_TOP(p) = HEAP_TOP(p) + (sz), HEAP_TOP(p) - (sz))))
 #endif
 
+/*
+ * Always allocate in a heap fragment, never on the heap.
+ */
+#if defined(VALGRIND)
+/* Running under valgrind, allocate exactly as much as needed.*/
+#  define HeapFragOnlyAlloc(p, sz)              \
+  (ASSERT((sz) >= 0),                           \
+   ErtsHAllocLockCheck(p),                      \
+   erts_heap_alloc((p),(sz),0))
+#else
+#  define HeapFragOnlyAlloc(p, sz)              \
+  (ASSERT((sz) >= 0),                           \
+   ErtsHAllocLockCheck(p),                      \
+   erts_heap_alloc((p),(sz),512))
+#endif
 
 /*
  * Description for each instruction (defined here because the name and

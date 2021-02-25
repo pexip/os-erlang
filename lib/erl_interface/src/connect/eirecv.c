@@ -1,7 +1,7 @@
 /*
  * %CopyrightBegin%
  * 
- * Copyright Ericsson AB 1998-2016. All Rights Reserved.
+ * Copyright Ericsson AB 1998-2020. All Rights Reserved.
  * 
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -60,24 +60,38 @@ ei_recv_internal (int fd,
   int arity;
   int version;
   int index = 0;
-  int i = 0;
-  int res;
+  int err;
   int show_this_msg = 0;
+  ei_socket_callbacks *cbs;
+  void *ctx;
+  ssize_t rlen;
+  unsigned tmo = ms == 0 ? EI_SCLBK_INF_TMO : ms;
+
+  err = EI_GET_CBS_CTX__(&cbs, &ctx, fd);
+  if (err) {
+      EI_CONN_SAVE_ERRNO__(err);
+      return ERL_ERROR;
+  }
 
   /* get length field */
-  if ((res = ei_read_fill_t(fd, header, 4, ms)) != 4) 
-  {
-      erl_errno = (res == -2) ? ETIMEDOUT : EIO;
-      return -1;
+  rlen = 4;
+  err = ei_read_fill_ctx_t__(cbs, ctx, header, &rlen, tmo);
+  if (!err && rlen != 4)
+      err = EIO;
+  if (err) {
+      EI_CONN_SAVE_ERRNO__(err);
+      return ERL_ERROR;
   }
+  
   len = get32be(s);
 
   /* got tick - respond and return */
   if (!len) {
     char tock[] = {0,0,0,0};
-    ei_write_fill_t(fd, tock, sizeof(tock), ms); /* Failure no problem */
+    ssize_t wlen = sizeof(tock);
+    ei_write_fill_ctx_t__(cbs, ctx, tock, &wlen, tmo); /* Failure no problem */
     *msglenp = 0;
-    return 0;			/* maybe flag ERL_EAGAIN [sverkerw] */
+    return ERL_TICK;
   }
   
   /* turn off tracing on each receive. it will be turned back on if
@@ -86,10 +100,13 @@ ei_recv_internal (int fd,
   ei_trace(-1,NULL);
   
   /* read enough to get at least entire header */
-  bytesread = (len > EIRECVBUF ? EIRECVBUF : len); 
-  if ((i = ei_read_fill_t(fd,header,bytesread,ms)) != bytesread) {
-      erl_errno = (i == -2) ? ETIMEDOUT : EIO;
-      return -1;
+  rlen = bytesread = (len > EIRECVBUF ? EIRECVBUF : len);
+  err = ei_read_fill_ctx_t__(cbs, ctx, header, &rlen, tmo);
+  if (!err && rlen != bytesread)
+      err = EIO;
+  if (err) {
+      EI_CONN_SAVE_ERRNO__(err);
+      return ERL_ERROR;
   }
 
   /* now decode header */
@@ -102,8 +119,8 @@ ei_recv_internal (int fd,
       || ei_decode_tuple_header(header,&index,&arity) 
       || ei_decode_long(header,&index,&msg->msgtype))
   {
-      erl_errno = EIO;	/* Maybe another code for decoding errors */
-      return -1;
+      EI_CONN_SAVE_ERRNO__(EBADMSG);      
+      return ERL_ERROR;
   }
   
   switch (msg->msgtype) {
@@ -112,8 +129,8 @@ ei_recv_internal (int fd,
     if (ei_decode_atom_as(header,&index,msg->cookie,sizeof(msg->cookie),ERLANG_UTF8,NULL,NULL) 
 	|| ei_decode_pid(header,&index,&msg->to))
     {
-	erl_errno = EIO;
-	return -1;
+        EI_CONN_SAVE_ERRNO__(EBADMSG);      
+        return ERL_ERROR;
     }
 
     break;
@@ -124,8 +141,8 @@ ei_recv_internal (int fd,
 	|| ei_decode_atom_as(header,&index,msg->cookie,sizeof(msg->cookie),ERLANG_UTF8,NULL,NULL) 
 	|| ei_decode_atom_as(header,&index,msg->toname,sizeof(msg->toname),ERLANG_UTF8,NULL,NULL))
     {
-	erl_errno = EIO;
-	return -1;
+        EI_CONN_SAVE_ERRNO__(EBADMSG);      
+        return ERL_ERROR;
     }
 
     /* actual message is remaining part of headerbuf, plus any unread bytes */
@@ -138,8 +155,8 @@ ei_recv_internal (int fd,
     if (ei_decode_pid(header,&index,&msg->from) 
 	|| ei_decode_pid(header,&index,&msg->to))
     {
-	erl_errno = EIO;
-	return -1;
+        EI_CONN_SAVE_ERRNO__(EBADMSG);      
+        return ERL_ERROR;
     }
 
     break;
@@ -150,8 +167,8 @@ ei_recv_internal (int fd,
     if (ei_decode_pid(header,&index,&msg->from) 
 	|| ei_decode_pid(header,&index,&msg->to))
     {
-	erl_errno = EIO;
-	return -1;
+        EI_CONN_SAVE_ERRNO__(EBADMSG);      
+        return ERL_ERROR;
     }
 
     break;
@@ -162,8 +179,8 @@ ei_recv_internal (int fd,
 	|| ei_decode_pid(header,&index,&msg->to)
 	|| ei_decode_trace(header,&index,&msg->token))
     {
-	erl_errno = EIO;
-	return -1;
+        EI_CONN_SAVE_ERRNO__(EBADMSG);      
+        return ERL_ERROR;
     }
 
     ei_trace(1,&msg->token); /* turn on tracing */
@@ -176,8 +193,8 @@ ei_recv_internal (int fd,
 	|| ei_decode_atom_as(header,&index,msg->toname,sizeof(msg->toname),ERLANG_UTF8,NULL,NULL)
 	|| ei_decode_trace(header,&index,&msg->token))
     {
-	erl_errno = EIO;
-	return -1;
+        EI_CONN_SAVE_ERRNO__(EBADMSG);      
+        return ERL_ERROR;
     }
 
     ei_trace(1,&msg->token); /* turn on tracing */
@@ -190,8 +207,8 @@ ei_recv_internal (int fd,
 	|| ei_decode_pid(header,&index,&msg->to)
 	|| ei_decode_trace(header,&index,&msg->token))
     {
-	erl_errno = EIO;
-	return -1;
+        EI_CONN_SAVE_ERRNO__(EBADMSG);      
+        return ERL_ERROR;
     }
 
     ei_trace(1,&msg->token); /* turn on tracing */
@@ -212,15 +229,20 @@ ei_recv_internal (int fd,
    */
   if (msglen > *bufsz) {
     if (staticbufp) {
-      int sz = EIRECVBUF;
       /* flush in rest of packet */
       while (remain > 0) {
-	if (remain < sz) sz = remain;
-	if ((i=ei_read_fill_t(fd,header,sz,ms)) <= 0) break;
-	remain -= i;
+          rlen = remain > EIRECVBUF ? EIRECVBUF : remain;
+          err = ei_read_fill_ctx_t__(cbs, ctx, header, &rlen, tmo);
+          if (err) {
+              EI_CONN_SAVE_ERRNO__(err);
+              return ERL_ERROR;
+          }
+          if (rlen == 0)
+              break;
+          remain -= rlen;
       }
       erl_errno = EMSGSIZE;
-      return -1;
+      return ERL_ERROR;
     }
     else {
 	/* Dynamic buffer --- grow it. */
@@ -231,7 +253,7 @@ ei_recv_internal (int fd,
       if ((mbuf = realloc(*mbufp, msglen)) == NULL)
       {
 	  erl_errno = ENOMEM;
-	  return -1;
+	  return ERL_ERROR;
       }
 
       *mbufp = mbuf;
@@ -247,11 +269,15 @@ ei_recv_internal (int fd,
 
   /* read the rest of the message into callers buffer */
   if (remain > 0) {
-    if ((i = ei_read_fill_t(fd,mbuf+bytesread-index,remain,ms)) != remain) {
-      *msglenp = bytesread-index+1; /* actual bytes in users buffer */
-      erl_errno = (i == -2) ? ETIMEDOUT : EIO;
-      return -1;
-    }
+      rlen = remain;
+      err = ei_read_fill_ctx_t__(cbs, ctx, mbuf+bytesread-index, &rlen, tmo);
+      if (!err && rlen != remain)
+          err = EIO;
+      if (err) {
+          *msglenp = bytesread-index+1; /* actual bytes in users buffer */
+          EI_CONN_SAVE_ERRNO__(err);
+          return ERL_ERROR;
+      }
   }
 
   if (show_this_msg)

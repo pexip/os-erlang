@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2017-2018. All Rights Reserved.
+%% Copyright Ericsson AB 2017-2020. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -24,7 +24,7 @@
 -include("logger_h_common.hrl").
 
 %%% API
--export([info/1, filesync/1, reset/1]).
+-export([filesync/1]).
 
 %% logger_h_common callbacks
 -export([init/2, check_config/4, reset_state/2,
@@ -46,25 +46,6 @@
 
 filesync(Name) ->
     logger_h_common:filesync(?MODULE,Name).
-
-%%%-----------------------------------------------------------------
-%%%
--spec info(Name) -> Info | {error,Reason} when
-      Name :: atom(),
-      Info :: term(),
-      Reason :: handler_busy | {badarg,term()}.
-
-info(Name) ->
-    logger_h_common:info(?MODULE,Name).
-
-%%%-----------------------------------------------------------------
-%%%
--spec reset(Name) -> ok | {error,Reason} when
-      Name :: atom(),
-      Reason :: handler_busy | {badarg,term()}.
-
-reset(Name) ->
-    logger_h_common:reset(?MODULE,Name).
 
 %%%===================================================================
 %%% logger callbacks

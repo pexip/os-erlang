@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2017-2018. All Rights Reserved.
+%% Copyright Ericsson AB 2017-2020. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -22,17 +22,16 @@
 -behaviour(gen_server).
 
 %% API
--export([start_link/0,
-         add_handler/3, remove_handler/1,
+-export([start_link/0, add_handler/3, remove_handler/1,
          add_filter/2, remove_filter/2,
          set_module_level/2, unset_module_level/0,
-         unset_module_level/1, cache_module_level/1,
+         unset_module_level/1,
          set_config/2, set_config/3,
          update_config/2, update_config/3,
          update_formatter_config/2]).
 
 %% Helper
--export([diff_maps/2]).
+-export([diff_maps/2,do_internal_log/4]).
 
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
@@ -43,7 +42,7 @@
 -define(SERVER, logger).
 -define(LOGGER_SERVER_TAG, '$logger_cb_process').
 
--record(state, {tid, async_req, async_req_queue}).
+-record(state, {tid, async_req, async_req_queue, remote_logger}).
 
 %%%===================================================================
 %%% API
@@ -105,9 +104,6 @@ unset_module_level(Modules) when is_list(Modules) ->
 unset_module_level(Modules) ->
     {error,{not_a_list_of_modules,Modules}}.
 
-cache_module_level(Module) ->
-    gen_server:cast(?SERVER,{cache_module_level,Module}).
-
 set_config(Owner,Key,Value) ->
     case sanity_check(Owner,Key,Value) of
         ok ->
@@ -155,6 +151,8 @@ init([]) ->
     process_flag(trap_exit, true),
     put(?LOGGER_SERVER_TAG,true),
     Tid = logger_config:new(?LOGGER_TABLE),
+    %% Store initial proxy config. logger_proxy reads config from here at startup.
+    logger_config:create(Tid,proxy,logger_proxy:get_default_config()),
     PrimaryConfig = maps:merge(default_config(primary),
                               #{handlers=>[simple]}),
     logger_config:create(Tid,primary,PrimaryConfig),
@@ -220,6 +218,24 @@ handle_call({add_filter,Id,Filter}, _From,#state{tid=Tid}=State) ->
     {reply,Reply,State};
 handle_call({remove_filter,Id,FilterId}, _From, #state{tid=Tid}=State) ->
     Reply = do_remove_filter(Tid,Id,FilterId),
+    {reply,Reply,State};
+handle_call({change_config,SetOrUpd,proxy,Config0},_From,#state{tid=Tid}=State) ->
+    Default =
+        case SetOrUpd of
+            set ->
+                logger_proxy:get_default_config();
+            update ->
+                {ok,OldConfig} = logger_config:get(Tid,proxy),
+                OldConfig
+        end,
+    Config = maps:merge(Default,Config0),
+    Reply =
+        case logger_olp:set_opts(logger_proxy,Config) of
+            ok ->
+                logger_config:set(Tid,proxy,Config);
+            Error ->
+                Error
+        end,
     {reply,Reply,State};
 handle_call({change_config,SetOrUpd,primary,Config0}, _From,
             #state{tid=Tid}=State) ->
@@ -306,18 +322,15 @@ handle_call({update_formatter_config,HandlerId,NewFConfig},_From,
             {error,{not_found,HandlerId}}
         end,
     {reply,Reply,State};
-handle_call({set_module_level,Modules,Level}, _From, #state{tid=Tid}=State) ->
-    Reply = logger_config:set_module_level(Tid,Modules,Level),
+handle_call({set_module_level,Modules,Level}, _From, State) ->
+    Reply = logger_config:set_module_level(Modules,Level),
     {reply,Reply,State};
-handle_call({unset_module_level,Modules}, _From, #state{tid=Tid}=State) ->
-    Reply = logger_config:unset_module_level(Tid,Modules),
+handle_call({unset_module_level,Modules}, _From, State) ->
+    Reply = logger_config:unset_module_level(Modules),
     {reply,Reply,State}.
 
 handle_cast({async_req_reply,_Ref,_Reply} = Reply,State) ->
-    call_h_reply(Reply,State);
-handle_cast({cache_module_level,Module}, #state{tid=Tid}=State) ->
-    logger_config:cache_module_level(Tid,Module),
-    {noreply, State}.
+    call_h_reply(Reply,State).
 
 %% Interface for those who can't call the API - e.g. the emulator, or
 %% places related to code loading.
@@ -340,12 +353,14 @@ handle_info(Unexpected,State) when element(1,Unexpected) == 'EXIT' ->
     %% The simple handler will send an 'EXIT' message when it is replaced
     %% We may as well ignore all 'EXIT' messages that we get
     ?LOG_INTERNAL(debug,
+                  #{},
                   [{logger,got_unexpected_message},
                    {process,?SERVER},
                    {message,Unexpected}]),
     {noreply,State};
 handle_info(Unexpected,State) ->
     ?LOG_INTERNAL(info,
+                  #{},
                   [{logger,got_unexpected_message},
                    {process,?SERVER},
                    {message,Unexpected}]),
@@ -357,7 +372,7 @@ terminate(_Reason, _State) ->
 %%%===================================================================
 %%% Internal functions
 %%%===================================================================
-call(Request) ->
+call(Request) when is_tuple(Request) ->
     Action = element(1,Request),
     case get(?LOGGER_SERVER_TAG) of
         true when
@@ -368,6 +383,7 @@ call(Request) ->
         _ ->
             gen_server:call(?SERVER,Request,?DEFAULT_LOGGER_CALL_TIMEOUT)
     end.
+
 
 do_add_filter(Tid,Id,{FId,_} = Filter) ->
     case logger_config:get(Tid,Id) of
@@ -413,11 +429,13 @@ default_config(Id,Module) ->
 sanity_check(Owner,Key,Value) ->
     sanity_check_1(Owner,[{Key,Value}]).
 
-sanity_check(HandlerId,Config) when is_map(Config) ->
-    sanity_check_1(HandlerId,maps:to_list(Config));
+sanity_check(Owner,Config) when is_map(Config) ->
+    sanity_check_1(Owner,maps:to_list(Config));
 sanity_check(_,Config) ->
     {error,{invalid_config,Config}}.
 
+sanity_check_1(proxy,_Config) ->
+    ok; % Details are checked by logger_olp:set_opts/2
 sanity_check_1(Owner,Config) when is_list(Config) ->
     try
         Type = get_type(Owner),
@@ -528,6 +546,7 @@ call_h(Module, Function, Args, DefRet) ->
                 _ ->
                     ST = logger:filter_stacktrace(?MODULE,S),
                     ?LOG_INTERNAL(error,
+                                  #{},
                                   [{logger,callback_crashed},
                                    {process,?SERVER},
                                    {reason,{C,R,ST}}]),
@@ -570,6 +589,7 @@ call_h_reply({'DOWN',Ref,_Proc,Pid,Reason}, #state{ async_req = {Ref,_PostFun,_F
     %% to the spawned process. It is only here to make sure that the logger_server does
     %% not deadlock if that happens.
     ?LOG_INTERNAL(error,
+                  #{},
                   [{logger,process_exited},
                    {process,Pid},
                    {reason,Reason}]),
@@ -578,6 +598,7 @@ call_h_reply({'DOWN',Ref,_Proc,Pid,Reason}, #state{ async_req = {Ref,_PostFun,_F
       State);
 call_h_reply(Unexpected,State) ->
     ?LOG_INTERNAL(info,
+                  #{},
                   [{logger,got_unexpected_message},
                    {process,?SERVER},
                    {message,Unexpected}]),
@@ -593,3 +614,18 @@ diffs([{K,V1}|T1],[{K,V2}|T2],D1,D2) ->
     diffs(T1,T2,D1#{K=>V1},D2#{K=>V2});
 diffs([],[],D1,D2) ->
     {D1,D2}.
+
+do_internal_log(Level,Location,Log,[Report] = Data) ->
+    do_internal_log(Level,Location,Log,Data,{report,Report});
+do_internal_log(Level,Location,Log,[Fmt,Args] = Data) ->
+    do_internal_log(Level,Location,Log,Data,{Fmt,Args}).
+do_internal_log(Level,Location,Log,Data,Msg) ->
+    Meta = logger:add_default_metadata(maps:merge(Location,maps:get(meta,Log,#{}))),
+    %% Spawn these to avoid deadlocks
+    case Log of
+        #{ meta := #{ internal_log_event := true } } ->
+            _ = spawn(logger_simple_h,log,[#{level=>Level,msg=>Msg,meta=>Meta},#{}]);
+        _ ->
+            _ = spawn(logger,macro_log,[Location,Level|Data]++
+                          [Meta#{internal_log_event=>true}])
+    end.

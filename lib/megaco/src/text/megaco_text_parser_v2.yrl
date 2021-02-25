@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %% 
-%% Copyright Ericsson AB 2003-2016. All Rights Reserved.
+%% Copyright Ericsson AB 2003-2020. All Rights Reserved.
 %% 
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -51,7 +51,7 @@
 %% This is ugly but...
 %%----------------------------------------------------------------------
 
-Expect 135.
+Expect 137.
 
 
 %%----------------------------------------------------------------------
@@ -1418,7 +1418,7 @@ safeToken2           -> 'EmergencyToken'        : '$1' .
 safeToken2           -> 'EmergencyOffToken'     : '$1' .
 safeToken2           -> 'ErrorToken'            : '$1' .
 %% v2-safeToken2           -> 'EventBufferToken'      : '$1' .
-%% v2-safeToken2           -> 'EventsToken'           : '$1' .
+safeToken2           -> 'EventsToken'           : '$1' .
 safeToken2           -> 'FailoverToken'         : '$1' .
 safeToken2           -> 'ForcedToken'           : '$1' .
 safeToken2           -> 'GracefulToken'         : '$1' .
