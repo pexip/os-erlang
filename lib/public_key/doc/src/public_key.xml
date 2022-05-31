@@ -5,7 +5,7 @@
   <header>
     <copyright>
       <year>2008</year>
-      <year>2018</year>
+      <year>2020</year>
       <holder>Ericsson AB, All Rights Reserved</holder>
     </copyright>
     <legalnotice>
@@ -31,12 +31,12 @@
     <date></date>
     <rev></rev>
   </header>
-  <module>public_key</module>
+  <module since="">public_key</module>
   <modulesummary>API module for public-key infrastructure.</modulesummary>
   <description>
     <p>Provides functions to handle public-key infrastructure,
     for details see
-    <seealso marker="public_key_app">public_key(6)</seealso>.
+    <seeapp marker="public_key_app">public_key(6)</seeapp>.
     </p>
   </description>
 
@@ -46,8 +46,8 @@
     <note><p>All records used in this Reference Manual 
     <!--     except #policy_tree_node{}  -->
     are generated from ASN.1 specifications
-    and are documented in the User's Guide. See <seealso 
-    marker="public_key_records">Public-key Records</seealso>.
+    and are documented in the User's Guide. See <seeguide 
+    marker="public_key_records">Public-key Records</seeguide>.
     </p></note>
     
     <p>Use the following include directive to get access to the 
@@ -93,13 +93,14 @@
       <desc>
 	<code>Cipher = "RC2-CBC" | "DES-CBC" | "DES-EDE3-CBC"</code>
 	<p><c>Salt</c> could be generated with
-	<seealso marker="crypto:crypto#strong_rand_bytes-1"><c>crypto:strong_rand_bytes(8)</c></seealso>.</p>
+	<seemfa marker="crypto:crypto#strong_rand_bytes/1"><c>crypto:strong_rand_bytes(8)</c></seemfa>.</p>
       </desc>
     </datatype>
 
     <datatype>
       <name name="public_key"/>
       <name name="rsa_public_key"/>
+      <name name="rsa_pss_public_key"/>
       <name name="dsa_public_key"/>
       <name name="ec_public_key"/>
       <name name="ecpk_parameters"/>
@@ -118,6 +119,7 @@
     <datatype>
       <name name="private_key"/>
       <name name="rsa_private_key"/>
+      <name name="rsa_pss_private_key"/>
       <name name="dsa_private_key"/>
       <name name="ec_private_key"/>
       <desc>
@@ -151,7 +153,7 @@
     </datatype>
 
     <datatype>
-      <name name="issuer_id"/>
+      <name name="cert_id"/>
       <desc>
       </desc>
     </datatype>
@@ -176,7 +178,7 @@
 <funcs>    
 
   <func>
-    <name name="compute_key" arity="2"/>
+    <name name="compute_key" arity="2" since="OTP R16B01"/>
     <fsummary>Computes shared secret.</fsummary>
   <desc>
     <p>Computes shared secret.</p>
@@ -184,7 +186,7 @@
   </func>
 
   <func>
-    <name name="compute_key" arity="3"/>
+    <name name="compute_key" arity="3" since="OTP R16B01"/>
     <fsummary>Computes shared secret.</fsummary>
   <desc>
     <p>Computes shared secret.</p>
@@ -192,27 +194,27 @@
   </func>
 
   <func>
-    <name name="decrypt_private" arity="2"/>
-    <name name="decrypt_private" arity="3"/>
+    <name name="decrypt_private" arity="2" since="OTP R14B"/>
+    <name name="decrypt_private" arity="3" since="OTP R14B"/>
     <fsummary>Public-key decryption.</fsummary>
   <desc> 
-    <p>Public-key decryption using the private key. See also <seealso
-	marker="crypto:crypto#private_decrypt/4">crypto:private_decrypt/4</seealso></p> 
+    <p>Public-key decryption using the private key. See also <seemfa
+	marker="crypto:crypto#private_decrypt/4">crypto:private_decrypt/4</seemfa></p> 
   </desc> 
   </func>
 
   <func>
-    <name name="decrypt_public" arity="2"/>
-    <name name="decrypt_public" arity="3"/>
+    <name name="decrypt_public" arity="2" since="OTP R14B"/>
+    <name name="decrypt_public" arity="3" since="OTP R14B"/>
     <fsummary>Public-key decryption.</fsummary>
   <desc> 
-    <p>Public-key decryption using the public key. See also <seealso
-	marker="crypto:crypto#public_decrypt/4">crypto:public_decrypt/4</seealso></p> 
+    <p>Public-key decryption using the public key. See also <seemfa
+	marker="crypto:crypto#public_decrypt/4">crypto:public_decrypt/4</seemfa></p> 
   </desc> 
   </func> 
 
   <func>
-    <name name="der_decode" arity="2"/>
+    <name name="der_decode" arity="2" since="OTP R14B"/>
     <fsummary>Decodes a public-key ASN.1 DER encoded entity.</fsummary>
     <desc>
       <p>Decodes a public-key ASN.1 DER encoded entity.</p>
@@ -220,7 +222,7 @@
   </func>
 
   <func>
-    <name name="der_encode" arity="2"/>
+    <name name="der_encode" arity="2" since="OTP R14B"/>
     <fsummary>Encodes a public-key entity with ASN.1 DER encoding.</fsummary>
   <desc> 
     <p>Encodes a public-key entity with ASN.1 DER encoding.</p>
@@ -228,7 +230,7 @@
   </func>
 
   <func>
-    <name name="dh_gex_group" arity="4"/>
+    <name name="dh_gex_group" arity="4" since="OTP 18.2"/>
     <fsummary>Selects a group for Diffie-Hellman key exchange</fsummary>
     <desc>
       <p>Selects a group for Diffie-Hellman key exchange with the key size in the range <c>MinSize...MaxSize</c>
@@ -249,49 +251,51 @@
   </func>
 
   <func>
-    <name name="encrypt_private" arity="2"/>
-    <name name="encrypt_private" arity="3"/>
+    <name name="encrypt_private" arity="2" since="OTP R14B"/>
+    <name name="encrypt_private" arity="3" since="OTP 21.1"/>
     <fsummary>Public-key encryption using the private key.</fsummary>
   <desc> 
     <p>Public-key encryption using the private key.
-     See also <seealso
-	marker="crypto:crypto#private_encrypt/4">crypto:private_encrypt/4</seealso>.</p> 
+     See also <seemfa
+	marker="crypto:crypto#private_encrypt/4">crypto:private_encrypt/4</seemfa>.</p> 
   </desc> 
   </func>   
 
   <func>
-    <name name="encrypt_public" arity="2"/>
-    <name name="encrypt_public" arity="3"/>
+    <name name="encrypt_public" arity="2" since="OTP R14B"/>
+    <name name="encrypt_public" arity="3" since="OTP 21.1"/>
     <fsummary>Public-key encryption using the public key.</fsummary>
   <desc> 
-    <p>Public-key encryption using the public key. See also <seealso
-	marker="crypto:crypto#public_encrypt/4">crypto:public_encrypt/4</seealso>.</p> 
+    <p>Public-key encryption using the public key. See also <seemfa
+	marker="crypto:crypto#public_encrypt/4">crypto:public_encrypt/4</seemfa>.</p> 
   </desc> 
   </func>   
   
   <func>
-    <name name="generate_key" arity="1"/>
+    <name name="generate_key" arity="1" since="OTP R16B01"/>
     <fsummary>Generates a new keypair.</fsummary>
   <desc>
     <p>Generates a new keypair. Note that except for Diffie-Hellman
     the public key is included in the private key structure. See also
-    <seealso marker="crypto:crypto#generate_key/2">crypto:generate_key/2</seealso>
+    <seemfa marker="crypto:crypto#generate_key/2">crypto:generate_key/2</seemfa>
     </p>
   </desc>
   </func>
 
   <func>
-    <name name="pem_decode" arity="1"/>
+    <name name="pem_decode" arity="1" since="OTP R14B"/>
     <fsummary>Decodes PEM binary data and returns
     entries as ASN.1 DER encoded entities.</fsummary>
   <desc> 
     <p>Decodes PEM binary data and returns entries as ASN.1 DER encoded entities.</p>
-    <p>Example <c>{ok, PemBin} = file:read_file("cert.pem").</c></p>
+    <p>Example <c>{ok, PemBin} = file:read_file("cert.pem").
+    PemEntries = public_key:pem_decode(PemBin).    
+    </c></p>
   </desc> 
   </func> 
     
   <func>
-    <name name="pem_encode" arity="1"/>
+    <name name="pem_encode" arity="1" since="OTP R14B"/>
     <fsummary>Creates a PEM binary.</fsummary>
     <desc> 
       <p>Creates a PEM binary.</p> 
@@ -299,8 +303,8 @@
   </func>
 
   <func>
-    <name name="pem_entry_decode" arity="1"/>
-    <name name="pem_entry_decode" arity="2"/>
+    <name name="pem_entry_decode" arity="1" since="OTP R14B"/>
+    <name name="pem_entry_decode" arity="2" since="OTP R14B"/>
     <fsummary>Decodes a PEM entry.</fsummary>
   <desc> 
     <p>Decodes a PEM entry. <c>pem_decode/1</c> returns a list of PEM
@@ -311,8 +315,8 @@
   </func>
 
   <func>
-    <name name="pem_entry_encode" arity="2"/>
-    <name name="pem_entry_encode" arity="3"/>
+    <name name="pem_entry_encode" arity="2" since="OTP R14B"/>
+    <name name="pem_entry_encode" arity="3" since="OTP R14B"/>
     <fsummary>Creates a PEM entry that can be fed to <c>pem_encode/1</c>.</fsummary>
     <desc> 
       <p>Creates a PEM entry that can be feed to <c>pem_encode/1</c>.</p>
@@ -326,7 +330,7 @@
   </func>
 
   <func>
-    <name name="pkix_decode_cert" arity="2"/>
+    <name name="pkix_decode_cert" arity="2" since=""/>
     <fsummary>Decodes an ASN.1 DER-encoded PKIX x509 certificate.</fsummary>
     <desc> 
       <p>Decodes an ASN.1 DER-encoded PKIX certificate. Option <c>otp</c>
@@ -337,7 +341,7 @@
   </func>
 
   <func>
-    <name name="pkix_encode" arity="3"/>
+    <name name="pkix_encode" arity="3" since="OTP R14B"/>
     <fsummary>DER encodes a PKIX x509 certificate or part of such a
     certificate.</fsummary>
   <desc> 
@@ -349,7 +353,7 @@
   </func>
 
  <func>
-   <name name="pkix_is_issuer" arity="2"/>
+   <name name="pkix_is_issuer" arity="2" since="OTP R14B"/>
    <fsummary>Checks if <c>IssuerCert</c> issued <c>Cert</c>.</fsummary>
    <desc> 
      <p>Checks if <c>IssuerCert</c> issued <c>Cert</c>.</p> 
@@ -357,7 +361,7 @@
  </func>
   
  <func>
-   <name name="pkix_is_fixed_dh_cert" arity="1"/>
+   <name name="pkix_is_fixed_dh_cert" arity="1" since="OTP R14B"/>
    <fsummary>Checks if a certificate is a fixed Diffie-Hellman certificate.</fsummary>
    <desc> 
      <p>Checks if a certificate is a fixed Diffie-Hellman certificate.</p> 
@@ -365,7 +369,7 @@
  </func>  
   
  <func>
-   <name name="pkix_is_self_signed" arity="1"/>
+   <name name="pkix_is_self_signed" arity="1" since="OTP R14B"/>
    <fsummary>Checks if a certificate is self-signed.</fsummary>
    <desc> 
      <p>Checks if a certificate is self-signed.</p> 
@@ -373,15 +377,15 @@
  </func>
 
  <func>
-   <name name="pkix_issuer_id" arity="2"/>
-   <fsummary>Returns the issuer id.</fsummary>
+   <name name="pkix_issuer_id" arity="2" since="OTP R14B"/>
+   <fsummary>Returns the x509 certificater issuer id.</fsummary>
    <desc> 
-     <p>Returns the issuer id.</p> 
+     <p>Returns the x509 certificater issuer id, if it can be determined.</p> 
    </desc> 
  </func>
  
  <func>
-   <name name="pkix_normalize_name" arity="1"/>
+   <name name="pkix_normalize_name" arity="1" since="OTP R14B"/>
    <fsummary>Normalizes an issuer name so that it can be easily
    compared to another issuer name.</fsummary>
    <desc> 
@@ -391,7 +395,7 @@
  </func>
 
   <func>
-    <name>pkix_path_validation(TrustedCert, CertChain, Options) -> {ok, {PublicKeyInfo, PolicyTree}} | {error, {bad_cert, Reason}} </name>
+    <name since="OTP R16B">pkix_path_validation(TrustedCert, CertChain, Options) -> {ok, {PublicKeyInfo, PolicyTree}} | {error, {bad_cert, Reason}} </name>
     <fsummary>Performs a basic path validation according to RFC 5280.</fsummary>
      <type>
        <v>TrustedCert =  #'OTPCertificate'{} | der_encoded() | atom()</v>
@@ -403,8 +407,8 @@
        <v>CertChain = [der_encoded()]</v>
        <d>A list of DER-encoded certificates in trust order ending with the peer certificate.</d>
        <v>Options = proplists:proplist()</v>
-       <v>PublicKeyInfo = {?'rsaEncryption' | ?'id-dsa',
-       rsa_public_key() | integer(), 'NULL' | 'Dss-Parms'{}}</v>
+       <v>PublicKeyInfo = {?'rsaEncryption' | ?'id-RSASSA-PSS'| ?'id-dsa',
+       rsa_public_key() | integer(), 'NULL' | 'RSASSA-PSS-params'{} | 'Dss-Parms'{}}</v>
        <v>PolicyTree = term()</v>
        <d>At the moment this is always an empty list as policies are not currently supported.</d>
        <v>Reason = cert_expired | invalid_issuer | invalid_signature | name_not_permitted |
@@ -415,15 +419,15 @@
        <p>
 	 Performs a basic path validation according to
 	 <url href="http://www.ietf.org/rfc/rfc5280.txt">RFC 5280.</url>
-	 However, CRL validation is done separately by <seealso
-	 marker="#pkix_crls_validate-3">pkix_crls_validate/3 </seealso> and is to be called
+	 However, CRL validation is done separately by <seemfa
+	 marker="#pkix_crls_validate/3">pkix_crls_validate/3 </seemfa> and is to be called
 	 from the supplied <c>verify_fun</c>.
        </p>
 
        <p>Available options:</p>
 
        <taglist>
-	<tag>{verify_fun, fun()}</tag>
+	<tag>{verify_fun, {fun(), InitialUserState::term()}</tag>
 	<item>
 	  <p>The fun must be defined as:</p>
 
@@ -446,6 +450,10 @@ fun(OtpCert :: #'OTPCertificate'{},
 	verifying application-specific extensions. If called with an
 	extension unknown to the user application, the return value
 	<c>{unknown, UserState}</c> is to be used.</p>
+  <warning><p>
+  Note that user defined custom <c>verify_fun</c> may alter original
+  path validation error (e.g <c>selfsigned_peer</c>). Use with caution.
+  </p></warning>
 
 	</item>
 	<tag>{max_path_length, integer()}</tag>
@@ -491,7 +499,7 @@ fun(OtpCert :: #'OTPCertificate'{},
    </func>
 
     <func>  
-      <name name="pkix_crl_issuer" arity="1"/>
+      <name name="pkix_crl_issuer" arity="1" since="OTP 17.5"/>
       <fsummary>Returns the issuer of the <c>CRL</c>.</fsummary>
       <desc> 
 	<p>Returns the issuer of the <c>CRL</c>.</p>
@@ -499,12 +507,12 @@ fun(OtpCert :: #'OTPCertificate'{},
     </func> 
    
    <func>
-     <name name="pkix_crls_validate" arity="3"/>
+     <name name="pkix_crls_validate" arity="3" since="OTP R16B"/>
      <fsummary>Performs CRL validation.</fsummary>
      <desc>
       <p>Performs CRL validation. It is intended to be called from
-      the verify fun of  <seealso marker="#pkix_path_validation-3"> pkix_path_validation/3
-       </seealso>.</p>
+      the verify fun of  <seemfa marker="#pkix_path_validation/3"> pkix_path_validation/3
+       </seemfa>.</p>
 
        <p>Available options:</p>
 
@@ -541,7 +549,7 @@ fun(#'DistributionPoint'{}, #'CertificateList'{},
 
 	<tag>{undetermined_details, boolean()}</tag>
 	<item>
-	  <p>Defaults to false. When revocation status can not be
+	  <p>Defaults to false. When revocation status cannot be
 	  determined, and this option is set to true, details of why no
 	  CRLs where accepted are included in the return value.</p>
 	</item>
@@ -551,7 +559,7 @@ fun(#'DistributionPoint'{}, #'CertificateList'{},
    </func>
    
    <func>  
-     <name name="pkix_crl_verify" arity="2"/>
+     <name name="pkix_crl_verify" arity="2" since="OTP 17.5"/>
      <fsummary> Verify that  <c>Cert</c>  is the <c> CRL</c>  signer. </fsummary>
      <desc> 
        <p>Verify that <c>Cert</c> is the <c>CRL</c> signer.</p>
@@ -559,26 +567,34 @@ fun(#'DistributionPoint'{}, #'CertificateList'{},
    </func>
 
    <func>  
-     <name name="pkix_dist_point" arity="1"/>
+     <name name="pkix_dist_point" arity="1" since="OTP 17.5"/>
      <fsummary>Creates a distribution point for CRLs issued by the same issuer as <c>Cert</c>.</fsummary>
      <desc> 
        <p>Creates a distribution point for CRLs issued by the same issuer as <c>Cert</c>.
-       Can be used as input to <seealso
-       marker="#pkix_crls_validate-3">pkix_crls_validate/3 </seealso>
+       Can be used as input to <seemfa
+       marker="#pkix_crls_validate/3">pkix_crls_validate/3 </seemfa>
        </p>
      </desc> 
    </func>
    
    <func>  
-     <name name="pkix_dist_points" arity="1"/>
+     <name name="pkix_dist_points" arity="1" since="OTP 17.5"/>
      <fsummary> Extracts distribution points from the certificates extensions.</fsummary>
      <desc> 
        <p> Extracts distribution points from the certificates extensions.</p>
      </desc> 
  </func>
-   
+
+ <func>
+    <name name="pkix_hash_type" arity="1" since="@master@"/>
+    <fsummary>Translates OID to Erlang digest type</fsummary>
+    <desc> 
+      <p>Translates OID to Erlang digest type</p> 
+    </desc> 
+  </func> 
+
   <func>
-    <name name="pkix_match_dist_point" arity="2"/>
+    <name name="pkix_match_dist_point" arity="2" since="OTP 19.0"/>
     <fsummary>Checks whether the given distribution point matches the
     Issuing Distribution Point of the CRL.</fsummary>
     <desc>
@@ -590,7 +606,7 @@ fun(#'DistributionPoint'{}, #'CertificateList'{},
   </func>
 
   <func>
-    <name name="pkix_sign" arity="2"/>
+    <name name="pkix_sign" arity="2" since="OTP R14B"/>
     <fsummary>Signs certificate.</fsummary>
     <desc> 
       <p>Signs an 'OTPTBSCertificate'. Returns the corresponding
@@ -599,7 +615,7 @@ fun(#'DistributionPoint'{}, #'CertificateList'{},
   </func> 
 
   <func>
-    <name name="pkix_sign_types" arity="1"/>
+    <name name="pkix_sign_types" arity="1" since="OTP R16B01"/>
     <fsummary>Translates signature algorithm OID to Erlang digest and signature algorithm types.</fsummary>
     <desc>
       <p>Translates signature algorithm OID to Erlang digest and signature types.
@@ -609,8 +625,8 @@ fun(#'DistributionPoint'{}, #'CertificateList'{},
   </func>
 
   <func>
-    <name>pkix_test_data(Options) -> Config </name>
-    <name>pkix_test_data([chain_opts()]) -> [conf_opt()]</name>
+    <name since="OTP 20.1">pkix_test_data(Options) -> Config </name>
+    <name since="OTP 20.1">pkix_test_data([chain_opts()]) -> [conf_opt()]</name>
     <fsummary>Creates certificate test data.</fsummary>
     <type>
       <v>Options = #{chain_type() := chain_opts()} </v>
@@ -624,19 +640,19 @@ fun(#'DistributionPoint'{}, #'CertificateList'{},
       <d>
 	A valid chain must have at least a ROOT and a peer cert.
 	The root cert can be given either as a cert pre-generated by
-	<seealso marker="#pkix_test_root_cert-2">
+	<seemfa marker="#pkix_test_root_cert/2">
 	  pkix_test_root_cert/2
-	</seealso>, or as root cert generation options.
+	</seemfa>, or as root cert generation options.
       </d>
       <v>root_cert() = #{cert := der_encoded(), key := Key}</v>
       <d>
 	A root certificate generated by
-	<seealso marker="#pkix_test_root_cert-2">
+	<seemfa marker="#pkix_test_root_cert/2">
 	  pkix_test_root_cert/2
-	</seealso>.
+	</seemfa>.
       </d>
       <v>cert_opt() = {Key, Value}</v>
-      <d>For available options see <seealso marker="#cert_opt"> cert_opt()</seealso> below.</d>
+      <d>For available options see <seeerl marker="#cert_opt"> cert_opt()</seeerl> below.</d>
 
       <v>Config = #{server_config := [conf_opt()],
       client_config := [conf_opt()]}</v>
@@ -644,9 +660,9 @@ fun(#'DistributionPoint'{}, #'CertificateList'{},
       <v>conf_opt() = {cert, der_encoded()} | {key, PrivateKey} |{cacerts, [der_encoded()]}</v>
       <d>
 	This is a subset of the type
-	<seealso marker="ssl:ssl#type-ssloption"> ssl:ssl_option()</seealso>.
+	<seetype marker="ssl:ssl#tls_option"> ssl:tls_option()</seetype>.
 	<c>PrivateKey</c> is what
-	<seealso marker="#generate_key-1">generate_key/1</seealso>
+	<seemfa marker="#generate_key/1">generate_key/1</seemfa>
 	returns.
       </d>
     </type>
@@ -673,9 +689,9 @@ fun(#'DistributionPoint'{}, #'CertificateList'{},
 	as root of the client certificate chain.
 	Vice versa applies to the <c>cacerts</c> returned for the client.
 	The root cert(s) can either be pre-generated with
-	<seealso marker="#pkix_test_root_cert-2">
+	<seemfa marker="#pkix_test_root_cert/2">
 	  pkix_test_root_cert/2
-	</seealso>, or if options are specified; it is (they are)
+	</seemfa>, or if options are specified; it is (they are)
 	 generated.
       </p>
       <p>
@@ -736,13 +752,13 @@ fun(#'DistributionPoint'{}, #'CertificateList'{},
 	  
 	<note><p>
 	Note that the generated certificates and keys does not provide a formally correct PKIX-trust-chain 
-	and they can not be used to achieve real security. This function is provided for testing purposes only.
+	and they cannot be used to achieve real security. This function is provided for testing purposes only.
 </p></note>
     </desc>
   </func>
   
   <func>
-    <name>pkix_test_root_cert(Name, Options) -> RootCert</name>
+    <name since="OTP 20.2">pkix_test_root_cert(Name, Options) -> RootCert</name>
     <fsummary>Generates a test data root cert.</fsummary>
     <type>
       <v>Name = string()</v>
@@ -750,29 +766,37 @@ fun(#'DistributionPoint'{}, #'CertificateList'{},
       <v>Options = [cert_opt()]</v>
       <d>
 	For available options see
-	<seealso marker="#cert_opt">cert_opt()</seealso>
+	<seeerl marker="#cert_opt">cert_opt()</seeerl>
 	under
-	<seealso marker="#pkix_test_data-1">pkix_test_data/1</seealso>.
+	<seemfa marker="#pkix_test_data/1">pkix_test_data/1</seemfa>.
       </d>
       <v>RootCert = #{cert := der_encoded(), key := Key}</v>
       <d>
 	A root certificate and key.  The <c>Key</c> is generated by
-	<seealso marker="#generate_key-1">generate_key/1</seealso>.
+	<seemfa marker="#generate_key/1">generate_key/1</seemfa>.
       </d>
     </type>
     <desc>
       <p>
 	Generates a root certificate that can be used
 	in multiple calls to
-	<seealso marker="#pkix_test_data-1">pkix_test_data/1</seealso>
+	<seemfa marker="#pkix_test_data/1">pkix_test_data/1</seemfa>
 	when you want the same root certificate for
 	several generated certificates.
       </p>
     </desc>
   </func>
 
+  <func>
+    <name name="pkix_subject_id" arity="1" since="@maint@"/>
+    <fsummary>Returns the X509 certificate subject id.</fsummary>
+    <desc> 
+      <p>Returns the X509 certificate subject id.</p> 
+    </desc> 
+  </func>
+  
   <func>  
-    <name name="pkix_verify" arity="2"/>
+    <name name="pkix_verify" arity="2" since="OTP R14B"/>
     <fsummary>Verifies PKIX x.509 certificate signature.</fsummary>
   <desc> 
     <p>Verifies PKIX x.509 certificate signature.</p>
@@ -780,8 +804,8 @@ fun(#'DistributionPoint'{}, #'CertificateList'{},
   </func> 
 
   <func>
-    <name>pkix_verify_hostname(Cert, ReferenceIDs) -> boolean()</name>
-    <name>pkix_verify_hostname(Cert, ReferenceIDs, Opts) -> boolean()</name>
+    <name since="OTP 19.3">pkix_verify_hostname(Cert, ReferenceIDs) -> boolean()</name>
+    <name since="OTP 19.3">pkix_verify_hostname(Cert, ReferenceIDs, Opts) -> boolean()</name>
     <fsummary>Verifies that a PKIX x.509 certificate <i>presented identifier</i> (e.g hostname) is
     an expected one.</fsummary>
     <type>
@@ -801,19 +825,20 @@ fun(#'DistributionPoint'{}, #'CertificateList'{},
       <p>This function checks that the <i>Presented Identifier</i> (e.g hostname) in a peer certificate
       is in agreement with at least one of the <i>Reference Identifier</i> that the client expects to be connected to.
       The function is intended to be added as an extra client check of the peer certificate when performing
-      <seealso marker="public_key:public_key#pkix_path_validation-3">public_key:pkix_path_validation/3</seealso>
+      <seemfa marker="public_key:public_key#pkix_path_validation/3">public_key:pkix_path_validation/3</seemfa>
       </p>
       <p>See <url href="https://tools.ietf.org/html/rfc6125">RFC 6125</url>
       for detailed information about hostname verification.
-      The <seealso marker="using_public_key#verify_hostname">User's Guide</seealso>
+      The <seeguide marker="using_public_key#verify_hostname">User's Guide</seeguide>
       and
-      <seealso marker="using_public_key#verify_hostname_examples">code examples</seealso>
+      <seeguide marker="using_public_key#verify_hostname_examples">code examples</seeguide>
       describes this function more detailed.
       </p>
       <p>The <c>{OtherRefId,term()}</c> is defined by the user and is passed to the <c>match_fun</c>, if defined.
       If the term in <c>OtherRefId</c> is a binary, it will be converted to a string.
       </p>
-      <p>The <c>ip</c> Reference ID takes an <seealso marker="inet:inet#type-ip_address">inet:ip_address()</seealso>
+      <p>The <c>ip</c> Reference ID takes an
+      <seetype marker="kernel:inet#ip_address">inet:ip_address()</seetype>
       or an ip address in string format (E.g "10.0.1.1" or "1234::5678:9012") as second element.
       </p>
       <p>The options are:</p>
@@ -829,9 +854,9 @@ fun(....) -> true;   % My special case
    (_, _) -> default % all others falls back to the inherit tests
 end
 	  </code>
-	  <br/>See <seealso marker="#pkix_verify_hostname_match_fun-1">pkix_verify_hostname_match_fun/1</seealso> for a
+	  <br/>See <seemfa marker="#pkix_verify_hostname_match_fun/1">pkix_verify_hostname_match_fun/1</seemfa> for a
 	  function that takes a protocol name as argument and returns a <c>fun/2</c> suitable for this option and
-	  <seealso marker="using_public_key#redefining_match_op">Re-defining the match operation</seealso>
+	  <seeguide marker="using_public_key#redefining_match_op">Re-defining the match operation</seeguide>
 	  in the User's Guide for an example.
 	</item>
 
@@ -841,7 +866,7 @@ end
 	of such a function. This <c>fun/1</c> is called when no <c>ReferenceID</c> matches. The return value of the fun
 	(a <c>boolean()</c>) decides the outcome. If <c>true</c> the the certificate is accepted otherwise
 	it is rejected. See
-	<seealso marker="using_public_key#-pinning--a-certificate">"Pinning" a Certificate</seealso>
+	<seeguide marker="using_public_key#-pinning--a-certificate">"Pinning" a Certificate</seeguide>
 	in the User's Guide.
 	</item>
 
@@ -855,7 +880,7 @@ end
 	  will return <c>false</c>.</item>
 	</list>
 	<br/>For an example, see
-	<seealso marker="using_public_key#hostname_extraction">Hostname extraction</seealso>
+	<seeguide marker="using_public_key#hostname_extraction">Hostname extraction</seeguide>
 	in the User's Guide.
 	</item>
       </taglist>
@@ -864,22 +889,22 @@ end
   </func>
 
   <func>
-    <name>pkix_verify_hostname_match_fun(Protcol) ->  fun(RefId | FQDN::string(), PresentedID) -> boolean() | default</name>
+    <name since="OTP 21.0">pkix_verify_hostname_match_fun(Protcol) ->  fun(RefId | FQDN::string(), PresentedID) -> boolean() | default</name>
     <fsummary>Returns a fun that is intendended as argument to the match_fun option in pkix_verify_hostname/3.
     </fsummary>
     <type>
       <v>Protocol = https</v>
       <d>The algorithm for wich the fun should implement the special matching rules</d>
       <v>RefId</v>
-      <d>See <seealso marker="#pkix_verify_hostname-3">pkix_verify_hostname/3</seealso>.</d>
+      <d>See <seemfa marker="#pkix_verify_hostname/3">pkix_verify_hostname/3</seemfa>.</d>
       <v>FQDN</v>
-      <d>See <seealso marker="#pkix_verify_hostname-3">pkix_verify_hostname/3</seealso>.</d>
+      <d>See <seemfa marker="#pkix_verify_hostname/3">pkix_verify_hostname/3</seemfa>.</d>
       <v>PresentedID</v>
-      <d>See <seealso marker="#pkix_verify_hostname-3">pkix_verify_hostname/3</seealso>.</d>
+      <d>See <seemfa marker="#pkix_verify_hostname/3">pkix_verify_hostname/3</seemfa>.</d>
     </type>
     <desc>
       <p>The return value of calling this function is intended to be used in the <c>match_fun</c> option in
-      <seealso marker="#pkix_verify_hostname-3">pkix_verify_hostname/3</seealso>.
+      <seemfa marker="#pkix_verify_hostname/3">pkix_verify_hostname/3</seemfa>.
       </p>
       <p>The returned fun augments the verify hostname matching according to the specific rules for
       the protocol in the argument.
@@ -889,8 +914,8 @@ end
   
 
   <func>
-    <name name="sign" arity="3"/>
-    <name name="sign" arity="4"/>
+    <name name="sign" arity="3" since=""/>
+    <name name="sign" arity="4" since="OTP 20.1"/>
     <fsummary>Creates a digital signature.</fsummary>
   <desc>
     <p>Creates a digital signature.</p> 
@@ -901,7 +926,7 @@ end
   </func>   
 
   <func>
-    <name name="ssh_decode" arity="2"/>
+    <name name="ssh_decode" arity="2" since="OTP R14B03"/>
     <fsummary>Decodes an SSH file-binary.</fsummary>
     <desc>
       <p>Decodes an SSH file-binary. In the case of <c>known_hosts</c> or
@@ -933,12 +958,12 @@ end
   </func>
 
   <func>
-    <name name="ssh_encode" arity="2"/>
+    <name name="ssh_encode" arity="2" since="OTP R14B03"/>
     <fsummary>Encodes a list of SSH file entries to a binary.</fsummary>
     <desc>
       <p>Encodes a list of SSH file entries (public keys and attributes) to a binary. Possible
       attributes depend on the file type, see
-      <seealso marker="#ssh_decode-2"> ssh_decode/2 </seealso>.
+      <seemfa marker="#ssh_decode/2"> ssh_decode/2 </seemfa>.
       </p>
       <p>If the <c>Type</c> is <c>ssh2_pubkey</c>, the <c>InData</c> shall be
       <c>InData_ssh2_pubkey</c>. Otherwise it shall be <c>OtherInData</c>.
@@ -947,13 +972,13 @@ end
   </func>
 
   <func>
-    <name>ssh_hostkey_fingerprint(HostKey) -> string()</name>
-    <name>ssh_hostkey_fingerprint(DigestType, HostKey) -> string()</name>
-    <name>ssh_hostkey_fingerprint([DigestType], HostKey) -> [string()]</name>
+    <name since="OTP 19.2">ssh_hostkey_fingerprint(HostKey) -> string()</name>
+    <name since="OTP 19.2">ssh_hostkey_fingerprint(DigestType, HostKey) -> string()</name>
+    <name since="OTP 19.2">ssh_hostkey_fingerprint([DigestType], HostKey) -> [string()]</name>
     <fsummary>Calculates a ssh fingerprint for a hostkey.</fsummary>
     <type>
-      <v>HostKey = <seealso marker="#type-public_key">public_key()</seealso></v>
-      <v>DigestType = <seealso marker="#type-digest_type">digest_type()</seealso></v>
+      <v>HostKey = <seetype marker="#public_key">public_key()</seetype></v>
+      <v>DigestType = <seetype marker="#digest_type">digest_type()</seetype></v>
     </type>
   <desc>
     <p>Calculates a ssh fingerprint from a public host key as openssh does.</p>
@@ -982,8 +1007,8 @@ end
   </func>
 
   <func>
-    <name name="verify" arity="4"/>
-    <name name="verify" arity="5"/>
+    <name name="verify" arity="4" since="OTP R14B"/>
+    <name name="verify" arity="5" since="OTP 20.1"/>
     <fsummary>Verifies a digital signature.</fsummary>
   <desc>
     <p>Verifies a digital signature.</p>
@@ -993,7 +1018,7 @@ end
   </func>
 
   <func>
-    <name name="short_name_hash" arity="1"/>
+    <name name="short_name_hash" arity="1" since="OTP 19.0"/>
     <fsummary>Generates a short hash of an issuer name.</fsummary>
     <desc>
       <p>Generates a short hash of an issuer name.  The hash is

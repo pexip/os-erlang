@@ -1,7 +1,7 @@
 /*
  * %CopyrightBegin%
  *
- * Copyright Ericsson AB 1996-2018. All Rights Reserved.
+ * Copyright Ericsson AB 1996-2020. All Rights Reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -63,6 +63,14 @@
 #  endif
 #endif
 
+#ifndef ERTS_NOINLINE
+#  if ERTS_AT_LEAST_GCC_VSN__(3,1,1)
+#    define ERTS_NOINLINE __attribute__((__noinline__))
+#  else
+#    define ERTS_NOINLINE
+#  endif
+#endif
+
 #if defined(DEBUG) || defined(ERTS_ENABLE_LOCK_CHECK)
 #  undef ERTS_CAN_INLINE
 #  define ERTS_CAN_INLINE 0
@@ -82,6 +90,12 @@
 #  define ERTS_GLB_INLINE_INCL_FUNC_DEF 1
 #else
 #  define ERTS_GLB_INLINE_INCL_FUNC_DEF 0
+#endif
+
+#ifdef __GNUC__
+#  define ERTS_NOINLINE __attribute__((__noinline__))
+#else
+#  define ERTS_NOINLINE
 #endif
 
 #if defined(VALGRIND) && !defined(NO_FPE_SIGNALS)
@@ -109,6 +123,23 @@
 #ifndef UNIX
 #  define UNIX 1
 #endif
+#endif
+
+/*
+ * Test for clang's convenient __has_builtin feature checking macro.
+ */
+#ifndef __has_builtin
+  #define __has_builtin(x) 0
+#endif
+
+/*
+ * Define HAVE_OVERFLOW_CHECK_BUILTINS if the overflow checking arithmetic
+ * builtins are available.
+ */
+#if ERTS_AT_LEAST_GCC_VSN__(5, 1, 0)
+#  define HAVE_OVERFLOW_CHECK_BUILTINS 1
+#elif __has_builtin(__builtin_mul_overflow)
+#  define HAVE_OVERFLOW_CHECK_BUILTINS 1
 #endif
 
 #include "erl_misc_utils.h"
@@ -147,7 +178,8 @@ typedef ERTS_SYS_FD_TYPE ErtsSysFdType;
 #  define ERTS_UNLIKELY(BOOL) (BOOL)
 #endif
 
-#if ERTS_AT_LEAST_GCC_VSN__(2, 96, 0)
+/* AIX doesn't like this and claims section conflicts */
+#if ERTS_AT_LEAST_GCC_VSN__(2, 96, 0) && !defined(_AIX)
 #if (defined(__APPLE__) && defined(__MACH__)) || defined(__DARWIN__)
 #  define ERTS_WRITE_UNLIKELY(X) X __attribute__ ((section ("__DATA,ERTS_LOW_WRITE") ))
 #else
@@ -186,7 +218,7 @@ typedef ERTS_SYS_FD_TYPE ErtsSysFdType;
 #endif
 
 /* In VC++, noreturn is a declspec that has to be before the types,
- * but in GNUC it is an att ribute to be placed between return type
+ * but in GNUC it is an attribute to be placed between return type
  * and function name, hence __decl_noreturn <types> __noreturn <function name>
  *
  * at some platforms (e.g. Android) __noreturn is defined at sys/cdef.h
@@ -226,6 +258,39 @@ __decl_noreturn void __noreturn erl_assert_error(const char* expr, const char *f
 #  define ERTS_UNDEF(V,I)
 #else
 #  define ERTS_UNDEF(V,I) V = I
+#endif
+
+/*
+ * ERTS_GCC_DIAG_ON and ERTS_GCC_DIAG_OFF can be used to temporarly
+ * disable a gcc or clang warning in a file.
+ *
+ * Example:
+ * GCC_DIAG_OFF(unused-function)
+ * static int test(){ return 0;}
+ * GCC_DIAG_ON(unused-function)
+ *
+ * These macros were orginally authored by Jonathan Wakely and has
+ * been modified by Patrick Horgan.
+ *
+ * Source: http://dbp-consulting.com/tutorials/SuppressingGCCWarnings.html
+ *
+ */
+#if ((__GNUC__ * 100) + __GNUC_MINOR__) >= 402
+#define ERTS_GCC_DIAG_STR(s) #s
+#define ERTS_GCC_DIAG_JOINSTR(x,y) ERTS_GCC_DIAG_STR(x ## y)
+# define ERTS_GCC_DIAG_DO_PRAGMA(x) _Pragma (#x)
+# define ERTS_GCC_DIAG_PRAGMA(x) ERTS_GCC_DIAG_DO_PRAGMA(GCC diagnostic x)
+# if ((__GNUC__ * 100) + __GNUC_MINOR__) >= 406
+#  define ERTS_GCC_DIAG_OFF(x) ERTS_GCC_DIAG_PRAGMA(push) \
+      ERTS_GCC_DIAG_PRAGMA(ignored ERTS_GCC_DIAG_JOINSTR(-W,x))
+#  define ERTS_GCC_DIAG_ON(x) ERTS_GCC_DIAG_PRAGMA(pop)
+# else
+#  define ERTS_GCC_DIAG_OFF(x) ERTS_GCC_DIAG_PRAGMA(ignored ERTS_GCC_DIAG_JOINSTR(-W,x))
+#  define ERTS_GCC_DIAG_ON(x)  ERTS_GCC_DIAG_PRAGMA(warning ERTS_GCC_DIAG_JOINSTR(-W,x))
+# endif
+#else
+# define ERTS_GCC_DIAG_OFF(x)
+# define ERTS_GCC_DIAG_ON(x)
 #endif
 
 /*
@@ -641,30 +706,16 @@ typedef struct preload {
  */
 typedef Eterm ErtsTracer;
 
-#include "erl_osenv.h"
 
 /*
- * This structure contains options to all built in drivers.
- * None of the drivers use all of the fields.
+ * This structure contains the rb tree for the erlang osenv copy
+ * see erl_osenv.h for more details.
  */
-
-typedef struct _SysDriverOpts {
-    Uint ifd;			/* Input file descriptor (fd driver). */
-    Uint ofd;			/* Outputfile descriptor (fd driver). */
-    int packet_bytes;		/* Number of bytes in packet header. */
-    int read_write;		/* Read and write bits. */
-    int use_stdio;		/* Use standard I/O: TRUE or FALSE. */
-    int redir_stderr;           /* Redirect stderr to stdout: TRUE/FALSE. */
-    int hide_window;		/* Hide this windows (Windows). */
-    int exit_status;		/* Report exit status of subprocess. */
-    int overlapped_io;          /* Only has effect on windows NT et al */
-    erts_osenv_t envir;		/* Environment of the port process */
-    char **argv;                /* Argument vector in Unix'ish format. */
-    char *wd;			/* Working directory. */
-    unsigned spawn_type;        /* Bitfield of ERTS_SPAWN_DRIVER | 
-				   ERTS_SPAWN_EXTERNAL | both*/ 
-    int parallelism;            /* Optimize for parallelism */
-} SysDriverOpts;
+typedef struct __erts_osenv_t {
+    struct __env_rbtnode_t *tree;
+    int variable_count;
+    int content_size;
+} erts_osenv_t;
 
 extern char *erts_default_arg0;
 
@@ -876,6 +927,9 @@ ERTS_GLB_INLINE void erts_refc_inc(erts_refc_t *refcp, erts_aint_t min_val);
 ERTS_GLB_INLINE erts_aint_t erts_refc_inc_unless(erts_refc_t *refcp,
                                                  erts_aint_t unless_val,
                                                  erts_aint_t min_val);
+ERTS_GLB_INLINE void erts_refc_inc_if(erts_refc_t *refcp,
+                                      erts_aint_t if_val,
+                                      erts_aint_t min_val);
 ERTS_GLB_INLINE erts_aint_t erts_refc_inctest(erts_refc_t *refcp,
 					      erts_aint_t min_val);
 ERTS_GLB_INLINE void erts_refc_dec(erts_refc_t *refcp, erts_aint_t min_val);
@@ -917,7 +971,7 @@ erts_refc_inc_unless(erts_refc_t *refcp,
     while (1) {
         erts_aint_t exp, new;
 #ifdef ERTS_REFC_DEBUG
-        if (val < 0)
+        if (val < min_val)
             erts_exit(ERTS_ABORT_EXIT,
                       "erts_refc_inc_unless(): Bad refc found (refc=%ld < %ld)!\n",
                       val, min_val);
@@ -929,6 +983,27 @@ erts_refc_inc_unless(erts_refc_t *refcp,
         val = erts_atomic_cmpxchg_nob((erts_atomic_t *) refcp, new, exp);
         if (val == exp)
             return new;
+    }
+}
+
+ERTS_GLB_INLINE void
+erts_refc_inc_if(erts_refc_t *refcp,
+                 erts_aint_t if_val,
+                 erts_aint_t min_val)
+{
+    erts_aint_t val = erts_atomic_read_nob((erts_atomic_t *) refcp);
+#ifdef ERTS_REFC_DEBUG
+    if (val < min_val)
+        erts_exit(ERTS_ABORT_EXIT,
+                  "erts_refc_inc_unless(): Bad refc found (refc=%ld < %ld)!\n",
+                  val, min_val);
+#endif
+    if (val == if_val) {
+        erts_atomic_cmpxchg_nob((erts_atomic_t *) refcp, val+1, val);
+        /*
+         * Ignore failure, as it means someone else took care of 'if_val'.
+         * Could be this function racing with itself.
+         */
     }
 }
 
@@ -1290,5 +1365,14 @@ erts_raw_env_next_char(byte *p, int encoding)
 }
 
 #endif /* #if ERTS_GLB_INLINE_INCL_FUNC_DEF */
+
+/*
+ * Magic numbers for our driver port_control callbacks.
+ * Kept them below 1<<27 to not inflict extra bignum garbage on 32-bit.
+ */
+#define ERTS_TTYSL_DRV_CONTROL_MAGIC_NUMBER  0x018b0900U
+#define ERTS_INET_DRV_CONTROL_MAGIC_NUMBER   0x03f1a300U
+#define ERTS_SPAWN_DRV_CONTROL_MAGIC_NUMBER  0x04c76a00U
+#define ERTS_FORKER_DRV_CONTROL_MAGIC_NUMBER 0x050a7800U
 
 #endif

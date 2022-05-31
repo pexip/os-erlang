@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2007-2018. All Rights Reserved.
+%% Copyright Ericsson AB 2007-2019. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -281,11 +281,11 @@ start(EscriptOptions) ->
         end
     catch
         throw:Str ->
-            io:format("escript: ~ts\n", [Str]),
+            put_chars(io_lib:format("escript: ~ts\n", [Str])),
             my_halt(127);
         _:Reason:Stk ->
-            io:format("escript: Internal error: ~tp\n", [Reason]),
-            io:format("~tp\n", [Stk]),
+            put_chars(io_lib:format("escript: Internal error: ~tp\n", [Reason])),
+            put_chars(io_lib:format("~tp\n", [Stk])),
             my_halt(127)
     end.
 
@@ -780,7 +780,7 @@ interpret(Forms, HasRecs,  File, Args) ->
 	    false -> Forms;
 	    true  -> erl_expand_records:module(Forms, [])
 	end,
-    Dict = parse_to_dict(Forms2),
+    Dict = parse_to_map(Forms2),
     ArgsA = erl_parse:abstract(Args, 0),
     Anno = a0(),
     Call = {call,Anno,{atom,Anno,main},[ArgsA]},
@@ -824,29 +824,29 @@ format_message(F, [{Mod,E}|Es]) ->
     [M|format_message(F, Es)];
 format_message(_, []) -> [].
 
-parse_to_dict(L) -> parse_to_dict(L, dict:new()).
+parse_to_map(L) -> parse_to_map(L, maps:new()).
 
-parse_to_dict([{function,_,Name,Arity,Clauses}|T], Dict0) ->
-    Dict = dict:store({local, Name,Arity}, Clauses, Dict0),
-    parse_to_dict(T, Dict);
-parse_to_dict([{attribute,_,import,{Mod,Funcs}}|T], Dict0) ->
-    Dict = lists:foldl(fun(I, D) ->
-                               dict:store({remote,I}, Mod, D)
-                       end, Dict0, Funcs),
-    parse_to_dict(T, Dict);
-parse_to_dict([_|T], Dict) ->
-    parse_to_dict(T, Dict);
-parse_to_dict([], Dict) ->
-    Dict.
+parse_to_map([{function,_,Name,Arity,Clauses}|T], Map0) ->
+    Map = maps:put({local, Name,Arity}, Clauses, Map0),
+    parse_to_map(T, Map);
+parse_to_map([{attribute,_,import,{Mod,Funcs}}|T], Map0) ->
+    Map = lists:foldl(fun(I, D) ->
+                              maps:put({remote,I}, Mod, D)
+                       end, Map0, Funcs),
+    parse_to_map(T, Map);
+parse_to_map([_|T], Map) ->
+    parse_to_map(T, Map);
+parse_to_map([], Map) ->
+    Map.
 
 code_handler(local, [file], _, File) ->
     File;
-code_handler(Name, Args, Dict, File) ->
+code_handler(Name, Args, Map, File) ->
     %%io:format("code handler=~p~n",[{Name, Args}]),
     Arity = length(Args),
-    case dict:find({local,Name,Arity}, Dict) of
+    case maps:find({local,Name,Arity}, Map) of
         {ok, Cs} ->
-            LF = {value,fun(I, J) -> code_handler(I, J, Dict, File) end},
+            LF = {value,fun(I, J) -> code_handler(I, J, Map, File) end},
             case erl_eval:match_clause(Cs, Args,erl_eval:new_bindings(),LF) of
                 {Body, Bs} ->
                     eval_exprs(Body, Bs, LF, none, none);
@@ -854,7 +854,7 @@ code_handler(Name, Args, Dict, File) ->
                     erlang:error({function_clause,[{local,Name,Args}]})
             end;
         error ->
-            case dict:find({remote,{Name,Arity}}, Dict) of
+            case maps:find({remote,{Name,Arity}}, Map) of
                 {ok, Mod} ->
                     %% io:format("Calling:~p~n",[{Mod,Name,Args}]),
                     apply(Mod, Name, Args);
@@ -885,13 +885,22 @@ format_exception(Class, Reason, StackTrace) ->
     erl_error:format_exception(1, Class, Reason, StackTrace, StackFun, PF, Enc).
 
 encoding() ->
-    [{encoding, Encoding}] = enc(),
-    Encoding.
+    case io:getopts() of
+        {error, _}=_Err ->
+            latin1;
+        Opts ->
+            case lists:keyfind(encoding, 1, Opts) of
+                false -> latin1;
+                {encoding, Encoding} -> Encoding
+            end
+    end.
 
-enc() ->
-    case lists:keyfind(encoding, 1, io:getopts()) of
-        false -> [{encoding,latin1}]; % should never happen
-        Enc -> [Enc]
+put_chars(String) ->
+    try
+        io:put_chars(String)
+    catch
+        _:_ ->
+            erlang:display(lists:flatten(String))
     end.
 
 a0() ->

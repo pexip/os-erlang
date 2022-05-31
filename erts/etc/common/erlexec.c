@@ -1,7 +1,7 @@
 /*
  * %CopyrightBegin%
  *
- * Copyright Ericsson AB 1996-2018. All Rights Reserved.
+ * Copyright Ericsson AB 1996-2020. All Rights Reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -83,6 +83,7 @@ static char *plusM_au_alloc_switches[] = {
     "acul",
     "acnl",
     "acfml",
+    "cp",
     "e",
     "t",
     "lmbcs",
@@ -199,7 +200,7 @@ void error(char* format, ...);
 
 static void usage_notsup(const char *switchname, const char *alt);
 static char **build_args_from_env(char *env_var);
-static char **build_args_from_string(char *env_var);
+static char **build_args_from_string(char *env_var, int allow_comments);
 static void initial_argv_massage(int *argc, char ***argv);
 static void get_parameters(int argc, char** argv);
 static void add_arg(char *new_arg);
@@ -219,7 +220,7 @@ static void get_start_erl_data(char *);
 static char* get_value(HKEY key, char* value_name, BOOL mustExit);
 static char* possibly_quote(char* arg);
 
-/* 
+/*
  * Functions from win_erlexec.c
  */
 int start_win_emulator(char* emu, char *startprog,char** argv, int start_detached);
@@ -249,13 +250,15 @@ static int start_smp_emu = 1;   /* Start the smp emulator. */
 static const char* emu_type = 0; /* Type of emulator (lcnt, valgrind, etc) */
 
 #ifdef __WIN32__
-static char *start_emulator_program = NULL; /* For detachec mode - 
+static char *start_emulator_program = NULL; /* For detached mode -
 					       erl.exe/werl.exe */
 static char* key_val_name = ERLANG_VERSION; /* Used by the registry
 					   * access functions.
 					   */
 static char* boot_script = NULL; /* used by option -start_erl and -boot */
-static char* config_script = NULL; /* used by option -start_erl and -config */
+static char** config_scripts = NULL; /* used by option -start_erl and -config */
+static int config_script_cnt = 0;
+static int got_start_erl = 0;
 
 static HANDLE this_module_handle;
 static int run_werl;
@@ -265,7 +268,7 @@ static WCHAR *latin1_to_utf16(char *str);
 #endif
 
 /*
- * Needed parameters to be fetched from the environment (Unix)
+ * Parameters to be fetched from the environment (Unix)
  * or the ini file (Win32).
  */
 
@@ -273,7 +276,7 @@ static char* bindir;		/* Location of executables. */
 static char* rootdir;		/* Root location of Erlang installation. */
 static char* emu;		/* Emulator to run. */
 static char* progname;		/* Name of this program. */
-static char* home;		/* Path of user's home directory. */
+static char* home;		/* Path of user's home directory, if any. */
 
 static void
 set_env(char *key, char *value)
@@ -375,7 +378,7 @@ add_extra_suffixes(char *prog)
    }
 #endif
 
-   if (emu_type) {
+   if (emu_type && strcmp("opt",emu_type) != 0) {
        p = write_str(p, ".");
        p = write_str(p, emu_type);
    }
@@ -392,12 +395,28 @@ add_extra_suffixes(char *prog)
 }
 
 #ifdef __WIN32__
+static void add_boot_config(void)
+{
+    int i;
+    if (boot_script)
+	add_args("-boot", boot_script, NULL);
+    for (i = 0; i < config_script_cnt; i++) {
+        add_args("-config", config_scripts[i], NULL);
+    }
+}
+# define ADD_BOOT_CONFIG add_boot_config()
+#else
+# define ADD_BOOT_CONFIG
+#endif
+
+
+#ifdef __WIN32__
 __declspec(dllexport) int win_erlexec(int argc, char **argv, HANDLE module, int windowed)
 #else
 int main(int argc, char **argv)
 #endif
 {
-    int haltAfterwards = 0;	/* If true, put 's erlang halt' at the end
+    int haltAfterwards = 0;	/* If true, put '-s erlang halt' at the end
 				 * of the arguments. */
     int isdistributed = 0;
     int no_epmd = 0;
@@ -408,13 +427,12 @@ int main(int argc, char **argv)
     int process_args = 1;
     int print_args_exit = 0;
     int print_qouted_cmd_exit = 0;
-    erts_cpu_info_t *cpuinfo = NULL;
     char* emu_name;
 
 #ifdef __WIN32__
     this_module_handle = module;
     run_werl = windowed;
-    /* if we started this erl just to get a detached emulator, 
+    /* if we started this erl just to get a detached emulator,
      * the arguments are already prepared for beam, so we skip
      * directly to start_emulator */
     s = get_env("ERL_CONSOLE_MODE");
@@ -432,7 +450,7 @@ int main(int argc, char **argv)
 	emu = argv[0];
 	start_emulator_program = strsave(argv[0]);
 	goto skip_arg_massage;
-    }   
+    }
     free_env_val(s);
 #else
     int reset_cerl_detached = 0;
@@ -463,12 +481,10 @@ int main(int argc, char **argv)
 #endif		
 
     get_parameters(argc, argv);
-    
+
     /*
      * Construct the path of the executable.
      */
-    cpuinfo = erts_cpu_info_create();
-
 #if defined(__WIN32__) && defined(WIN32_ALWAYS_DEBUG)
     emu_type = "debug";
 #endif
@@ -526,9 +542,6 @@ int main(int argc, char **argv)
 	i++;
     }
 
-    erts_cpu_info_destroy(cpuinfo);
-    cpuinfo = NULL;
-
     if (malloc_lib) {
 	if (strcmp(malloc_lib, "libc") != 0)
 	    usage("+MYm");
@@ -584,21 +597,16 @@ int main(int argc, char **argv)
 
     free_env_val(s);
     set_env("PATH", tmpStr);
-    
+
     i = 1;
 
-#ifdef __WIN32__
-#define ADD_BOOT_CONFIG					\
-    if (boot_script)					\
-	add_args("-boot", boot_script, NULL);		\
-    if (config_script)					\
-	add_args("-config", config_script, NULL);
-#else
-#define ADD_BOOT_CONFIG
-#endif
-
     get_home();
-    add_args("-home", home, NULL);
+    /* Add the home parameter when available. This is optional to support
+       systems that don't have the notion of a home directory and setups
+       that don't have the HOME environment variable set (ERL-476). */
+    if (home != NULL) {
+        add_args("-home", home, NULL);
+    }
 
     add_epmd_port();
 
@@ -616,7 +624,9 @@ int main(int argc, char **argv)
 		case 'b':
 		    if (strcmp(argv[i], "-boot") == 0) {
 			if (boot_script)
-			    error("Conflicting -start_erl and -boot options");
+			    error("Conflicting -boot options");
+                        if (got_start_erl)
+                            error("Conflicting -start_erl and -boot options");
 			if (i+1 >= argc)
 			    usage("-boot");
 			boot_script = strsave(argv[i+1]);
@@ -630,7 +640,7 @@ int main(int argc, char **argv)
 		case 'c':
 		    if (strcmp(argv[i], "-compile") == 0) {
 			/*
-			 * Note that the shell script erl.exec does an recursive call
+			 * Note that the shell script erl.exec does a recursive call
 			 * on itself here.  We'll avoid doing that.
 			 */
 			add_args("-noshell", "-noinput", "-s", "c", "lc_batch",
@@ -640,12 +650,17 @@ int main(int argc, char **argv)
 		    }
 #ifdef __WIN32__
 		    else if (strcmp(argv[i], "-config") == 0){
-			if (config_script)
+			if (got_start_erl)
 			    error("Conflicting -start_erl and -config options");
 			if (i+1 >= argc)
 			    usage("-config");
-			config_script = strsave(argv[i+1]);
-			i++;
+                        do {
+                            config_script_cnt++;
+                            config_scripts = erealloc(config_scripts,
+                                                      config_script_cnt * sizeof(char*));
+                            config_scripts[config_script_cnt-1] = strsave(argv[i+1]);
+                            i++;
+                        } while ((i+1) < argc && argv[i+1][0] != '-' && argv[i+1][0] != '+');
 		    }
 #endif
 		    else {
@@ -660,15 +675,6 @@ int main(int argc, char **argv)
 			start_detached = 1;
 			add_args("-noshell", "-noinput", NULL);
 		    }
-		    break;
-
-		  case 'i':
-		    if (strcmp(argv[i], "-instr") == 0) {
-			add_Eargs("-Mim");
-			add_Eargs("true");
-		    }
-		    else
-			add_arg(argv[i]);
 		    break;
 
 		  case 'e':
@@ -690,7 +696,7 @@ int main(int argc, char **argv)
 			    usage("-env");
 			set_env(argv[i+1], argv[i+2]);
 			i += 2;
-		    } else if (strcmp(argv[i], "-epmd") == 0) { 
+		    } else if (strcmp(argv[i], "-epmd") == 0) {
 			if (i+1 >= argc)
 			    usage("-epmd");
 			epmd_prog = argv[i+1];
@@ -708,7 +714,7 @@ int main(int argc, char **argv)
 
 		  case 'm':
 		    /*
-		     * Note that the shell script erl.exec does an recursive call
+		     * Note that the shell script erl.exec does a recursive call
 		     * on itself here.  We'll avoid doing that.
 		     */
 		    if (strcmp(argv[i], "-make") == 0) {
@@ -734,7 +740,7 @@ int main(int argc, char **argv)
 		    if (strcmp(argv[i], "-name") == 0) { /* -name NAME */
 			if (i+1 >= argc)
 			    usage("-name");
-		    
+
 			/*
 			 * Note: Cannot use add_args() here, due to non-defined
 			 * evaluation order.
@@ -771,7 +777,7 @@ int main(int argc, char **argv)
 			add_arg(argv[i]);
 			add_arg(argv[i+1]);
 			i++;
-		    }		    
+		    }
 		    else if (strcmp(argv[i], "-start_erl") == 0) {
 			if (i+1 < argc && argv[i+1][0] != '-') {
 			    get_start_erl_data(argv[i+1]);
@@ -819,10 +825,8 @@ int main(int argc, char **argv)
 
 	      case '+':
 		switch (argv[i][1]) {
-		  case '#':
 		  case 'a':
 		  case 'A':
-		  case 'b':
 		  case 'C':
 		  case 'e':
 		  case 'i':
@@ -895,7 +899,7 @@ int main(int argc, char **argv)
 		      if (argv[i][2] != '\0') {
 			  if ((argv[i][2] != 'i') &&
 			      (argv[i][2] != 'c') &&
-			      (argv[i][2] != 'd')) { 
+			      (argv[i][2] != 'd')) {
 			  usage(argv[i]);
 			} else {
 			  add_Eargs(argv[i]);
@@ -1027,7 +1031,7 @@ int main(int argc, char **argv)
 		    add_Eargs(argv[i]);
 		}
 		break;
-      
+
 	      default:
 		add_arg(argv[i]);
 	    } /* switch(argv[i][0] */
@@ -1045,7 +1049,7 @@ int main(int argc, char **argv)
     if (haltAfterwards) {
 	add_args("-s", "erlang", "halt", NULL);
     }
-    
+
     if (isdistributed && !no_epmd)
 	start_epmd(epmd_prog);
 
@@ -1054,8 +1058,8 @@ int main(int argc, char **argv)
 	/* Start the emulator within an xterm.
 	 * Move up all arguments and insert
 	 * "xterm -e " first.
-	 * The path must be searched for this 
-	 * to work, i.e execvp() must be used. 
+	 * The path must be searched for this
+	 * to work, i.e execvp() must be used.
 	 */
 	ensure_EargsSz(EargsCnt+2);
 	for (i = EargsCnt; i > 0; i--)
@@ -1063,9 +1067,9 @@ int main(int argc, char **argv)
 	EargsCnt += 2; /* Two args to insert */
 	Eargsp[0] = emu = "xterm";
 	Eargsp[1] = "-e";
-    }    
+    }
 #endif
-    
+
     add_Eargs("--");
     add_Eargs("-root");
     add_Eargs(rootdir);
@@ -1076,7 +1080,7 @@ int main(int argc, char **argv)
     for (i = 0; i < argsCnt; i++)
 	Eargsp[EargsCnt++] = argsp[i];
     Eargsp[EargsCnt] = NULL;
-    
+
     if (print_qouted_cmd_exit) {
 	printf("\"%s\" ", emu);
 	for (i = 1; i < EargsCnt; i++)
@@ -1101,7 +1105,7 @@ int main(int argc, char **argv)
 #ifdef __WIN32__
 
     if (EargsSz != EargsCnt + 1)
-	Eargsp = (char **) erealloc((void *) Eargsp, (EargsCnt + 1) * 
+	Eargsp = (char **) erealloc((void *) Eargsp, (EargsCnt + 1) *
 				    sizeof(char *));
     efree((void *) argsp);
 
@@ -1167,7 +1171,7 @@ int main(int argc, char **argv)
 #ifdef DEBUG
 	execvp(emu, Eargsp); /* "xterm ..." needs to search the path */
 #endif
-    } 
+    }
 #ifdef DEBUG
     else
 #endif
@@ -1195,10 +1199,10 @@ usage_aux(void)
 #endif
 	  "[-make] [-man [manopts] MANPAGE] [-x] [-emu_args] [-start_epmd BOOLEAN] "
 	  "[-args_file FILENAME] [+A THREADS] [+a SIZE] [+B[c|d|i]] [+c [BOOLEAN]] "
-	  "[+C MODE] [+h HEAP_SIZE_OPTION] [+K BOOLEAN] "
-	  "[+l] [+M<SUBSWITCH> <ARGUMENT>] [+P MAX_PROCS] [+Q MAX_PORTS] "
+	  "[+C MODE] [+dcg DECENTRALIZED_COUNTER_GROUPS_LIMIT] [+h HEAP_SIZE_OPTION] "
+	  "[+M<SUBSWITCH> <ARGUMENT>] [+P MAX_PROCS] [+Q MAX_PORTS] "
 	  "[+R COMPAT_REL] "
-	  "[+r] [+rg READER_GROUPS_LIMIT] [+s SCHEDULER_OPTION] "
+	  "[+r] [+rg READER_GROUPS_LIMIT] [+s<SUBSWITCH> SCHEDULER_OPTION] "
 	  "[+S NO_SCHEDULERS:NO_SCHEDULERS_ONLINE] "
 	  "[+SP PERCENTAGE_SCHEDULERS:PERCENTAGE_SCHEDULERS_ONLINE] "
 	  "[+T LEVEL] [+V] [+v] "
@@ -1242,12 +1246,12 @@ start_epmd(char *epmd)
     if (!epmd) {
 	epmd = epmd_cmd;
 #ifdef __WIN32__
-	erts_snprintf(epmd_cmd, sizeof(epmd_cmd), "%s" DIRSEP "epmd", bindir);
+	erts_snprintf(epmd_cmd, sizeof(epmd_cmd), "\"%s" DIRSEP "epmd\"", bindir);
 	arg1 = "-daemon";
 #else
 	erts_snprintf(epmd_cmd, sizeof(epmd_cmd), "\"%s" DIRSEP "epmd\" -daemon", bindir);
 #endif
-    } 
+    }
 #ifdef __WIN32__
     if (arg1 != NULL) {
 	strcat(epmd, " ");
@@ -1261,7 +1265,7 @@ start_epmd(char *epmd)
 	start.cb = sizeof (start);
 	MultiByteToWideChar(CP_UTF8, 0, epmd, -1, wcepmd, MAXPATHLEN+100);
 
-	if (!CreateProcessW(NULL, wcepmd, NULL, NULL, FALSE, 
+	if (!CreateProcessW(NULL, wcepmd, NULL, NULL, FALSE,
 			       CREATE_DEFAULT_ERROR_MODE | DETACHED_PROCESS,
 			       NULL, NULL, &start, &pi))
 	    result = -1;
@@ -1291,7 +1295,7 @@ add_args(char *first_arg, ...)
 {
     va_list ap;
     char* arg;
-    
+
     add_arg(first_arg);
     va_start(ap, first_arg);
     while ((arg = va_arg(ap, char *)) != NULL) {
@@ -1350,7 +1354,7 @@ erealloc(void *p, size_t size)
 }
 
 static void
-efree(void *p) 
+efree(void *p)
 {
     free(p);
 }
@@ -1388,6 +1392,7 @@ strsave(char* string)
 
 static void get_start_erl_data(char *file)
 {
+    static char* a_config_script;
     int fp;
     char tmpbuffer[512];
     char start_erl_data[512];
@@ -1396,9 +1401,9 @@ static void get_start_erl_data(char *file)
     char* reldir;
     char* otpstring;
     char* tprogname;
-    if (boot_script) 
+    if (boot_script)
 	error("Conflicting -start_erl and -boot options");
-    if (config_script)
+    if (config_scripts)
 	error("Conflicting -start_erl and -config options");
     env = get_env("RELDIR");
     if (env)
@@ -1448,14 +1453,17 @@ static void get_start_erl_data(char *file)
     erts_snprintf(progname,strlen(tprogname) + 20,"%s -start_erl",tprogname);
 
     boot_script = emalloc(512);
-    config_script = emalloc(512);
+    a_config_script = emalloc(512);
     erts_snprintf(boot_script, 512, "%s/%s/start", reldir, otpstring);
-    erts_snprintf(config_script, 512, "%s/%s/sys", reldir, otpstring);
-       
+    erts_snprintf(a_config_script, 512, "%s/%s/sys", reldir, otpstring);
+    config_scripts = &a_config_script;
+    config_script_cnt = 1;
+
+    got_start_erl = 1;
 }
 
 
-static wchar_t *replace_filename(wchar_t *path, wchar_t *new_base) 
+static wchar_t *replace_filename(wchar_t *path, wchar_t *new_base)
 {
     int plen = wcslen(path);
     wchar_t *res = (wchar_t *) emalloc((plen+wcslen(new_base)+1)*sizeof(wchar_t));
@@ -1478,8 +1486,8 @@ static char *path_massage(wchar_t *long_path)
      WideCharToMultiByte(CP_UTF8, 0, long_path, -1, p, len, NULL, NULL);
      return p;
 }
-    
-static char *do_lookup_in_section(InitSection *inis, char *name, 
+
+static char *do_lookup_in_section(InitSection *inis, char *name,
 				  char *section, wchar_t *filename, int is_path)
 {
     char *p = lookup_init_entry(inis, name);
@@ -1498,8 +1506,8 @@ static void get_parameters(int argc, char** argv)
     wchar_t *p;
     wchar_t buffer[MAX_PATH];
     wchar_t *ini_filename;
-    HANDLE module = GetModuleHandle(NULL); /* This might look strange, but we want the erl.ini 
-					      that resides in the same dir as erl.exe, not 
+    HANDLE module = GetModuleHandle(NULL); /* This might look strange, but we want the erl.ini
+					      that resides in the same dir as erl.exe, not
 					      an erl.ini in our directory */
     InitFile *inif;
     InitSection *inis;
@@ -1548,9 +1556,9 @@ static void get_parameters(int argc, char** argv)
 	}
 
 	bindir = do_lookup_in_section(inis, "Bindir", INI_SECTION, ini_filename,1);
-	rootdir = do_lookup_in_section(inis, "Rootdir", INI_SECTION, 
+	rootdir = do_lookup_in_section(inis, "Rootdir", INI_SECTION,
 				       ini_filename,1);
-	progname = do_lookup_in_section(inis, "Progname", INI_SECTION, 
+	progname = do_lookup_in_section(inis, "Progname", INI_SECTION,
 					ini_filename,0);
 	free_init_file(inif);
     }
@@ -1575,7 +1583,7 @@ get_home(void)
             home = utf16_to_utf8(profile);
             /* CoTaskMemFree(profile); */
 	} else
-	    error("HOMEDRIVE or HOMEPATH is not set and GetWindowsDir failed");
+	    error("HOMEDRIVE or HOMEPATH not set and getting USERPROFILE failed");
     } else {
 	home = emalloc(strlen(homedrive)+strlen(homepath)+1);
 	strcpy(home, homedrive);
@@ -1640,8 +1648,6 @@ static void
 get_home(void)
 {
     home = get_env("HOME");
-    if (home == NULL)
-	error("HOME must be set");
 }
 
 #endif
@@ -1657,12 +1663,12 @@ static void add_epmd_port(void)
 static char **build_args_from_env(char *env_var)
 {
     char *value = get_env(env_var);
-    char **res = build_args_from_string(value);
+    char **res = build_args_from_string(value, 0);
     free_env_val(value);
     return res;
 }
 
-static char **build_args_from_string(char *string)
+static char **build_args_from_string(char *string, int allow_comments)
 {
     int argc = 0;
     char **argv = NULL;
@@ -1671,7 +1677,7 @@ static char **build_args_from_string(char *string)
     int s_alloced = 0;
     int s_pos = 0;
     char *p = string;
-    enum {Start, Build, Build0, BuildSQuoted, BuildDQuoted, AcceptNext} state;
+    enum {Start, Build, Build0, BuildSQuoted, BuildDQuoted, AcceptNext, BuildComment} state;
 
 #define ENSURE()					\
     if (s_pos >= s_alloced) {			        \
@@ -1690,9 +1696,9 @@ static char **build_args_from_string(char *string)
     for(;;) {
 	switch (state) {
 	case Start:
-	    if (!*p) 
+	    if (!*p)
 		goto done;
-	    if (argc >= alloced - 1) { /* Make room for extra NULL */
+	    if (argc >= alloced - 2) { /* Make room for extra NULL and "--" */
 		argv = erealloc(argv, (alloced += 10) * sizeof(char *));
 	    }
 	    cur_s = argc + argv;
@@ -1703,12 +1709,24 @@ static char **build_args_from_string(char *string)
 	    break;
 	case Build0:
 	    switch (*p) {
+            case '\n':
+	    case '\f':
+	    case '\r':
+	    case '\t':
+	    case '\v':
 	    case ' ':
 		++p;
 		break;
 	    case '\0':
 		state = Start;
 		break;
+            case '#':
+                if (allow_comments) {
+                    ++p;
+                    state = BuildComment;
+                    break;
+                }
+                /* fall-through */
 	    default:
 		state = Build;
 		break;
@@ -1716,6 +1734,15 @@ static char **build_args_from_string(char *string)
 	    break;
 	case Build:
 	    switch (*p) {
+	    case '#':
+                if (!allow_comments)
+                    goto build_default;
+                /* fall-through */
+	    case '\n':
+	    case '\f':
+	    case '\r':
+	    case '\t':
+	    case '\v':
 	    case ' ':
 	    case '\0':
 		ENSURE();
@@ -1736,6 +1763,7 @@ static char **build_args_from_string(char *string)
 		state = AcceptNext;
 		break;
 	    default:
+            build_default:
 		ENSURE();
 		(*cur_s)[s_pos++] = *p++;
 		break;
@@ -1770,22 +1798,30 @@ static char **build_args_from_string(char *string)
 	    }
 	    break;
 	case AcceptNext:
-	    if (!*p) {
-		state = Build;
-	    } else {
+	    if (*p) {
 		ENSURE();
 		(*cur_s)[s_pos++] = *p++;
 	    }
 	    state = Build;
 	    break;
+        case BuildComment:
+            if (*p == '\n' || *p == '\0') {
+                state = Build0;
+            } else {
+                p++;
+            }
+            break;
 	}
     }
 done:
-    argv[argc] = NULL; /* Sure to be large enough */
     if (!argc) {
 	efree(argv);
 	return NULL;
     }
+    argv[argc++] = "--"; /* Add a -- separator in order
+                            for flags from different environments
+                            to not effect each other */
+    argv[argc++] = NULL; /* Sure to be large enough */
     return argv;
 #undef ENSURE
 }
@@ -1799,30 +1835,16 @@ errno_string(void)
     return str;
 }
 
+#define FILE_BUFF_SIZE 1024
+
 static char **
 read_args_file(char *filename)
 {
-    int c, aix = 0, quote = 0, cmnt = 0, asize = 0;
-    char **res, *astr = NULL;
     FILE *file;
-
-#undef EAF_CMNT
-#undef EAF_QUOTE
-#undef SAVE_CHAR
-
-#define EAF_CMNT	(1 << 8)
-#define EAF_QUOTE	(1 << 9)
-#define SAVE_CHAR(C)						\
-    do {							\
-	if (!astr)						\
-	    astr = emalloc(sizeof(char)*(asize = 20));		\
-	if (aix == asize)					\
-	    astr = erealloc(astr, sizeof(char)*(asize += 20));	\
-	if (' ' != (char) (C))					\
-	    astr[aix++] = (char) (C);				\
-	else if (aix > 0 && astr[aix-1] != ' ')			\
-	    astr[aix++] = ' ';					\
-   } while (0)
+    char buff[FILE_BUFF_SIZE+1];
+    size_t astr_sz = 0, sz;
+    char *astr = buff;
+    char **res;
 
     do {
 	errno = 0;
@@ -1834,63 +1856,41 @@ read_args_file(char *filename)
 		     errno_string());
     }
 
-    while (1) {
-	c = getc(file);
-	if (c == EOF) {
-	    if (ferror(file)) {
-		if (errno == EINTR) {
-		    clearerr(file);
-		    continue;
-		}
-		usage_format("Failed to read arguments file \"%s\": %s\n",
-			     filename,
-			     errno_string());
-	    }
-	    break;
-	}
+    sz = fread(astr, 1, FILE_BUFF_SIZE, file);
 
-	switch (quote | cmnt | c) {
-	case '\\':
-	    quote = EAF_QUOTE;
-	    break;
-	case '#':
-	    cmnt = EAF_CMNT;
-	    break;
-	case EAF_CMNT|'\n':
-	    cmnt = 0;
-	    /* Fall through... */
-	case '\n':
-	case '\f':
-	case '\r':
-	case '\t':
-	case '\v':
-	    if (!quote)
-		c = ' ';
-	    /* Fall through... */
-	default:
-	    if (!cmnt)
-		SAVE_CHAR(c);
-	    quote = 0;
-	    break;
-	}
+    while (!feof(file) && sz == FILE_BUFF_SIZE) {
+        if (astr == buff) {
+            astr = emalloc(FILE_BUFF_SIZE*2+1);
+            astr_sz = FILE_BUFF_SIZE;
+            memcpy(astr, buff, sizeof(buff));
+        } else {
+            astr_sz += FILE_BUFF_SIZE;
+            astr = erealloc(astr,astr_sz+FILE_BUFF_SIZE+1);
+        }
+        sz = fread(astr+astr_sz, 1, FILE_BUFF_SIZE, file);
     }
 
-    SAVE_CHAR('\0');
+    if (ferror(file)) {
+        usage_format("Failed to read arguments file \"%s\": %s\n",
+                     filename,
+                     errno_string());
+    }
+
+    astr[astr_sz + sz] = '\0';
 
     fclose(file);
 
     if (astr[0] == '\0')
 	res = NULL;
     else
-	res = build_args_from_string(astr);
+	res = build_args_from_string(astr, !0);
 
-    efree(astr);
+    if (astr != buff)
+        efree(astr);
 
     return res;
 
-#undef EAF_CMNT
-#undef EAF_QUOTE
-#undef SAVE_CHAR
+#undef FILE_BUFF_SIZE
 }
 
 
@@ -1993,7 +1993,7 @@ get_file_args(char *filename, argv_buf *abp, argv_buf *xabp)
 
     i = 0;
     argv = read_args_file(filename);
-    
+
     while (argv) {
 	
 	while (argv[i]) {
@@ -2036,11 +2036,13 @@ initial_argv_massage(int *argc, char ***argv)
     argv_buf ab = {0}, xab = {0};
     int ix, vix, ac;
     char **av;
+    char *sep = "--";
     struct {
 	int argc;
 	char **argv;
     } avv[] = {{INT_MAX, NULL}, {INT_MAX, NULL}, {INT_MAX, NULL},
-	       {INT_MAX, NULL}, {INT_MAX, NULL}, {INT_MAX, NULL}};
+	       {INT_MAX, NULL}, {INT_MAX, NULL},
+               {INT_MAX, NULL}, {INT_MAX, NULL}};
     /*
      * The environment flag containing OTP release is intentionally
      * undocumented and intended for OTP internal use only.
@@ -2060,6 +2062,8 @@ initial_argv_massage(int *argc, char ***argv)
     if (*argc > 1) {
 	avv[vix].argc = *argc - 1;
 	avv[vix++].argv = &(*argv)[1];
+        avv[vix].argc = 1;
+        avv[vix++].argv = &sep;
     }
 
     av = build_args_from_env("ERL_FLAGS");
@@ -2070,7 +2074,7 @@ initial_argv_massage(int *argc, char ***argv)
     if (av)
 	avv[vix++].argv = av;
 
-    if (vix == (*argc > 1 ? 1 : 0)) {
+    if (vix == (*argc > 1 ? 2 : 0)) {
 	/* Only command line argv; check if we can use argv as it is... */
 	ac = *argc;
 	av = *argv;
@@ -2092,7 +2096,7 @@ initial_argv_massage(int *argc, char ***argv)
  build_new_argv:
 
     save_arg(&ab, (*argv)[0]);
-    
+
     vix = 0;
     while (avv[vix].argv) {
 	ac = avv[vix].argc;
@@ -2184,12 +2188,12 @@ possibly_quote(char* arg)
  * Unicode helpers to handle environment and command line parameters on
  * Windows. We internally handle all environment variables in UTF8,
  * but put and get the environment using the WCHAR (limited UTF16) interface
- * 
- * These are simplified to only handle Unicode characters that can fit in 
+ *
+ * These are simplified to only handle Unicode characters that can fit in
  * Windows simplified UTF16, i.e. characters that fit in 16 bits.
  */
 
-static int utf8_len(unsigned char first) 
+static int utf8_len(unsigned char first)
 {
     if ((first & ((unsigned char) 0x80)) == 0) {
 	return 1;
@@ -2199,7 +2203,7 @@ static int utf8_len(unsigned char first)
 	return 3;
     } else if ((first & ((unsigned char) 0xF8)) == 0xF0) {
 	return 4;
-    } 
+    }
     return 1; /* will be a '?' */
 }
 
@@ -2209,7 +2213,7 @@ static WCHAR *utf8_to_utf16(unsigned char *bytes)
     unsigned char *tmp = bytes;
     WCHAR *target, *res;
     int num = 0;
-    
+
     while (*tmp) {
 	num++;
 	tmp += utf8_len(*tmp);
@@ -2220,12 +2224,12 @@ static WCHAR *utf8_to_utf16(unsigned char *bytes)
 	    unipoint = (unsigned int) *bytes;
 	    ++bytes;
 	} else if (((*bytes) & ((unsigned char) 0xE0)) == 0xC0) {
-	    unipoint = 
+	    unipoint =
 		(((unsigned int) ((*bytes) & ((unsigned char) 0x1F))) << 6) |
 		((unsigned int) (bytes[1] & ((unsigned char) 0x3F)));
 	    bytes += 2;
 	} else if (((*bytes) & ((unsigned char) 0xF0)) == 0xE0) {
-	    unipoint = 
+	    unipoint =
 		(((unsigned int) ((*bytes) & ((unsigned char) 0xF))) << 12) |
 		(((unsigned int) (bytes[1] & ((unsigned char) 0x3F))) << 6) |
 		((unsigned int) (bytes[2] & ((unsigned char) 0x3F)));
@@ -2258,9 +2262,9 @@ static int put_utf8(WCHAR ch, unsigned char *target, int sz, int *pos)
 	if (((*pos) + 1) >= sz) {
 	    return -1;
 	}
-	target[(*pos)++] = (((unsigned char) (x >> 6)) | 
+	target[(*pos)++] = (((unsigned char) (x >> 6)) |
 			    ((unsigned char) 0xC0));
-	target[(*pos)++] = (((unsigned char) (x & 0x3F)) | 
+	target[(*pos)++] = (((unsigned char) (x & 0x3F)) |
 			    ((unsigned char) 0x80));
     } else {
 	if ((x >= 0xD800 && x <= 0xDFFF) ||
@@ -2272,11 +2276,11 @@ static int put_utf8(WCHAR ch, unsigned char *target, int sz, int *pos)
 	    return -1;
 	}
 
-	target[(*pos)++] = (((unsigned char) (x >> 12)) | 
+	target[(*pos)++] = (((unsigned char) (x >> 12)) |
 			    ((unsigned char) 0xE0));
-	target[(*pos)++] = ((((unsigned char) (x >> 6)) & 0x3F)  | 
+	target[(*pos)++] = ((((unsigned char) (x >> 6)) & 0x3F)  |
 			    ((unsigned char) 0x80));
-	target[(*pos)++] = (((unsigned char) (x & 0x3F)) | 
+	target[(*pos)++] = (((unsigned char) (x & 0x3F)) |
 			    ((unsigned char) 0x80));
     }
     return 0;
@@ -2288,7 +2292,7 @@ static int need_bytes_for_utf8(WCHAR x)
 	return 1;
     else if (x < 0x800)
 	return 2;
-    else 
+    else
 	return 3;
 }
 
@@ -2303,7 +2307,7 @@ static WCHAR *latin1_to_utf16(char *str)
     return wstr;
 }
 
-static char *utf16_to_utf8(WCHAR *wstr) 
+static char *utf16_to_utf8(WCHAR *wstr)
 {
     int len = wcslen(wstr);
     char *result;
@@ -2322,5 +2326,5 @@ static char *utf16_to_utf8(WCHAR *wstr)
     result[pos] = '\0';
     return result;
 }
-    
+
 #endif

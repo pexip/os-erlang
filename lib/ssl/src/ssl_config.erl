@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2007-2018. All Rights Reserved.
+%% Copyright Ericsson AB 2007-2020. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -26,20 +26,49 @@
 -include("ssl_connection.hrl").
 -include_lib("public_key/include/public_key.hrl"). 
 
--export([init/2]).
+-define(DEFAULT_MAX_SESSION_CACHE, 1000).
 
-init(SslOpts, Role) ->
+-export([init/2,
+         pre_1_3_session_opts/0
+        ]).
+
+%%====================================================================
+%% Internal application API
+%%====================================================================
+init(#{erl_dist := ErlDist,
+       key := Key,
+       keyfile := KeyFile,
+       password := Password,
+       dh := DH,
+       dhfile := DHFile} = SslOpts, Role) ->
     
-    init_manager_name(SslOpts#ssl_options.erl_dist),
+    init_manager_name(ErlDist),
 
     {ok, #{pem_cache := PemCache} = Config} 
 	= init_certificates(SslOpts, Role),
     PrivateKey =
-	init_private_key(PemCache, SslOpts#ssl_options.key, SslOpts#ssl_options.keyfile,
-			 SslOpts#ssl_options.password, Role),
-    DHParams = init_diffie_hellman(PemCache, SslOpts#ssl_options.dh, SslOpts#ssl_options.dhfile, Role),
+	init_private_key(PemCache, Key, KeyFile, Password, Role),
+    DHParams = init_diffie_hellman(PemCache, DH, DHFile, Role),
     {ok, Config#{private_key => PrivateKey, dh_params => DHParams}}.
 
+pre_1_3_session_opts() ->
+    CbOpts = case application:get_env(ssl, session_cb) of
+		 {ok, Cb} when is_atom(Cb) ->
+		     InitArgs = session_cb_init_args(),
+		     #{session_cb => Cb,
+                       session_cb_init_args => InitArgs};
+		 _  ->
+		     #{session_cb => ssl_server_session_cache_db,
+                       session_cb_init_args => []}
+	     end,
+    LifeTime = session_lifetime(),
+    Max = max_session_cache_size(),
+    [CbOpts#{lifetime => LifeTime, max => Max}].
+
+
+%%====================================================================
+%% Internal functions 
+%%====================================================================	     
 init_manager_name(false) ->
     put(ssl_manager, ssl_manager:name(normal)),
     put(ssl_pem_cache, ssl_pem_cache:name(normal));
@@ -47,12 +76,12 @@ init_manager_name(true) ->
     put(ssl_manager, ssl_manager:name(dist)),
     put(ssl_pem_cache, ssl_pem_cache:name(dist)).
 
-init_certificates(#ssl_options{cacerts = CaCerts,
-			       cacertfile = CACertFile,
-			       certfile = CertFile,			   
-			       cert = Cert,
-			       crl_cache = CRLCache
-			      }, Role) ->
+init_certificates(#{cacerts := CaCerts,
+                    cacertfile := CACertFile,
+                    certfile := CertFile,
+                    cert := OwnCerts,
+                    crl_cache := CRLCache
+                   }, Role) ->
     {ok, Config} =
 	try 
 	    Certs = case CaCerts of
@@ -66,31 +95,31 @@ init_certificates(#ssl_options{cacerts = CaCerts,
 	    _:Reason ->
 		file_error(CACertFile, {cacertfile, Reason})
 	end,
-    init_certificates(Cert, Config, CertFile, Role).
+    init_certificates(OwnCerts, Config, CertFile, Role).
 
 init_certificates(undefined, Config, <<>>, _) ->
-    {ok, Config#{own_certificate => undefined}};
+    {ok, Config#{own_certificates => undefined}};
 
 init_certificates(undefined, #{pem_cache := PemCache} = Config, CertFile, client) ->
     try 
-	%% Ignoring potential proxy-certificates see: 
-	%% http://dev.globus.org/wiki/Security/ProxyFileFormat
-	[OwnCert|_] = ssl_certificate:file_to_certificats(CertFile, PemCache),
-	{ok, Config#{own_certificate => OwnCert}}
+        %% OwnCert | [OwnCert | Chain]
+	OwnCerts = ssl_certificate:file_to_certificats(CertFile, PemCache),
+	{ok, Config#{own_certificates => OwnCerts}}
     catch _Error:_Reason  ->
-	    {ok, Config#{own_certificate => undefined}}
+	    {ok, Config#{own_certificates => undefined}}
     end; 
 
 init_certificates(undefined, #{pem_cache := PemCache} = Config, CertFile, server) ->
     try
-	[OwnCert|_] = ssl_certificate:file_to_certificats(CertFile, PemCache),
-	{ok, Config#{own_certificate => OwnCert}}
+        %% OwnCert | [OwnCert | Chain]
+	OwnCerts = ssl_certificate:file_to_certificats(CertFile, PemCache),
+	{ok, Config#{own_certificates => OwnCerts}}
     catch
 	_:Reason ->
 	    file_error(CertFile, {certfile, Reason})	    
     end;
-init_certificates(Cert, Config, _, _) ->
-    {ok, Config#{own_certificate => Cert}}.
+init_certificates(OwnCerts, Config, _, _) ->
+    {ok, Config#{own_certificates => OwnCerts}}.
 init_private_key(_, #{algorithm := Alg} = Key, _, _Password, _Client) when Alg == ecdsa;
                                                                            Alg == rsa;
                                                                            Alg == dss ->
@@ -171,4 +200,28 @@ init_diffie_hellman(DbHandle,_, DHParamFile, server) ->
     catch
 	_:Reason ->
 	    file_error(DHParamFile, {dhfile, Reason}) 
+    end.
+
+session_cb_init_args() ->
+    case application:get_env(ssl, session_cb_init_args) of
+	{ok, Args} when is_list(Args) ->
+	    Args;
+	_  ->
+	    []
+    end.
+
+session_lifetime() ->
+    case application:get_env(ssl, session_lifetime) of
+	{ok, Time} when is_integer(Time) ->
+            Time;
+        _  ->
+            ?'24H_in_sec'
+    end.
+
+max_session_cache_size() ->
+    case application:get_env(ssl, session_cache_server_max) of
+	{ok, Size} when is_integer(Size) ->
+	    Size;
+	_ ->
+	   ?DEFAULT_MAX_SESSION_CACHE
     end.

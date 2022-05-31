@@ -1,7 +1,8 @@
+
 #
 # %CopyrightBegin%
 #
-# Copyright Ericsson AB 1996-2018. All Rights Reserved.
+# Copyright Ericsson AB 1996-2019. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -31,6 +32,7 @@ USE_VM_PROBES=@USE_VM_PROBES@
 FPE=@FPE@
 LIBS = @LIBS@
 Z_LIB=@Z_LIB@
+CROSS_COMPILING = @CROSS_COMPILING@
 NO_INLINE_FUNCTIONS=false
 OPCODE_TABLES = $(ERL_TOP)/lib/compiler/src/genop.tab \
 beam/ops.tab \
@@ -266,18 +268,18 @@ DEXPORT = @DEXPORT@
 RANLIB  = @RANLIB@
 STRIP   = strip
 PERL    = @PERL@
-RM	= @RM@
 MKDIR	= @MKDIR@
 
-USING_MINGW=@MIXED_CYGWIN_MINGW@
-MIXED_MSYS=@MIXED_MSYS@
+USING_MINGW=@MIXED_MINGW@
 
 ifeq ($(TARGET),win32)
 LIB_PREFIX=
 LIB_SUFFIX=.lib
+EXE_SUFFIX=.exe
 else
 LIB_PREFIX=lib
 LIB_SUFFIX=.a
+EXE_SUFFIX=
 endif
 
 ifeq (@EMU_LOCK_CHECKING@,yes)
@@ -308,9 +310,6 @@ ifeq ($(TARGET), win32)
 GEN_OPT_FLGS = $(OPT_LEVEL)
 UNROLL_FLG = 
 RC=rc.sh
-ifeq ($(MIXED_MSYS), yes)
-MAKE_PRELOAD_EXTRA = -msys
-endif
 ifeq ($(USING_MINGW), yes)
 RES_EXT = @OBJEXT@
 MAKE_PRELOAD_EXTRA += " -windres"
@@ -467,13 +466,13 @@ $(ERTS_LIB):
 
 .PHONY: clean
 clean:
-	$(RM) -f $(GENERATE)
-	$(RM) -rf $(TARGET)/*.c $(TARGET)/*.h $(TARGET)/*-GENERATED
-	$(RM) -rf $(TARGET)/*/*
-	$(RM) -rf obj/$(TARGET)
-	$(RM) -rf pcre/obj/$(TARGET) $(PCRE_GENINC)
-	$(RM) -rf zlib/obj/$(TARGET)
-	$(RM) -rf bin/$(TARGET)
+	$(RM) $(GENERATE)
+	$(RM) -r $(TARGET)/*.c $(TARGET)/*.h $(TARGET)/*-GENERATED
+	$(RM) -r $(TARGET)/*/*
+	$(RM) -r obj/$(TARGET)
+	$(RM) -r pcre/obj/$(TARGET) $(PCRE_GENINC)
+	$(RM) -r zlib/obj/$(TARGET)
+	$(RM) -r bin/$(TARGET)
 	cd $(ERTS_LIB_DIR) && $(MAKE) clean
 
 .PHONY: docs
@@ -599,7 +598,6 @@ endif
 
 $(TTF_DIR)/erl_bif_table.c \
 $(TTF_DIR)/erl_bif_table.h \
-$(TTF_DIR)/erl_bif_wrap.c \
 $(TTF_DIR)/erl_bif_list.h \
 $(TTF_DIR)/erl_atom_table.c \
 $(TTF_DIR)/erl_atom_table.h \
@@ -626,21 +624,59 @@ $(TTF_DIR)/driver_tab.c: Makefile.in utils/make_driver_tab
 	$(gen_verbose)LANG=C $(PERL) utils/make_driver_tab -o $@ -nifs $(NIF_OBJS) $(STATIC_NIF_LIBS) -drivers $(DRV_OBJS) $(STATIC_DRIVER_LIBS)
 GENERATE += $(TTF_DIR)/driver_tab.c
 
+DB_INSERT_LIST_YCF_FLAGS=-yield \
+		-static_aux_funs \
+		-only_yielding_funs \
+		-f ets_insert_2_list_check \
+		-f ets_insert_new_2_list_has_member \
+		-f ets_insert_2_list_from_p_heap \
+		-f ets_insert_2_list_destroy_copied_dbterms \
+		-f ets_insert_2_list_copy_term_list \
+		-f ets_insert_new_2_dbterm_list_has_member \
+		-f ets_insert_2_list_insert_db_term_list \
+		-f ets_insert_2_list \
+		-fnoauto ets_insert_2_list_lock_tbl
 
+ifeq ($(CROSS_COMPILING),no)
+$(TARGET)/erl_db_insert_list.ycf.h: beam/erl_db.c $(ERTS_LIB)
+	$(gen_verbose)$(ERL_TOP)/erts/lib_src/yielding_c_fun/bin/$(TARGET)/yielding_c_fun$(EXE_SUFFIX) \
+		$(DB_INSERT_LIST_YCF_FLAGS) \
+		-output_file_name $@ $<
+else
+## We cannot build a 'yielding_c_fun' that can be executed since we are
+## cross compiling. A working bootstrap system of valid version *should*
+## be in the path. Find 'yielding_c_fun' in the bootstrap system...
+$(TARGET)/erl_db_insert_list.ycf.h: beam/erl_db.c
+	$(gen_verbose)CROSS_YCF=`utils/find_cross_ycf` && \
+		"$$CROSS_YCF" $(DB_INSERT_LIST_YCF_FLAGS) \
+		-output_file_name $@ $<
+endif
+
+GENERATE += $(TARGET)/erl_db_insert_list.ycf.h
 
 # Preloaded code.
 # 
 # This list must be consistent with PRE_LOADED_MODULES in
 # erts/preloaded/src/Makefile.
 
-PRELOAD_BEAM =	$(ERL_TOP)/erts/preloaded/ebin/otp_ring0.beam \
-		$(ERL_TOP)/erts/preloaded/ebin/erts_code_purger.beam \
+ifeq ($(USE_ESOCK), yes)
+ESOCK_PRELOAD_BEAM = \
+	$(ERL_TOP)/erts/preloaded/ebin/socket_registry.beam \
+	$(ERL_TOP)/erts/preloaded/ebin/prim_socket.beam \
+	$(ERL_TOP)/erts/preloaded/ebin/prim_net.beam
+else
+ESOCK_PRELOAD_BEAM =
+endif
+
+PRELOAD_BEAM =	$(ERL_TOP)/erts/preloaded/ebin/erts_code_purger.beam \
+		$(ERL_TOP)/erts/preloaded/ebin/erl_init.beam \
 		$(ERL_TOP)/erts/preloaded/ebin/init.beam \
 		$(ERL_TOP)/erts/preloaded/ebin/prim_buffer.beam \
 		$(ERL_TOP)/erts/preloaded/ebin/prim_eval.beam \
 		$(ERL_TOP)/erts/preloaded/ebin/prim_inet.beam \
 		$(ERL_TOP)/erts/preloaded/ebin/prim_file.beam \
 		$(ERL_TOP)/erts/preloaded/ebin/zlib.beam \
+		$(ESOCK_PRELOAD_BEAM) \
 		$(ERL_TOP)/erts/preloaded/ebin/prim_zip.beam \
 		$(ERL_TOP)/erts/preloaded/ebin/erl_prim_loader.beam \
 		$(ERL_TOP)/erts/preloaded/ebin/erlang.beam \
@@ -732,8 +768,8 @@ $(OBJDIR)/PROFILE: $(BINDIR)/$(PROFILE_EXECUTABLE)
 	$(V_at)echo " PROFILE ${PROFILE_EXECUTABLE}"
 	$(V_at)rm -f $(OBJDIR)/erl*.profraw
 	$(V_at)set -e; LLVM_PROFILE_FILE="$(OBJDIR)/erlc-%m.profraw" \
-          ERL_FLAGS="-emu_type prof${TYPEMARKER} +S 1" $(ERLC) -DPGO \
-	  -o $(OBJDIR) test/estone_SUITE.erl > $(OBJDIR)/PROFILE_LOG
+          ERL_FLAGS="-emu_type prof${TYPEMARKER} +S 1" $(ERLC) -no-server \
+          -DPGO -o $(OBJDIR) test/estone_SUITE.erl > $(OBJDIR)/PROFILE_LOG
 	$(V_at)set -e; LLVM_PROFILE_FILE="$(OBJDIR)/erl-%m.profraw" \
 	  ERL_FLAGS="-emu_type prof${TYPEMARKER} +S 1" $(ERL) -pa $(OBJDIR) \
 	  -noshell -s estone_SUITE pgo -s init stop >> $(OBJDIR)/PROFILE_LOG
@@ -833,6 +869,37 @@ EMU_OBJS = \
 	$(OBJDIR)/beam_catches.o 	$(OBJDIR)/code_ix.o \
 	$(OBJDIR)/beam_ranges.o
 
+
+ifeq ($(USE_ESOCK), yes)
+
+# WE ARE USING ESOCK
+
+ESOCK_NIF_OBJS = \
+	$(OBJDIR)/prim_socket_nif.o \
+	$(OBJDIR)/prim_net_nif.o
+
+ifneq ($(TARGET), win32)
+# These are *currently* only needed for non-win32,
+# since the nif-functions for socket and net are basically
+# stubbed with notsup in the win32 case.
+ESOCK_RUN_OBJS = \
+	$(OBJDIR)/socket_dbg.o \
+	$(OBJDIR)/socket_tarray.o \
+	$(OBJDIR)/socket_util.o
+else
+ESOCK_RUN_OBJS =
+endif
+
+else
+
+# WE ARE *NOT* USING ESOCK
+
+ESOCK_NIF_OBJS =
+ESOCK_RUN_OBJS =
+
+endif
+
+
 RUN_OBJS += \
 	$(OBJDIR)/erl_alloc.o		$(OBJDIR)/erl_mtrace.o \
 	$(OBJDIR)/erl_alloc_util.o	$(OBJDIR)/erl_goodfit_alloc.o \
@@ -845,7 +912,6 @@ RUN_OBJS += \
 	$(OBJDIR)/erl_bif_persistent.o \
 	$(OBJDIR)/erl_bif_atomics.o    	$(OBJDIR)/erl_bif_counters.o \
 	$(OBJDIR)/erl_bif_trace.o	$(OBJDIR)/erl_bif_unique.o \
-	$(OBJDIR)/erl_bif_wrap.o	$(OBJDIR)/erl_nfunc_sched.o \
 	$(OBJDIR)/erl_guard_bifs.o 	$(OBJDIR)/erl_dirty_bif_wrap.o \
 	$(OBJDIR)/erl_trace.o		$(OBJDIR)/copy.o \
 	$(OBJDIR)/utils.o		$(OBJDIR)/bif.o \
@@ -864,8 +930,9 @@ RUN_OBJS += \
 	$(OBJDIR)/module.o		$(OBJDIR)/export.o \
 	$(OBJDIR)/register.o		$(OBJDIR)/break.o \
 	$(OBJDIR)/erl_async.o		$(OBJDIR)/erl_lock_check.o \
+	$(OBJDIR)/erl_dyn_lock_check.o \
 	$(OBJDIR)/erl_gc.o 		$(OBJDIR)/erl_lock_count.o \
-	$(OBJDIR)/erl_posix_str.o	 \
+	$(OBJDIR)/erl_posix_str.o	\
 	$(OBJDIR)/erl_bits.o 		$(OBJDIR)/erl_math.o \
 	$(OBJDIR)/erl_fun.o             $(OBJDIR)/erl_bif_port.o \
 	$(OBJDIR)/erl_term.o 		$(OBJDIR)/erl_node_tables.o \
@@ -879,14 +946,19 @@ RUN_OBJS += \
 	$(OBJDIR)/erl_thr_queue.o	$(OBJDIR)/erl_sched_spec_pre_alloc.o \
 	$(OBJDIR)/erl_ptab.o		$(OBJDIR)/erl_map.o \
 	$(OBJDIR)/erl_msacc.o		$(OBJDIR)/erl_lock_flags.o \
-	$(OBJDIR)/erl_io_queue.o
+	$(OBJDIR)/erl_io_queue.o	$(OBJDIR)/erl_db_catree.o \
+	$(ESOCK_RUN_OBJS)		$(OBJDIR)/erl_flxctr.o \
+	$(OBJDIR)/erl_nfunc_sched.o \
+	$(OBJDIR)/erl_global_literals.o
 
 LTTNG_OBJS = $(OBJDIR)/erlang_lttng.o
+
 NIF_OBJS = \
-	   $(OBJDIR)/erl_tracer_nif.o \
-	   $(OBJDIR)/prim_buffer_nif.o \
-	   $(OBJDIR)/prim_file_nif.o \
-	   $(OBJDIR)/zlib_nif.o
+	$(OBJDIR)/erl_tracer_nif.o \
+	$(OBJDIR)/prim_buffer_nif.o \
+	$(OBJDIR)/prim_file_nif.o \
+	$(OBJDIR)/zlib_nif.o \
+	$(ESOCK_NIF_OBJS)
 
 ifeq ($(TARGET),win32)
 DRV_OBJS = \
@@ -1147,7 +1219,14 @@ endif
 BEAM_SRC=$(wildcard beam/*.c)
 DRV_COMMON_SRC=$(wildcard drivers/common/*.c)
 DRV_OSTYPE_SRC=$(wildcard drivers/$(ERLANG_OSTYPE)/*.c)
+ifeq ($(TARGET), win32)
+# These are *currently* only needed for non-win32,
+# since the nif-functions for socket and net are basically
+# stubbed with badarg in the win32 case.
+NIF_COMMON_SRC=$(filter-out $(wildcard nifs/common/socket_*.c), $(wildcard nifs/common/*.c))
+else
 NIF_COMMON_SRC=$(wildcard nifs/common/*.c)
+endif
 NIF_OSTYPE_SRC=$(wildcard nifs/$(ERLANG_OSTYPE)/*.c)
 ALL_SYS_SRC=$(wildcard sys/$(ERLANG_OSTYPE)/*.c) $(wildcard sys/common/*.c)
 # We use $(shell ls) here instead of wildcard as $(wildcard ) resolved at
@@ -1165,7 +1244,7 @@ DEP_FLAGS=-MM  $(subst -O2,,$(CFLAGS)) $(INCLUDES) -I../etc/win32 \
 	-Idrivers/common -Idrivers/$(ERLANG_OSTYPE) \
 	-Inifs/common -Inifs/$(ERLANG_OSTYPE)
 
-# ifeq (@MIXED_CYGWIN_VC@,yes)
+# ifeq (@MIXED_VC@,yes)
 # VC++ used for compiling. If __GNUC__ is defined we will include
 # other headers then when compiling which will result in faulty
 # dependencies.
@@ -1232,6 +1311,7 @@ endif
 	$(V_at)cd $(ERTS_LIB_DIR) && $(MAKE) depend
 endif
 
+ifneq ($(ERTS_SKIP_DEPEND),true)
 ifneq ($(MAKECMDGOALS),clean)
 ifneq ($(MAKECMDGOALS),generate)
 ifndef VOID_EMULATOR
@@ -1239,3 +1319,6 @@ ifndef VOID_EMULATOR
 endif
 endif
 endif
+endif
+
+include $(ERL_TOP)/make/app_targets.mk

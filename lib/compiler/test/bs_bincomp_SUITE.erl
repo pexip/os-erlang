@@ -26,7 +26,8 @@
 	 init_per_group/2,end_per_group/2,
 	 byte_aligned/1,bit_aligned/1,extended_byte_aligned/1,
 	 extended_bit_aligned/1,mixed/1,filters/1,trim_coverage/1,
-	 nomatch/1,sizes/1,general_expressions/1,matched_out_size/1]).
+	 nomatch/1,sizes/1,general_expressions/1,matched_out_size/1,
+         no_generator/1]).
 
 -include_lib("common_test/include/ct.hrl").
 
@@ -35,7 +36,8 @@ suite() -> [{ct_hooks,[ts_install_cth]}].
 all() -> 
     [byte_aligned, bit_aligned, extended_byte_aligned,
      extended_bit_aligned, mixed, filters, trim_coverage,
-     nomatch, sizes, general_expressions, matched_out_size].
+     nomatch, sizes, general_expressions, matched_out_size,
+     no_generator].
 
 groups() -> 
     [].
@@ -99,26 +101,26 @@ extended_bit_aligned(Config) when is_list(Config) ->
 mixed(Config) when is_list(Config) ->
     cs_init(),
     <<2,3,3,4,4,5,5,6>> =
-	cs(<< <<(X+Y)>> || <<X>> <= <<1,2,3,4>>, <<Y>> <= <<1,2>> >>),
+	cs_default(<< <<(X+Y)>> || <<X>> <= <<1,2,3,4>>, <<Y>> <= <<1,2>> >>),
     <<2,3,3,4,4,5,5,6>> =
-	<< <<(X+Y)>> || <<X>> <= <<1,2,3,4>>, Y <- [1,2] >>,
+	cs_default(<< <<(X+Y)>> || <<X>> <= <<1,2,3,4>>, Y <- [1,2] >>),
     <<2,3,3,4,4,5,5,6>> =
-	cs(<< <<(X+Y)>> || X <- [1,2,3,4], Y <- [1,2] >>),
+	cs_default(<< <<(X+Y)>> || X <- [1,2,3,4], Y <- [1,2] >>),
     One = id([1,2,3,4]),
     Two = id([1,2]),
     <<2,3,3,4,4,5,5,6>> =
-	cs(<< <<(X+Y)>> || X <- One, Y <- Two >>),
+	cs_default(<< <<(X+Y)>> || X <- One, Y <- Two >>),
     [2,3,3,4,4,5,5,6] =
 	[(X+Y) || <<X>> <= <<1,2,3,4>>, <<Y>> <= <<1,2>>],
     [2,3,3,4,4,5,5,6] =
 	[(X+Y) || <<X>> <= <<1,2,3,4>>, Y <- [1,2]],
     <<2:3,3:3,3:3,4:3,4:3,5:3,5:3,6:3>> =
-	cs(<< <<(X+Y):3>> || <<X:3>> <= <<1:3,2:3,3:3,4:3>>,
-			     <<Y:3>> <= <<1:3,2:3>> >>),
+	cs_default(<< <<(X+Y):3>> || <<X:3>> <= <<1:3,2:3,3:3,4:3>>,
+                                     <<Y:3>> <= <<1:3,2:3>> >>),
     <<2:3,3:3,3:3,4:3,4:3,5:3,5:3,6:3>> =
-	cs(<< <<(X+Y):3>> || <<X:3>> <= <<1:3,2:3,3:3,4:3>>, Y <- [1,2] >>),
+	cs_default(<< <<(X+Y):3>> || <<X:3>> <= <<1:3,2:3,3:3,4:3>>, Y <- [1,2] >>),
     <<2:3,3:3,3:3,4:3,4:3,5:3,5:3,6:3>> =
-	cs(<< <<(X+Y):3>> || X <- [1,2,3,4], Y <- [1,2] >>),
+	cs_default(<< <<(X+Y):3>> || X <- [1,2,3,4], Y <- [1,2] >>),
     <<2:3,3:3,3:3,4:3,4:3,5:3,5:3,6:3>> =
 	cs_default(<< <<(X+Y):3>> || {X,Y} <- [{1,1},{1,2},{2,1},{2,2},
 					       {3,1},{3,2},{4,1},{4,2}] >>),
@@ -126,7 +128,16 @@ mixed(Config) when is_list(Config) ->
 	[(X+Y) || <<X:3>> <= <<1:3,2:3,3:3,4:3>>, <<Y:3>> <= <<1:3,2:3>>],
     [2,3,3,4,4,5,5,6] =
 	[(X+Y) || <<X:3>> <= <<1:3,2:3,3:3,4:3>>, {_,Y} <- [{a,1},{b,2}]],
+
+    %% OTP-16899: Nested binary comprehensions would fail to load.
+    <<0,1,0,2,0,3,99>> = mixed_nested([1,2,3]),
+
+    <<1>> = cs_default(<< <<X>> || L <- [[1]], X <- L >>),
+
     cs_end().
+
+mixed_nested(L) ->
+    << << << << E:16 >> || E <- L >> || true >>/binary, 99:(id(8))>>.
 
 filters(Config) when is_list(Config) ->
     cs_init(),
@@ -191,7 +202,18 @@ coverage_trimmer(Params) ->
 coverage_summer(A, B, C, D) -> A+B+C+D.
 
 nomatch(Config) when is_list(Config) ->
+    Bin = id(<<1,2,3,4,5>>),
     <<>> = << <<X:8>> || X = {_,_} = [_|_] <- [1,2,3] >>,
+    [] = [X || <<X:all/binary>> <= Bin],
+    [] = [X || <<X:bad/binary>> <= Bin],
+    <<>> = << <<X:32>> || <<X:all/binary>> <= Bin >>,
+    <<>> = << <<X:32>> || <<X:bad/binary>> <= Bin >>,
+
+    <<>> = << <<"a">> || <<_:1/float>> <= Bin>>,
+
+    NaN = <<(-1):32>>,
+    <<>> = << <<"a">> || <<_:32/float>> <= NaN >>,
+
     ok.
 
 sizes(Config) when is_list(Config) ->
@@ -344,6 +366,15 @@ matched_out_size(Config) when is_list(Config) ->
 
 matched_out_size_1(Binary) ->
     << <<X>> || <<S, X:S>> <= Binary>>.
+
+no_generator(Config) ->
+    [<<"abc">>] = [<<(id(<<"abc">>)) || true >>],
+    {<<>>} = {<<(id(<<"abc">>)) || false >>},
+
+    %% Would crash the compiler when compiled with +no_type_opt.
+    {'EXIT',{badarg,_}} = (catch << (catch "\001") || true >>),
+
+    ok.
 
 cs_init() ->
     erts_debug:set_internal_state(available_internal_state, true),

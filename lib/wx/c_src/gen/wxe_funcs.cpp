@@ -1,7 +1,7 @@
 /*
  * %CopyrightBegin%
  *
- * Copyright Ericsson AB 2008-2018. All Rights Reserved.
+ * Copyright Ericsson AB 2008-2020. All Rights Reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -843,6 +843,13 @@ case wxWindow_IsTopLevel: { // wxWindow::IsTopLevel
  wxWindow *This = (wxWindow *) getPtr(bp,memenv); bp += 4;
  if(!This) throw wxe_badarg(0);
  bool Result = This->IsTopLevel();
+ rt.addBool(Result);
+ break;
+}
+case wxWindow_IsShownOnScreen: { // wxWindow::IsShownOnScreen
+ wxWindow *This = (wxWindow *) getPtr(bp,memenv); bp += 4;
+ if(!This) throw wxe_badarg(0);
+ bool Result = This->IsShownOnScreen();
  rt.addBool(Result);
  break;
 }
@@ -1707,7 +1714,7 @@ case wxWindow_IsDoubleBuffered: { // wxWindow::IsDoubleBuffered
  break;
 }
 #endif
-#if wxCHECK_VERSION(3,0,0) && !defined(__WXMAC__)
+#if wxCHECK_VERSION(3,1,0) || (!defined(__WXMAC__) && wxCHECK_VERSION(3,0,0))
 case wxWindow_SetDoubleBuffered: { // wxWindow::SetDoubleBuffered
  wxWindow *This = (wxWindow *) getPtr(bp,memenv); bp += 4;
  bool * on = (bool *) bp; bp += 4;
@@ -1722,6 +1729,39 @@ case wxWindow_GetContentScaleFactor: { // wxWindow::GetContentScaleFactor
  if(!This) throw wxe_badarg(0);
  double Result = This->GetContentScaleFactor();
  rt.addFloat(Result);
+ break;
+}
+#endif
+#if wxCHECK_VERSION(3,1,3)
+case wxWindow_GetDPI: { // wxWindow::GetDPI
+ wxWindow *This = (wxWindow *) getPtr(bp,memenv); bp += 4;
+ if(!This) throw wxe_badarg(0);
+ wxSize Result = This->GetDPI();
+ rt.add(Result);
+ break;
+}
+#endif
+#if wxCHECK_VERSION(3,1,0)
+case wxWindow_FromDIP: { // wxWindow::FromDIP
+ wxWindow *This = (wxWindow *) getPtr(bp,memenv); bp += 4;
+ int * szW = (int *) bp; bp += 4;
+ int * szH = (int *) bp; bp += 4;
+ wxSize sz = wxSize(*szW,*szH);
+ if(!This) throw wxe_badarg(0);
+ wxSize Result = This->FromDIP(sz);
+ rt.add(Result);
+ break;
+}
+#endif
+#if wxCHECK_VERSION(3,1,0)
+case wxWindow_ToDIP: { // wxWindow::ToDIP
+ wxWindow *This = (wxWindow *) getPtr(bp,memenv); bp += 4;
+ int * szW = (int *) bp; bp += 4;
+ int * szH = (int *) bp; bp += 4;
+ wxSize sz = wxSize(*szW,*szH);
+ if(!This) throw wxe_badarg(0);
+ wxSize Result = This->ToDIP(sz);
+ rt.add(Result);
  break;
 }
 #endif
@@ -7336,6 +7376,29 @@ case wxMenuBar_IsChecked: { // wxMenuBar::IsChecked
  rt.addBool(Result);
  break;
 }
+#if wxCHECK_VERSION(3,0,0) && defined(__WXMAC__)
+case wxMenuBar_SetAutoWindowMenu: { // wxMenuBar::SetAutoWindowMenu
+ bool * enable = (bool *) bp; bp += 4;
+ wxMenuBar::SetAutoWindowMenu(*enable);
+ break;
+}
+#endif
+#if wxCHECK_VERSION(3,0,0) && defined(__WXMAC__)
+case wxMenuBar_GetAutoWindowMenu: { // wxMenuBar::GetAutoWindowMenu
+ bool Result = wxMenuBar::GetAutoWindowMenu();
+ rt.addBool(Result);
+ break;
+}
+#endif
+#if wxCHECK_VERSION(3,0,0) && defined(__WXMAC__)
+case wxMenuBar_OSXGetAppleMenu: { // wxMenuBar::OSXGetAppleMenu
+ wxMenuBar *This = (wxMenuBar *) getPtr(bp,memenv); bp += 4;
+ if(!This) throw wxe_badarg(0);
+ wxMenu * Result = (wxMenu*)This->OSXGetAppleMenu();
+ rt.addRef(getRef((void *)Result,memenv), "wxMenu");
+ break;
+}
+#endif
 case wxMenuBar_IsEnabled_1: { // wxMenuBar::IsEnabled
  wxMenuBar *This = (wxMenuBar *) getPtr(bp,memenv); bp += 4;
  int * itemid = (int *) bp; bp += 4;
@@ -25870,6 +25933,15 @@ case wxMouseEvent_ShiftDown: { // wxMouseEvent::ShiftDown
  rt.addBool(Result);
  break;
 }
+#if wxCHECK_VERSION(3,0,0)
+case wxMouseEvent_GetWheelAxis: { // wxMouseEvent::GetWheelAxis
+ wxMouseEvent *This = (wxMouseEvent *) getPtr(bp,memenv); bp += 4;
+ if(!This) throw wxe_badarg(0);
+ int Result = This->GetWheelAxis();
+ rt.addInt(Result);
+ break;
+}
+#endif
 case wxSetCursorEvent_GetCursor: { // wxSetCursorEvent::GetCursor
  wxSetCursorEvent *This = (wxSetCursorEvent *) getPtr(bp,memenv); bp += 4;
  if(!This) throw wxe_badarg(0);
@@ -31701,8 +31773,14 @@ case wxLogNull_destroy: { // wxLogNull::destroy
    delete This;}
  break;
 }
+
 case wxTaskBarIcon_new: { // wxTaskBarIcon::wxTaskBarIcon
- wxTaskBarIcon * Result = new EwxTaskBarIcon();
+ EwxTaskBarIcon * Result = new EwxTaskBarIcon();
+ Result->port = Ecmd.port;
+ if ( * (int*) bp) {
+   Result->createPopupMenu = *(int *) bp;
+ }
+
  newPtr((void *) Result, 1, memenv);
  rt.addRef(getRef((void *)Result,memenv), "wxTaskBarIcon");
  break;
@@ -32113,6 +32191,120 @@ case wxDropFilesEvent_GetFiles: { // wxDropFilesEvent::GetFiles
  rt.add(tmpArrayStr);
  break;
 }
+#if wxUSE_DISPLAY
+case wxDisplay_new: { // wxDisplay::wxDisplay
+ int n=0;
+ while( * (int*) bp) { switch (* (int*) bp) {
+  case 1: {bp += 4;
+ n = (int)*(unsigned int *) bp; bp += 4;
+  } break;
+ }};
+ wxDisplay * Result = new wxDisplay(n);
+ newPtr((void *) Result, 239, memenv);
+ rt.addRef(getRef((void *)Result,memenv), "wxDisplay");
+ break;
+}
+case wxDisplay_destruct: { // wxDisplay::~wxDisplay
+ wxDisplay *This = (wxDisplay *) getPtr(bp,memenv); bp += 4;
+ if(This) {   ((WxeApp *) wxTheApp)->clearPtr((void *) This);
+   delete This;}
+ break;
+}
+case wxDisplay_IsOk: { // wxDisplay::IsOk
+ wxDisplay *This = (wxDisplay *) getPtr(bp,memenv); bp += 4;
+ if(!This) throw wxe_badarg(0);
+ bool Result = This->IsOk();
+ rt.addBool(Result);
+ break;
+}
+#if wxCHECK_VERSION(2,8,12)
+case wxDisplay_GetClientArea: { // wxDisplay::GetClientArea
+ wxDisplay *This = (wxDisplay *) getPtr(bp,memenv); bp += 4;
+ if(!This) throw wxe_badarg(0);
+ wxRect Result = This->GetClientArea();
+ rt.add(Result);
+ break;
+}
+#endif
+case wxDisplay_GetGeometry: { // wxDisplay::GetGeometry
+ wxDisplay *This = (wxDisplay *) getPtr(bp,memenv); bp += 4;
+ if(!This) throw wxe_badarg(0);
+ wxRect Result = This->GetGeometry();
+ rt.add(Result);
+ break;
+}
+case wxDisplay_GetName: { // wxDisplay::GetName
+ wxDisplay *This = (wxDisplay *) getPtr(bp,memenv); bp += 4;
+ if(!This) throw wxe_badarg(0);
+ wxString Result = This->GetName();
+ rt.add(Result);
+ break;
+}
+case wxDisplay_IsPrimary: { // wxDisplay::IsPrimary
+ wxDisplay *This = (wxDisplay *) getPtr(bp,memenv); bp += 4;
+ if(!This) throw wxe_badarg(0);
+ bool Result = This->IsPrimary();
+ rt.addBool(Result);
+ break;
+}
+case wxDisplay_GetCount: { // wxDisplay::GetCount
+ int Result = wxDisplay::GetCount();
+ rt.addUint(Result);
+ break;
+}
+case wxDisplay_GetFromPoint: { // wxDisplay::GetFromPoint
+ int * ptX = (int *) bp; bp += 4;
+ int * ptY = (int *) bp; bp += 4;
+ wxPoint pt = wxPoint(*ptX,*ptY);
+ int Result = wxDisplay::GetFromPoint(pt);
+ rt.addInt(Result);
+ break;
+}
+case wxDisplay_GetFromWindow: { // wxDisplay::GetFromWindow
+ wxWindow *window = (wxWindow *) getPtr(bp,memenv); bp += 4;
+ int Result = wxDisplay::GetFromWindow(window);
+ rt.addInt(Result);
+ break;
+}
+#if wxCHECK_VERSION(3,1,2)
+case wxDisplay_GetPPI: { // wxDisplay::GetPPI
+ wxDisplay *This = (wxDisplay *) getPtr(bp,memenv); bp += 4;
+ if(!This) throw wxe_badarg(0);
+ wxSize Result = This->GetPPI();
+ rt.add(Result);
+ break;
+}
+#endif
+#endif // wxUSE_DISPLAY
+#if wxUSE_GRAPHICS_CONTEXT
+case wxGCDC_new_1: { // wxGCDC::wxGCDC
+ wxWindowDC *dc = (wxWindowDC *) getPtr(bp,memenv); bp += 4;
+ wxGCDC * Result = new EwxGCDC(*dc);
+ newPtr((void *) Result, 8, memenv);
+ rt.addRef(getRef((void *)Result,memenv), "wxGCDC");
+ break;
+}
+case wxGCDC_new_0: { // wxGCDC::wxGCDC
+ wxGCDC * Result = new EwxGCDC();
+ newPtr((void *) Result, 8, memenv);
+ rt.addRef(getRef((void *)Result,memenv), "wxGCDC");
+ break;
+}
+case wxGCDC_GetGraphicsContext: { // wxGCDC::GetGraphicsContext
+ wxGCDC *This = (wxGCDC *) getPtr(bp,memenv); bp += 4;
+ if(!This) throw wxe_badarg(0);
+ wxGraphicsContext * Result = (wxGraphicsContext*)This->GetGraphicsContext();
+ rt.addRef(getRef((void *)Result,memenv,8), "wxGraphicsContext");
+ break;
+}
+case wxGCDC_SetGraphicsContext: { // wxGCDC::SetGraphicsContext
+ wxGCDC *This = (wxGCDC *) getPtr(bp,memenv); bp += 4;
+ wxGraphicsContext *ctx = (wxGraphicsContext *) getPtr(bp,memenv); bp += 4;
+ if(!This) throw wxe_badarg(0);
+ This->SetGraphicsContext(ctx);
+ break;
+}
+#endif // wxUSE_GRAPHICS_CONTEXT
   default: {
     wxeReturn error = wxeReturn(WXE_DRV_PORT, Ecmd.caller, false);    error.addAtom("_wxe_error_");
     error.addInt((int) op);
@@ -32174,6 +32366,7 @@ bool WxeApp::delete_object(void *ptr, wxeRefData *refd) {
   case 231: delete (EwxLocale *) ptr; return false;
   case 236: delete (wxOverlay *) ptr; break;
   case 237: delete (EwxDCOverlay *) ptr; return false;
+  case 239: delete (wxDisplay *) ptr; break;
   default: delete (wxObject *) ptr; return false;
   }
   return true;

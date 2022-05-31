@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 1996-2018. All Rights Reserved.
+%% Copyright Ericsson AB 1996-2019. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -28,7 +28,7 @@
 -export([format_error/1]).
 %% File system and metadata.
 -export([get_cwd/0, get_cwd/1, set_cwd/1, delete/1, rename/2,
-	 make_dir/1, del_dir/1, list_dir/1, list_dir_all/1,
+	 make_dir/1, del_dir/1, del_dir_r/1, list_dir/1, list_dir_all/1,
 	 read_file_info/1, read_file_info/2,
 	 write_file_info/2, write_file_info/3,
 	 altname/1,
@@ -239,19 +239,48 @@ make_dir(Name) ->
 del_dir(Name) ->
     check_and_call(del_dir, [file_name(Name)]).
 
--spec read_file_info(Filename) -> {ok, FileInfo} | {error, Reason} when
-      Filename :: name_all(),
+-spec del_dir_r(File) -> ok | {error, Reason} when
+      File :: name_all(),
+      Reason :: posix() | badarg.
+
+del_dir_r(File) -> % rm -rf File
+    case read_link_info(File) of
+	{ok, #file_info{type = directory}} ->
+	    case list_dir_all(File) of
+		{ok, Names} ->
+		    lists:foreach(fun(Name) ->
+				      del_dir_r(filename:join(File, Name))
+				  end, Names);
+		{error, _Reason} -> ok
+	    end,
+	    del_dir(File);
+	{ok, _FileInfo} -> delete(File);
+	{error, _Reason} = Error -> Error
+    end.
+
+-spec read_file_info(File) -> {ok, FileInfo} | {error, Reason} when
+      File :: name_all() | io_device(),
       FileInfo :: file_info(),
       Reason :: posix() | badarg.
+
+read_file_info(IoDevice)
+  when is_pid(IoDevice); is_record(IoDevice, file_descriptor) ->
+    read_file_info(IoDevice, []);
 
 read_file_info(Name) ->
     check_and_call(read_file_info, [file_name(Name)]).
 
--spec read_file_info(Filename, Opts) -> {ok, FileInfo} | {error, Reason} when
-      Filename :: name_all(),
+-spec read_file_info(File, Opts) -> {ok, FileInfo} | {error, Reason} when
+      File :: name_all() | io_device(),
       Opts :: [file_info_option()],
       FileInfo :: file_info(),
       Reason :: posix() | badarg.
+
+read_file_info(IoDevice, Opts) when is_pid(IoDevice), is_list(Opts) ->
+    file_request(IoDevice, {read_handle_info, Opts});
+
+read_file_info(#file_descriptor{module = Module} = Handle, Opts) when is_list(Opts) ->
+    Module:read_handle_info(Handle, Opts);
 
 read_file_info(Name, Opts) when is_list(Opts) ->
     Args = [file_name(Name), Opts],
@@ -460,7 +489,7 @@ raw_write_file_info(Name, #file_info{} = Info) ->
 -spec open(File, Modes) -> {ok, IoDevice} | {error, Reason} when
       File :: Filename | iodata(),
       Filename :: name_all(),
-      Modes :: [mode() | ram],
+      Modes :: [mode() | ram | directory],
       IoDevice :: io_device(),
       Reason :: posix() | badarg | system_limit.
 
@@ -545,7 +574,7 @@ allocate(#file_descriptor{module = Module} = Handle, Offset, Length) ->
               | {no_translation, unicode, latin1}.
 
 read(File, Sz) when (is_pid(File) orelse is_atom(File)), is_integer(Sz), Sz >= 0 ->
-    case io:request(File, {get_chars, '', Sz}) of
+    case io:request(File, {get_chars, latin1, '', Sz}) of
 	Data when is_list(Data); is_binary(Data) ->
 	    {ok, Data};
 	Other ->
@@ -566,7 +595,7 @@ read(_, _) ->
               | {no_translation, unicode, latin1}.
 
 read_line(File) when (is_pid(File) orelse is_atom(File)) ->
-    case io:request(File, {get_line, ''}) of
+    case io:request(File, {get_line, latin1, ''}) of
 	Data when is_list(Data); is_binary(Data) ->
 	    {ok, Data};
 	Other ->
@@ -1143,7 +1172,7 @@ path_script(Path, File, Bs) ->
              {ok, IoDevice, FullName} | {error, Reason} when
       Path :: [Dir :: name_all()],
       Filename :: name_all(),
-      Modes :: [mode()],
+      Modes :: [mode() | directory],
       IoDevice :: io_device(),
       FullName :: filename_all(),
       Reason :: posix() | badarg | system_limit.
@@ -1279,14 +1308,23 @@ sendfile(Filename, Sock)  ->
 %% Internal sendfile functions
 sendfile(#file_descriptor{ module = Mod } = Fd, Sock, Offset, Bytes,
 	 ChunkSize, Headers, Trailers, Opts)
-  when is_port(Sock) ->
-    case Mod:sendfile(Fd, Sock, Offset, Bytes, ChunkSize, Headers, Trailers,
-		      Opts) of
-	{error, enotsup} ->
-	    sendfile_fallback(Fd, Sock, Offset, Bytes, ChunkSize,
-			      Headers, Trailers);
-	Else ->
-	    Else
+  when is_integer(Offset), is_integer(Bytes) ->
+    case Sock of
+        {'$inet', _, _} ->
+            sendfile_fallback(
+              Fd, Sock, Offset, Bytes, ChunkSize,
+              Headers, Trailers);
+        _ when is_port(Sock) ->
+            case Mod:sendfile(
+                   Fd, Sock, Offset, Bytes, ChunkSize,
+                   Headers, Trailers, Opts) of
+                {error, enotsup} ->
+                    sendfile_fallback(
+                      Fd, Sock, Offset, Bytes, ChunkSize,
+                      Headers, Trailers);
+                Else ->
+                    Else
+            end
     end;
 sendfile(_,_,_,_,_,_,_,_) ->
     {error, badarg}.
@@ -1319,12 +1357,19 @@ sendfile_fallback(File, Sock, Offset, Bytes, ChunkSize, Headers, Trailers) ->
     end.
 
 
-sendfile_fallback(File, Sock, Offset, Bytes, ChunkSize) ->
+sendfile_fallback(File, Sock, Offset, Bytes, ChunkSize)
+  when 0 =< Bytes ->
     {ok, CurrPos} = file:position(File, {cur, 0}),
-    {ok, _NewPos} = file:position(File, {bof, Offset}),
-    Res = sendfile_fallback_int(File, Sock, Bytes, ChunkSize, 0),
-    _ = file:position(File, {bof, CurrPos}),
-    Res.
+    case file:position(File, {bof, Offset}) of
+        {ok, _NewPos} ->
+            Res = sendfile_fallback_int(File, Sock, Bytes, ChunkSize, 0),
+            _ = file:position(File, {bof, CurrPos}),
+            Res;
+        Error ->
+            Error
+    end;
+sendfile_fallback(_, _, _, _, _) ->
+    {error, einval}.
 
 
 sendfile_fallback_int(File, Sock, Bytes, ChunkSize, BytesSent)

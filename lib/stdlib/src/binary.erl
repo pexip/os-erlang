@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2010-2018. All Rights Reserved.
+%% Copyright Ericsson AB 2010-2020. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -141,7 +141,7 @@ last(_) ->
     erlang:nif_error(undef).
 
 -spec list_to_bin(ByteList) -> binary() when
-      ByteList :: iodata().
+      ByteList :: iolist().
 
 list_to_bin(_) ->
     erlang:nif_error(undef).

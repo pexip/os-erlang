@@ -1,7 +1,7 @@
 /*
  * %CopyrightBegin%
  *
- * Copyright Ericsson AB 1996-2018. All Rights Reserved.
+ * Copyright Ericsson AB 1996-2020. All Rights Reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -604,7 +604,12 @@ cleanup:
 /*
  *  Copy a structure to a heap.
  */
-Eterm copy_struct_x(Eterm obj, Uint sz, Eterm** hpp, ErlOffHeap* off_heap, Uint *bsz, erts_literal_area_t *litopt)
+Eterm copy_struct_x(Eterm obj, Uint sz, Eterm** hpp, ErlOffHeap* off_heap,
+                    Uint *bsz, erts_literal_area_t *litopt
+#ifdef ERTS_COPY_REGISTER_LOCATION
+                    , char *file, int line
+#endif
+    )
 {
     char* hstart;
     Uint hsize;
@@ -854,7 +859,11 @@ Eterm copy_struct_x(Eterm obj, Uint sz, Eterm** hpp, ErlOffHeap* off_heap, Uint 
 	    case EXTERNAL_REF_SUBTAG:
 		{
 		  ExternalThing *etp = (ExternalThing *) objp;
-		  erts_refc_inc(&etp->node->refc, 2);
+#if defined(ERTS_COPY_REGISTER_LOCATION) && defined(ERL_NODE_BOOKKEEP)
+		  erts_ref_node_entry__(etp->node, 2, make_boxed(htop), file, line);
+#else
+		  erts_ref_node_entry(etp->node, 2, make_boxed(htop));
+#endif
 		}
 	    L_off_heap_node_container_common:
 		{
@@ -1238,11 +1247,25 @@ Uint copy_shared_calculate(Eterm obj, erts_shcopy_t *info)
 		} else {
 		    extra_bytes = 0;
 		}
-		ASSERT(is_boxed(real_bin) &&
-		       (((*boxed_val(real_bin)) &
-			 (_TAG_HEADER_MASK - _BINARY_XXX_MASK - BOXED_VISITED_MASK))
-			== _TAG_HEADER_REFC_BIN));
-		hdr = *_unchecked_binary_val(real_bin) & ~BOXED_VISITED_MASK;
+                ASSERT(is_boxed(real_bin));
+                hdr = *_unchecked_binary_val(real_bin);
+                switch (primary_tag(hdr)) {
+                case TAG_PRIMARY_HEADER:
+                    /* real_bin is untouched, only referred by sub-bins so far */
+                    break;
+                case BOXED_VISITED:
+                    /* real_bin referred directly once so far */
+                    hdr = (hdr - BOXED_VISITED) + TAG_PRIMARY_HEADER;
+                    break;
+                case BOXED_SHARED_PROCESSED:
+                case BOXED_SHARED_UNPROCESSED:
+                    /* real_bin referred directly more than once */
+                    e = hdr >> _TAG_PRIMARY_SIZE;
+                    hdr = SHTABLE_X(t, e);
+                    hdr = (hdr & ~BOXED_VISITED_MASK) + TAG_PRIMARY_HEADER;
+                    break;
+                }
+
 		if (thing_subtag(hdr) == HEAP_BINARY_SUBTAG) {
 		    sum += heap_bin_size(size+extra_bytes);
 		} else {
@@ -1326,8 +1349,13 @@ Uint copy_shared_calculate(Eterm obj, erts_shcopy_t *info)
  *  Copy object "obj" preserving sharing.
  *  Second half: copy and restore the object.
  */
-Uint copy_shared_perform(Eterm obj, Uint size, erts_shcopy_t *info,
-                         Eterm** hpp, ErlOffHeap* off_heap) {
+Uint copy_shared_perform_x(Eterm obj, Uint size, erts_shcopy_t *info,
+                           Eterm** hpp, ErlOffHeap* off_heap
+#ifdef ERTS_COPY_REGISTER_LOCATION
+                           , char *file, int line
+#endif
+    )
+{
     Uint e;
     unsigned sz;
     Eterm* ptr;
@@ -1393,7 +1421,11 @@ Uint copy_shared_perform(Eterm obj, Uint size, erts_shcopy_t *info,
                     *resp = obj;
                 } else {
                     Uint bsz = 0;
-                    *resp = copy_struct_x(obj, hbot - hp, &hp, off_heap, &bsz, NULL); /* copy literal */
+                    *resp = copy_struct_x(obj, hbot - hp, &hp, off_heap, &bsz, NULL
+#ifdef ERTS_COPY_REGISTER_LOCATION
+                                          , file, line
+#endif
+                        ); /* copy literal */
                     hbot -= bsz;
                 }
 		goto cleanup_next;
@@ -1461,7 +1493,11 @@ Uint copy_shared_perform(Eterm obj, Uint size, erts_shcopy_t *info,
                     *resp = obj;
                 } else {
                     Uint bsz = 0;
-                    *resp = copy_struct_x(obj, hbot - hp, &hp, off_heap, &bsz, NULL); /* copy literal */
+                    *resp = copy_struct_x(obj, hbot - hp, &hp, off_heap, &bsz, NULL
+#ifdef ERTS_COPY_REGISTER_LOCATION
+                                          , file, line
+#endif
+                        ); /* copy literal */
                     hbot -= bsz;
                 }
 		goto cleanup_next;
@@ -1611,11 +1647,6 @@ Uint copy_shared_perform(Eterm obj, Uint size, erts_shcopy_t *info,
 		    extra_bytes = 0;
 		}
 		real_size = size+extra_bytes;
-		ASSERT(is_boxed(real_bin) &&
-		       (((*boxed_val(real_bin)) &
-			 (_TAG_HEADER_MASK - _BINARY_XXX_MASK - BOXED_VISITED_MASK))
-			== _TAG_HEADER_REFC_BIN));
-		ptr = _unchecked_binary_val(real_bin);
 		*resp = make_binary(hp);
 		if (extra_bytes != 0) {
 		    ErlSubBin* res = (ErlSubBin *) hp;
@@ -1628,7 +1659,26 @@ Uint copy_shared_perform(Eterm obj, Uint size, erts_shcopy_t *info,
 		    res->is_writable = 0;
 		    res->orig = make_binary(hp);
 		}
-		if (thing_subtag(*ptr & ~BOXED_VISITED_MASK) == HEAP_BINARY_SUBTAG) {
+                ASSERT(is_boxed(real_bin));
+                ptr = _unchecked_binary_val(real_bin);
+                hdr = *ptr;
+                switch (primary_tag(hdr)) {
+                case TAG_PRIMARY_HEADER:
+                    /* real_bin is untouched, ie only referred by sub-bins */
+                    break;
+                case BOXED_VISITED:
+                    /* real_bin referred directly once */
+                    hdr = (hdr - BOXED_VISITED) + TAG_PRIMARY_HEADER;
+                    break;
+                case BOXED_SHARED_PROCESSED:
+                case BOXED_SHARED_UNPROCESSED:
+                    /* real_bin referred directly more than once */
+                    e = hdr >> _TAG_PRIMARY_SIZE;
+                    hdr = SHTABLE_X(t, e);
+                    hdr = (hdr & ~BOXED_VISITED_MASK) + TAG_PRIMARY_HEADER;
+                    break;
+                }
+		if (thing_subtag(hdr) == HEAP_BINARY_SUBTAG) {
 		    ErlHeapBin* from = (ErlHeapBin *) ptr;
 		    ErlHeapBin* to = (ErlHeapBin *) hp;
 		    hp += heap_bin_size(real_size);
@@ -1638,7 +1688,7 @@ Uint copy_shared_perform(Eterm obj, Uint size, erts_shcopy_t *info,
 		} else {
 		    ProcBin* from = (ProcBin *) ptr;
 		    ProcBin* to = (ProcBin *) hp;
-		    ASSERT(thing_subtag(*ptr & ~BOXED_VISITED_MASK) == REFC_BINARY_SUBTAG);
+		    ASSERT(thing_subtag(hdr) == REFC_BINARY_SUBTAG);
 		    if (from->flags) {
 			erts_emasculate_writable_binary(from);
 		    }
@@ -1660,7 +1710,12 @@ Uint copy_shared_perform(Eterm obj, Uint size, erts_shcopy_t *info,
 	    case EXTERNAL_REF_SUBTAG:
 	    {
 		ExternalThing *etp = (ExternalThing *) ptr;
-		erts_refc_inc(&etp->node->refc, 2);
+                
+#if defined(ERTS_COPY_REGISTER_LOCATION) && defined(ERL_NODE_BOOKKEEP)
+                erts_ref_node_entry__(etp->node, 2, make_boxed(hp), file, line);
+#else
+                erts_ref_node_entry(etp->node, 2, make_boxed(hp));
+#endif
 	    }
 	  off_heap_node_container_common:
 	    {
@@ -1823,8 +1878,12 @@ all_clean:
  *
  * NOTE: Assumes that term is a tuple (ptr is an untagged tuple ptr).
  */
-Eterm copy_shallow(Eterm* ERTS_RESTRICT ptr, Uint sz, Eterm** hpp,
-                   ErlOffHeap* off_heap)
+Eterm
+copy_shallow_x(Eterm* ERTS_RESTRICT ptr, Uint sz, Eterm** hpp, ErlOffHeap* off_heap
+#ifdef ERTS_COPY_REGISTER_LOCATION
+               , char *file, int line
+#endif
+    )
 {
     Eterm* tp = ptr;
     Eterm* hp = *hpp;
@@ -1866,7 +1925,11 @@ Eterm copy_shallow(Eterm* ERTS_RESTRICT ptr, Uint sz, Eterm** hpp,
 	    case EXTERNAL_REF_SUBTAG:
 		{
 		    ExternalThing* etp = (ExternalThing *) (tp-1);
-		    erts_refc_inc(&etp->node->refc, 2);
+#if defined(ERTS_COPY_REGISTER_LOCATION) && defined(ERL_NODE_BOOKKEEP)
+                    erts_ref_node_entry__(etp->node, 2, make_boxed(hp-1), file, line);
+#else
+                    erts_ref_node_entry(etp->node, 2, make_boxed(hp-1));
+#endif
 		}
 	    off_heap_common:
 		{

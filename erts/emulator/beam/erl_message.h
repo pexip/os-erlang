@@ -1,7 +1,7 @@
 /*
  * %CopyrightBegin%
  *
- * Copyright Ericsson AB 1997-2018. All Rights Reserved.
+ * Copyright Ericsson AB 1997-2020. All Rights Reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -22,9 +22,16 @@
 #define __ERL_MESSAGE_H__
 
 #include "sys.h"
+#include "erl_vm.h"
 #define ERTS_PROC_SIG_QUEUE_TYPE_ONLY
 #include "erl_proc_sig_queue.h"
 #undef ERTS_PROC_SIG_QUEUE_TYPE_ONLY
+
+#ifdef DEBUG
+#define ERTS_MSG_COPY_WORDS_PER_REDUCTION 4
+#else
+#define ERTS_MSG_COPY_WORDS_PER_REDUCTION 64
+#endif
 
 struct proc_bin;
 struct external_thing_;
@@ -111,6 +118,7 @@ erts_produce_heap(ErtsHeapFactory* factory, Uint need, Uint xtra)
     }
     res = factory->hp;
     factory->hp += need;
+    INIT_HEAP_MEM(res, need);
     return res;
 }
 
@@ -138,7 +146,7 @@ typedef struct erl_heap_fragment ErlHeapFragment;
 struct erl_heap_fragment {
     ErlHeapFragment* next;	/* Next heap fragment */
     ErlOffHeap off_heap;	/* Offset heap data. */
-    Uint alloc_size;		/* Size in (half)words of mem */
+    Uint alloc_size;		/* Size in words of mem */
     Uint used_size;		/* With terms to be moved to heap by GC */
     Eterm mem[1];		/* Data */
 };
@@ -167,7 +175,6 @@ struct erl_heap_fragment {
 #define ERL_MESSAGE_REF_FIELDS__			\
     ErtsMessage *next;	/* Next message */		\
     union {						\
-	ErtsDistExternal *dist_ext;			\
 	ErlHeapFragment *heap_frag;			\
 	void *attached;					\
     } data;						\
@@ -291,6 +298,7 @@ typedef struct {
     /* Common for inner and middle queue */
     ErtsMessage **saved_last;	/* saved last pointer */
     Sint len; /* NOT message queue length (see above) */
+    Uint32 flags;
 } ErtsSignalPrivQueues;
 
 typedef struct {
@@ -318,21 +326,27 @@ typedef struct erl_trace_message_queue__ {
         erts_proc_unlock((P), ERTS_PROC_LOCK_MSGQ);                     \
         if ((P)->sig_qs.cont) {                                         \
             (P)->sig_qs.saved_last = (P)->sig_qs.cont_last;             \
-            (P)->flags |= F_DEFERRED_SAVED_LAST;                        \
+            (P)->sig_qs.flags |= FS_DEFERRED_SAVED_LAST;                \
         }                                                               \
         else {                                                          \
             (P)->sig_qs.saved_last = (P)->sig_qs.last;                  \
-            (P)->flags &= ~F_DEFERRED_SAVED_LAST;                       \
+            (P)->sig_qs.flags &= ~FS_DEFERRED_SAVED_LAST;               \
         }                                                               \
     } while (0)
 
 #define ERTS_RECV_MARK_SET(P)                                           \
     do {                                                                \
         if ((P)->sig_qs.saved_last) {                                   \
-            if ((P)->flags & F_DEFERRED_SAVED_LAST) {                   \
-                /* Points to middle queue; use end of inner */          \
+            if ((P)->sig_qs.flags & FS_DEFERRED_SAVED_LAST) {           \
+                (P)->sig_qs.flags |= FS_DEFERRED_SAVE;                  \
+                /*                                                      \
+                 * Trigger handling of signals in loop_rec by           \
+                 * setting save pointer to the end of message queue     \
+                 * (inner queue). This in order to resolv saved_last    \
+                 * which currently may point into inner or middle       \
+                 * queue.                                               \
+                 */                                                     \
                 (P)->sig_qs.save = (P)->sig_qs.last;                    \
-                ASSERT(!PEEK_MESSAGE((P)));                             \
             }                                                           \
             else {                                                      \
                 /* Points to inner queue; safe to use */                \
@@ -344,7 +358,7 @@ typedef struct erl_trace_message_queue__ {
 #define ERTS_RECV_MARK_CLEAR(P)                                         \
     do {                                                                \
         (P)->sig_qs.saved_last = NULL;                                  \
-        (P)->flags &= ~F_DEFERRED_SAVED_LAST;                           \
+        (P)->sig_qs.flags &= ~(FS_DEFERRED_SAVED_LAST|FS_DEFERRED_SAVE); \
     } while (0)
 
 
@@ -438,8 +452,10 @@ ErlHeapFragment* new_message_buffer(Uint);
 ErlHeapFragment* erts_resize_message_buffer(ErlHeapFragment *, Uint,
 					    Eterm *, Uint);
 void free_message_buffer(ErlHeapFragment *);
-void erts_queue_dist_message(Process*, ErtsProcLocks, ErtsDistExternal *, Eterm, Eterm);
+void erts_queue_dist_message(Process*, ErtsProcLocks, ErtsDistExternal *,
+                             ErlHeapFragment *, Eterm, Eterm);
 void erts_queue_message(Process*, ErtsProcLocks,ErtsMessage*, Eterm, Eterm);
+void erts_queue_message_token(Process*, ErtsProcLocks,ErtsMessage*, Eterm, Eterm, Eterm);
 void erts_queue_proc_message(Process* from,Process* to, ErtsProcLocks,ErtsMessage*, Eterm);
 void erts_queue_proc_messages(Process* from, Process* to, ErtsProcLocks,
                               ErtsMessage*, ErtsMessage**, Uint);
@@ -454,8 +470,6 @@ void erts_save_message_in_proc(Process *p, ErtsMessage *msg);
 Sint erts_move_messages_off_heap(Process *c_p);
 Sint erts_complete_off_heap_message_queue_change(Process *c_p);
 Eterm erts_change_message_queue_management(Process *c_p, Eterm new_state);
-
-int erts_decode_dist_message(Process *, ErtsProcLocks, ErtsMessage *, int);
 
 void erts_cleanup_messages(ErtsMessage *mp);
 
@@ -585,22 +599,11 @@ ERTS_GLB_INLINE Uint erts_used_frag_sz(const ErlHeapFragment* bp)
 ERTS_GLB_INLINE Uint erts_msg_attached_data_size(ErtsMessage *msg)
 {
     ASSERT(msg->data.attached);
-    if (is_value(ERL_MESSAGE_TERM(msg))) {
-	ErlHeapFragment *bp;
-        bp = erts_message_to_heap_frag(msg);
-	return erts_used_frag_sz(bp);
-    }
-    else if (msg->data.dist_ext->heap_size < 0)
-	return erts_msg_attached_data_size_aux(msg);
-    else {
-	Uint sz = msg->data.dist_ext->heap_size;
-	if (is_not_nil(ERL_MESSAGE_TOKEN(msg))) {
-	    ErlHeapFragment *heap_frag;
-	    heap_frag = erts_dist_ext_trailer(msg->data.dist_ext);
-	    sz += heap_frag->used_size;
-	}
-	return sz;
-    }
+
+    if (ERTS_SIG_IS_INTERNAL_MSG(msg))
+	return erts_used_frag_sz(erts_message_to_heap_frag(msg));
+
+    return erts_msg_attached_data_size_aux(msg);
 }
 
 #endif

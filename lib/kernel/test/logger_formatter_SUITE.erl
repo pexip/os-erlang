@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2018. All Rights Reserved.
+%% Copyright Ericsson AB 2018-2020. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -568,6 +568,11 @@ format_mfa(_Config) ->
     ct:log(String4),
     "othermfa" = String4,
 
+    Meta5 = #{mfa=>{'m o d','a\x{281}b',['  ']}},
+    String5 = format(info,{"~p",[term]},Meta5,#{template=>Template}),
+    ct:log(String5),
+    "'m o d':'a\x{281}b'/1" = String5,
+
     ok.
     
 format_time(_Config) ->
@@ -867,7 +872,7 @@ my_try(Fun) ->
     try Fun() catch C:R:S -> {C,R,hd(S)} end.
 
 timestamp() ->
-    erlang:system_time(microsecond).
+    logger:timestamp().
 
 %% necessary?
 add_time(#{time:=_}=Meta) ->

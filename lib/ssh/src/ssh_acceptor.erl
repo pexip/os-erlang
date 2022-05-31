@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2008-2018. All Rights Reserved.
+%% Copyright Ericsson AB 2008-2020. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -33,7 +33,8 @@
 %% spawn export  
 -export([acceptor_init/5, acceptor_loop/6]).
 
--export([dbg_trace/3]).
+-behaviour(ssh_dbg).
+-export([ssh_dbg_trace_points/0, ssh_dbg_flags/1, ssh_dbg_on/1, ssh_dbg_off/1, ssh_dbg_format/2]).
 
 -define(SLEEP_TIME, 200).
 
@@ -45,12 +46,56 @@ start_link(Port, Address, Options, AcceptTimeout) ->
     proc_lib:start_link(?MODULE, acceptor_init, Args).
 
 %%%----------------------------------------------------------------
-number_of_connections(SystemSup) ->
-    length([X || 
-	       {R,X,supervisor,[ssh_subsystem_sup]} <- supervisor:which_children(SystemSup),
-	       is_pid(X),
-	       is_reference(R)
-	  ]).
+number_of_connections(SysSup) ->
+    length([S || S <- supervisor:which_children(SysSup),
+                 has_worker(SysSup,S)]).
+
+
+has_worker(SysSup, {R,SubSysSup,supervisor,[ssh_subsystem_sup]}) when is_reference(R),
+                                                                      is_pid(SubSysSup) ->
+    try
+        {{server, ssh_connection_sup, _, _}, Pid, supervisor, [ssh_connection_sup]} =
+            lists:keyfind([ssh_connection_sup], 4, supervisor:which_children(SubSysSup)),
+        {Pid, supervisor:which_children(Pid)}
+    of
+        {ConnSup,[]} ->
+            %% Strange. Since the connection supervisor exists, there should have been
+            %% a connection here.
+            %% It might be that the connection_handler worker has "just died", maybe
+            %% due to a exit(_,kill). It might also be so that the worker is starting.
+            %% Spawn a killer that redo the test and kills it if the problem persists.
+            %% TODO: Fix this better in the supervisor tree....
+            spawn(fun() ->
+                          timer:sleep(10),
+                          try supervisor:which_children(ConnSup)
+                          of
+                              [] ->
+                                  %% we are on the server-side:
+                                  ssh_system_sup:stop_subsystem(SysSup, SubSysSup);
+                              [_] ->
+                                  %% is ok now
+                                  ok;
+                          _ ->
+                                  %% What??
+                                  error
+                          catch _:_ ->
+                                  %% What??
+                                  error
+                          end
+                  end),
+            false;
+        {_ConnSup,[_]}->
+            true;
+         _ ->
+            %% What??
+            false
+    catch _:_ ->
+            %% What??
+            false
+    end;
+
+has_worker(_,_) ->
+    false.
 
 %%%----------------------------------------------------------------
 listen(Port, Options) ->
@@ -202,18 +247,26 @@ handle_error(Reason) ->
 %%%# Tracing
 %%%#
 
-dbg_trace(points,         _,  _) -> [connections];
+ssh_dbg_trace_points() -> [connections].
 
-dbg_trace(flags,  connections,  _) -> [c];
-dbg_trace(on,     connections,  _) -> dbg:tp(?MODULE,  acceptor_init, 5, x),
-                                      dbg:tpl(?MODULE, handle_connection, 5, x);
-dbg_trace(off,    connections,  _) -> dbg:ctp(?MODULE, acceptor_init, 5),
-                                      dbg:ctp(?MODULE, handle_connection, 5);
-dbg_trace(format, connections, {call, {?MODULE,acceptor_init,
-                                       [_Parent, Port, Address, _Opts, _AcceptTimeout]}}) ->
+ssh_dbg_flags(connections) -> [c].
+
+ssh_dbg_on(connections) -> dbg:tp(?MODULE,  acceptor_init, 5, x),
+                           dbg:tpl(?MODULE, handle_connection, 5, x).
+
+ssh_dbg_off(connections) -> dbg:ctp(?MODULE, acceptor_init, 5),
+                            dbg:ctp(?MODULE, handle_connection, 5).
+
+ssh_dbg_format(connections, {call, {?MODULE,acceptor_init,
+                                    [_Parent, Port, Address, _Opts, _AcceptTimeout]}}) ->
     [io_lib:format("Starting LISTENER on ~s:~p\n", [ntoa(Address),Port])
     ];
-dbg_trace(format, connections, {return_from, {?MODULE,handle_connection,5}, {error,Error}}) ->
+ssh_dbg_format(connections, {return_from, {?MODULE,acceptor_init,5}, _Ret}) ->
+    skip;
+
+ssh_dbg_format(connections, {call, {?MODULE,handle_connection,[_,_,_,_,_]}}) ->
+    skip;
+ssh_dbg_format(connections, {return_from, {?MODULE,handle_connection,5}, {error,Error}}) ->
     ["Starting connection to server failed:\n",
      io_lib:format("Error = ~p", [Error])
     ].

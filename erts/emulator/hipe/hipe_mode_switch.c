@@ -2,7 +2,7 @@
  * %CopyrightBegin%
 
  *
- * Copyright Ericsson AB 2001-2018. All Rights Reserved.
+ * Copyright Ericsson AB 2001-2020. All Rights Reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -202,15 +202,13 @@ hipe_push_beam_trap_frame(Process *p, Eterm reg[], unsigned arity)
 	p->stop -= 2;
 	p->stop[1] = hipe_beam_catch_throw;
     }
-    p->stop[0] = make_cp(p->cp);
+    p->stop[0] = (BeamInstr) hipe_beam_pc_return;
     ++p->catches;
-    p->cp = hipe_beam_pc_return;
 }
 
 static __inline__ void hipe_pop_beam_trap_frame(Process *p)
 {
     ASSERT(p->stop[1] == hipe_beam_catch_throw);
-    p->cp = cp_val(p->stop[0]);
     --p->catches;
     p->stop += 2;
 }
@@ -263,7 +261,7 @@ Process *hipe_mode_switch(Process *p, unsigned cmd, Eterm reg[])
 	  unsigned arity = cmd >> 8;
 
 	  /* p->hipe.u.ncallee set in beam_emu */
-	  if (p->cp == hipe_beam_pc_return) {
+	  if (cp_val(p->stop[0]) == hipe_beam_pc_return) {
 	    /* Native called BEAM, which now tailcalls native. */
 	    hipe_pop_beam_trap_frame(p);
 	    result = hipe_tailcall_to_native(p, arity, reg);
@@ -292,7 +290,7 @@ Process *hipe_mode_switch(Process *p, unsigned cmd, Eterm reg[])
 	  /* just like a normal call from now on */
 
 	  /* p->hipe.u.ncallee set in beam_emu */
-	  if (p->cp == hipe_beam_pc_return) {
+	  if (cp_val(p->stop[0]) == hipe_beam_pc_return) {
 	      /* Native called BEAM, which now tailcalls native. */
 	      hipe_pop_beam_trap_frame(p);
 	      result = hipe_tailcall_to_native(p, arity, reg);
@@ -490,20 +488,20 @@ Process *hipe_mode_switch(Process *p, unsigned cmd, Eterm reg[])
 	  /* same semantics, different debug trace messages */
 	  /* XXX: BEAM has different entries for the locked and unlocked
 	     cases. HiPE doesn't, so we must check dynamically. */
-	  if (p->flags & F_HIPE_RECV_LOCKED)
-	      p->flags &= ~F_HIPE_RECV_LOCKED;
+	  if (p->sig_qs.flags & FS_HIPE_RECV_LOCKED)
+	      p->sig_qs.flags &= ~FS_HIPE_RECV_LOCKED;
 	  else
 	      erts_proc_lock(p, ERTS_PROC_LOCKS_MSG_RECEIVE);
 	  p->i = hipe_beam_pc_resume;
 	  p->arity = 0;
           if (erts_atomic32_read_nob(&p->state) & ERTS_PSFLG_EXITING)
               ASSERT(erts_atomic32_read_nob(&p->state) & ERTS_PSFLG_ACTIVE);
-          else if (!(p->flags & F_HIPE_RECV_YIELD))
+          else if (!(p->sig_qs.flags & FS_HIPE_RECV_YIELD))
               erts_atomic32_read_band_relb(&p->state, ~ERTS_PSFLG_ACTIVE);
           else {
               /* Yielded from receive */
               ERTS_VBUMP_ALL_REDS(p);
-              p->flags &= ~F_HIPE_RECV_YIELD;
+              p->sig_qs.flags &= ~FS_HIPE_RECV_YIELD;
           }
 	  erts_proc_unlock(p, ERTS_PROC_LOCKS_MSG_RECEIVE);
       do_schedule:
@@ -527,7 +525,7 @@ Process *hipe_mode_switch(Process *p, unsigned cmd, Eterm reg[])
 	      p = erts_schedule(NULL, p, reds_in - p->fcalls);
 	      ERTS_REQ_PROC_MAIN_LOCK(p);
 	      ASSERT(!(p->flags & F_HIPE_MODE));
-	      p->flags &= ~F_HIPE_RECV_LOCKED;
+	      p->sig_qs.flags &= ~FS_HIPE_RECV_LOCKED;
 	      reg = p->scheduler_data->x_reg_array;
 	  }
 	  {

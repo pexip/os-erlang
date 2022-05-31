@@ -4,7 +4,7 @@
 <chapter>
   <header>
     <copyright>
-      <year>2004</year><year>2018</year>
+      <year>2004</year><year>2020</year>
       <holder>Ericsson AB. All Rights Reserved.</holder>
     </copyright>
     <legalnotice>
@@ -30,6 +30,110 @@
     <file>notes.xml</file>
   </header>
   <p>This document describes the changes made to the SASL application.</p>
+
+<section><title>SASL 4.0.1</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+          <p>
+	    Make <c>release_handler</c> more resilient against
+	    exiting processes during upgrade.</p>
+          <p>
+	    Own Id: OTP-16744 Aux Id: ERL-1247, PR-2666 </p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>SASL 4.0</title>
+
+    <section><title>Improvements and New Features</title>
+      <list>
+        <item>
+          <p>
+	    Remove usage and documentation of old requests of the
+	    I/O-protocol.</p>
+          <p>
+	    Own Id: OTP-15695</p>
+        </item>
+        <item>
+          <p>
+	    <c>systools:make_script/2</c> now accepts the name of the
+	    boot file to create, it is not restricted to only
+	    <c>RelName.boot</c> or <c>start.boot</c>.</p>
+          <p>
+	    <c>systools:make_tar/2</c> now accepts the option
+	    <c>extra_files</c> to add any extra non release related
+	    files to the tar file.</p>
+          <p>
+	    Own Id: OTP-16561 Aux Id: PR-2420 </p>
+        </item>
+        <item>
+          <p>
+	    <seemfa
+	    marker="systools#make_tar/1"><c>systools:make_tar/1,2</c></seemfa>
+	    now filters out any tools from erts if included in the
+	    release tar ball. See the documentation for more details.</p>
+          <p>
+	    *** POTENTIAL INCOMPATIBILITY ***</p>
+          <p>
+	    Own Id: OTP-16603</p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>SASL 3.4.2</title>
+
+    <section><title>Improvements and New Features</title>
+      <list>
+        <item>
+          <p>
+	    A socket "registry" has been added making it possible to
+	    list current open sockets.</p>
+          <p>
+	    Own Id: OTP-16309</p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>SASL 3.4.1</title>
+
+    <section><title>Improvements and New Features</title>
+      <list>
+        <item>
+          <p>
+	    The net module has been split into 'net' (kernel) and
+	    prim_net (preloaded).</p>
+          <p>
+	    Own Id: OTP-15765</p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>SASL 3.4</title>
+
+    <section><title>Improvements and New Features</title>
+      <list>
+        <item>
+          <p>
+	    Change the first module called by erts to be named
+	    erl_init instead of otp_ring0. systools in sasl have been
+	    updated to reflect this change.</p>
+          <p>
+	    Own Id: OTP-15336 Aux Id: PR-1825 </p>
+        </item>
+      </list>
+    </section>
+
+</section>
 
 <section><title>SASL 3.3</title>
 
@@ -69,10 +173,10 @@
       <list>
         <item>
 	    <p>A new logging API is added to Erlang/OTP, see the
-	    <seealso
-	    marker="kernel:logger"><c>logger(3)</c></seealso> manual
-	    page, and section <seealso
-	    marker="kernel:logger_chapter">Logging</seealso> in the
+	    <seeerl
+	    marker="kernel:logger"><c>logger(3)</c></seeerl> manual
+	    page, and section <seeguide
+	    marker="kernel:logger_chapter">Logging</seeguide> in the
 	    Kernel User's Guide.</p>
 	    <p>Calls to <c>error_logger</c> are automatically
 	    redirected to the new API, and legacy error logger event
@@ -303,8 +407,8 @@
 	    new purge strategy will as of ERTS version 8.1 be
 	    enabled. This new strategy is not fully backwards
 	    compatible with the strategy used by default. For more
-	    information see the documentation of <seealso
-	    marker="erts:erlang#check_process_code/3"><c>erlang:check_process_code/3</c></seealso>.</p>
+	    information see the documentation of <seemfa
+	    marker="erts:erlang#check_process_code/3"><c>erlang:check_process_code/3</c></seemfa>.</p>
           <p>
 	    Own Id: OTP-13808 Aux Id: OTP-13833 </p>
         </item>
@@ -332,8 +436,8 @@
 	    the runtime system is built with support for dirty
 	    schedulers.</p>
           <p>
-	    For more information see the documentation of <seealso
-	    marker="erts:erlang#check_process_code/3"><c>erlang:check_process_code/3</c></seealso>.</p>
+	    For more information see the documentation of <seemfa
+	    marker="erts:erlang#check_process_code/3"><c>erlang:check_process_code/3</c></seemfa>.</p>
           <p>
 	    Own Id: OTP-13833</p>
         </item>

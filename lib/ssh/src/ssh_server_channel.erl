@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2013-2018. All Rights Reserved.
+%% Copyright Ericsson AB 2013-2020. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -37,7 +37,7 @@
 
 -callback handle_msg(Msg ::term(), State :: term()) ->
     {ok, State::term()} | {stop, ChannelId::ssh:channel_id(), State::term()}. 
--callback handle_ssh_msg({ssh_cm, ConnectionRef::ssh:connection_ref(), SshMsg::term()},
+-callback handle_ssh_msg(ssh_connection:event(),
 			 State::term()) -> {ok, State::term()} |
 					   {stop, ChannelId::ssh:channel_id(),
 					    State::term()}.

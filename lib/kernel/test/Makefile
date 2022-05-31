@@ -1,7 +1,7 @@
 #
 # %CopyrightBegin%
 #
-# Copyright Ericsson AB 1997-2018. All Rights Reserved.
+# Copyright Ericsson AB 1997-2020. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -24,7 +24,24 @@ include $(ERL_TOP)/make/$(TARGET)/otp.mk
 # Target Specs
 # ----------------------------------------------------
 
+SOCKET_MODULES = \
+	socket_test_lib \
+	socket_test_logger \
+	socket_test_evaluator \
+	socket_test_ttest_lib \
+	socket_test_ttest_tcp_gen \
+	socket_test_ttest_tcp_socket \
+	socket_test_ttest_tcp_client \
+	socket_test_ttest_tcp_client_gen \
+	socket_test_ttest_tcp_client_socket \
+	socket_test_ttest_tcp_server \
+	socket_test_ttest_tcp_server_gen \
+	socket_test_ttest_tcp_server_socket \
+	socket_SUITE
+
 MODULES= \
+	kernel_test_lib \
+	erpc_SUITE \
 	rpc_SUITE \
 	pdict_SUITE \
 	bif_SUITE \
@@ -57,6 +74,7 @@ MODULES= \
 	prim_file_SUITE \
 	ram_file_SUITE \
 	gen_tcp_api_SUITE \
+	gen_tcp_dist \
 	gen_tcp_echo_SUITE \
 	gen_tcp_misc_SUITE \
 	gen_udp_SUITE \
@@ -76,12 +94,18 @@ MODULES= \
 	logger_filters_SUITE \
 	logger_formatter_SUITE \
 	logger_legacy_SUITE \
+	logger_olp_SUITE \
+	logger_proxy_SUITE \
 	logger_simple_h_SUITE \
 	logger_std_h_SUITE \
+	logger_stress_SUITE \
 	logger_test_lib \
+	net_SUITE \
 	os_SUITE \
+	pg_SUITE \
 	pg2_SUITE \
 	seq_trace_SUITE \
+	$(SOCKET_MODULES) \
 	wrap_log_reader_SUITE \
 	cleanup \
 	ignore_cores \
@@ -106,6 +130,11 @@ APP_FILES = \
 	topApp3.app
 
 ERL_FILES= $(MODULES:%=%.erl) code_a_test.erl
+HRL_FILES= \
+	kernel_test_lib.hrl \
+	socket_test_evaluator.hrl \
+	socket_test_ttest.hrl \
+	socket_test_ttest_client.hrl
 
 TARGET_FILES= $(MODULES:%=$(EBIN)/%.$(EMULATOR))
 INSTALL_PROGS= $(TARGET_FILES)
@@ -127,11 +156,18 @@ ERL_COMPILE_FLAGS +=
 
 EBIN = .
 
+TARGETS = $(MODULES:%=$(EBIN)/%.$(EMULATOR))
+SOCKET_TARGETS = $(SOCKET_MODULES:%=$(EBIN)/%.$(EMULATOR))
+
+
 # ----------------------------------------------------
 # Targets
 # ----------------------------------------------------
 
-make_emakefile:
+gen_tcp_dist.erl: ../examples/gen_tcp_dist/src/gen_tcp_dist.erl
+	cp $< $@
+
+make_emakefile: $(ERL_FILES)
 	$(ERL_TOP)/make/make_emakefile $(ERL_COMPILE_FLAGS) -o$(EBIN) '*_SUITE_make' \
 	> $(EMAKEFILE)
 	$(ERL_TOP)/make/make_emakefile $(ERL_COMPILE_FLAGS) -o$(EBIN) $(MODULES) \
@@ -147,6 +183,10 @@ clean:
 
 docs:
 
+targets: $(TARGETS)
+socket_targets: $(SOCKET_TARGETS)
+
+
 # ----------------------------------------------------
 # Release Target
 # ---------------------------------------------------- 
@@ -156,7 +196,7 @@ release_spec: opt
 
 release_tests_spec: make_emakefile
 	$(INSTALL_DIR) "$(RELSYSDIR)"
-	$(INSTALL_DATA) $(ERL_FILES) "$(RELSYSDIR)"
+	$(INSTALL_DATA) $(ERL_FILES) $(HRL_FILES) "$(RELSYSDIR)"
 	$(INSTALL_DATA) $(APP_FILES) "$(RELSYSDIR)"
 	$(INSTALL_DATA) \
 		kernel.spec kernel_smoke.spec kernel_bench.spec logger.spec \

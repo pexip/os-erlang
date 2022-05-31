@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2008-2018. All Rights Reserved.
+%% Copyright Ericsson AB 2008-2020. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -21,11 +21,36 @@
 
 -module(ssl_crl_SUITE).
 
-%% Note: This directive should only be used in test suites.
--compile(export_all).
+-behaviour(ct_suite).
 
 -include_lib("common_test/include/ct.hrl").
 -include_lib("public_key/include/public_key.hrl").
+
+%% Common test
+-export([all/0,
+         groups/0,
+         init_per_suite/1,
+         init_per_group/2,
+         init_per_testcase/2,
+         end_per_suite/1,
+         end_per_group/2,
+         end_per_testcase/2
+        ]).
+
+
+%% Test cases
+-export([crl_verify_valid/0,
+         crl_verify_valid/1,
+         crl_verify_revoked/0,
+         crl_verify_revoked/1,
+         crl_verify_no_crl/0,
+         crl_verify_no_crl/1,
+         crl_hash_dir_collision/0,
+         crl_hash_dir_collision/1,
+         crl_hash_dir_expired/0,
+         crl_hash_dir_expired/1]).
+
+-define(TIMEOUT, {seconds, 30}).
 
 %%--------------------------------------------------------------------
 %% Common Test interface functions -----------------------------------
@@ -42,7 +67,8 @@ groups() ->
      {check_true, [],  [{group, v2_crl},
 			{group, v1_crl},
 			{group, idp_crl},
-                        {group, crl_hash_dir}]},
+                        {group, crl_hash_dir},
+                        {group, crl_verify_crldp_crlissuer}]},
      {check_peer, [],   [{group, v2_crl},
 			 {group, v1_crl},
 			 {group, idp_crl},
@@ -54,7 +80,8 @@ groups() ->
      {v2_crl,  [], basic_tests()},
      {v1_crl,  [], basic_tests()},
      {idp_crl, [], basic_tests()},
-     {crl_hash_dir, [], basic_tests() ++ crl_hash_dir_tests()}].
+     {crl_hash_dir, [], basic_tests() ++ crl_hash_dir_tests()},
+     {crl_verify_crldp_crlissuer, [], [crl_verify_valid]}].
 
 basic_tests() ->
     [crl_verify_valid, crl_verify_revoked, crl_verify_no_crl].
@@ -108,8 +135,8 @@ init_per_group(Group, Config0) ->
 		CertDir = filename:join(proplists:get_value(priv_dir, Config0), Group),
 		{CertOpts, Config} = init_certs(CertDir, Group, Config0),
 		{ok, _} =  make_certs:all(DataDir, CertDir, CertOpts),
-		CrlCacheOpts = case Group of
-				   crl_hash_dir ->
+		CrlCacheOpts = case need_hash_dir(Group) of
+				   true ->
 				       CrlDir = filename:join(CertDir, "crls"),
 				       %% Copy CRLs to their hashed filenames.
 				       %% Find the hashes with 'openssl crl -noout -hash -in crl.pem'.
@@ -157,7 +184,7 @@ init_per_testcase(Case, Config0) ->
 	    {CertOpts, Config} = init_certs(CertDir, idp_crl, Config),
 	    case make_certs:all(DataDir, CertDir, CertOpts) of
                 {ok, _} ->
-                    ct:timetrap({seconds, 6}),
+                    ct:timetrap(?TIMEOUT),
                     [{cert_dir, CertDir} | Config];
                 _ ->
                     end_per_testcase(Case, Config0),
@@ -238,7 +265,7 @@ crl_verify_revoked(Config)  when is_list(Config) ->
 		  end,	
     
     crl_verify_error(Hostname, ServerNode, ServerOpts, ClientNode, ClientOpts,
-                     "certificate revoked").
+                     certificate_revoked).
 
 crl_verify_no_crl() ->
     [{doc,"Verify a simple CRL chain when the CRL is missing"}].
@@ -277,10 +304,10 @@ crl_verify_no_crl(Config) when is_list(Config) ->
             %% The error "revocation status undetermined" gets turned
             %% into "bad certificate".
             crl_verify_error(Hostname, ServerNode, ServerOpts, ClientNode, ClientOpts,
-                             "bad certificate");
+                             bad_certificate);
         peer ->
             crl_verify_error(Hostname, ServerNode, ServerOpts, ClientNode, ClientOpts,
-                             "bad certificate");
+                             bad_certificate);
         best_effort ->
             %% In "best effort" mode, we consider the certificate not
             %% to be revoked if we can't find the appropriate CRL.
@@ -341,7 +368,7 @@ crl_hash_dir_collision(Config) when is_list(Config) ->
 
     %% First certificate revoked; first fails, second succeeds.
     crl_verify_error(Hostname, ServerNode, ServerOpts1, ClientNode, ClientOpts,
-                     "certificate revoked"),
+                     certificate_revoked),
     crl_verify_valid(Hostname, ServerNode, ServerOpts2, ClientNode, ClientOpts),
 
     make_certs:revoke(PrivDir, CA2, "collision-client-2", CertsConfig),
@@ -352,9 +379,9 @@ crl_hash_dir_collision(Config) when is_list(Config) ->
 
     %% Second certificate revoked; both fail.
     crl_verify_error(Hostname, ServerNode, ServerOpts1, ClientNode, ClientOpts,
-                     "certificate revoked"),
+                     certificate_revoked),
     crl_verify_error(Hostname, ServerNode, ServerOpts2, ClientNode, ClientOpts,
-                     "certificate revoked"),
+                     certificate_revoked),
 
     ok.
 
@@ -383,8 +410,11 @@ crl_hash_dir_expired(Config) when is_list(Config) ->
 	 {verify, verify_peer}],
     {ClientNode, ServerNode, Hostname} = ssl_test_lib:run_where(Config),
 
-    %% First make a CRL that expired yesterday.
-    make_certs:gencrl(PrivDir, CA, CertsConfig, -24),
+    %% First make a CRL that will expire in one second.
+    make_certs:gencrl_sec(PrivDir, CA, CertsConfig, 1),
+    %% Sleep until the next CRL is due
+    ct:sleep({seconds, 1}),
+
     CrlDir = filename:join(PrivDir, "crls"),
     populate_crl_hash_dir(PrivDir, CrlDir,
 			  [{CA, "1627b4b0"}],
@@ -397,10 +427,10 @@ crl_hash_dir_expired(Config) when is_list(Config) ->
             %% The error "revocation status undetermined" gets turned
             %% into "bad certificate".
             crl_verify_error(Hostname, ServerNode, ServerOpts, ClientNode, ClientOpts,
-                             "bad certificate");
+                             bad_certificate);
         peer ->
             crl_verify_error(Hostname, ServerNode, ServerOpts, ClientNode, ClientOpts,
-                             "bad certificate");
+                             bad_certificate);
         best_effort ->
             %% In "best effort" mode, we consider the certificate not
             %% to be revoked if we can't find the appropriate CRL.
@@ -448,11 +478,8 @@ crl_verify_error(Hostname, ServerNode, ServerOpts, ClientNode, ClientOpts, Expec
 					      {host, Hostname},
 					      {from, self()},
 					      {options, ClientOpts}]),
-    receive
-	{Server, AlertOrClose} ->
-	    ct:pal("Server Alert or Close ~p", [AlertOrClose])
-    end,
-    ssl_test_lib:check_result(Client, {error, {tls_alert, ExpectedAlert}}).
+
+    ssl_test_lib:check_client_alert(Server, Client, ExpectedAlert).
 
 %%--------------------------------------------------------------------
 %% Internal functions ------------------------------------------------
@@ -462,8 +489,17 @@ is_idp(idp_crl) ->
 is_idp(_) ->
     false.
 
+need_hash_dir(crl_hash_dir) ->
+    true;
+need_hash_dir(crl_verify_crldp_crlissuer) ->
+    true;
+need_hash_dir(_) ->
+    false.
+
 init_certs(_,v1_crl, Config)  -> 
     {[{v2_crls, false}], Config};
+init_certs(_,crl_verify_crldp_crlissuer , Config) ->
+    {[{crldp_crlissuer, true}], Config};
 init_certs(_, idp_crl, Config) -> 
     Port = proplists:get_value(httpd_port, Config),
     {[{crl_port,Port},

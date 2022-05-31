@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2011-2018. All Rights Reserved.
+%% Copyright Ericsson AB 2011-2020. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -2331,7 +2331,7 @@ reg_print_proc() ->
 rh_print() ->
     receive
 	{print, {Module,Line}, [H|T]} ->
-	    ?t:format("=== ~p:~p - ~p",[Module,Line,H]),
+	    ?t:format("=== ~p:~p - ~tp",[Module,Line,H]),
 	    lists:foreach(fun(Term) -> ?t:format("    ~tp",[Term]) end, T),
 	    ?t:format("",[]),
 	    rh_print();

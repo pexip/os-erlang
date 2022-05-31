@@ -1,7 +1,7 @@
 /*
  * %CopyrightBegin%
  * 
- * Copyright Ericsson AB 1996-2018. All Rights Reserved.
+ * Copyright Ericsson AB 1996-2020. All Rights Reserved.
  * 
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -32,23 +32,6 @@
 #include <direct.h>
 #include <windows.h>
 #include <winbase.h>
-
-#elif VXWORKS
-
-#include <stdio.h>
-#include <string.h>
-#include <vxWorks.h>
-#include <hostLib.h>
-#include <selectLib.h>
-#include <ifLib.h>
-#include <sockLib.h>
-#include <taskLib.h>
-#include <inetLib.h>
-#include <unistd.h>
-#include <sys/socket.h>
-#include <netinet/in.h>
-#include <netinet/tcp.h> 
-#include <time.h>
 
 #else /* unix */
 
@@ -88,15 +71,6 @@
 #include "ei_resolve.h"
 #include "erl_start.h"		/* FIXME remove dependency */
 
-#ifdef __WIN32__
-static void initWinSock(void);
-#endif
-
-/*
- * Some nice global variables
- * (I don't think "nice" is the right word actually... -gordon)
- */
-/* FIXME problem for threaded ? */
 
 struct call_flags {
     int startp;
@@ -104,10 +78,14 @@ struct call_flags {
     int modp;
     int evalp;
     int randomp;
+    int dynamic_name;
     int use_long_name;	/* indicates if -name was used, else -sname or -n */
+    int use_localhost_fallback;
     int debugp;
     int verbosep;
     int haltp;
+    long port;
+    char *hostname;
     char *cookie;
     char *node;
     char *hidden;
@@ -128,6 +106,23 @@ static void* ei_chk_calloc(size_t nmemb, size_t size);
 static void* ei_chk_realloc(void *old, size_t size);
 static char* ei_chk_strdup(char *s);
 
+/* Converts the given hostname to a shortname, if required. */
+static void format_node_hostname(const struct call_flags *flags,
+                                 const char *hostname,
+                                 char dst[EI_MAXHOSTNAMELEN + 1])
+{
+    char *ct;
+
+    strncpy(dst, hostname, EI_MAXHOSTNAMELEN);
+    dst[EI_MAXHOSTNAMELEN] = '\0';
+
+    /* If shortnames, cut off the name at first '.' */
+    if (flags->use_long_name == 0 && (ct = strchr(dst, '.'))) {
+        *ct = '\0';
+    }
+}
+
+static void start_timeout(int timeout);
 
 /***************************************************************************
  *
@@ -135,20 +130,13 @@ static char* ei_chk_strdup(char *s);
  *
  ***************************************************************************/
 
-/* FIXME isn't VxWorks to handle arguments differently? */
-
-#if !defined(VXWORKS)
 int main(int argc, char *argv[])
-#else
-int erl_call(int argc, char **argv)
-#endif
 {
     int i = 1,fd,creation;
     struct hostent *hp;
     char host_name[EI_MAXHOSTNAMELEN+1];
     char nodename[MAXNODELEN+1];
     char *p = NULL;
-    char *ct = NULL; /* temporary used when truncating nodename */
     int modsize = 0;
     char *host = NULL;
     char *module = NULL;
@@ -156,6 +144,10 @@ int erl_call(int argc, char **argv)
     struct call_flags flags = {0}; /* Default 0 and NULL in all fields */
     char* progname = argv[0];
     ei_cnode ec;
+    flags.port = -1;
+    flags.hostname = NULL;
+
+    ei_init();
 
     /* Get the command line options */
     while (i < argc) {
@@ -179,6 +171,47 @@ int erl_call(int argc, char **argv)
 	    flags.node = ei_chk_strdup(argv[i+1]);
 	    i++;
 	    flags.use_long_name = 1;
+	} else if (strcmp(argv[i], "-address") == 0) {  /* -address [HOST:]PORT */
+	    if (i+1 >= argc) {
+		usage_arg(progname, "-address ");
+	    }
+            {
+                char* hostname_port_arg = ei_chk_strdup(argv[i+1]);
+                char* address_string_end = strchr(hostname_port_arg, ':');
+                if (address_string_end == NULL) {
+                    flags.port = strtol(hostname_port_arg, NULL, 10);
+                } else {
+                    flags.port = strtol(address_string_end + 1, NULL, 10);
+                    /* Remove port part from hostname_port_arg*/
+                    *address_string_end = '\0';
+                    if (strlen(hostname_port_arg) > 0) {
+                        flags.hostname = hostname_port_arg;
+                    }
+                }
+
+                if (flags.port < 1 || flags.port > 65535) {
+                    usage_error(progname, "-address");
+                }
+                i++;
+            }
+        } else if (strcmp(argv[i], "-timeout") == 0) {
+            long timeout;
+
+            if (i+1 >= argc) {
+                usage_arg(progname, "-timeout ");
+            }
+
+            timeout = strtol(argv[i+1], NULL, 10);
+            if (timeout <= 0 || timeout >= (1 << 20)) {
+                usage_error(progname, "-timeout");
+            }
+
+            start_timeout(timeout);
+            i++;
+        } else if (strcmp(argv[i], "-__uh_test__") == 0) {
+            /* Fakes a failure in the call to ei_gethostbyname(h_hostname) so
+             * we can test the localhost fallback. */
+            flags.use_localhost_fallback = 1;
 	} else {
 	    if (strlen(argv[i]) != 2) {
 		usage_error(progname, argv[i]);
@@ -200,6 +233,9 @@ int erl_call(int argc, char **argv)
 	    case 'r':
 		flags.randomp = 1;
 		break;
+            case 'R':
+                flags.dynamic_name = 1;
+                break;
 	    case 'e':
 		flags.evalp = 1;
 		break;
@@ -253,11 +289,12 @@ int erl_call(int argc, char **argv)
 
     } /* while */
 
-	
     /*
      * Can't have them both !
      */
-    if (flags.modp && flags.evalp) {
+    if ((flags.modp && flags.evalp) ||
+        (flags.port != -1 && flags.startp) ||
+        (flags.port != -1 && flags.node)) {
       usage(progname);
     }
 
@@ -286,7 +323,7 @@ int erl_call(int argc, char **argv)
     /* 
      * What we, at least, requires !
      */
-    if (flags.node == NULL) {
+    if (flags.node == NULL && flags.port == -1) {
 	usage(progname);
     }
 
@@ -294,58 +331,52 @@ int erl_call(int argc, char **argv)
 	flags.cookie = NULL;
     }
 
-    /* FIXME decide how many bits etc or leave to connect_xinit? */
-    creation = (time(NULL) % 3) + 1; /* "random" */
+    creation = time(NULL) + 1; /* "random" */
 
-    if (flags.hidden == NULL) {
+    if (flags.hidden == NULL && !flags.dynamic_name) {
       /* As default we are c17@gethostname */
       i = flags.randomp ? (time(NULL) % 997) : 17;
       flags.hidden = (char *) ei_chk_malloc(10 + 2 ); /* c17 or cXYZ */
-#if defined(VXWORKS)
-      sprintf(flags.hidden, "c%d",
-	  i < 0 ?  (int) taskIdSelf() : i);
-#else
       sprintf(flags.hidden, "c%d",
 	  i < 0 ?  (int) getpid() : i);
-#endif
     }
     {
       /* A name for our hidden node was specified */
       char h_hostname[EI_MAXHOSTNAMELEN+1];
-      char h_nodename[MAXNODELEN+1];
-      char *h_alivename=flags.hidden;
+      char h_nodename_buf[MAXNODELEN+1];
+      char *h_nodename = h_nodename_buf;
+      char *h_alivename = flags.hidden;
       struct in_addr h_ipadr;
-      char* ct;
-
-#ifdef __WIN32__
-      /*
-       * FIXME Extremly ugly, but needed to get ei_gethostbyname() below
-       * to work.
-       */
-      initWinSock();
-#endif
 
       /* gethostname requires len to be max(hostname) + 1 */
       if (gethostname(h_hostname, EI_MAXHOSTNAMELEN+1) < 0) {
-	  fprintf(stderr,"erl_call: failed to get host name: %d\n", errno);
-	  exit(1);
+          fprintf(stderr,"erl_call: failed to get host name: %d\n", errno);
+          exit(1);
       }
-      if ((hp = ei_gethostbyname(h_hostname)) == 0) {
-	  fprintf(stderr,"erl_call: can't resolve hostname %s\n", h_hostname);
-	  exit(1);
+
+      if (flags.use_localhost_fallback || (hp = ei_gethostbyname(h_hostname)) == 0) {
+          /* Failed to resolve our own hostname; try binding to loopback and
+           * hope for the best. */
+          hp = ei_gethostbyname("localhost");
+          flags.use_localhost_fallback = 1;
+
+          format_node_hostname(&flags, h_hostname, h_hostname);
+      } else {
+          format_node_hostname(&flags, hp->h_name, h_hostname);
       }
-      /* If shortnames, cut off the name at first '.' */
-      if (flags.use_long_name == 0 && (ct = strchr(hp->h_name, '.')) != NULL) {
-	  *ct = '\0';
-      }
-      strncpy(h_hostname, hp->h_name, EI_MAXHOSTNAMELEN);
-      h_hostname[EI_MAXHOSTNAMELEN] = '\0';
+
       memcpy(&h_ipadr.s_addr, *hp->h_addr_list, sizeof(struct in_addr));
-      if (strlen(h_alivename) + strlen(h_hostname) + 2 > sizeof(h_nodename)) {
-	  fprintf(stderr,"erl_call: hostname too long: %s\n", h_hostname);
-	  exit(1);
+      if (h_alivename) {
+          if (strlen(h_alivename) + strlen(h_hostname) + 2 > sizeof(h_nodename_buf)) {
+              fprintf(stderr,"erl_call: hostname too long: %s\n", h_hostname);
+              exit(1);
+          }
+          sprintf(h_nodename, "%s@%s", h_alivename, h_hostname);
       }
-      sprintf(h_nodename, "%s@%s", h_alivename, h_hostname);
+      else {
+          /* dynamic node name */
+          h_nodename = NULL;
+      }
       
       if (ei_connect_xinit(&ec, h_hostname, h_alivename, h_nodename,
 			   (Erl_IpAddr)&h_ipadr, flags.cookie, 
@@ -356,50 +387,73 @@ int erl_call(int argc, char **argv)
       }
 
     }
-    if ((p = strchr((const char *)flags.node, (int) '@')) == 0) {
+    if (flags.port != -1 && flags.hostname != NULL) {
+        host = flags.hostname;
+        strcpy(host_name, flags.hostname);
+    } else if ((flags.port != -1 && flags.hostname == NULL) ||
+        (strchr((const char *)flags.node, (int) '@') == 0)) {
 	strcpy(host_name, ei_thishostname(&ec));
 	host = host_name;
     } else {
+        p = strchr((const char *)flags.node, (int) '@');
 	*p = 0;
 	host = p+1;
     }
 
-    /* 
-     * Expand name to a real name (may be ip-address) 
-     */
-    /* FIXME better error string */
-    if ((hp = ei_gethostbyname(host)) == 0) {
-	fprintf(stderr,"erl_call: can't ei_gethostbyname(%s)\n", host);
-	exit(1);
-    }
-    /* If shortnames, cut off the name at first '.' */
-    if (flags.use_long_name == 0 && (ct = strchr(hp->h_name, '.')) != NULL) {
-	*ct = '\0';
-    }
-    strncpy(host_name, hp->h_name, EI_MAXHOSTNAMELEN);
-    host_name[EI_MAXHOSTNAMELEN] = '\0';
-    if (strlen(flags.node) + strlen(host_name) + 2 > sizeof(nodename)) {
-	fprintf(stderr,"erl_call: nodename too long: %s\n", flags.node);
-	exit(1);
-    }
-    sprintf(nodename, "%s@%s", flags.node, host_name);
+    if (flags.use_localhost_fallback && strcmp(host, ei_thishostname(&ec)) == 0) {
+        /* We're on the same host *and* have used the localhost fallback, so we
+         * skip canonical name resolution since it's bound to fail.
+         *
+         * `ei_connect` will do the right thing later on. */
+        strcpy(host_name, ei_thishostname(&ec));
+    } else {
+        if ((hp = ei_gethostbyname(host)) == 0) {
+            fprintf(stderr,"erl_call: can't ei_gethostbyname(%s)\n", host);
+            exit(1);
+        }
 
+        format_node_hostname(&flags, hp->h_name, host_name);
+    }
+
+    if (flags.port == -1) {
+        if (strlen(flags.node) + strlen(host_name) + 2 > sizeof(nodename)) {
+            fprintf(stderr,"erl_call: nodename too long: %s\n", flags.node);
+            exit(1);
+        }
+        sprintf(nodename, "%s@%s", flags.node, host_name);
+    }
     /* 
      * Try to connect. Start an Erlang system if the
      * start option is on and no system is running.
      */
     if (flags.startp && !flags.haltp) {
 	fd = do_connect(&ec, nodename, &flags);
-    } else if ((fd = ei_connect(&ec, nodename)) < 0) {
-	/* We failed to connect ourself */
-	/* FIXME do we really know we failed because of node not up? */
-	if (flags.haltp) {
-	    exit(0);
-	} else {
-	    fprintf(stderr,"erl_call: failed to connect to node %s\n",
-		    nodename);
-	    exit(1);
-	}
+    } else if (flags.port == -1) {
+        if ((fd = ei_connect(&ec, nodename)) < 0) {
+            /* We failed to connect ourself */
+            /* FIXME do we really know we failed because of node not up? */
+            if (flags.haltp) {
+                exit(0);
+            } else {
+                fprintf(stderr,"erl_call: failed to connect to node %s\n",
+                        nodename);
+                exit(1);
+            }
+        }
+    } else {
+        /* Connect using address:port */
+        if ((fd = ei_connect_host_port(&ec, host, (int)flags.port)) < 0) {
+            /* We failed to connect ourself */
+            /* FIXME do we really know we failed because of node not up? */
+            if (flags.haltp) {
+                exit(0);
+            } else {
+                fprintf(stderr,"erl_call: failed to connect to node with address \"%s:%ld\"\n",
+                        flags.hostname == NULL ? "" : flags.hostname,
+                        flags.port);
+                exit(1);
+            }
+        }
     }
 
     /* If we are connected and the halt switch is set */
@@ -425,8 +479,14 @@ int erl_call(int argc, char **argv)
     }
 
     if (flags.verbosep) {
-	fprintf(stderr,"erl_call: we are now connected to node \"%s\"\n",
-		nodename);
+        if (flags.port == -1) {
+            fprintf(stderr,"erl_call: we are now connected to node \"%s\"\n",
+                    nodename);
+        } else {
+            fprintf(stderr,"erl_call: we are now connected to node with address \"%s:%ld\"\n",
+                    flags.hostname == NULL ? "": flags.hostname,
+                    flags.port);
+        }
     }
 
     /*
@@ -809,6 +869,25 @@ static int get_module(char **mbuf, char **mname)
 
 } /* get_module */
 
+#ifdef __WIN32__
+static DWORD WINAPI timer_thread(void *data) {
+    DWORD_PTR timeout = (DWORD_PTR)data * 1000;
+
+    Sleep(timeout);
+    exit(1);
+}
+
+static void start_timeout(int timeout) {
+    if (CreateThread(NULL, 0, timer_thread, (void*)timeout, 0, NULL) == NULL) {
+        fprintf(stderr,"erl_call: Failed to start timer thread\n");
+        exit(1);
+    }
+}
+#else
+static void start_timeout(int timeout) {
+    alarm(timeout);
+}
+#endif
 
 /***************************************************************************
  *
@@ -818,8 +897,8 @@ static int get_module(char **mbuf, char **mname)
 
 static void usage_noexit(const char *progname) {
   fprintf(stderr,"\nUsage: %s [-[demqrsv]] [-c Cookie] [-h HiddenName] \n", progname);
-  fprintf(stderr,"            [-x ErlScript] [-a [Mod [Fun [Args]]]]\n");
-  fprintf(stderr,"            (-n Node | -sname Node | -name Node)\n\n");
+  fprintf(stderr,"            [-x ErlScript] [-a [Mod [Fun [Args]]]] [-timeout Secs]\n");
+  fprintf(stderr,"            (-n Node | -sname Node | -name Node | -address [HOSTNAME:]PORT)\n\n");
 #ifdef __WIN32__
   fprintf(stderr,"  where: -a  apply(Mod,Fun,Args) (e.g -a \"erlang length [[a,b,c]]\"\n");
 #else
@@ -827,12 +906,19 @@ static void usage_noexit(const char *progname) {
 #endif
   fprintf(stderr,"         -c  cookie string; by default read from ~/.erlang.cookie\n");
   fprintf(stderr,"         -d  direct Erlang output to ~/.erl_call.out.<Nodename>\n");
-  fprintf(stderr,"         -e  evaluate contents of standard input (e.g echo \"X=1,Y=2,{X,Y}.\"|erl_call -e ...)\n");
+  fprintf(stderr,"         -e  evaluate contents of standard input (e.g., echo \"X=1,Y=2,{X,Y}.\"|%s -e ...)\n",
+          progname);
   fprintf(stderr,"         -h  specify a name for the erl_call client node\n");
   fprintf(stderr,"         -m  read and compile Erlang module from stdin\n");
   fprintf(stderr,"         -n  name of Erlang node, same as -name\n");
   fprintf(stderr,"         -name  name of Erlang node, expanded to a fully qualified\n");
   fprintf(stderr,"         -sname name of Erlang node, short form will be used\n");
+  fprintf(stderr,"         -address [HOSTNAME:]PORT of Erlang node\n"
+          "                  (the default hostname is the hostname of the local manchine)\n"
+          "                  (e.g., %s -address my_host:36303 ...)\n"
+          "                  (cannot be combinated with -s, -n, -name and -sname)\n",
+          progname);
+  fprintf(stderr,"         -timeout  command timeout, in seconds\n");
   fprintf(stderr,"         -q  halt the Erlang node (overrides the -s switch)\n");
   fprintf(stderr,"         -r  use a random name for the erl_call client node\n");
   fprintf(stderr,"         -s  start a new Erlang node if necessary\n");
@@ -856,46 +942,6 @@ static void usage(const char *progname) {
   usage_noexit(progname);
   exit(0);
 }
-
-
-/***************************************************************************
- *
- *  OS specific functions
- *
- ***************************************************************************/
-
-#ifdef __WIN32__
-/*
- * FIXME This should not be here.  This is a quick fix to make erl_call
- * work at all on Windows NT.
- */
-static void initWinSock(void)
-{
-    WORD wVersionRequested;  
-    WSADATA wsaData; 
-    int err; 
-    static int initialized;
-
-    wVersionRequested = MAKEWORD(1, 1); 
-    if (!initialized) {
-	initialized = 1;
-	err = WSAStartup(wVersionRequested, &wsaData); 
- 
-	if (err != 0) {
-	    fprintf(stderr,"erl_call: "
-		    "Can't initialize windows sockets: %d\n", err);
-	}
-  
-	if ( LOBYTE( wsaData.wVersion ) != 1 || 
-	    HIBYTE( wsaData.wVersion ) != 1 ) { 
-	    fprintf(stderr,"erl_call: This version of "
-		    "windows sockets not supported\n");
-	    WSACleanup(); 
-	}
-    }
-}
-#endif
-
 
 /***************************************************************************
  *
