@@ -27,7 +27,12 @@
 
 -behaviour(supervisor).
 
--export([start_link/0, start_child/1]).
+-export([start_link/0,
+         start_child/4,
+         start_system_subsystem/4,
+         stop_child/1,
+         stop_system/1
+        ]).
 
 %% Supervisor callback
 -export([init/1]).
@@ -38,22 +43,64 @@
 %%%  API
 %%%=========================================================================
 start_link() ->
-    supervisor:start_link({local,?SSHC_SUP}, ?MODULE, []).
+    supervisor:start_link({local,?MODULE}, ?MODULE, []).
 
-start_child(Args) ->
-    supervisor:start_child(?MODULE, Args).
+start_child(Address, Port, Profile, Options) ->
+    case ssh_system_sup:system_supervisor(Address, Port, Profile) of
+     undefined ->
+            %% Here we a new connction on a new Host/Port/Profile
+            Spec = child_spec(Address, Port, Profile, Options),
+            supervisor:start_child(?MODULE, Spec);
+	Pid ->
+            {ok,Pid}
+    end.
+
+
+start_system_subsystem(Host, Port, Profile, Options) ->
+    ssh_controller:start_system_subsystem(client_controller, ?MODULE, Host, Port, Profile, Options,
+                                          child_spec(Host, Port, Profile, Options)
+                                         ).
+
+stop_child(ChildId) when is_tuple(ChildId) ->
+    supervisor:terminate_child(?SSHC_SUP, ChildId);
+stop_child(ChildPid) when is_pid(ChildPid)->
+    stop_child(system_name(ChildPid)).
+
+stop_system(SysSup) ->
+    ssh_controller:stop_system(client_controller, SysSup).
+
 
 %%%=========================================================================
 %%%  Supervisor callback
 %%%=========================================================================
 init(_) ->
-    SupFlags = #{strategy  => simple_one_for_one, 
+    SupFlags = #{strategy  => one_for_one, 
                  intensity =>    0,
                  period    => 3600
                 },
-    ChildSpecs = [#{id       => undefined, % As simple_one_for_one is used.
-                    start    => {ssh_connection_handler, start_link, []},
-                    restart  => temporary % because there is no way to restart a crashed connection
-                   }
-                 ],
+    ChildSpecs = [#{id       => client_controller,
+                    start    => {ssh_controller, start_link, [client, client_controller]},
+                    restart  => permanent,
+                    type     => worker
+                   }],
     {ok, {SupFlags,ChildSpecs}}.
+
+%%%=========================================================================
+%%%  Internal functions
+%%%=========================================================================
+child_spec(Address, Port, Profile, Options) ->
+    #{id       => id(Address, Port, Profile),
+      start    => {ssh_system_sup, start_link, [client, Address, Port, Profile, Options]},
+      restart  => temporary,
+      type     => supervisor
+     }.
+
+id(Address, Port, Profile) ->
+    {client, ssh_system_sup, Address, Port, Profile}.
+
+system_name(SysSup) ->
+    case lists:keyfind(SysSup, 2, supervisor:which_children(?SSHC_SUP)) of
+        {Name, SysSup, _, _} -> Name;
+        false -> undefind
+    end.
+

@@ -1,7 +1,7 @@
 /*
  * %CopyrightBegin%
  *
- * Copyright Ericsson AB 2001-2017. All Rights Reserved.
+ * Copyright Ericsson AB 2001-2020. All Rights Reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -249,11 +249,12 @@
 
 #include "erl_lock_check.h"
 #include "erl_lock_count.h"
+#include "erl_dyn_lock_check.h"
 
-#if defined(__GLIBC__) && (__GLIBC__ << 16) + __GLIBC_MINOR__ < (2 << 16) + 4
+#if defined(__GLIBC__) && (__GLIBC__ << 16) + __GLIBC_MINOR__ < (2 << 16) + 5
 /*
  * pthread_mutex_destroy() may return EBUSY when it shouldn't :( We have
- * only seen this bug in glibc versions before 2.4. Note that condition
+ * only seen this bug in glibc versions before 2.5. Note that condition
  * variables, rwmutexes, spinlocks, and rwspinlocks also may be effected by
  * this bug since these implementations may use mutexes internally.
  */
@@ -295,6 +296,9 @@ typedef struct {
 #ifdef DEBUG
     erts_lock_flags_t flags;
 #endif
+#ifdef ERTS_DYN_LOCK_CHECK_INTERNAL
+    erts_dlc_t dlc;
+#endif
 } erts_mtx_t;
 typedef ethr_cond erts_cnd_t;
 
@@ -309,6 +313,9 @@ typedef struct {
 #endif
 #ifdef DEBUG
     erts_lock_flags_t flags;
+#endif
+#ifdef ERTS_DYN_LOCK_CHECK_INTERNAL
+    erts_dlc_t dlc;
 #endif
 } erts_rwmtx_t;
 
@@ -487,6 +494,7 @@ ERTS_GLB_INLINE void erts_tsd_key_delete(erts_tsd_key_t key);
 ERTS_GLB_INLINE void erts_tsd_set(erts_tsd_key_t key, void *value);
 ERTS_GLB_INLINE void * erts_tsd_get(erts_tsd_key_t key);
 ERTS_GLB_INLINE erts_tse_t *erts_tse_fetch(void);
+ERTS_GLB_INLINE void erts_tse_use(erts_tse_t *ep);
 ERTS_GLB_INLINE void erts_tse_return(erts_tse_t *ep);
 ERTS_GLB_INLINE void erts_tse_prepare_timed(erts_tse_t *ep);
 ERTS_GLB_INLINE void erts_tse_set(erts_tse_t *ep);
@@ -1619,6 +1627,9 @@ erts_mtx_init(erts_mtx_t *mtx, char *name, Eterm extra, erts_lock_flags_t flags)
 #ifdef ERTS_ENABLE_LOCK_COUNT
     erts_lcnt_init_ref_x(&mtx->lcnt, name, extra, flags);
 #endif
+#ifdef ERTS_DYN_LOCK_CHECK_INTERNAL
+    erts_dlc_create_lock(&mtx->dlc, name);
+#endif
 }
 
 ERTS_GLB_INLINE void
@@ -1629,6 +1640,9 @@ erts_mtx_init_locked(erts_mtx_t *mtx, char *name, Eterm extra, erts_lock_flags_t
     ethr_mutex_lock(&mtx->mtx);
     #ifdef ERTS_ENABLE_LOCK_CHECK
         erts_lc_trylock(1, &mtx->lc);
+    #endif
+    #ifdef ERTS_DYN_LOCK_CHECK_INTERNAL
+        erts_dlc_trylock(&mtx->dlc, 1);
     #endif
     #ifdef ERTS_ENABLE_LOCK_COUNT
         erts_lcnt_trylock(&mtx->lcnt, 1);
@@ -1686,11 +1700,13 @@ erts_mtx_trylock(erts_mtx_t *mtx)
     erts_lc_trylock(res == 0, &mtx->lc);
 #endif
 #endif
+#ifdef ERTS_DYN_LOCK_CHECK_INTERNAL
+    erts_dlc_trylock(&mtx->dlc, res == 0);
+#endif
 #ifdef ERTS_ENABLE_LOCK_COUNT
     erts_lcnt_trylock(&mtx->lcnt, res);
 #endif    
     return res;
-
 }
 
 ERTS_GLB_INLINE void
@@ -1707,6 +1723,9 @@ erts_mtx_lock(erts_mtx_t *mtx)
     erts_lc_lock(&mtx->lc);
 #endif
 #endif
+#ifdef ERTS_DYN_LOCK_CHECK_INTERNAL
+    erts_dlc_lock(&mtx->dlc);
+#endif
 #ifdef ERTS_ENABLE_LOCK_COUNT
     erts_lcnt_lock(&mtx->lcnt);
 #endif
@@ -1721,6 +1740,9 @@ erts_mtx_unlock(erts_mtx_t *mtx)
 {
 #ifdef ERTS_ENABLE_LOCK_CHECK
     erts_lc_unlock(&mtx->lc);
+#endif
+#ifdef ERTS_DYN_LOCK_CHECK_INTERNAL
+    erts_dlc_unlock(&mtx->dlc);
 #endif
 #ifdef ERTS_ENABLE_LOCK_COUNT
     erts_lcnt_unlock(&mtx->lcnt);
@@ -1847,6 +1869,9 @@ erts_rwmtx_init_opt(erts_rwmtx_t *rwmtx, erts_rwmtx_opt_t *opt,
 #ifdef ERTS_ENABLE_LOCK_CHECK
     erts_lc_init_lock_x(&rwmtx->lc, name, flags, extra);
 #endif
+#ifdef ERTS_DYN_LOCK_CHECK_INTERNAL
+    erts_dlc_create_lock(&rwmtx->dlc, name);
+#endif
 #ifdef ERTS_ENABLE_LOCK_COUNT
     erts_lcnt_init_ref_x(&rwmtx->lcnt, name, extra, flags);
 #endif
@@ -1909,6 +1934,9 @@ erts_rwmtx_tryrlock(erts_rwmtx_t *rwmtx)
     erts_lc_trylock_flg(res == 0, &rwmtx->lc, ERTS_LOCK_OPTIONS_READ);
 #endif
 #endif
+#ifdef ERTS_DYN_LOCK_CHECK_INTERNAL
+    erts_dlc_trylock(&rwmtx->dlc, res == 0);
+#endif
 #ifdef ERTS_ENABLE_LOCK_COUNT
     erts_lcnt_trylock_opt(&rwmtx->lcnt, res, ERTS_LOCK_OPTIONS_READ);
 #endif
@@ -1930,6 +1958,9 @@ erts_rwmtx_rlock(erts_rwmtx_t *rwmtx)
     erts_lc_lock_flg(&rwmtx->lc, ERTS_LOCK_OPTIONS_READ);
 #endif
 #endif
+#ifdef ERTS_DYN_LOCK_CHECK_INTERNAL
+    erts_dlc_lock(&rwmtx->dlc);
+#endif
 #ifdef ERTS_ENABLE_LOCK_COUNT
     erts_lcnt_lock_opt(&rwmtx->lcnt, ERTS_LOCK_OPTIONS_READ);
 #endif
@@ -1944,6 +1975,9 @@ erts_rwmtx_runlock(erts_rwmtx_t *rwmtx)
 {
 #ifdef ERTS_ENABLE_LOCK_CHECK
     erts_lc_unlock_flg(&rwmtx->lc, ERTS_LOCK_OPTIONS_READ);
+#endif
+#ifdef ERTS_DYN_LOCK_CHECK_INTERNAL
+    erts_dlc_unlock(&rwmtx->dlc);
 #endif
 #ifdef ERTS_ENABLE_LOCK_COUNT
     erts_lcnt_unlock_opt(&rwmtx->lcnt, ERTS_LOCK_OPTIONS_READ);
@@ -1976,6 +2010,9 @@ erts_rwmtx_tryrwlock(erts_rwmtx_t *rwmtx)
     erts_lc_trylock_flg(res == 0, &rwmtx->lc, ERTS_LOCK_OPTIONS_RDWR);
 #endif
 #endif
+#ifdef ERTS_DYN_LOCK_CHECK_INTERNAL
+    erts_dlc_trylock(&rwmtx->dlc, res == 0);
+#endif
 #ifdef ERTS_ENABLE_LOCK_COUNT
     erts_lcnt_trylock_opt(&rwmtx->lcnt, res, ERTS_LOCK_OPTIONS_RDWR);
 #endif
@@ -1997,6 +2034,9 @@ erts_rwmtx_rwlock(erts_rwmtx_t *rwmtx)
     erts_lc_lock_flg(&rwmtx->lc, ERTS_LOCK_OPTIONS_RDWR);
 #endif
 #endif
+#ifdef ERTS_DYN_LOCK_CHECK_INTERNAL
+    erts_dlc_lock(&rwmtx->dlc);
+#endif
 #ifdef ERTS_ENABLE_LOCK_COUNT
     erts_lcnt_lock_opt(&rwmtx->lcnt, ERTS_LOCK_OPTIONS_RDWR);
 #endif
@@ -2011,6 +2051,9 @@ erts_rwmtx_rwunlock(erts_rwmtx_t *rwmtx)
 {
 #ifdef ERTS_ENABLE_LOCK_CHECK
     erts_lc_unlock_flg(&rwmtx->lc, ERTS_LOCK_OPTIONS_RDWR);
+#endif
+#ifdef ERTS_DYN_LOCK_CHECK_INTERNAL
+    erts_dlc_unlock(&rwmtx->dlc);
 #endif
 #ifdef ERTS_ENABLE_LOCK_COUNT
     erts_lcnt_unlock_opt(&rwmtx->lcnt, ERTS_LOCK_OPTIONS_RDWR);
@@ -2359,6 +2402,23 @@ ERTS_GLB_INLINE erts_tse_t *erts_tse_fetch(void)
     return (erts_tse_t *) ethr_get_ts_event();
 }
 
+ERTS_GLB_INLINE void erts_tse_use(erts_tse_t *ep)
+{
+    /*
+     * When enabling use on event from emulator
+     * it *must* not already be in use...
+     */
+#ifdef DEBUG
+    erts_tse_t *tmp_ep;
+    ASSERT(!(ep->iflgs & ETHR_TS_EV_BUSY));
+    tmp_ep =
+#else
+    (void)
+#endif
+        ethr_use_ts_event(ep);
+    ASSERT(ep == tmp_ep);
+}
+
 ERTS_GLB_INLINE void erts_tse_return(erts_tse_t *ep)
 {
     ethr_leave_ts_event(ep);
@@ -2366,7 +2426,9 @@ ERTS_GLB_INLINE void erts_tse_return(erts_tse_t *ep)
 
 ERTS_GLB_INLINE void erts_tse_prepare_timed(erts_tse_t *ep)
 {
-    int res = ethr_event_prepare_timed(&((ethr_ts_event *) ep)->event);
+    int res;
+    ETHR_ASSERT(ep->iflgs & ETHR_TS_EV_BUSY);
+    res = ethr_event_prepare_timed(&((ethr_ts_event *) ep)->event);
     if (res != 0)
 	erts_thr_fatal_error(res, "prepare timed");
 }
@@ -2378,6 +2440,7 @@ ERTS_GLB_INLINE void erts_tse_set(erts_tse_t *ep)
 
 ERTS_GLB_INLINE void erts_tse_reset(erts_tse_t *ep)
 {
+    ETHR_ASSERT(ep->iflgs & ETHR_TS_EV_BUSY);
     ethr_event_reset(&((ethr_ts_event *) ep)->event);
 }
 
@@ -2385,6 +2448,7 @@ ERTS_GLB_INLINE int erts_tse_wait(erts_tse_t *ep)
 {
     int res;
     ERTS_MSACC_PUSH_AND_SET_STATE(ERTS_MSACC_STATE_SLEEP);
+    ETHR_ASSERT(ep->iflgs & ETHR_TS_EV_BUSY);
     res = ethr_event_wait(&((ethr_ts_event *) ep)->event);
     ERTS_MSACC_POP_STATE();
     return res;
@@ -2394,6 +2458,7 @@ ERTS_GLB_INLINE int erts_tse_swait(erts_tse_t *ep, int spincount)
 {
     int res;
     ERTS_MSACC_PUSH_AND_SET_STATE(ERTS_MSACC_STATE_SLEEP);
+    ETHR_ASSERT(ep->iflgs & ETHR_TS_EV_BUSY);
     res = ethr_event_swait(&((ethr_ts_event *) ep)->event, spincount);
     ERTS_MSACC_POP_STATE();
     return res;
@@ -2403,6 +2468,7 @@ ERTS_GLB_INLINE int erts_tse_twait(erts_tse_t *ep, Sint64 tmo)
 {
     int res;
     ERTS_MSACC_PUSH_AND_SET_STATE(ERTS_MSACC_STATE_SLEEP);
+    ETHR_ASSERT(ep->iflgs & ETHR_TS_EV_BUSY);
     res = ethr_event_twait(&((ethr_ts_event *) ep)->event,
                            (ethr_sint64_t) tmo);
     ERTS_MSACC_POP_STATE();
@@ -2413,6 +2479,7 @@ ERTS_GLB_INLINE int erts_tse_stwait(erts_tse_t *ep, int spincount, Sint64 tmo)
 {
     int res;
     ERTS_MSACC_PUSH_AND_SET_STATE(ERTS_MSACC_STATE_SLEEP);
+    ETHR_ASSERT(ep->iflgs & ETHR_TS_EV_BUSY);
     res = ethr_event_stwait(&((ethr_ts_event *) ep)->event,
                             spincount,
                             (ethr_sint64_t) tmo);

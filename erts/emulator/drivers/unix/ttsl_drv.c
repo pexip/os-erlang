@@ -1,7 +1,7 @@
 /*
  * %CopyrightBegin%
  *
- * Copyright Ericsson AB 1996-2018. All Rights Reserved.
+ * Copyright Ericsson AB 1996-2020. All Rights Reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -31,7 +31,7 @@
 static int ttysl_init(void);
 static ErlDrvData ttysl_start(ErlDrvPort, char*);
 
-#ifdef HAVE_TERMCAP  /* else make an empty driver that can not be opened */
+#ifdef HAVE_TERMCAP  /* else make an empty driver that cannot be opened */
 
 #ifndef WANT_NONBLOCKING
 #define WANT_NONBLOCKING
@@ -394,6 +394,8 @@ static ErlDrvSSizeT ttysl_control(ErlDrvData drv_data,
 {
     char resbuff[2*sizeof(Uint32)];
     ErlDrvSizeT res_size;
+
+    command -= ERTS_TTYSL_DRV_CONTROL_MAGIC_NUMBER;
     switch (command) {
     case CTRL_OP_GET_WINSIZE:
 	{
@@ -419,7 +421,7 @@ static ErlDrvSSizeT ttysl_control(ErlDrvData drv_data,
 	}
 	break;
     default:
-	return 0;
+	return -1;
     }
     if (rlen < res_size) {
 	*rbuf = driver_alloc(res_size);
@@ -1323,17 +1325,17 @@ static int start_termcap(void)
 
     capbuf = driver_alloc(1024);
     if (!capbuf)
-	goto false;
+	goto termcap_false;
     eres = erl_drv_getenv("TERM", capbuf, &envsz);
     if (eres == 0)
 	env = capbuf;
     else if (eres < 0) {
         DEBUGLOG(("start_termcap: failure in erl_drv_getenv(\"TERM\", ..) = %d\n", eres));
-	goto false;
+	goto termcap_false;
     } else /* if (eres > 1) */ {
       char *envbuf = driver_alloc(envsz);
       if (!envbuf)
-	  goto false;
+	  goto termcap_false;
       while (1) {
 	  char *newenvbuf;
 	  eres = erl_drv_getenv("TERM", envbuf, &envsz);
@@ -1343,7 +1345,7 @@ static int start_termcap(void)
           if (eres < 0 || !newenvbuf) {
               DEBUGLOG(("start_termcap: failure in erl_drv_getenv(\"TERM\", ..) = %d or realloc buf == %p\n", eres, newenvbuf));
 	      env = newenvbuf ? newenvbuf : envbuf;
-	      goto false;
+	      goto termcap_false;
 	  }
 	  envbuf = newenvbuf;
       }
@@ -1351,7 +1353,7 @@ static int start_termcap(void)
     }
     if ((tres = tgetent((char*)lbuf, env)) <= 0) {
         DEBUGLOG(("start_termcap: failure in tgetent(..) = %d\n", tres));
-        goto false;
+        goto termcap_false;
     }
     if (env != capbuf) {
 	env = NULL;
@@ -1373,7 +1375,7 @@ static int start_termcap(void)
         return TRUE;
     }
     DEBUGLOG(("start_termcap: failed start\n"));
- false:
+ termcap_false:
     if (env && env != capbuf)
 	driver_free(env);
     if (capbuf)

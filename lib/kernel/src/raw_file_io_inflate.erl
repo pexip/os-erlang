@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2017. All Rights Reserved.
+%% Copyright Ericsson AB 2017-2020. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -26,7 +26,7 @@
 
 -include("file_int.hrl").
 
--define(INFLATE_CHUNK_SIZE, (1 bsl 10)).
+-define(INFLATE_CHUNK_SIZE, (8 bsl 10)).
 -define(GZIP_WBITS, (16 + 15)).
 
 callback_mode() -> state_functions.

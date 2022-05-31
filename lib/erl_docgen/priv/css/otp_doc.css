@@ -49,9 +49,15 @@ a:visited      { color: #1b6ec2; text-decoration: none }
   border-right: 1px solid #ccc;
 }
 
+.leftnav-tube
+{
+    margin: 15px;
+}
+
 #content {
   margin-left: 340px; /* set left value to WidthOfFrameDiv */
-  max-width: 42em;
+  max-width: 52em;
+  overflow-x: hidden;
 }
 
 .frontpage 
@@ -61,7 +67,8 @@ a:visited      { color: #1b6ec2; text-decoration: none }
 
 .innertube 
 {
-  margin: 15px; /* Magins for inner DIV inside each DIV (to provide padding) */
+    margin-left: 15px; /* Magins for inner DIV inside each DIV (to provide padding) */
+    margin-right: 11em;
 }
 
 .footer 
@@ -71,6 +78,39 @@ a:visited      { color: #1b6ec2; text-decoration: none }
 }
 
 .bold_code   { font-family: mono, Courier, monospace; font-weight: bold }
+
+/* Invisible table for function specs,
+ * just to get since-version out in right margin */
+.func-table, .func-tr, .func-td, .cfunc-td, .func-since-td {
+    width: 100%;
+    border: 0;
+    padding: 0;
+    margin: 0;
+}
+
+.func-tr:nth-child(n) {
+    background: inherit  /* turn off zebra striped rows */
+}
+
+.func-td {
+    width: 38em;
+}
+
+.cfunc-td {
+    width: 31em;
+    padding-left: 7em;
+    text-indent: -7em;
+}
+
+.func-since-td {
+    width: auto;
+    padding-left: 1em;
+}
+
+.func-td:hover {
+ background-color: #f5f5f5;
+}
+
 .code        {
  font-family: mono, Courier, monospace;
  font-weight: normal;
@@ -154,10 +194,17 @@ pre {
 }
 
 
-.exports-body, .data-types-body, .REFBODY{
+.data-types-body, .REFBODY{
  margin-left: 2em;
 }
 .REFTYPES    { margin-left: 1.5em }
+.exports-body {
+    margin-left: 3em;
+}
+.exports-tube
+{
+    margin-right: 11em;
+}
 
 footer       { }
 
@@ -247,20 +294,45 @@ th {
     outline: none;
 }
 
-.ghlink {
-    margin-left: -2.7em; /* .pencil.font-size + .pencil.padding.left + .pencil.padding.right = 2.7 */
+.ghlink-before {
+    margin-left: -4em;
     visibility: hidden;
 }
 
-.pencil:before {
+.pencil-before:before {
     transform: rotateZ(90deg);
+    display: inline-block;
     content: "\270E";
     color: #1a1a1a !important;
-    font-weight: bold;
     font-size: 1.5em;
-    padding: .3em .6em .6em;
-    line-height: 1em;
     font-family: mono;
+}
+
+.paperclip-before:before {
+    display: inline-block;
+    content: "\1F517";
+    padding-left: 1em;
+    padding-right: .3em;
+}
+
+.ghlink-after {
+    visibility: hidden;
+}
+
+.pencil-after:after {
+    display: inline-block;
+    transform: rotate(90deg);
+    content: "\270E";
+    color: #1a1a1a !important;
+    font-size: 1.5em;
+    font-family: mono;
+}
+
+.paperclip-after:after {
+    display: inline-block;
+    content: "\1F517";
+    padding-right: .3em;
+    padding-left: .7em;
 }
 
 hr{
@@ -282,4 +354,10 @@ a > .code {
 
 .func-types-title{
  font-size: 1em;
+}
+
+.since{
+    color: gray;
+    font-weight: normal;
+    font-size: small;
 }

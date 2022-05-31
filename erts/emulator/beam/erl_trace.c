@@ -1,7 +1,7 @@
 /*
  * %CopyrightBegin%
  *
- * Copyright Ericsson AB 1999-2018. All Rights Reserved.
+ * Copyright Ericsson AB 1999-2020. All Rights Reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -72,6 +72,7 @@ static ErtsTracer default_port_tracer;
 
 static Eterm system_monitor;
 static Eterm system_profile;
+static erts_atomic_t system_logger;
 
 #ifdef HAVE_ERTS_NOW_CPU
 int erts_cpu_timestamp;
@@ -340,6 +341,7 @@ void erts_init_trace(void) {
     default_port_trace_flags = F_INITIAL_TRACE_FLAGS;
     default_port_tracer = erts_tracer_nil;
     system_seq_tracer = erts_tracer_nil;
+    erts_atomic_init_nob(&system_logger, am_logger);
     init_sys_msg_dispatcher();
     init_tracer_nif();
 }
@@ -633,9 +635,11 @@ write_sys_msg_to_port(Eterm unused_to,
 		      Eterm message) {
     byte *buffer;
     byte *ptr;
-    unsigned size;
+    Uint size;
 
-    size = erts_encode_ext_size(message);
+    if (erts_encode_ext_size(message, &size) != ERTS_EXT_SZ_OK)
+	erts_exit(ERTS_ERROR_EXIT, "Internal error: System limit\n");
+
     buffer = (byte *) erts_alloc(ERTS_ALC_T_TMP, size);
 
     ptr = buffer;
@@ -709,7 +713,9 @@ trace_sched(Process *p, ErtsProcLocks locks, Eterm what)
     trace_sched_aux(p, locks, what);
 }
 
-/* Send {trace_ts, Pid, Send, Msg, DestPid, Timestamp}
+/* Send {trace_ts, Pid, Send, Msg, DestPid, PamResult, Timestamp}
+ * or   {trace_ts, Pid, Send, Msg, DestPid, Timestamp}
+ * or   {trace, Pid, Send, Msg, DestPid, PamResult}
  * or   {trace, Pid, Send, Msg, DestPid}
  *
  * where 'Send' is 'send' or 'send_to_non_existing_process'.
@@ -769,7 +775,9 @@ trace_send(Process *p, Eterm to, Eterm msg)
     erts_match_set_release_result_trace(p, pam_result);
 }
 
-/* Send {trace_ts, Pid, receive, Msg, Timestamp}
+/* Send {trace_ts, Pid, receive, Msg, PamResult, Timestamp}
+ * or   {trace_ts, Pid, receive, Msg, Timestamp}
+ * or   {trace, Pid, receive, Msg, PamResult}
  * or   {trace, Pid, receive, Msg}
  */
 void
@@ -822,7 +830,7 @@ trace_receive(Process* receiver,
 }
 
 int
-seq_trace_update_send(Process *p)
+seq_trace_update_serial(Process *p)
 {
     ErtsTracer seq_tracer = erts_get_system_seq_tracer();
     ASSERT((is_tuple(SEQ_TRACE_TOKEN(p)) || is_nil(SEQ_TRACE_TOKEN(p))));
@@ -843,6 +851,18 @@ seq_trace_update_send(Process *p)
     SEQ_TRACE_TOKEN_LASTCNT(p) = 
 	make_small(p -> seq_trace_lastcnt);
     return 1;
+}
+
+void
+erts_seq_trace_update_node_token(Eterm token)
+{
+    Eterm serial;
+    Uint serial_num;
+    SEQ_TRACE_T_SENDER(token) = erts_this_dist_entry->sysname;
+    serial = SEQ_TRACE_T_SERIAL(token);
+    serial_num = unsigned_val(serial);
+    serial_num++;
+    SEQ_TRACE_T_SERIAL(token) = make_small(serial_num);
 }
 
 
@@ -920,6 +940,9 @@ seq_trace_output_generic(Eterm token, Eterm msg, Uint type,
     UnUseTmpHeapNoproc(LOCAL_HEAP_SIZE);
 #undef LOCAL_HEAP_SIZE
 }
+
+
+
 
 /* Send {trace_ts, Pid, return_to, {Mod, Func, Arity}, Timestamp}
  * or   {trace, Pid, return_to, {Mod, Func, Arity}}
@@ -2027,10 +2050,24 @@ enqueue_sys_msg(enum ErtsSysMsgType type,
     erts_mtx_unlock(&smq_mtx);
 }
 
+Eterm
+erts_get_system_logger(void)
+{
+    return (Eterm)erts_atomic_read_nob(&system_logger);
+}
+
+Eterm
+erts_set_system_logger(Eterm logger)
+{
+    if (logger != am_logger && logger != am_undefined && !is_internal_pid(logger))
+        return THE_NON_VALUE;
+    return (Eterm)erts_atomic_xchg_nob(&system_logger, logger);
+}
+
 void
 erts_queue_error_logger_message(Eterm from, Eterm msg, ErlHeapFragment *bp)
 {
-    enqueue_sys_msg(SYS_MSG_TYPE_ERRLGR, from, am_logger, msg, bp);
+    enqueue_sys_msg(SYS_MSG_TYPE_ERRLGR, from, erts_get_system_logger(), msg, bp);
 }
 
 void
@@ -2096,36 +2133,49 @@ sys_msg_disp_failure(ErtsSysMsgQ *smqp, Eterm receiver)
 	erts_thr_progress_unblock();
 	break;
     case SYS_MSG_TYPE_ERRLGR: {
-	char *no_elgger = "(no logger present)";
 	Eterm *tp;
 	Eterm tag;
+
 	if (is_not_tuple(smqp->msg)) {
-	unexpected_elmsg:
-	    erts_fprintf(stderr,
-			 "%s unexpected logger message: %T\n",
-			 no_elgger,
-			 smqp->msg);
+	    goto unexpected_error_msg;
+	}
+	tp = tuple_val(smqp->msg);
+	if (arityval(tp[0]) != 2) {
+	    goto unexpected_error_msg;
+	}
+	if (is_not_tuple(tp[2])) {
+	    goto unexpected_error_msg;
+	}
+	tp = tuple_val(tp[2]);
+	if (arityval(tp[0]) != 3) {
+	    goto unexpected_error_msg;
+	}
+	tag = tp[1];
+	if (is_not_tuple(tp[3])) {
+	    goto unexpected_error_msg;
+	}
+	tp = tuple_val(tp[3]);
+	if (arityval(tp[0]) != 3) {
+	    goto unexpected_error_msg;
+	}
+	if (is_not_list(tp[3])) {
+	    goto unexpected_error_msg;
 	}
 
-	tp = tuple_val(smqp->msg);
-	if (arityval(tp[0]) != 2)
-	    goto unexpected_elmsg;
-	if (is_not_tuple(tp[2]))
-	    goto unexpected_elmsg;
-	tp = tuple_val(tp[2]);
-	if (arityval(tp[0]) != 3)
-	    goto unexpected_elmsg;
-	tag = tp[1];
-	if (is_not_tuple(tp[3]))
-	    goto unexpected_elmsg;
-	tp = tuple_val(tp[3]);
-	if (arityval(tp[0]) != 3)
-	    goto unexpected_elmsg;
-	if (is_not_list(tp[3]))
-	    goto unexpected_elmsg;
-	erts_fprintf(stderr, "%s %T: %T\n",
-		     no_elgger, tag, CAR(list_val(tp[3])));
-	break;
+        {
+            static const char *no_logger = "(no logger present)";
+        /* no_error_logger: */
+            erts_fprintf(stderr, "%s %T: %T\n",
+                         no_logger, tag, CAR(list_val(tp[3])));
+            break;
+        unexpected_error_msg:
+            erts_fprintf(stderr,
+                         "%s unexpected logger message: %T\n",
+                         no_logger,
+                         smqp->msg);
+            break;
+        }
+        ASSERT(0);
     }
     case SYS_MSG_TYPE_PROC_MSG:
         break;
@@ -2172,11 +2222,12 @@ sys_msg_dispatcher_wait(void *vwait_p)
     erts_mtx_unlock(&smq_mtx);
 }
 
+static ErtsSysMsgQ *local_sys_message_queue = NULL;
+
 static void *
 sys_msg_dispatcher_func(void *unused)
 {
     ErtsThrPrgrCallbacks callbacks;
-    ErtsSysMsgQ *local_sys_message_queue = NULL;
     ErtsThrPrgrData *tpd;
     int wait = 0;
 
@@ -2184,13 +2235,15 @@ sys_msg_dispatcher_func(void *unused)
     erts_lc_set_thread_name("system message dispatcher");
 #endif
 
+    local_sys_message_queue = NULL;
+
     callbacks.arg = (void *) &wait;
     callbacks.wakeup = sys_msg_dispatcher_wakeup;
     callbacks.prepare_wait = sys_msg_dispatcher_prep_wait;
     callbacks.wait = sys_msg_dispatcher_wait;
     callbacks.finalize_wait = sys_msg_dispatcher_fin_wait;
 
-    tpd = erts_thr_progress_register_managed_thread(NULL, &callbacks, 0);
+    tpd = erts_thr_progress_register_managed_thread(NULL, &callbacks, 0, 0);
 
     while (1) {
 	int end_wait = 0;
@@ -2209,6 +2262,7 @@ sys_msg_dispatcher_func(void *unused)
 
 	/* Fetch current trace message queue ... */
 	if (!sys_message_queue) {
+            wait = 1;
 	    erts_mtx_unlock(&smq_mtx);
 	    end_wait = 1;
 	    erts_thr_progress_active(tpd, 0);
@@ -2216,8 +2270,23 @@ sys_msg_dispatcher_func(void *unused)
 	    erts_mtx_lock(&smq_mtx);
 	}
 
-	while (!sys_message_queue)
-	    erts_cnd_wait(&smq_cnd, &smq_mtx);
+	while (!sys_message_queue) {
+            if (wait)
+                erts_cnd_wait(&smq_cnd, &smq_mtx);
+            if (sys_message_queue)
+                break;
+            wait = 1;
+	    erts_mtx_unlock(&smq_mtx);
+            /*
+             * Ensure thread progress continue. We might have
+             * been the last thread to go to sleep. In that case
+             * erts_thr_progress_finalize_wait() will take care
+             * of it...
+             */
+	    erts_thr_progress_finalize_wait(tpd);
+	    erts_thr_progress_prepare_wait(tpd);
+	    erts_mtx_lock(&smq_mtx);
+        }
 
 	local_sys_message_queue = sys_message_queue;
 	sys_message_queue = NULL;
@@ -2239,6 +2308,8 @@ sys_msg_dispatcher_func(void *unused)
 	    ErtsProcLocks proc_locks = ERTS_PROC_LOCKS_MSG_SEND;
 	    Process *proc = NULL;
 	    Port *port = NULL;
+
+            ASSERT(is_value(smqp->msg));
 
 	    if (erts_thr_progress_update(tpd))
 		erts_thr_progress_leader_update(tpd);
@@ -2271,7 +2342,7 @@ sys_msg_dispatcher_func(void *unused)
 		}
 		break;
 	    case SYS_MSG_TYPE_ERRLGR:
-		receiver = am_logger;
+		receiver = smqp->to;
 		break;
 	    default:
 		receiver = NIL;
@@ -2285,8 +2356,15 @@ sys_msg_dispatcher_func(void *unused)
 	    if (is_internal_pid(receiver)) {
 		proc = erts_pid2proc(NULL, 0, receiver, proc_locks);
 		if (!proc) {
-		    /* Bad tracer */
-		    goto failure;
+                    if (smqp->type == SYS_MSG_TYPE_ERRLGR) {
+                        /* Bad logger process, send to kernel 'logger' process */
+                        erts_set_system_logger(am_logger);
+                        receiver = erts_get_system_logger();
+                        goto logger;
+                    } else {
+                        /* Bad tracer */
+                        goto failure;
+                    }
 		}
 		else {
 		    ErtsMessage *mp;
@@ -2299,9 +2377,9 @@ sys_msg_dispatcher_func(void *unused)
 #endif
 		    erts_proc_unlock(proc, proc_locks);
 		}
-	    }
-	    else if (receiver == am_logger) {
-		proc = erts_whereis_process(NULL,0,receiver,proc_locks,0);
+	    } else if (receiver == am_logger) {
+            logger:
+		proc = erts_whereis_process(NULL,0,am_logger,proc_locks,0);
 		if (!proc)
 		    goto failure;
 		else if (smqp->from == proc->common.id)
@@ -2309,7 +2387,10 @@ sys_msg_dispatcher_func(void *unused)
 		else
 		    goto queue_proc_msg;
 	    }
-	    else if (is_internal_port(receiver)) {
+            else if (receiver == am_undefined) {
+                goto drop_sys_msg;
+	    }
+            else if (is_internal_port(receiver)) {
 		port = erts_thr_id2port_sflgs(receiver,
 					      ERTS_PORT_SFLGS_INVALID_TRACER_LOOKUP);
 		if (!port)
@@ -2342,6 +2423,7 @@ sys_msg_dispatcher_func(void *unused)
 		erts_fprintf(stderr, "dropped\n");
 #endif
 	    }
+            smqp->msg = THE_NON_VALUE;
 	}
     }
 
@@ -2349,32 +2431,38 @@ sys_msg_dispatcher_func(void *unused)
 }
 
 void
-erts_foreach_sys_msg_in_q(void (*func)(Eterm,
-				       Eterm,
-				       Eterm,
-				       ErlHeapFragment *))
+erts_debug_foreach_sys_msg_in_q(void (*func)(Eterm,
+                                             Eterm,
+                                             Eterm,
+                                             ErlHeapFragment *))
 {
-    ErtsSysMsgQ *sm;
-    erts_mtx_lock(&smq_mtx);
-    for (sm = sys_message_queue; sm; sm = sm->next) {
-	Eterm to;
-	switch (sm->type) {
-	case SYS_MSG_TYPE_SYSMON:
-	    to = erts_get_system_monitor();
-	    break;
-	case SYS_MSG_TYPE_SYSPROF:
-	    to = erts_get_system_profile();
-	    break;
-	case SYS_MSG_TYPE_ERRLGR:
-	    to = am_logger;
-	    break;
-	default:
-	    to = NIL;
-	    break;
-	}
-	(*func)(sm->from, to, sm->msg, sm->bp);
+    ErtsSysMsgQ *smq[] = {sys_message_queue, local_sys_message_queue};
+    int i;
+
+    ERTS_LC_ASSERT(erts_thr_progress_is_blocking());
+
+    for (i = 0; i < sizeof(smq)/sizeof(smq[0]); i++) {
+        ErtsSysMsgQ *sm;
+        for (sm = smq[i]; sm; sm = sm->next) {
+            Eterm to;
+            switch (sm->type) {
+            case SYS_MSG_TYPE_SYSMON:
+                to = erts_get_system_monitor();
+                break;
+            case SYS_MSG_TYPE_SYSPROF:
+                to = erts_get_system_profile();
+                break;
+            case SYS_MSG_TYPE_ERRLGR:
+                to = erts_get_system_logger();
+                break;
+            default:
+                to = NIL;
+                break;
+            }
+            if (is_value(sm->msg))
+                (*func)(sm->from, to, sm->msg, sm->bp);
+        }
     }
-    erts_mtx_unlock(&smq_mtx);
 }
 
 

@@ -28,7 +28,7 @@
 	 stop/0,
 	 dump/0, dump_data/0,
 	 start_profiling/1, start_profiling/2, start_profiling/3,
-	 profile/1, profile/2, profile/3, profile/4, profile/5,
+	 profile/1, profile/2, profile/3, profile/4, profile/5, profile/6,
 	 stop_profiling/0,
 	 analyze/0, analyze/1, analyze/2, analyze/4,
 	 log/1]).
@@ -398,7 +398,7 @@ collect_bpd() ->
     collect_bpd([M || M <- [element(1, Mi) || Mi <- code:all_loaded()], M =/= ?MODULE]).
 
 collect_bpd(Ms) when is_list(Ms) ->
-    collect_bpdf(collect_mfas(Ms) ++ erlang:system_info(snifs)).
+    collect_bpdf(collect_mfas(Ms)).
 
 collect_mfas(Ms) ->
     lists:foldl(fun

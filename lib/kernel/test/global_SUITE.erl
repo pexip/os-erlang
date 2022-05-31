@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 1997-2018. All Rights Reserved.
+%% Copyright Ericsson AB 1997-2019. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -43,7 +43,7 @@
 -export([global_load/3, lock_global/2, lock_global2/2]).
 
 -export([]).
--export([mass_spawn/1]).
+-export([init_mass_spawn/1]).
 
 -export([start_tracer/0, stop_tracer/0, get_trace/0]).
 
@@ -2512,8 +2512,10 @@ re_register_name(Config) when is_list(Config) ->
     Me = self(),
     Pid1 = spawn(fun() -> proc(Me) end),
     yes = global:register_name(name, Pid1),
+    wait_for_monitor(Pid1),
     Pid2 = spawn(fun() -> proc(Me) end),
     _ = global:re_register_name(name, Pid2),
+    wait_for_monitor(Pid2),
     Pid2 ! die,
     Pid1 ! die,
     receive {Pid1, MonitoredBy1} -> [] = MonitoredBy1 end,
@@ -2521,6 +2523,15 @@ re_register_name(Config) when is_list(Config) ->
     _ = global:unregister_name(name),
     init_condition(Config),
     ok.
+
+wait_for_monitor(Pid) ->
+    case process_info(Pid, monitored_by) of
+        {monitored_by, []} ->
+            timer:sleep(1),
+            wait_for_monitor(Pid);
+        {monitored_by, [_]} ->
+            ok
+    end.
 
 proc(Parent) ->
     receive die -> ok end,
@@ -3727,13 +3738,17 @@ start_node(Name, How, Config) ->
 start_node(Name0, How, Args, Config) ->
     Name = node_name(Name0, Config),
     Pa = filename:dirname(code:which(?MODULE)),
-    R = test_server:start_node(Name, How, [{args,
-					    Args ++ " " ++
-						"-kernel net_setuptime 100 "
-					    %%					    "-noshell "
-					    "-pa " ++ Pa},
-					   {linked, false}
-					  ]),
+    R = test_server:start_node(
+          Name, How, [{args,
+                       Args ++
+                           " -kernel net_setuptime 100 " ++
+                           %% Limit the amount of threads so that we
+                           %% don't run into the maximum allowed
+                           " +S 1 +SDio 1 " ++
+                           %% "-noshell "
+                           "-pa " ++ Pa},
+                      {linked, false}
+                     ]),
     %% {linked,false} only seems to work for slave nodes.
     %%    ct:sleep(1000),
     record_started_node(R).
@@ -3750,12 +3765,16 @@ start_node_rel(Name0, Rel, Config) ->
 			end,
     Env = [],
     Pa = filename:dirname(code:which(?MODULE)),
-    Res = test_server:start_node(Name, peer, 
-                                 [{args,
-                                   Compat ++ 
-				       " -kernel net_setuptime 100 "
-                                   " -pa " ++ Pa},
-                                  {erl, Release}] ++ Env),
+    Res = test_server:start_node(
+            Name, peer,
+            [{args,
+              Compat ++
+                  " -kernel net_setuptime 100 " ++
+                  %% Limit the amount of threads so that we
+                  %% don't run into the maximum allowed
+                  " +S 1 +SDio 1 " ++
+                  "-pa " ++ Pa},
+             {erl, Release}] ++ Env),
     record_started_node(Res).
 
 record_started_node({ok, Node}) ->
@@ -3876,7 +3895,7 @@ mass_death(Config) when is_list(Config) ->
     io:format("Nodes: ~p~n", [Nodes]),
     Ns = lists:seq(1, 40),
     %% Start processes with globally registered names on the nodes
-    {Pids,[]} = rpc:multicall(Nodes, ?MODULE, mass_spawn, [Ns]),
+    {Pids,[]} = rpc:multicall(Nodes, ?MODULE, init_mass_spawn, [Ns]),
     io:format("Pids: ~p~n", [Pids]),
     %% Wait...
     ct:sleep(10000),
@@ -3913,6 +3932,11 @@ wait_mass_death(Nodes, OrigNames, Then, Config) ->
 	    wait_mass_death(Nodes, OrigNames, Then, Config)
     end.
 
+init_mass_spawn(N) ->
+    Pid = mass_spawn(N),
+    unlink(Pid),
+    Pid.
+
 mass_spawn([]) ->
     ok;
 mass_spawn([N|T]) ->
@@ -3926,7 +3950,10 @@ mass_spawn([N|T]) ->
 		  Parent ! self(),
 		  loop()
 	  end),
-    receive Pid -> Pid end.
+    receive
+        Pid ->
+            Pid
+    end.
 
 mass_names([], _) ->
     [];

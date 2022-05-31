@@ -133,7 +133,7 @@ log(Log, Term) ->
 blog(Log, Bytes) ->
     req(Log, {log, external, [ensure_binary(Bytes)]}).
 
--spec log_terms(Log, TermList) -> ok | {error, Resaon :: log_error_rsn()} when
+-spec log_terms(Log, TermList) -> ok | {error, Reason :: log_error_rsn()} when
       Log :: log(),
       TermList :: [term()].
 log_terms(Log, Terms) ->
@@ -763,7 +763,7 @@ handle({From, {truncate, Head, F, A}}=Message, S) ->
 		ok ->
 		    erase(is_full),
 		    notify_owners({truncated, S#state.cnt}),
-		    N = if Head =:= none -> 0; true -> 1 end,
+		    N = if H =:= none -> 0; true -> 1 end,
 		    reply(From, ok, (state_ok(S))#state{cnt = N});
 		Error ->
 		    do_exit(S, From, Error, ?failure(Error, F, A))

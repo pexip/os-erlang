@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2018. All Rights Reserved.
+%% Copyright Ericsson AB 2018-2020. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -19,7 +19,7 @@
 %%
 -module(persistent_term).
 
--export([erase/1,get/0,get/1,info/0,put/2]).
+-export([erase/1,get/0,get/1,get/2,info/0,put/2]).
 
 -type key() :: term().
 -type value() :: term().
@@ -39,6 +39,13 @@ get() ->
       Key :: key(),
       Value :: value().
 get(_Key) ->
+    erlang:nif_error(undef).
+
+-spec get(Key, Default) -> Value when
+      Key :: key(),
+      Default :: value(),
+      Value :: value().
+get(_Key, _Default) ->
     erlang:nif_error(undef).
 
 -spec info() -> Info when

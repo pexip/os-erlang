@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2011-2018. All Rights Reserved.
+%% Copyright Ericsson AB 2011-2020. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -22,12 +22,12 @@
 -module(inet_tls_dist).
 
 -export([childspecs/0]).
--export([listen/1, accept/1, accept_connection/5,
-	 setup/5, close/1, select/1, is_node_name/1]).
+-export([listen/2, accept/1, accept_connection/5,
+	 setup/5, close/1, select/1, address/0, is_node_name/1]).
 
 %% Generalized dist API
--export([gen_listen/2, gen_accept/2, gen_accept_connection/6,
-	 gen_setup/6, gen_close/2, gen_select/2]).
+-export([gen_listen/3, gen_accept/2, gen_accept_connection/6,
+	 gen_setup/6, gen_close/2, gen_select/2, gen_address/1]).
 
 -export([nodelay/0]).
 
@@ -41,6 +41,7 @@
 -include_lib("public_key/include/public_key.hrl").
 
 -include("ssl_api.hrl").
+-include_lib("kernel/include/logger.hrl").
 
 %% -------------------------------------------------------------------------
 
@@ -61,6 +62,14 @@ gen_select(Driver, Node) ->
         _ ->
             false
     end.
+
+%% ------------------------------------------------------------
+%% Get the address family that this distribution uses
+%% ------------------------------------------------------------
+address() ->
+    gen_address(inet_tcp).
+gen_address(Driver) ->
+    inet_tcp_dist:gen_address(Driver).
 
 %% -------------------------------------------------------------------------
 
@@ -131,8 +140,8 @@ f_recv(SslSocket, Length, Timeout) ->
 f_setopts_pre_nodeup(_SslSocket) ->
     ok.
 
-f_setopts_post_nodeup(_SslSocket) ->
-    ok.
+f_setopts_post_nodeup(SslSocket) ->
+    ssl:setopts(SslSocket, [nodelay()]).
 
 f_getll(DistCtrl) ->
     {ok, DistCtrl}.
@@ -192,13 +201,13 @@ split_stat([], R, W, P) ->
 
 %% -------------------------------------------------------------------------
 
-listen(Name) ->
-    gen_listen(inet_tcp, Name).
+listen(Name, Host) ->
+    gen_listen(inet_tcp, Name, Host).
 
-gen_listen(Driver, Name) ->
-    case inet_tcp_dist:gen_listen(Driver, Name) of
+gen_listen(Driver, Name, Host) ->
+    case inet_tcp_dist:gen_listen(Driver, Name, Host) of
         {ok, {Socket, Address, Creation}} ->
-            inet:setopts(Socket, [{packet, 4}]),
+            inet:setopts(Socket, [{packet, 4}, {nodelay, true}]),
             {ok, {Socket, Address#net_address{protocol=tls}, Creation}};
         Other ->
             Other
@@ -225,7 +234,7 @@ accept_loop(Driver, Listen, Kernel) ->
                 true ->
                     accept_loop(Driver, Listen, Kernel, Socket);
                 {false,IP} ->
-		    error_logger:error_msg(
+		    ?LOG_ERROR(
                       "** Connection attempt from "
                       "disallowed IP ~w ** ~n", [IP]),
 		    ?shutdown2(no_node, trace({disallowed, IP}))
@@ -260,7 +269,7 @@ accept_loop(Driver, Listen, Kernel, Socket) ->
         {error, {options, _}} = Error ->
             %% Bad options: that's probably our fault.
             %% Let's log that.
-            error_logger:error_msg(
+            ?LOG_ERROR(
               "Cannot accept TLS distribution connection: ~s~n",
               [ssl:format_error(Error)]),
             gen_tcp:close(Socket),
@@ -436,7 +445,7 @@ allowed_nodes(SslSocket, Allowed) ->
                           PeerCert, allowed_hosts(Allowed), PeerIP)
                     of
                         [] ->
-                            error_logger:error_msg(
+                            ?LOG_ERROR(
                               "** Connection attempt from "
                               "disallowed node(s) ~p ** ~n", [PeerIP]),
                             ?shutdown2(
@@ -480,22 +489,25 @@ allowed_nodes(PeerCert, Allowed, PeerIP, Node, Host) ->
             allowed_nodes(PeerCert, Allowed, PeerIP)
     end.
 
-
-
 setup(Node, Type, MyNode, LongOrShortNames, SetupTime) ->
     gen_setup(inet_tcp, Node, Type, MyNode, LongOrShortNames, SetupTime).
 
 gen_setup(Driver, Node, Type, MyNode, LongOrShortNames, SetupTime) ->
     Kernel = self(),
     monitor_pid(
-      spawn_opt(
-        fun() ->
-                do_setup(
-                  Driver, Kernel, Node, Type,
-                  MyNode, LongOrShortNames, SetupTime)
-        end,
-        [link, {priority, max}])).
+      spawn_opt(setup_fun(Driver, Kernel, Node, Type, MyNode, LongOrShortNames, SetupTime),
+                [link, {priority, max}])).
 
+-spec setup_fun(_,_,_,_,_,_,_) -> fun(() -> no_return()).
+setup_fun(Driver, Kernel, Node, Type, MyNode, LongOrShortNames, SetupTime) ->
+    fun() ->
+            do_setup(
+              Driver, Kernel, Node, Type,
+              MyNode, LongOrShortNames, SetupTime)
+    end.
+
+
+-spec do_setup(_,_,_,_,_,_,_) -> no_return().
 do_setup(Driver, Kernel, Node, Type, MyNode, LongOrShortNames, SetupTime) ->
     {Name, Address} = split_node(Driver, Node, LongOrShortNames),
     ErlEpmd = net_kernel:epmd_module(),
@@ -520,13 +532,15 @@ do_setup(Driver, Kernel, Node, Type, MyNode, LongOrShortNames, SetupTime) ->
                trace({getaddr_failed, Driver, Address, Other}))
     end.
 
+-spec do_setup_connect(_,_,_,_,_,_,_,_,_,_) -> no_return().
+
 do_setup_connect(Driver, Kernel, Node, Address, Ip, TcpPort, Version, Type, MyNode, Timer) ->
     Opts =  trace(connect_options(get_ssl_options(client))),
     dist_util:reset_timer(Timer),
     case ssl:connect(
         Address, TcpPort,
         [binary, {active, false}, {packet, 4},
-            Driver:family(), nodelay()] ++ Opts,
+            Driver:family(), {nodelay, true}] ++ Opts,
         net_kernel:connecttime()) of
     {ok, #sslsocket{pid = [_, DistCtrl| _]} = SslSocket} ->
             _ = monitor_pid(DistCtrl),
@@ -564,7 +578,7 @@ gen_close(Driver, Socket) ->
 %% Determine if EPMD module supports address resolving. Default
 %% is to use inet_tcp:getaddr/2.
 %% ------------------------------------------------------------
-get_address_resolver(EpmdModule, Driver) ->
+get_address_resolver(EpmdModule, _Driver) ->
     case erlang:function_exported(EpmdModule, address_please, 3) of
         true -> {EpmdModule, address_please};
         _    -> {erl_epmd, address_please}
@@ -690,12 +704,12 @@ split_node(Driver, Node, LongOrShortNames) ->
         {node, Name, Host} ->
 	    check_node(Driver, Node, Name, Host, LongOrShortNames);
 	{host, _} ->
-	    error_logger:error_msg(
+	    ?LOG_ERROR(
               "** Nodename ~p illegal, no '@' character **~n",
               [Node]),
 	    ?shutdown2(Node, trace({illegal_node_n@me, Node}));
 	_ ->
-	    error_logger:error_msg(
+	    ?LOG_ERROR(
               "** Nodename ~p illegal **~n", [Node]),
 	    ?shutdown2(Node, trace({illegal_node_name, Node}))
     end.
@@ -707,7 +721,7 @@ check_node(Driver, Node, Name, Host, LongOrShortNames) ->
 		{ok, _} ->
 		    {Name, Host};
 		_ ->
-		    error_logger:error_msg(
+		    ?LOG_ERROR(
                       "** System running to use "
                       "fully qualified hostnames **~n"
                       "** Hostname ~s is illegal **~n",
@@ -715,7 +729,7 @@ check_node(Driver, Node, Name, Host, LongOrShortNames) ->
 		    ?shutdown2(Node, trace({not_longnames, Host}))
 	    end;
 	[_,_|_] when LongOrShortNames =:= shortnames ->
-	    error_logger:error_msg(
+	    ?LOG_ERROR(
               "** System NOT running to use "
               "fully qualified hostnames **~n"
               "** Hostname ~s is illegal **~n",
@@ -752,8 +766,8 @@ nodelay() ->
 
 get_ssl_options(Type) ->
     try ets:lookup(ssl_dist_opts, Type) of
-        [{Type, Opts}] ->
-            [{erl_dist, true} | Opts];
+        [{Type, Opts0}] ->
+            [{erl_dist, true} | dist_defaults(Opts0)];
         _ ->
             get_ssl_dist_arguments(Type)
     catch
@@ -764,11 +778,18 @@ get_ssl_options(Type) ->
 get_ssl_dist_arguments(Type) ->
     case init:get_argument(ssl_dist_opt) of
 	{ok, Args} ->
-	    [{erl_dist, true} | ssl_options(Type, lists:append(Args))];
+	    [{erl_dist, true} | dist_defaults(ssl_options(Type, lists:append(Args)))];
 	_ ->
 	    [{erl_dist, true}]
     end.
 
+dist_defaults(Opts) ->
+    case proplists:get_value(versions, Opts, undefined) of
+        undefined ->
+            [{versions, ['tlsv1.2']} | Opts];
+        _ ->
+            Opts
+    end.
 
 ssl_options(_Type, []) ->
     [];
@@ -845,13 +866,13 @@ monitor_pid(Pid) ->
     %%          MRef = erlang:monitor(process, Pid),
     %%          receive
     %%              {'DOWN', MRef, _, _, normal} ->
-    %%                  error_logger:error_report(
-    %%                    [dist_proc_died,
+    %%                  ?LOG_ERROR(
+    %%                    [{slogan, dist_proc_died},
     %%                     {reason, normal},
     %%                     {pid, Pid}]);
     %%              {'DOWN', MRef, _, _, Reason} ->
-    %%                  error_logger:info_report(
-    %%                    [dist_proc_died,
+    %%                  ?LOG_NOTICE(
+    %%                    [{slogan, dist_proc_died},
     %%                     {reason, Reason},
     %%                     {pid, Pid}])
     %%          end

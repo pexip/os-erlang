@@ -1,7 +1,7 @@
 /*
  * %CopyrightBegin%
  *
- * Copyright Ericsson AB 2008-2016. All Rights Reserved.
+ * Copyright Ericsson AB 2008-2020. All Rights Reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -766,9 +766,16 @@ class EwxHtmlWindow : public wxHtmlWindow {
  EwxHtmlWindow() : wxHtmlWindow() {};
 };
 
+
 class EwxTaskBarIcon : public wxTaskBarIcon {
  public: ~EwxTaskBarIcon() {((WxeApp *)wxTheApp)->clearPtr(this);};
  EwxTaskBarIcon() : wxTaskBarIcon() {};
+
+ int createPopupMenu;
+ ErlDrvTermData port;
+
+ private:
+ virtual wxMenu* CreatePopupMenu();
 };
 
 class EwxLocale : public wxLocale {
@@ -798,4 +805,12 @@ class EwxDCOverlay : public wxDCOverlay {
  EwxDCOverlay(wxOverlay& overlay,wxWindowDC * dc,int x,int y,int width,int height) : wxDCOverlay(overlay,dc,x,y,width,height) {};
  EwxDCOverlay(wxOverlay& overlay,wxWindowDC * dc) : wxDCOverlay(overlay,dc) {};
 };
+
+#if wxUSE_GRAPHICS_CONTEXT
+class EwxGCDC : public wxGCDC {
+ public: ~EwxGCDC() {((WxeApp *)wxTheApp)->clearPtr(this);};
+ EwxGCDC(const wxWindowDC& dc) : wxGCDC(dc) {};
+ EwxGCDC() : wxGCDC() {};
+};
+#endif // wxUSE_GRAPHICS_CONTEXT
 

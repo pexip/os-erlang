@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2012-2018. All Rights Reserved.
+%% Copyright Ericsson AB 2012-2020. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -47,7 +47,8 @@
 -export([is_process_executing_dirty/1]).
 -export([dirty_process_handle_signals/1]).
 
--export([release_literal_area_switch/0]).
+-export([release_literal_area_switch/0, wait_release_literal_area_switch/1]).
+
 -export([purge_module/2]).
 
 -export([flush_monitor_messages/3]).
@@ -66,8 +67,9 @@
 -export([dist_ctrl_put_data/2]).
 
 -export([get_dflags/0]).
+-export([get_creation/0]).
 -export([new_connection/1]).
--export([abort_connection/2]).
+-export([abort_pending_connection/2]).
 
 -export([scheduler_wall_time/1, system_flag_scheduler_wall_time/1,
          gather_sched_wall_time_result/1,
@@ -88,7 +90,7 @@
 
 -export([process_flag/3]).
 
--export([create_dist_channel/4]).
+-export([create_dist_channel/3]).
 
 -export([erase_persistent_terms/0]).
 
@@ -98,6 +100,15 @@
          counters_put/3, counters_info/1]).
 
 -export([spawn_system_process/3]).
+
+-export([ets_lookup_binary_info/2, ets_super_user/1, ets_info_binary/1,
+         ets_raw_first/1, ets_raw_next/2]).
+
+-export([get_internal_state_blocked/1]).
+
+-export([spawn_request/4, spawn_init/1, dist_spawn_request/4, dist_spawn_init/1]).
+
+-export([crasher/6]).
 
 %%
 %% Await result of send to port
@@ -344,6 +355,15 @@ dirty_process_handle_signals(_Pid) ->
 release_literal_area_switch() ->
     erlang:nif_error(undefined).
 
+-spec wait_release_literal_area_switch(WaitMsg) -> 'true' | 'false' when
+      WaitMsg :: term().
+
+wait_release_literal_area_switch(WaitMsg) ->
+    %% release_literal_area_switch() traps to here
+    %% when it needs to wait
+    receive WaitMsg -> ok end,
+    erts_internal:release_literal_area_switch().
+
 -spec purge_module(Module, Op) -> boolean() when
       Module :: module(),
       Op :: 'prepare' | 'prepare_on_load' | 'abort' | 'complete'.
@@ -549,16 +569,20 @@ dist_ctrl_put_data(DHandle, IoList) ->
 get_dflags() ->
     erlang:nif_error(undefined).
 
+-spec erts_internal:get_creation() -> pos_integer().
+get_creation() ->
+    erlang:nif_error(undefined).
+
 -spec erts_internal:new_connection(Node) -> ConnId when
       Node :: atom(),
       ConnId :: {integer(), erlang:dist_handle()}.
 new_connection(_Node) ->
     erlang:nif_error(undefined).
 
--spec erts_internal:abort_connection(Node, ConnId) -> boolean() when
+-spec erts_internal:abort_pending_connection(Node, ConnId) -> boolean() when
       Node :: atom(),
       ConnId :: {integer(), erlang:dist_handle()}.
-abort_connection(_Node, _ConnId) ->
+abort_pending_connection(_Node, _ConnId) ->
     erlang:nif_error(undefined).
 
 %% Scheduler wall time
@@ -688,17 +712,18 @@ process_display(_Pid, _Type) ->
 process_flag(_Pid, _Flag, _Value) ->
     erlang:nif_error(undefined).
 
--spec create_dist_channel(Node, DistCtrlr, Flags, Ver) -> Result when
+-spec create_dist_channel(Node, DistCtrlr, {Flags, Ver, Cr}) -> Result when
       Node :: atom(),
       DistCtrlr :: port() | pid(),
       Flags :: integer(),
       Ver :: integer(),
+      Cr :: pos_integer(),
       Result :: {'ok', erlang:dist_handle()}
               | {'message', reference()}
               | 'badarg'
               | 'system_limit'.
                                  
-create_dist_channel(_Node, _DistCtrlr, _Flags, _Ver) ->
+create_dist_channel(_Node, _DistCtrlr, _Tpl) ->
     erlang:nif_error(undefined).
 
 -spec erase_persistent_terms() -> 'ok'.
@@ -735,3 +760,165 @@ counters_info(_Ref) ->
     Args :: list().
 spawn_system_process(_Mod, _Func, _Args) ->
     erlang:nif_error(undefined).
+
+
+%%
+%% ETS info internals...
+%%
+
+-spec ets_lookup_binary_info(Tab, Key) -> BinInfo when
+      Tab :: ets:tab(),
+      Key :: term(),
+      BinInfo :: [{non_neg_integer(), non_neg_integer(), non_neg_integer()}].
+
+ets_lookup_binary_info(_Tab, _Key) ->
+    erlang:nif_error(undef).
+
+-spec ets_super_user(Bool) -> 'ok' when
+      Bool :: boolean().
+
+ets_super_user(_Bool) ->
+    erlang:nif_error(undef).
+
+-spec ets_raw_first(Tab) -> term() when
+      Tab :: ets:tab().
+
+ets_raw_first(_Tab) ->
+    erlang:nif_error(undef).
+    
+-spec ets_raw_next(Tab, Key) -> term() when
+      Tab :: ets:tab(),
+      Key :: term().
+
+ets_raw_next(_Tab, _Key) ->
+    erlang:nif_error(undef).
+
+-spec ets_info_binary(Tab) -> BinInfo when
+      Tab :: ets:tab(),
+      BinInfo :: [{non_neg_integer(), non_neg_integer(), non_neg_integer()}].
+
+ets_info_binary(Tab) ->
+    try
+        erts_internal:ets_super_user(true),
+        ets:safe_fixtable(Tab, true),
+        ets_info_binary_iter(Tab, erts_internal:ets_raw_first(Tab), [])
+    catch
+        C:R:S ->
+            ets_info_binary_error(Tab, C, R, S)
+    after
+        ets:safe_fixtable(Tab, false),
+        erts_internal:ets_super_user(false)
+    end.
+    
+ets_info_binary_error(Tab, C, R, []) ->
+    erlang:raise(C, R, [{ets, info, [Tab, binary], []}]);
+ets_info_binary_error(Tab, C, R, [SF|SFs]) when
+      element(1, SF) == erts_internal,
+      element(2, SF) == ets_info_binary ->
+    erlang:raise(C, R, [{ets, info, [Tab, binary], []}|SFs]);
+ets_info_binary_error(Tab, C, R, [_SF|SFs]) ->
+    ets_info_binary_error(Tab, C, R, SFs).
+
+ets_info_binary_iter(_Tab, '$end_of_table', Acc) ->
+    Acc;
+ets_info_binary_iter(Tab, Key, Acc) ->
+    NewAcc = case erts_internal:ets_lookup_binary_info(Tab, Key) of
+                 [] -> Acc;
+                 [BI] -> [BI|Acc];
+                 [_|_] = BIL -> BIL ++ Acc
+             end,
+    ets_info_binary_iter(Tab, erts_internal:ets_raw_next(Tab, Key), NewAcc).
+
+-spec get_internal_state_blocked(Arg :: term()) -> term().
+
+get_internal_state_blocked(Arg) ->
+    erlang:system_flag(multi_scheduling, block),
+    Result = try
+                 erts_debug:get_internal_state({Arg,
+                                                blocked})
+             after
+                 erlang:system_flag(multi_scheduling, unblock)
+             end,
+    Result.
+
+-spec spawn_request(Module, Function, Args, Opts) -> Res when
+      Module :: module(),
+      Function :: atom(),
+      Args :: [term()],
+      Opts :: [term()],
+      Res :: reference() | 'badarg'.
+
+spawn_request(_Module, _Function, _Args, _Opts) ->
+    erlang:nif_error(undef).
+
+-spec spawn_init({Module, Function, Args}) -> Res when
+      Module :: module(),
+      Function :: atom(),
+      Args :: [term()],
+      Res :: term().
+
+spawn_init({M, F, A}) ->
+    apply(M, F, A).
+
+-spec dist_spawn_request(Node, MFA, Opts, spawn_request) -> Res when
+      Node :: node(),
+      MFA :: {Module, Function, Args},
+      Module :: module(),
+      Function :: atom(),
+      Args :: [term()],
+      Opts :: [term()],
+      Res :: reference() | 'badarg';
+                        (Node, MFA, Opts, spawn_opt) -> Res when
+      Node :: node(),
+      MFA :: {Module, Function, Args},
+      Module :: module(),
+      Function :: atom(),
+      Args :: [term()],
+      Opts :: [term()],
+      Res :: {reference(), boolean()} | 'badarg'.
+
+dist_spawn_request(_Node, _MFA, _Opts, _Type) ->
+    erlang:nif_error(undef).
+
+-spec dist_spawn_init(MFA) -> Res when
+      MFA :: {Module, Function, non_neg_integer()},
+      Module :: module(),
+      Function :: atom(),
+      Res :: term().
+
+dist_spawn_init(MFA) ->
+    %%
+    %% The argument list is passed as a message
+    %% to the newly created process. This since
+    %% it might be large and require a substantial
+    %% amount of work to decode. This way we put
+    %% this work on the newly created process
+    %% (which can execute in parallel with all
+    %% other tasks) instead of on the distribution
+    %% channel code which is a bottleneck in the
+    %% system.
+    %% 
+    %% erl_create_process() ensures that the
+    %% argument list to use in apply is
+    %% guaranteed to be the first message in the
+    %% message queue.
+    %%
+    {M, F, _NoA} = MFA,
+    receive
+        A ->
+            erlang:apply(M, F, A)
+    end.
+
+%%
+%% Failed distributed spawn(), spawn_link(), spawn_monitor(), spawn_opt()
+%% spawns a dummy process executing the crasher/6 function...
+%%
+
+crasher(Node,Mod,Fun,Args,[],Reason) ->
+    error_logger:warning_msg("** Can not start ~w:~w,~w on ~w **~n",
+			     [Mod,Fun,Args,Node]),
+    erlang:exit(Reason);
+crasher(Node,Mod,Fun,Args,Opts,Reason) ->
+    error_logger:warning_msg("** Can not start ~w:~w,~w (~w) on ~w **~n",
+			     [Mod,Fun,Args,Opts,Node]),
+    erlang:exit(Reason).

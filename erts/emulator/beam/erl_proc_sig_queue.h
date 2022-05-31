@@ -1,7 +1,7 @@
 /*
  * %CopyrightBegin%
  * 
- * Copyright Ericsson AB 2018. All Rights Reserved.
+ * Copyright Ericsson AB 2018-2020. All Rights Reserved.
  * 
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -89,6 +89,7 @@
 #endif
 
 struct erl_mesg;
+struct erl_dist_external;
 
 typedef struct {
     struct erl_mesg *next;
@@ -212,6 +213,38 @@ erts_proc_sig_send_exit(Process *c_p, Eterm from, Eterm to,
 
 /**
  *
+ * @brief Send an exit signal to a process.
+ *
+ * This function is used instead of erts_proc_sig_send_link_exit()
+ * when the signal arrives via the distribution and
+ * therefore no link structure is available.
+ *
+ * @param[in]     dep           Distribution entry of channel
+ *                              that the signal arrived on.
+ *
+ * @param[in]     from          Identifier of sender.
+ *
+ * @param[in]     to            Identifier of receiver.
+ *
+ * @param[in]     dist_ext      The exit reason in external term format
+ *
+ * @param[in]     hfrag         Heap frag with trace token and dist_ext
+ *                              iff available, otherwise NULL.
+ *
+ * @param[in]     reason        Exit reason.
+ *
+ * @param[in]     token         Seq trace token.
+ *
+ */
+void
+erts_proc_sig_send_dist_exit(DistEntry *dep,
+                             Eterm from, Eterm to,
+                             ErtsDistExternal *dist_ext,
+                             ErlHeapFragment *hfrag,
+                             Eterm reason, Eterm token);
+
+/**
+ *
  * @brief Send an exit signal due to broken link to a process.
  *
  *
@@ -282,7 +315,7 @@ erts_proc_sig_send_unlink(Process *c_p, ErtsLink *lnk);
  *
  * This function is used instead of erts_proc_sig_send_link_exit()
  * when the signal arrives via the distribution and
- * no link structure is available.
+ * therefore no link structure is available.
  *
  * @param[in]     dep           Distribution entry of channel
  *                              that the signal arrived on.
@@ -290,6 +323,11 @@ erts_proc_sig_send_unlink(Process *c_p, ErtsLink *lnk);
  * @param[in]     from          Identifier of sender.
  *
  * @param[in]     to            Identifier of receiver.
+ *
+ * @param[in]     dist_ext      The exit reason in external term format
+ *
+ * @param[in]     hfrag         Heap frag with trace token and dist_ext
+ *                              iff available, otherwise NULL.
  *
  * @param[in]     reason        Exit reason.
  *
@@ -299,6 +337,8 @@ erts_proc_sig_send_unlink(Process *c_p, ErtsLink *lnk);
 void
 erts_proc_sig_send_dist_link_exit(struct dist_entry_ *dep,
                                   Eterm from, Eterm to,
+                                  ErtsDistExternal *dist_ext,
+                                  ErlHeapFragment *hfrag,
                                   Eterm reason, Eterm token);
 
 /**
@@ -307,7 +347,7 @@ erts_proc_sig_send_dist_link_exit(struct dist_entry_ *dep,
  *
  * This function is used instead of erts_proc_sig_send_unlink()
  * when the signal arrives via the distribution and
- * no link structure is available.
+ * therefore no link structure is available.
  *
  * @param[in]     dep           Distribution entry of channel
  *                              that the signal arrived on.
@@ -380,7 +420,7 @@ erts_proc_sig_send_monitor(ErtsMonitor *mon, Eterm to);
  *
  * This function is used instead of erts_proc_sig_send_monitor_down()
  * when the signal arrives via the distribution and
- * no link structure is available.
+ * therefore no monitor structure is available.
  *
  * @param[in]     dep           Pointer to distribution entry
  *                              of channel that the signal
@@ -392,12 +432,19 @@ erts_proc_sig_send_monitor(ErtsMonitor *mon, Eterm to);
  *
  * @param[in]     to            Identifier of receiver.
  *
+ * @param[in]     dist_ext      The exit reason in external term format
+ *
+ * @param[in]     hfrag         Heap frag with trace token and dist_ext
+ *                              iff available, otherwise NULL.
+ *
  * @param[in]     reason        Exit reason.
  *
  */
 void
 erts_proc_sig_send_dist_monitor_down(DistEntry *dep, Eterm ref,
                                      Eterm from, Eterm to,
+                                     ErtsDistExternal *dist_ext,
+                                     ErlHeapFragment *hfrag,
                                      Eterm reason);
 
 /**
@@ -659,6 +706,14 @@ erts_proc_sig_send_rpc_request(Process *c_p,
                                Eterm (*func)(Process *, void *, int *, ErlHeapFragment **),
                                void *arg);
 
+int
+erts_proc_sig_send_dist_spawn_reply(Eterm node,
+                                    Eterm ref,
+                                    Eterm to,
+                                    ErtsLink *lnk,
+                                    Eterm result,
+                                    Eterm token);
+
 /*
  * End of send operations of currently supported process signals.
  */
@@ -740,7 +795,9 @@ erts_proc_sig_handle_incoming(Process *c_p, erts_aint32_t *statep,
  *                              queue.
  */
 int
-erts_proc_sig_handle_exit(Process *c_p, int *redsp);
+erts_proc_sig_handle_exit(Process *c_p, Sint *redsp,
+                          ErtsMonitor **pend_spawn_mon_pp,
+                          Eterm reason);
 
 /**
  *
@@ -962,6 +1019,34 @@ void
 erts_proc_sig_handle_pending_suspend(Process *c_p);
 
 /**
+ *
+ * @brief Decode the reason term in an external signal
+ *
+ * Any distributed signal with a payload only has the control
+ * message decoded by the dist entry. The final decode of the
+ * payload is done by the process when it inspects the signal
+ * by calling this function.
+ *
+ * This functions handles both messages and link/monitor exits.
+ *
+ * Return true if the decode was successful, false otherwise.
+ *
+ * @param[in]   c_p             Pointer to executing process
+ *
+ * @param[in]   proc_lock       Locks held by process. Should always be MAIN.
+ *
+ * @param[in]   msgp            The signal to decode
+ *
+ * @param[in]   force_off_heap  If the term should be forced to be off-heap
+ */
+int
+erts_proc_sig_decode_dist(Process *proc, ErtsProcLocks proc_locks,
+                          ErtsMessage *msgp, int force_off_heap);
+
+ErtsDistExternal *
+erts_proc_sig_get_external(ErtsMessage *msgp);
+
+/**
  * @brief Initialize this functionality
  */
 void erts_proc_sig_queue_init(void);
@@ -970,8 +1055,9 @@ void
 erts_proc_sig_debug_foreach_sig(Process *c_p,
                                 void (*msg_func)(ErtsMessage *, void *),
                                 void (*oh_func)(ErlOffHeap *, void *),
-                                void (*mon_func)(ErtsMonitor *, void *),
-                                void (*lnk_func)(ErtsLink *, void *),
+                                ErtsMonitorFunc mon_func,
+                                ErtsLinkFunc lnk_func,
+                                void (*ext_func)(ErtsDistExternal *, void *),
                                 void *arg);
 
 extern Process *erts_dirty_process_signal_handler;
@@ -989,8 +1075,7 @@ erts_proc_sig_fetch(Process *proc)
     Sint res = 0;
     ErtsSignal *sig;
 
-    ERTS_LC_ASSERT(erts_thr_progress_is_blocking()
-                   || ERTS_PROC_IS_EXITING(proc)
+    ERTS_LC_ASSERT(ERTS_PROC_IS_EXITING(proc)
                    || ((erts_proc_lc_my_proc_locks(proc)
                         & (ERTS_PROC_LOCK_MAIN
                            | ERTS_PROC_LOCK_MSGQ))
@@ -1040,8 +1125,12 @@ erts_proc_notify_new_sig(Process* rp, erts_aint32_t state,
         state = erts_proc_sys_schedule(rp, state, enable_flag);
     }
 
-    if (state & (ERTS_PSFLG_DIRTY_RUNNING
-                 | ERTS_PSFLG_DIRTY_RUNNING_SYS)) {
+    if (state & ERTS_PSFLG_DIRTY_RUNNING) {
+        /*
+         * We ignore ERTS_PSFLG_DIRTY_RUNNING_SYS. For
+         * more info see erts_execute_dirty_system_task()
+         * in erl_process.c.
+         */
         erts_make_dirty_proc_handled(rp->common.id, state, -1);
     }
 }

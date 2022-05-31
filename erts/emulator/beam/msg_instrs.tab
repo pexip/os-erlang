@@ -2,7 +2,7 @@
 //
 // %CopyrightBegin%
 //
-// Copyright Ericsson AB 2017-2018. All Rights Reserved.
+// Copyright Ericsson AB 2017-2020. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -105,6 +105,7 @@ i_loop_rec(Dest) {
         $SET_CP_I_ABS(I);
         c_p->arity = 0;
         c_p->current = NULL;
+        c_p->fcalls = FCALLS;
         FCALLS -= erts_proc_sig_receive_helper(c_p, FCALLS, neg_o_reds,
                                                &msgp, &get_out);
         SWAPIN;
@@ -137,8 +138,8 @@ i_loop_rec(Dest) {
 
     if (ERTS_UNLIKELY(ERTS_SIG_IS_EXTERNAL_MSG(msgp))) {
         FCALLS -= 10; /* FIXME: bump appropriate amount... */
-        SWAPOUT; /* erts_decode_dist_message() may write to heap... */
-        if (!erts_decode_dist_message(c_p, ERTS_PROC_LOCK_MAIN, msgp, 0)) {
+        SWAPOUT; /* erts_proc_sig_decode_dist() may write to heap... */
+        if (!erts_proc_sig_decode_dist(c_p, ERTS_PROC_LOCK_MAIN, msgp, 0)) {
             /*
              * A corrupt distribution message that we weren't able to decode;
              * remove it...
@@ -209,7 +210,8 @@ remove_message() {
             ASSERT(is_small(SEQ_TRACE_TOKEN_SERIAL(c_p)));
             ASSERT(is_small(SEQ_TRACE_TOKEN_LASTCNT(c_p)));
             ASSERT(is_small(SEQ_TRACE_TOKEN_FLAGS(c_p)));
-            ASSERT(is_pid(SEQ_TRACE_TOKEN_SENDER(c_p)));
+            ASSERT(is_pid(SEQ_TRACE_TOKEN_SENDER(c_p))
+                   || is_atom(SEQ_TRACE_TOKEN_SENDER(c_p)));
             c_p->seq_trace_lastcnt = unsigned_val(SEQ_TRACE_TOKEN_SERIAL(c_p));
             if (c_p->seq_trace_clock < unsigned_val(SEQ_TRACE_TOKEN_SERIAL(c_p))) {
                 c_p->seq_trace_clock = unsigned_val(SEQ_TRACE_TOKEN_SERIAL(c_p));

@@ -1,7 +1,7 @@
 #
 # %CopyrightBegin%
 #
-# Copyright Ericsson AB 1996-2018. All Rights Reserved.
+# Copyright Ericsson AB 1996-2020. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -112,6 +112,7 @@ MODULES= \
 	sets \
 	shell \
 	shell_default \
+	shell_docs \
 	slave \
 	sofs \
 	string \
@@ -133,7 +134,7 @@ HRL_FILES= \
 	../include/qlc.hrl \
 	../include/zip.hrl
 
-INTERNAL_HRL_FILES= dets.hrl erl_tar.hrl
+INTERNAL_HRL_FILES= dets.hrl erl_tar.hrl otp_internal.hrl
 
 ERL_FILES= $(MODULES:%=%.erl)
 
@@ -149,14 +150,22 @@ APPUP_FILE= stdlib.appup
 APPUP_SRC= $(APPUP_FILE).src
 APPUP_TARGET= $(EBIN)/$(APPUP_FILE)
 
+ifeq ($(TARGET),win32)
+  EXE_SUFFIX=.exe
+else
+  EXE_SUFFIX=
+endif
+
 # ----------------------------------------------------
 # FLAGS
 # ----------------------------------------------------
 
 ifeq ($(NATIVE_LIBS_ENABLED),yes)
 ERL_COMPILE_FLAGS += +native
+else
+ERL_COMPILE_FLAGS += -Werror
 endif
-ERL_COMPILE_FLAGS += -I../include -I../../kernel/include -Werror
+ERL_COMPILE_FLAGS += -I../include -I../../kernel/include
 
 # ----------------------------------------------------
 # Targets
@@ -205,7 +214,7 @@ $(APPUP_TARGET): $(APPUP_SRC) ../vsn.mk
 	$(vsn_verbose)sed -e 's;%VSN%;$(VSN);' $< > $@
 
 unicode_util.erl: ../uc_spec/*
-	escript ../uc_spec/gen_unicode_mod.escript
+	escript$(EXE_SUFFIX) ../uc_spec/gen_unicode_mod.escript
 
 # ----------------------------------------------------
 # Release Target
