@@ -15,7 +15,7 @@ Build-Conflicts: autoconf2.13, libwxgtk2.4-dev, libwxgtk2.6-dev, libwxgtk2.8-dev
 Homepage: http://www.erlang.org/
 Vcs-Browser: https://salsa.debian.org/erlang-team/packages/erlang
 Vcs-Git: https://salsa.debian.org/erlang-team/packages/erlang.git
-XS-Pexip-Upstream: http://ftp.debian.org/debian/ buster
+XS-Pexip-Upstream: http://deb.debian.org/debian/ bullseye
 
 Package: erlang-base
 Architecture: any
