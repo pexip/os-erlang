@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 1996-2018. All Rights Reserved.
+%% Copyright Ericsson AB 1996-2021. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -66,7 +66,16 @@ functions(Fs, Opts) ->
     lists:flatmap(fun ({Name, E}) -> function(Name, E, Opts) end, Fs).
 
 function(Name, #xmlElement{content = Es}, Opts) ->
-    TS = get_content(typespec, Es),
+    TSs = get_elem(typespec, Es),
+    case TSs of
+	[] ->
+	    spec_clause(Name, [], Opts);
+	[_|_] ->
+	    lists:concat([ spec_clause(Name, TS, Opts)
+			   || #xmlElement{content = TS} <- TSs ])
+    end.
+
+spec_clause(Name, TS, Opts) ->
     Spec = typespec(TS, Opts),
     [{spec,(Name
             ++ [?IND(2),{contract,Spec}]
@@ -309,6 +318,14 @@ app_fix(L, I) -> % a bit slow
         _ -> app_fix(L, I+1)
     end.
 
+%% Translate edoc absolute links to local links
+fix_mod_ref([{marker, "specs://" ++ HRef}], Opts) ->
+    case string:split(HRef,"/",all) of
+        %% We don't need to prefix with "app:" on the link
+        %% it will be added later anyway
+        [_App, "doc", ModRef] ->
+            fix_mod_ref([{marker,ModRef}], Opts)
+    end;
 %% Remove the file suffix from module references.
 fix_mod_ref(HRef, #opts{file_suffix = ""}) ->
     HRef;

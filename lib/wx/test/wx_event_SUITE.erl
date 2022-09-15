@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %% 
-%% Copyright Ericsson AB 2008-2018. All Rights Reserved.
+%% Copyright Ericsson AB 2008-2021. All Rights Reserved.
 %% 
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -610,7 +610,7 @@ white_box_check_event_handlers() ->
     {_,_,Server,_} = wx:get_env(),
     {status, _, _, [Env, _, _, _, Data]} = sys:get_status(Server),
     [_H, _data, {data, [{_, Record}]}] = Data,
-    {state, _Port1, _Port2, Users, [], CBs, _Next} = Record,
+    {state, _Port1, Users, [], CBs, _Next} = Record,
     {[{Pid, Evs} ||
 	 {Pid, {user, Evs}} <- gb_trees:to_list(Users),
 	 Evs =/= []], %% Ignore empty

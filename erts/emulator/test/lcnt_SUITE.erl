@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2017-2020. All Rights Reserved.
+%% Copyright Ericsson AB 2017-2021. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -195,6 +195,9 @@ remove_untoggleable_locks([{resource_monitors, _, _, _} | T]) ->
 remove_untoggleable_locks([{nif_load, _, _, _} | T]) ->
     remove_untoggleable_locks(T);
 remove_untoggleable_locks([{'esock.gcnt', _, _, _} | T]) ->
+    %% Global lock used by socket NIF
+    remove_untoggleable_locks(T);
+remove_untoggleable_locks([{'esock.protocols', _, _, _} | T]) ->
     %% Global lock used by socket NIF
     remove_untoggleable_locks(T);
 remove_untoggleable_locks([H | T]) ->

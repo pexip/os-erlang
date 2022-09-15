@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2004-2018. All Rights Reserved.
+%% Copyright Ericsson AB 2004-2021. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -34,7 +34,9 @@
 -define(NEW_PID_EXT,         $X).
 -define(NEW_PORT_EXT,        $Y).
 -define(NEWER_REFERENCE_EXT, $Z).
+-define(V4_PORT_EXT,        $x).
 
+-define(OLD_MAX_PIDS_PORTS, ((1 bsl 28) - 1)).
 
 -export([all/0, suite/0,groups/0,init_per_group/2,end_per_group/2,
 	 init_per_suite/1,
@@ -152,7 +154,12 @@ port_roundtrip(Config) when is_list(Config)->
     ThisNode = {node(), erlang:system_info(creation)},
     RemPorts = [mk_port({gurka@sallad, Cr}, Num)
 		|| Cr <- [1,2,3,4,16#adec0ded],
-		   Num <- [4711, 268435455]],
+		   Num <- [4711, 268435455]]
+    %% V4 ports
+        ++ [mk_port({gurka@sallad, Cr}, Num)
+            || Cr <- [17, 4711, 16#adec0ded],
+               Num <- [(1 bsl 47) bor (1 bsl 25),
+                       (1 bsl 57) bor (1 bsl 23)]],
     do_echo([hd(erlang:ports()),
 	     mk_port(ThisNode, 4711),
 	     mk_port(ThisNode, 268435455)
@@ -167,7 +174,8 @@ ref_roundtrip(Config) when is_list(Config)->
 	       || Cr <- [1,2,3,4,16#adec0ded],
 		  Words <- [[4711],
 			    [4711, 4711, 4711],
-			    [262143, 4294967295, 4294967295]]],
+			    [262143, 4294967295, 4294967295],
+                            [262143, 4294967295, 4294967294, 4294967293, 4294967292]]],
     do_echo([make_ref(),
 	     mk_ref(ThisNode, [4711]),
 	     mk_ref(ThisNode, [4711, 4711, 4711]),
@@ -409,19 +417,19 @@ unicode(Config) when is_list(Config) ->
 		    case L of
 			X -> ok;
 			_ ->
-			    ?t:fail({mismatch,Out,In})
+			    ct:fail({mismatch,Out,In})
 		    end;
 		(Echoer, {L,Tag}=Out, {Echoer,X,Tag}=In) ->
 		    case unicode:characters_to_binary(L, utf8) of
 			X -> ok;
 			_ ->
-			    ?t:fail({mismatch,Out,In})
+			    ct:fail({mismatch,Out,In})
 		    end;
 		(Echoer, {L}=Out, {Echoer,X}=In) ->
 		    case L of
 			X -> ok;
 			_ ->
-			    ?t:fail({mismatch,Out,In})
+			    ct:fail({mismatch,Out,In})
 		    end
 	    end, ["unicode"]).
 
@@ -448,14 +456,14 @@ unicode_list_to_string(Config) when is_list(Config) ->
 		    case L of
 			X -> ok;
 			_ ->
-			    ?t:fail({mismatch,Out,In})
+			    ct:fail({mismatch,Out,In})
 		    end;
 		(Echoer, {L,valid}=Out, {Echoer,X,_}=In) ->
 		    B = unicode:characters_to_binary(L, unicode, {utf16,big}),
 		    case [-D || <<D:16/big>> <= B] of
 			X -> ok;
 			_ ->
-			    ?t:fail({mismatch,Out,In})
+			    ct:fail({mismatch,Out,In})
 		    end
 	    end).
 
@@ -470,13 +478,13 @@ unicode_string_to_list(Config) when is_list(Config) ->
 		    case L of
 			X -> ok;
 			_ ->
-			    ?t:fail({mismatch,Out,In})
+			    ct:fail({mismatch,Out,In})
 		    end;
 		(Echoer, {L,valid}=Out, {Echoer,X,_}=In) ->
 		    case [-C || C <- L] of
 			X -> ok;
 			_ ->
-			    ?t:fail({mismatch,Out,In})
+			    ct:fail({mismatch,Out,In})
 		    end
 	    end, ["unicode"]).
 
@@ -588,7 +596,7 @@ connect(doc) -> [];
 connect(suite) -> [];
 connect(Config) when is_list(Config) ->
     WD = filename:dirname(code:which(?MODULE)),
-    {ok,Other} = ?t:start_node(make_name(), slave, [{args,"-pa "++WD}]),
+    {ok,Other} = test_server:start_node(make_name(), slave, [{args,"-pa "++WD}]),
     Action =
 	fun (Pid) ->
 		JName = node(Pid),
@@ -598,7 +606,7 @@ connect(Config) when is_list(Config) ->
 		    {Pid,Other,true} ->
 			ok;
 		    Unexpected1 ->
-			?t:fail({result,Unexpected1})
+			ct:fail({result,Unexpected1})
 		end,
 		Hidden = erlang:nodes(hidden),
 		Hidden = rpc:call(Other, erlang, nodes, [hidden]),
@@ -616,7 +624,7 @@ connect(Config) when is_list(Config) ->
 		    {Pid,Other,true} ->
 			ok;
 		    Unexpected2->
-			?t:fail({result,Unexpected2})
+			ct:fail({result,Unexpected2})
 		end,
 		Hidden = rpc:call(Other, erlang, nodes, [hidden])
 	end,
@@ -678,7 +686,7 @@ echo_loop(Cont, Echoer, OutTrans, InTrans, TermAcc)
 	Other ->
 	    io:format("echo_server_terms unexpected ~p: receive ~P~n",
 		      [self(),Other,10]),
-	    ?t:fail({unexpected, Other})
+	    ct:fail({unexpected, Other})
     end,
     echo_loop(Cont(), Echoer, OutTrans, InTrans, []).
 
@@ -693,7 +701,7 @@ check_terms(Echoer, [Term | Rest]) ->
 	Other ->
 	    io:format("check_terms unexpected ~p: receive ~P~n",
 		      [self(),Other,10]),
-	    ?t:fail({unexpected, Other})
+	    ct:fail({unexpected, Other})
     end;
 check_terms(_, []) ->
     ok.
@@ -719,9 +727,9 @@ run_server(Server, Config, Action, ExtraArgs) ->
 	       end),
     receive
 	{Server, JName, Pid} ->
-	    ?t:format("~w: ~p (~p)~n",
+	    test_server:format("~w: ~p (~p)~n",
 		      [Server, Pid, node(Pid)]),
-	    ?t:format("nodes(hidden): ~p~n",
+	    test_server:format("nodes(hidden): ~p~n",
 		      [nodes(hidden)]),
 	    Action(Pid),
 	    Pid ! bye,
@@ -730,7 +738,7 @@ run_server(Server, Config, Action, ExtraArgs) ->
 		    ok
 	    end;
 	Other ->
-	    ?t:fail({unexpected,Other})
+	    ct:fail({unexpected,Other})
     end.
 
 %%
@@ -743,6 +751,18 @@ make_name() ->
 		 ++ "-" ++ integer_to_list(A)
 		 ++ "-" ++ integer_to_list(B)
 		 ++ "-" ++ integer_to_list(C)).
+
+uint64_be(Uint) when is_integer(Uint), 0 =< Uint, Uint < 1 bsl 64 ->
+    [(Uint bsr 56) band 16#ff,
+     (Uint bsr 48) band 16#ff,
+     (Uint bsr 40) band 16#ff,
+     (Uint bsr 32) band 16#ff,
+     (Uint bsr 24) band 16#ff,
+     (Uint bsr 16) band 16#ff,
+     (Uint bsr 8) band 16#ff,
+     Uint band 16#ff];
+uint64_be(Uint) ->
+    exit({badarg, uint64_be, [Uint]}).
 
 uint32_be(Uint) when is_integer(Uint), 0 =< Uint, Uint < 1 bsl 32 ->
     [(Uint bsr 24) band 16#ff,
@@ -789,17 +809,24 @@ mk_pid({NodeNameExt, Creation}, Number, Serial) ->
 	    exit({unexpected_binary_to_term_result, Other})
     end.
 
-port_tag(Creation) when Creation =< 3 -> ?PORT_EXT;
-port_tag(_Creation) -> ?NEW_PORT_EXT.
+port_tag(Num, Creation) when 0 =< Num, Num =< ?OLD_MAX_PIDS_PORTS, Creation =< 3 ->
+    ?PORT_EXT;
+port_tag(Num, _Creation) when 0 =< Num, Num =< ?OLD_MAX_PIDS_PORTS ->
+    ?NEW_PORT_EXT;
+port_tag(_Num, _Creation) ->
+    ?V4_PORT_EXT.
 
 mk_port({NodeName, Creation}, Number) when is_atom(NodeName) ->
     <<?VERSION_MAGIC, NodeNameExt/binary>> = term_to_binary(NodeName),
     mk_port({NodeNameExt, Creation}, Number);
 mk_port({NodeNameExt, Creation}, Number) ->
     case catch binary_to_term(list_to_binary([?VERSION_MAGIC,
-					      port_tag(Creation),
+					      port_tag(Number, Creation),
 					      NodeNameExt,
-					      uint32_be(Number),
+					      case Number > ?OLD_MAX_PIDS_PORTS of
+						  true -> uint64_be(Number);
+						  false -> uint32_be(Number)
+					      end,
 					      enc_creation(Creation)])) of
 	Port when is_port(Port) ->
 	    Port;

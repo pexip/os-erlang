@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2020-2020. All Rights Reserved.
+%% Copyright Ericsson AB 2020-2022. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -36,7 +36,6 @@
          new_session_id/1,
          register_session/2,
          reuse_session/2
-         %%invalidate_session/2
         ]).
 
 %% gen_server callbacks
@@ -53,9 +52,9 @@
                 lifetime,
                 db,
                 max,
-                session_index,
+                session_order,
                 id_generator,
-                listner
+                listener
                }).
 
 %%%===================================================================
@@ -66,10 +65,10 @@
                       {error, Error :: {already_started, pid()}} |
                       {error, Error :: term()} |
                       ignore.
-start_link(ssl_unknown_listener = Listner, Map) ->
-    gen_server:start_link({local, Listner}, ?MODULE, [Listner, Map], []);
-start_link(Listner, Map) ->
-    gen_server:start_link(?MODULE, [Listner, Map], []).
+start_link(ssl_unknown_listener = Listener, Map) ->
+    gen_server:start_link({local, Listener}, ?MODULE, [Listener, Map], []);
+start_link(Listener, Map) ->
+    gen_server:start_link(?MODULE, [Listener, Map], []).
 
 %%--------------------------------------------------------------------
 -spec new_session_id(Pid::pid()) -> ssl:session_id().
@@ -109,21 +108,21 @@ register_session(Pid, Session) ->
 %%% gen_server callbacks
 %%%===================================================================
 -spec init(Args :: term()) -> {ok, State :: term()}.
-init([Listner, #{lifetime := Lifetime,
+init([Listener, #{lifetime := Lifetime,
                  session_cb := Cb,
                  session_cb_init_args := InitArgs,
                  max := Max
                 }]) ->
     process_flag(trap_exit, true),
-    Monitor = monitor_listener(Listner),
+    Monitor = monitor_listener(Listener),
     DbRef = init(Cb, [{role, server} | InitArgs]),
     State = #state{store_cb = Cb,
                    lifetime = Lifetime,
                    db = DbRef,
                    max = Max,
-                   session_index = #{},
+                   session_order = gb_trees:empty(),
                    id_generator = crypto:strong_rand_bytes(16),
-                   listner = Monitor
+                   listener = Monitor
                   },
     {ok, State}.
 
@@ -135,70 +134,65 @@ handle_call(new_session_id, _From, #state{id_generator = IdGen} = State) ->
 handle_call({reuse_session, SessionId}, _From,  #state{store_cb = Cb,
                                                        db = Store0,
                                                        lifetime = Lifetime,
-                                                       session_index = Index0} = State0) ->
-    case maps:get(SessionId, Index0, undefined) of
+                                                       session_order = Order0} = State0) ->
+    case lookup(Cb, Store0, SessionId) of
         undefined ->
             {reply, not_reusable, State0};
-        Key ->
-            case lookup(Cb, Store0, Key) of
-                undefined ->
-                    {reply, not_reusable, State0};
-                Session ->
-                    case ssl_session:valid_session(Session, Lifetime) of
-                        true ->
-                            {reply, Session, State0};
-                        false ->
-                            {Store, Index} = invalidate_session(Cb, Store0, Index0, SessionId, Key),
-                            {reply, not_reusable, State0#state{db = Store, session_index = Index}}
-                    end
+        #session{internal_id = InId} = Session ->
+            case ssl_session:valid_session(Session, Lifetime) of
+                true ->
+                    {reply, Session, State0};
+                false ->
+                    {Store, Order} = invalidate_session(Cb, Store0, Order0, SessionId, InId),
+                    {reply, not_reusable, State0#state{db = Store, session_order = Order}}
             end
     end.
 
 -spec handle_cast(Request :: term(), State :: term()) ->
            {noreply, NewState :: term()}.
-handle_cast({register_session, #session{session_id = SessionId} = Session},
+handle_cast({register_session, #session{session_id = SessionId, time_stamp = TimeStamp} = Session0},
             #state{store_cb = Cb,
                    db = Store0,
                    max = Max,
                    lifetime = Lifetime,
-                   session_index = Index0}
+                   session_order = Order0}
             = State0) ->
-    TimeStamp = erlang:monotonic_time(),
-    Id = {TimeStamp, erlang:unique_integer([monotonic])},
+    InternalId = {TimeStamp, erlang:unique_integer([monotonic])},
+    Session = Session0#session{internal_id = InternalId},
     State = case size(Cb, Store0) of
                 Max ->
-                    {#session{session_id = OldSessionId}, Store1}
-                        = oldest_session(Cb, Store0),
                     %% Throw away oldest session table may not grow larger than max
-                    Store = update(Cb, Store1, Id, Session),
-                    Index = maps:without([OldSessionId], Index0),
-                    State0#state{db = Store,
-                                 session_index = Index#{SessionId => Id}};
+                    {_, OldSessId, Order1} = gb_trees:take_smallest(Order0),
+                    Store1 = delete(Cb, Store0, OldSessId),
+                    %% Insert new session
+                    Order = gb_trees:insert(InternalId, SessionId, Order1),
+                    Store = update(Cb, Store1, SessionId, Session),
+                    State0#state{db = Store, session_order = Order};
                 Size when Size > 0 ->
-                    {#session{session_id = OldSessionId} = OldestSession, Store1}
-                        = oldest_session(Cb, Store0),
+                    {_, OldSessId, Order1} = gb_trees:take_smallest(Order0),
+                    OldestSession = lookup(Cb, Store0, OldSessId),
                     case ssl_session:valid_session(OldestSession, Lifetime) of
                         true ->
-                            Store = update(Cb, Store0, Id, Session#session{time_stamp = TimeStamp}),
+                            Store = update(Cb, Store0, SessionId, Session#session{time_stamp = TimeStamp}),
                             State0#state{db = Store,
-                                         session_index = Index0#{SessionId => Id}};
+                                         session_order = gb_trees:insert(InternalId, SessionId, Order0)};
                         false ->
                             %% Throw away oldest session as it is not valid anymore
-                            Store = update(Cb, Store1, Id, Session#session{time_stamp = TimeStamp}),
-                            Index = maps:without([OldSessionId], Index0),
+                            Store1 = delete(Cb, Store0, OldSessId),
+                            Store = update(Cb, Store1, SessionId, Session#session{time_stamp = TimeStamp}),
                             State0#state{db = Store,
-                                         session_index = Index#{SessionId => Id}}
+                                         session_order =  gb_trees:insert(InternalId, SessionId, Order1)}
                     end;
                 0 ->
-                    Store = update(Cb, Store0, Id, Session#session{time_stamp = TimeStamp}),
+                    Store = update(Cb, Store0, SessionId, Session#session{time_stamp = TimeStamp}),
                     State0#state{db = Store,
-                                 session_index = Index0#{SessionId => Id}}
+                                 session_order = gb_trees:insert(InternalId, SessionId, Order0)}
             end,
     {noreply, State}.
 
 -spec handle_info(Info :: timeout() | term(), State :: term()) ->
           {noreply, NewState :: term()}.
-handle_info({'DOWN', Monitor, _, _, _}, #state{listner = Monitor} = State) ->
+handle_info({'DOWN', Monitor, _, _, _}, #state{listener = Monitor} = State) ->
      {stop, normal, State};
 handle_info(_, State) ->
     {noreply, State}.
@@ -219,32 +213,16 @@ call(Pid, Msg) ->
 session_id(Key) ->
     Unique1 = erlang:unique_integer(),
     Unique2 = erlang:unique_integer(),
-    %% Obfuscate to avoid DoS attack possiblities
+    %% Obfuscate to avoid DoS attack possibilities
     %% This id should be unpredictable an 32 bytes
     %% and unique but have no other cryptographic requirements.
     Bin1 = crypto:crypto_one_time(aes_128_ecb, Key, <<Unique1:128>>, true),
     Bin2 = crypto:crypto_one_time(aes_128_ecb, Key, <<Unique2:128>>, true),
     <<Bin1/binary, Bin2/binary>>.
 
-invalidate_session(Cb, Store, Index, SessionId, Key) ->
-    {delete(Cb, Store, Key),
-     maps:without([SessionId], Index)}.
-
-oldest_session(Cb, Store0) ->
-    try Cb:take_oldest(Store0) of
-        {_, Element, Store} ->
-            {Element, Store}
-    catch
-        _:_ -> %% Backwards compatible
-            {Key, OldApiElement} = Cb:foldl(fun(E, []) ->
-                                                       E;
-                                                  (_, Acc)->
-                                                       Acc
-                                               end, [],
-                                               Store0),
-            OldAPIStore = delete(Cb, Store0, Key),
-            {OldApiElement, OldAPIStore}
-    end.
+invalidate_session(Cb, Store0, Order, SessionId, InternalId) ->
+    Store = delete(Cb, Store0, SessionId),
+    {Store, gb_trees:delete(InternalId, Order)}.
 
 init(Cb, Options) ->
     Cb:init(Options).
@@ -277,5 +255,5 @@ monitor_listener(ssl_unknown_listener) ->
     %% Backwards compatible Erlang node
     %% global process.
     undefined;
-monitor_listener(Listen) when is_port(Listen) ->
-    erlang:monitor(port, Listen).
+monitor_listener(Listen) ->
+    inet:monitor(Listen).

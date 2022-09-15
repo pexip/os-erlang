@@ -1,7 +1,7 @@
 %% 
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2005-2020. All Rights Reserved.
+%% Copyright Ericsson AB 2005-2022. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -123,13 +123,17 @@
 init_all(Config) when is_list(Config) ->
 
     ?IPRINT("init_all -> entry with"
-            "~n   Config: ~p",[Config]),
+            "~n   Config: ~p"
+            "~n   Nodes:  ~p", [Config, nodes()]),
 
-    %% -- 
+    %% --
     %% Start nodes
-    %% 
+    %%
 
+    ?IPRINT("init_all -> start sub-agent node"),
     ?line {ok, SaNode}  = start_node(snmp_sa),
+
+    ?IPRINT("init_all -> start manager node"),
     ?line {ok, MgrNode} = start_node(snmp_mgr),
 
 
@@ -137,33 +141,41 @@ init_all(Config) when is_list(Config) ->
     %% Create necessary files ( and dirs ) 
     %% 
 
-    SuiteTopDir = ?config(snmp_suite_top_dir, Config),
-    ?DBG("init_all -> SuiteTopDir ~p", [SuiteTopDir]),
+    ?IPRINT("init_all -> lookup group top dir"),
+    GroupTopDir = ?config(snmp_group_top_dir, Config),
+    ?DBG("init_all -> GroupTopDir ~p", [GroupTopDir]),
 
-    AgentDir = join(SuiteTopDir, "agent/"), 
+    ?IPRINT("init_all -> create agent dir"),
+    AgentDir = join(GroupTopDir, "agent/"), 
     ?line ok = file:make_dir(AgentDir),
     ?DBG("init_all -> AgentDir ~p", [AgentDir]),
 
+    ?IPRINT("init_all -> create agent db dir"),
     AgentDbDir = join(AgentDir, "db/"), 
     ?line ok   = file:make_dir(AgentDbDir),
     ?DBG("init_all -> AgentDbDir ~p", [AgentDbDir]),
 
+    ?IPRINT("init_all -> create agent log dir"),
     AgentLogDir = join(AgentDir, "log/"), 
     ?line ok    = file:make_dir(AgentLogDir),
     ?DBG("init_all -> AgentLogDir ~p", [AgentLogDir]),
 
+    ?IPRINT("init_all -> create agent config dir"),
     AgentConfDir = join(AgentDir, "conf/"), 
     ?line ok     = file:make_dir(AgentConfDir),
     ?DBG("init_all -> AgentConfDir ~p", [AgentConfDir]),
 
-    MgrDir   = join(SuiteTopDir, "mgr/"), 
+    ?IPRINT("init_all -> create manager dir"),
+    MgrDir   = join(GroupTopDir, "mgr/"), 
     ?line ok = file:make_dir(MgrDir),
     ?DBG("init_all -> MgrDir ~p", [MgrDir]),
 
-    SaDir    = join(SuiteTopDir, "sa/"), 
+    ?IPRINT("init_all -> create sub-agent dir"),
+    SaDir    = join(GroupTopDir, "sa/"), 
     ?line ok = file:make_dir(SaDir),
     ?DBG("init_all -> SaDir ~p", [SaDir]),
 
+    ?IPRINT("init_all -> create sub-agent db dir"),
     SaDbDir  = join(SaDir, "db/"), 
     ?line ok = file:make_dir(SaDbDir),
     ?DBG("init_all -> SaDbDir ~p", [SaDbDir]),
@@ -176,29 +188,34 @@ init_all(Config) when is_list(Config) ->
     %% Start and initiate mnesia
     %% 
 
-    ?DBG("init_all -> load application mnesia", []),
+    ?IPRINT("init_all -> load mnesia application (local)"),
     ?line ok = application:load(mnesia),
 
-    ?DBG("init_all -> load application mnesia on node ~p", [SaNode]),
+    ?IPRINT("init_all -> load application mnesia on node ~p", [SaNode]),
     ?line ok = rpc:call(SaNode, application, load, [mnesia]),
     
-    ?DBG("init_all -> application mnesia: set_env dir",[]),
+    ?IPRINT("init_all -> application mnesia (local): set_env dir"),
     ?line application_controller:set_env(mnesia, dir, 
 					 join(AgentDbDir, "Mnesia1")),
 
-    ?DBG("init_all -> application mnesia: set_env dir on node ~p",[SaNode]),
+    ?IPRINT("init_all -> application mnesia: set_env dir on node ~p", [SaNode]),
     ?line rpc:call(SaNode, application_controller, set_env, 
 		   [mnesia, dir,  join(SaDir, "Mnesia2")]),
 
-    ?DBG("init_all -> create mnesia schema",[]),
+    ?IPRINT("init_all -> create mnesia schema"),
     ?line ok = mnesia:create_schema([SaNode, node()]),
     
-    ?DBG("init_all -> start application mnesia",[]),
+    ?IPRINT("init_all -> start application mnesia (local)"),
     ?line ok = application:start(mnesia),
 
-    ?DBG("init_all -> start application mnesia on ~p",[SaNode]),
+    ?IPRINT("init_all -> start application mnesia on ~p", [SaNode]),
     ?line ok = rpc:call(SaNode, application, start, [mnesia]),
+
+    ?IPRINT("init_all -> get localhost"),
     Ip = ?LOCALHOST(),
+
+    ?IPRINT("init_all -> done when"
+            "~n   Nodes: ~p", [nodes()]),
     [{snmp_sa,        SaNode}, 
      {snmp_mgr,       MgrNode}, 
      {snmp_master,    node()}, 
@@ -215,11 +232,29 @@ init_all(Config) when is_list(Config) ->
 
 
 finish_all(Config) when is_list(Config) ->
-    SaNode = ?config(snmp_sa, Config),
+
+    ?IPRINT("finish_all -> entry with"
+            "~n   Config: ~p"
+            "~n   Nodes:  ~p", [Config, nodes()]),
+
+    SaNode  = ?config(snmp_sa, Config),
     MgrNode = ?config(snmp_mgr, Config),
+
+    ?IPRINT("finish_all -> stop sub-agent node ~p", [SaNode]),
     stop_node(SaNode),
+
+    ?IPRINT("finish_all -> stop manager node ~p", [MgrNode]),
     stop_node(MgrNode),
-    application:stop(mnesia).
+
+    ?IPRINT("finish_all -> stop mnesia application"),
+    application:stop(mnesia),
+
+    ?IPRINT("finish_all -> unload mnesia application"),
+    application:unload(mnesia),
+
+    ?IPRINT("finish_all -> stop when"
+            "~n   Nodes: ~p", [nodes()]),
+    ok.
 
 
 %% --- This one *must* be run first in each case ---
@@ -238,10 +273,18 @@ init_case(Config) when is_list(Config) ->
     SaHost         = ?HOSTNAME(SaNode),
     MgrHost        = ?HOSTNAME(MgrNode),
     MasterHost     = ?HOSTNAME(MasterNode),
-    {ok, MasterIP} = snmp_misc:ip(MasterHost, IpFamily),
-    {ok, MIP}      = snmp_misc:ip(MgrHost, IpFamily),
-    {ok, SIP}      = snmp_misc:ip(SaHost, IpFamily),
+    {ok, MasterIP} = ?LIB:which_host_ip(MasterHost, IpFamily),
+    {ok, MIP}      = ?LIB:which_host_ip(MgrHost,    IpFamily),
+    {ok, SIP}      = ?LIB:which_host_ip(SaHost,     IpFamily),
 
+    ?IPRINT("init_case -> "
+            "~n   SaHost:     ~p"
+            "~n   MgrHost:    ~p"
+            "~n   MasterHost: ~p"
+            "~n   MasterIP:   ~p"
+            "~n   MIP:        ~p"
+            "~n   SIP:        ~p",
+            [SaHost, MgrHost, MasterHost, MasterIP, MIP, SIP]),
 
     put(mgr_node,    MgrNode),
     put(sa_node,     SaNode),
@@ -263,11 +306,13 @@ init_case(Config) when is_list(Config) ->
     put(mgr_dir, MgrDir),
 
     put(vsn, ?config(vsn, Config)),
-    ?DBG("init_case -> exit with"
-	"~n   MasterNode: ~p"
-	"~n   SaNode:     ~p"
-	"~n   MgrNode:    ~p"
-	"~n   MibDir:     ~p", [MasterNode, SaNode, MgrNode, MibDir]),
+
+    ?IPRINT("init_case -> done with"
+            "~n   MasterNode: ~p"
+            "~n   SaNode:     ~p"
+            "~n   MgrNode:    ~p"
+            "~n   MibDir:     ~p", [MasterNode, SaNode, MgrNode, MibDir]),
+
     {SaNode, MgrNode, MibDir}.
 
 
@@ -395,7 +440,21 @@ await_tc_runner_done(Runner, OldFlag) ->
             unlink_and_flush_exit(Runner),
 	    case Ret of
 		{error, Reason} ->
-		    exit(Reason);
+                    %% Any failures while we have system events are skipped
+                    SysEvs = snmp_test_global_sys_monitor:events(),
+                    if
+                        (SysEvs =:= []) ->
+                            ?EPRINT("TC failure: "
+                                    "~n   ~p"
+                                    "~n", [Reason]),
+                            exit(Reason);
+                        true ->
+                            ?WPRINT("TC failure when we got system events: "
+                                    "~n   Reason:     ~p"
+                                    "~n   Sys Events: ~p"
+                                    "~n", [Reason, SysEvs]),
+                            skip([{reason, Reason}, {system_events, SysEvs}])
+                    end;
 		{skip, Reason} ->
 		    skip(Reason);
 		OK ->
@@ -498,34 +557,22 @@ tc_run(Mod, Func, Args, Opts) ->
                                    {dir,                 Dir},
                                    {mibs,                mibs(StdM, M)}]) of
 	{ok, _Pid} ->
-	    case (catch apply(Mod, Func, Args)) of
-		{'EXIT', {skip, Reason}} ->
-                    ?WPRINT("apply skip detected: "
-                             "~n   ~p", [Reason]),
-		    (catch snmp_test_mgr:stop()),
-		    ?SKIP(Reason);
-		{'EXIT', Reason} ->
-                    %% We have hosts (mostly *very* slooow VMs) that
-                    %% can timeout anything. Since we are basically
-                    %% testing communication, we therefor must check
-                    %% for system events at every failure. Grrr!
-                    SysEvs = snmp_test_global_sys_monitor:events(),
-		    (catch snmp_test_mgr:stop()),
-                    if
-                        (SysEvs =:= []) ->
-                            ?EPRINT("TC runner failed: "
-                                    "~n   ~p~n", [Reason]),
-                            ?FAIL({apply_failed, {Mod, Func, Args}, Reason});
-                        true ->
-                            ?WPRINT("apply exit catched when we got system events: "
-                                     "~n   Reason:     ~p"
-                                     "~n   Sys Events: ~p"
-                                     "~n", [Reason, SysEvs]),
-                            ?SKIP([{reason, Reason}, {system_events, SysEvs}])
-                    end;
-		Res ->
+	    try apply(Mod, Func, Args) of
+                Res ->
 		    (catch snmp_test_mgr:stop()),
 		    Res
+            catch
+                C:{skip, Reason} ->
+                    ?WPRINT("apply (~w-) skip detected: "
+                            "~n   ~p", [C, Reason]),
+		    (catch snmp_test_mgr:stop()),
+                    ?SKIP(Reason);
+
+                throw:{error, Reason} ->
+                    tc_run_skip_check(Mod, Func, Args, Reason, throw);
+
+		exit:Reason ->
+                    tc_run_skip_check(Mod, Func, Args, Reason, exit)
 	    end;
 
 	{error, Reason} ->
@@ -540,6 +587,35 @@ tc_run(Mod, Func, Args, Opts) ->
 	    (catch snmp_test_mgr:stop()),
 	    ?line ?FAIL({mgr_start_failure, Err})
     end.
+
+%% We have some crap machines that generate this every now and then
+%% (thay miss the window with 1 or 2 ms). If also detected by the
+%% test manager, we get this and can skip.
+tc_run_skip_check(_Mod, _Func, _Args,
+                  {securityError, usmStatsNotInTimeWindows} = Reason,
+                  _Cat) ->
+    ?SKIP([{reason, Reason}]);
+%% We have hosts (mostly *very* slooow VMs) that
+%% can timeout anything. Since we are basically
+%% testing communication, we therefor must check
+%% for system events at every failure. Grrr!
+tc_run_skip_check(Mod, Func, Args, Reason, Cat) ->
+    SysEvs = snmp_test_global_sys_monitor:events(),
+    (catch snmp_test_mgr:stop()),
+    if
+        (SysEvs =:= []) ->
+            ?EPRINT("TC runner (~w-) failed: "
+                    "~n   ~p~n", [Cat, Reason]),
+            ?FAIL({apply_failed, {Mod, Func, Args}, Reason});
+        true ->
+            ?WPRINT("apply (~w) catched "
+                    "when we got system events: "
+                    "~n   Reason:     ~p"
+                    "~n   Sys Events: ~p"
+                    "~n", [Cat, Reason, SysEvs]),
+            ?SKIP([{category, Cat},
+                   {reason, Reason}, {system_events, SysEvs}])
+    end.    
 
 
 %% ---------------------------------------------------------------
@@ -594,10 +670,11 @@ start_agent(Config, Vsns, Opts) ->
             "~n   Vsns:   ~p"
             "~n   Opts:   ~p", [node(), Config, Vsns, Opts]),
     
-    ?line AgentLogDir  = ?config(agent_log_dir,  Config),
-    ?line AgentConfDir = ?config(agent_conf_dir, Config),
-    ?line AgentDbDir   = ?config(agent_db_dir,   Config),
-    ?line SaNode       = ?config(snmp_sa,        Config),
+    ?line AgentLogDir  = ?config(agent_log_dir,      Config),
+    ?line AgentConfDir = ?config(agent_conf_dir,     Config),
+    ?line AgentDbDir   = ?config(agent_db_dir,       Config),
+    ?line SaNode       = ?config(snmp_sa,            Config),
+    ?line InetBackend  = ?config(socket_create_opts, Config),
 
     Env = app_agent_env_init(
 	    [{versions,         Vsns}, 
@@ -616,14 +693,15 @@ start_agent(Config, Vsns, Opts) ->
 	     {mib_server,       [{verbosity, log}]},
 	     {symbolic_store,   [{verbosity, log}]},
 	     {note_store,       [{verbosity, log}]},
-	     {net_if,           [{verbosity, trace}]}],
+	     {net_if,           [{verbosity, trace},
+                                 {options,   InetBackend}]}],
 	    Opts),
     
 
     process_flag(trap_exit,true),
 
     ?IPRINT("start_agent -> try start snmp app supervisor", []),
-    {ok, AppSup} = snmp_app_sup:start_link(),
+    AppSup = start_app_sup(),
     unlink(AppSup),
     ?DBG("start_agent -> snmp app supervisor: ~p", [AppSup]),
 
@@ -875,6 +953,18 @@ stop_agent(Config) when is_list(Config) ->
     ?IPRINT("stop_agent -> done", []),
     Config4.
 
+start_app_sup() ->
+    case snmp_app_sup:start_link() of
+        {ok, AppSup} ->
+            AppSup;
+        {error, {already_started, Pid}} ->
+            ?EPRINT("start_agent -> "
+                    "SNMP app supervisor already started: "
+                    "~n      (existing) Pid:          ~p"
+                    "~n      (existing) Process Info: ~p",
+                    [Pid, (catch process_info(Pid))]),
+            ?FAIL({already_started, snmp_app_supervisor})
+    end.
 
 start_sup(Env) ->
     case (catch snmp_app_sup:start_agent(normal, Env)) of
@@ -1040,6 +1130,9 @@ expect(Mod, Line, Type, Enterp, Generic, Specific, ExpVBs) ->
 expect2(Mod, Line, F) ->
     io_format_expect("for ~w:~w", [Mod, Line]),
     case F() of
+	{error, {securityError, usmStatsNotInTimeWindows}} ->
+	    io_format_expect("(USM) Stats not-in-windows => ", []),
+	    skip({securityError, usmStatsNotInTimeWindows});
 	{error, Reason} ->
 	    io_format_expect("failed at ~w:~w => "
                              "~n      ~p", [Mod, Line, Reason]),
@@ -1073,8 +1166,13 @@ get_timeout() ->
 receive_pdu(To) ->
     receive
 	{snmp_pdu, PDU} when is_record(PDU, pdu) ->
-	    PDU
+	    PDU;
+        {error, Reason} = ERROR ->
+	    ?EPRINT("[await response-pdu] received unexpected error: "
+                    "~n      ~p", [Reason]),
+            ERROR
     after To ->
+	    ?EPRINT("[await response-pdu] unexpected timeout"),
 	    {error, timeout}
     end.
 
@@ -1679,6 +1777,26 @@ update_usm(Vsns, Dir) ->
 		     usmNoPrivProtocol, "", "", "", 
 		     "passwd_shaxxxxxxxxxx", ""}, 
 
+		    {"agentEngine", "authSHA224", "authSHA224", zeroDotZero, 
+		     usmHMAC128SHA224AuthProtocol, "", "", 
+		     usmNoPrivProtocol, "", "", "", 
+		     "passwd_sha224xxxxxxxxxxxxxxx", ""}, 
+
+		    {"agentEngine", "authSHA256", "authSHA256", zeroDotZero, 
+		     usmHMAC192SHA256AuthProtocol, "", "", 
+		     usmNoPrivProtocol, "", "", "", 
+		     "passwd_sha256xxxxxxxxxxxxxxxxxxx", ""}, 
+
+		    {"agentEngine", "authSHA384", "authSHA384", zeroDotZero, 
+		     usmHMAC256SHA384AuthProtocol, "", "", 
+		     usmNoPrivProtocol, "", "", "", 
+		     "passwd_sha384xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx", ""}, 
+
+		    {"agentEngine", "authSHA512", "authSHA512", zeroDotZero, 
+		     usmHMAC384SHA512AuthProtocol, "", "", 
+		     usmNoPrivProtocol, "", "", "", 
+		     "passwd_sha512xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx", ""}, 
+
 		    {"agentEngine", "privDES", "privDES", zeroDotZero, 
 		     usmHMACSHAAuthProtocol, "", "", 
 		     usmDESPrivProtocol, "", "", "", 
@@ -1700,6 +1818,26 @@ update_usm(Vsns, Dir) ->
 		     usmHMACSHAAuthProtocol, "", "", 
 		     usmNoPrivProtocol, "", "", "", 
 		     "passwd_shaxxxxxxxxxx", ""}, 
+
+		    {"mgrEngine", "authSHA224", "authSHA224", zeroDotZero, 
+		     usmHMAC128SHA224AuthProtocol, "", "", 
+		     usmNoPrivProtocol, "", "", "", 
+		     "passwd_sha224xxxxxxxxxxxxxxx", ""}, 
+
+		    {"mgrEngine", "authSHA256", "authSHA256", zeroDotZero, 
+		     usmHMAC192SHA256AuthProtocol, "", "", 
+		     usmNoPrivProtocol, "", "", "", 
+		     "passwd_sha256xxxxxxxxxxxxxxxxxxx", ""}, 
+
+		    {"mgrEngine", "authSHA384", "authSHA384", zeroDotZero, 
+		     usmHMAC256SHA384AuthProtocol, "", "", 
+		     usmNoPrivProtocol, "", "", "", 
+		     "passwd_sha384xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx", ""}, 
+
+		    {"mgrEngine", "authSHA512", "authSHA512", zeroDotZero, 
+		     usmHMAC384SHA512AuthProtocol, "", "", 
+		     usmNoPrivProtocol, "", "", "", 
+		     "passwd_sha512xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx", ""}, 
 
 		    {"mgrEngine", "privDES", "privDES", zeroDotZero, 
 		     usmHMACSHAAuthProtocol, "", "", 
@@ -1755,10 +1893,14 @@ update_community(_, Dir) ->
     
 -define(tDescr_instance, [1,3,6,1,2,1,16,1,0]).
 update_vacm(_Vsn, Dir) ->
-    Conf = [{vacmSecurityToGroup, usm, "authMD5", "initial"}, 
-	    {vacmSecurityToGroup, usm, "authSHA", "initial"}, 
-	    {vacmSecurityToGroup, usm, "privDES", "initial"}, 
-	    {vacmSecurityToGroup, usm, "newUser", "initial"},
+    Conf = [{vacmSecurityToGroup, usm, "authMD5",    "initial"}, 
+	    {vacmSecurityToGroup, usm, "authSHA",    "initial"}, 
+	    {vacmSecurityToGroup, usm, "authSHA224", "initial"}, 
+	    {vacmSecurityToGroup, usm, "authSHA256", "initial"}, 
+	    {vacmSecurityToGroup, usm, "authSHA384", "initial"}, 
+	    {vacmSecurityToGroup, usm, "authSHA512", "initial"}, 
+	    {vacmSecurityToGroup, usm, "privDES",    "initial"}, 
+	    {vacmSecurityToGroup, usm, "newUser",    "initial"},
 	    {vacmViewTreeFamily, "internet", ?tDescr_instance, 
 	     excluded, null}],
     ?line ok = snmp_config:update_agent_vacm_config(Dir, Conf).

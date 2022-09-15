@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 1998-2020. All Rights Reserved.
+%% Copyright Ericsson AB 1998-2022. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -79,10 +79,12 @@ listen(Transport, Port, #config{transport_info = {Transport, _, _, _, _},
     case Transport:listen(Port, Options ++ internal_inet_values()) of
 	{ok, ListenSocket} ->
 	    {ok, Tracker} = inherit_tracker(ListenSocket, EmOpts, SslOpts),
-            LifeTime = get_ticket_lifetime(),
-            TicketStoreSize = get_ticket_store_size(),
+            LifeTime = ssl_config:get_ticket_lifetime(),
+            TicketStoreSize = ssl_config:get_ticket_store_size(),
+            MaxEarlyDataSize = ssl_config:get_max_early_data_size(),
             %% TLS-1.3 session handling
-            {ok, SessionHandler} = session_tickets_tracker(LifeTime, TicketStoreSize, SslOpts),
+            {ok, SessionHandler} =
+                session_tickets_tracker(ListenSocket, LifeTime, TicketStoreSize, MaxEarlyDataSize, SslOpts),
             %% PRE TLS-1.3 session handling
             {ok, SessionIdHandle} = session_id_tracker(ListenSocket, SslOpts),
             Trackers =  [{option_tracker, Tracker}, {session_tickets_tracker, SessionHandler},
@@ -103,15 +105,7 @@ accept(ListenSocket, #config{transport_info = {Transport,_,_,_,_} = CbInfo,
             Tracker = proplists:get_value(option_tracker, Trackers),
             {ok, EmOpts} = get_emulated_opts(Tracker),
 	    {ok, Port} = tls_socket:port(Transport, Socket),
-            {ok, Sender} = tls_sender:start(),
-            ConnArgs = [server, Sender, "localhost", Port, Socket,
-			{SslOpts, emulated_socket_options(EmOpts, #socket_options{}), Trackers}, self(), CbInfo],
-	    case tls_connection_sup:start_child(ConnArgs) of
-		{ok, Pid} ->
-		    ssl_gen_statem:socket_control(ConnectionCb, Socket, [Pid, Sender], Transport, Trackers);
-		{error, Reason} ->
-		    {error, Reason}
-	    end;
+            start_tls_server_connection(SslOpts, ConnectionCb, Transport, Port, Socket, EmOpts, Trackers, CbInfo);
 	{error, Reason} ->
 	    {error, Reason}
     end.
@@ -154,7 +148,7 @@ connect(Address, Port,
 
 socket(Pids, Transport, Socket, ConnectionCb, Trackers) ->
     #sslsocket{pid = Pids, 
-	       %% "The name "fd" is keept for backwards compatibility
+	       %% "The name "fd" is kept for backwards compatibility
 	       fd = {Transport, Socket, ConnectionCb, Trackers}}.
 setopts(gen_tcp, Socket = #sslsocket{pid = {ListenSocket, #config{trackers = Trackers}}}, Options) ->
     Tracker = proplists:get_value(option_tracker, Trackers),
@@ -261,15 +255,16 @@ inherit_tracker(ListenSocket, EmOpts, #{erl_dist := false} = SslOpts) ->
 inherit_tracker(ListenSocket, EmOpts, #{erl_dist := true} = SslOpts) ->
     ssl_listen_tracker_sup:start_child_dist([ListenSocket, EmOpts, SslOpts]).
 
-session_tickets_tracker(_, _, #{erl_dist := false,
-                                session_tickets := disabled}) ->
+session_tickets_tracker(_,_, _, _, #{erl_dist := false,
+                                   session_tickets := disabled}) ->
     {ok, disabled};
-session_tickets_tracker(Lifetime, TicketStoreSize, 
+session_tickets_tracker(ListenSocket, Lifetime, TicketStoreSize, MaxEarlyDataSize,
                         #{erl_dist := false,
                           session_tickets := Mode,
                           anti_replay := AntiReplay}) ->
-    tls_server_session_ticket_sup:start_child([Mode, Lifetime, TicketStoreSize, AntiReplay]);
-session_tickets_tracker(Lifetime, TicketStoreSize,
+    tls_server_session_ticket_sup:start_child([ListenSocket, Mode, Lifetime,
+                                               TicketStoreSize, MaxEarlyDataSize, AntiReplay]);
+session_tickets_tracker(ListenSocket, Lifetime, TicketStoreSize, MaxEarlyDataSize,
                         #{erl_dist := true,
                           session_tickets := Mode,
                           anti_replay := AntiReplay}) ->
@@ -278,7 +273,8 @@ session_tickets_tracker(Lifetime, TicketStoreSize,
     Workers = proplists:get_value(workers, Children),
     case Workers of
         0 ->
-            tls_server_session_ticket_sup:start_child([Mode, Lifetime, TicketStoreSize, AntiReplay]);
+            tls_server_session_ticket_sup:start_child([ListenSocket, Mode, Lifetime,
+                                                       TicketStoreSize, MaxEarlyDataSize, AntiReplay]);
         1 ->
             [{_,Child,_, _}] = supervisor:which_children(SupName),
             {ok, Child}
@@ -318,7 +314,7 @@ start_link(Port, SockOpts, SslOpts) ->
 %%--------------------------------------------------------------------
 init([Listen, Opts, SslOpts]) ->
     process_flag(trap_exit, true),
-    Monitor = monitor_listen(Listen),
+    Monitor = inet:monitor(Listen),
     {ok, #state{emulated_opts = do_set_emulated_opts(Opts, []), 
                 listen_monitor = Monitor,
                 ssl_opts = SslOpts}}.
@@ -395,8 +391,18 @@ code_change(_OldVsn, State, _Extra) ->
 call(Pid, Msg) ->
     gen_server:call(Pid, Msg, infinity).
 
-monitor_listen(Listen) when is_port(Listen) ->
-    erlang:monitor(port, Listen).
+start_tls_server_connection(SslOpts, ConnectionCb, Transport, Port, Socket, EmOpts, Trackers, CbInfo) ->    
+    try
+        {ok, DynSup} = tls_connection_sup:start_child([]),
+        {ok, Sender} = tls_dyn_connection_sup:start_child(DynSup, sender, []),
+        ConnArgs = [server, Sender, "localhost", Port, Socket,
+                    {SslOpts, emulated_socket_options(EmOpts, #socket_options{}), Trackers}, self(), CbInfo],
+        {ok, Pid} = tls_dyn_connection_sup:start_child(DynSup, receiver, ConnArgs),
+        ssl_gen_statem:socket_control(ConnectionCb, Socket, [Pid, Sender], Transport, Trackers)
+    catch
+	error:{badmatch, {error, _} = Error} ->
+            Error
+    end.
 
 split_options(Opts) ->
     split_options(Opts, emulated_options(), [], []).
@@ -504,19 +510,3 @@ validate_inet_option(active, Value)
 validate_inet_option(_, _) ->
     ok.
 
-get_ticket_lifetime() ->
-    case application:get_env(ssl, server_session_ticket_lifetime) of
-	{ok, Seconds} when is_integer(Seconds) andalso
-                           Seconds =< 604800 ->  %% MUST be less than 7 days
-	    Seconds;
-	_  ->
-	    7200 %% Default 2 hours
-    end.
-
-get_ticket_store_size() ->
-    case application:get_env(ssl, server_session_ticket_store_size) of
-	{ok, Size} when is_integer(Size) ->
-	    Size;
-	_  ->
-	    1000
-    end.

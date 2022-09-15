@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 1997-2020. All Rights Reserved.
+%% Copyright Ericsson AB 1997-2022. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -29,6 +29,9 @@
 -define(NEW_REFERENCE_EXT,   114).
 -define(ATOM_UTF8_EXT,       118).
 -define(SMALL_ATOM_UTF8_EXT, 119).
+
+-define(DFLAG_EXPORT_PTR_TAG, 16#200).
+-define(DFLAG_BIT_BINARIES,   16#400).
 
 %% Tests distribution and the tcp driver.
 
@@ -62,8 +65,9 @@
          bad_dist_ext_control/1,
          bad_dist_ext_connection_id/1,
          bad_dist_ext_size/1,
-	 start_epmd_false/1, epmd_module/1,
+	 start_epmd_false/1, no_epmd/1, epmd_module/1,
          bad_dist_fragments/1,
+         exit_dist_fragments/1,
          message_latency_large_message/1,
          message_latency_large_link_exit/1,
          message_latency_large_monitor_exit/1,
@@ -72,6 +76,7 @@
          message_latency_large_link_exit/0,
          message_latency_large_monitor_exit/0,
          message_latency_large_exit2/0,
+         dist_entry_refc_race/1,
          system_limit/1,
          hopefull_data_encoding/1,
          hopefull_export_fun_bug/1,
@@ -83,6 +88,7 @@
          optimistic_dflags_echo/0, optimistic_dflags_sender/1,
          roundtrip/1, bounce/1, do_dist_auto_connect/1, inet_rpc_server/1,
          dist_parallel_sender/3, dist_parallel_receiver/0,
+         derr_run/1,
          dist_evil_parallel_receiver/0, make_busy/2]).
 
 %% epmd_module exports
@@ -102,9 +108,10 @@ all() ->
      {group, trap_bif}, {group, dist_auto_connect},
      dist_parallel_send, atom_roundtrip, unicode_atom_roundtrip,
      contended_atom_cache_entry, contended_unicode_atom_cache_entry,
-     {group, message_latency},
+     {group, message_latency}, exit_dist_fragments,
      {group, bad_dist}, {group, bad_dist_ext},
-     start_epmd_false, epmd_module, system_limit,
+     dist_entry_refc_race,
+     start_epmd_false, no_epmd, epmd_module, system_limit,
      hopefull_data_encoding, hopefull_export_fun_bug,
      huge_iovec].
 
@@ -1079,21 +1086,24 @@ dist_auto_connect_relay(Parent) ->
 
 
 dist_parallel_send(Config) when is_list(Config) ->
-    {ok, RNode} = start_node(dist_parallel_receiver),
-    {ok, SNode} = start_node(dist_parallel_sender),
-    WatchDog = spawn_link(
-                 fun () ->
-                         TRef = erlang:start_timer((2*60*1000), self(), oops),
-                         receive
-                             {timeout, TRef, _ } ->
-                                 spawn(SNode, fun () -> abort(timeout) end),
-                                 spawn(RNode, fun () -> abort(timeout) end)
-                                 %%       rpc:cast(SNode, erlang, halt,
-                                 %%		["Timetrap (sender)"]),
-                                 %%       rpc:cast(RNode, erlang, halt,
-                                 %%		["Timetrap (receiver)"])
-                         end
-                 end),
+    %% Disabled "connect all" so global wont interfere...
+    {ok, RNode} = start_node(dist_parallel_receiver, "-connect_all false"),
+    {ok, SNode} = start_node(dist_parallel_sender, "-connect_all false"),
+
+    %% WatchDog = spawn_link(
+    %%             fun () ->
+    %%                     TRef = erlang:start_timer((2*60*1000), self(), oops),
+    %%                     receive
+    %%                         {timeout, TRef, _ } ->
+    %%                             spawn(SNode, fun () -> abort(timeout) end),
+    %%                             spawn(RNode, fun () -> abort(timeout) end)
+    %%                              %%       rpc:cast(SNode, erlang, halt,
+    %%                              %%		["Timetrap (sender)"]),
+    %%                              %%       rpc:cast(RNode, erlang, halt,
+    %%                              %%		["Timetrap (receiver)"])
+    %%                      end
+    %%              end),
+
     MkSndrs = fun (Receiver) ->
                       lists:map(fun (_) ->
                                         spawn_link(SNode,
@@ -1102,18 +1112,23 @@ dist_parallel_send(Config) when is_list(Config) ->
                                                    [self(), Receiver, 1000])
                                 end, lists:seq(1, 64))
               end,
+    Parent = self(),
     SndrsStart = fun (Sndrs) ->
-                         Parent = self(),
                          spawn_link(SNode,
                            fun () ->
                                    lists:foreach(fun (P) ->
                                                          P ! {go, Parent}
-                                                 end, Sndrs)
+                                                 end, Sndrs),
+                                   unlink(Parent)
                            end)
                  end,
     SndrsWait = fun (Sndrs) ->
                         lists:foreach(fun (P) ->
-                                              receive {P, done} -> ok end
+                                              receive
+                                                  {P, done} ->
+                                                      unlink(P),
+                                                      ok
+                                              end
                                       end, Sndrs)
                 end,
     DPR = spawn_link(RNode, ?MODULE, dist_parallel_receiver, []),
@@ -1130,8 +1145,8 @@ dist_parallel_send(Config) when is_list(Config) ->
     unlink(DEPR),
     exit(DEPR, bang),
 
-    unlink(WatchDog),
-    exit(WatchDog, bang),
+    %% unlink(WatchDog),
+    %% exit(WatchDog, bang),
 
     stop_node(RNode),
     stop_node(SNode),
@@ -1750,14 +1765,14 @@ start_monitor(Offender,P) ->
                           just_stay_alive -> ok
                       end
               end),
-    Ref = receive
+    Res = receive
               {Q,ref,R} ->
-                  R
+                  {Q, R}
           after  5000 ->
                      error
           end,
-    io:format("Ref is ~p~n",[Ref]),
-    ok.
+    io:format("Res is ~p~n",[Res]),
+    Res.
 start_link(Offender,P) ->
     Parent = self(),
     Q = spawn(Offender,
@@ -1769,21 +1784,22 @@ start_link(Offender,P) ->
                           just_stay_alive -> ok
                       end
               end),
-    Ref = receive
+    Res = receive
               {Q,ref,R} ->
                   R
           after  5000 ->
                      error
           end,
-    io:format("Ref is ~p~n",[Ref]),
-    ok.
+    io:format("Res is ~p~n",[Res]),
+    Res.
 
 %% Test dist messages with valid structure (binary to term ok) but malformed control content
 bad_dist_structure(Config) when is_list(Config) ->
     ct:timetrap({seconds, 15}),
 
-    {ok, Offender} = start_node(bad_dist_structure_offender),
-    {ok, Victim} = start_node(bad_dist_structure_victim),
+    %% Disabled "connect all" so global wont interfere...
+    {ok, Offender} = start_node(bad_dist_structure_offender, "-connect_all false"),
+    {ok, Victim} = start_node(bad_dist_structure_victim, "-connect_all false"),
     start_node_monitors([Offender,Victim]),
     Parent = self(),
     P = spawn(Victim,
@@ -1877,8 +1893,9 @@ bad_dist_structure(Config) when is_list(Config) ->
 bad_dist_fragments(Config) when is_list(Config) ->
     ct:timetrap({seconds, 15}),
 
-    {ok, Offender} = start_node(bad_dist_fragment_offender),
-    {ok, Victim} = start_node(bad_dist_fragment_victim),
+    %% Disabled "connect all" so global wont interfere...
+    {ok, Offender} = start_node(bad_dist_fragment_offender, "-connect_all false"),
+    {ok, Victim} = start_node(bad_dist_fragment_victim, "-connect_all false"),
 
     Msg = iolist_to_binary(dmsg_ext(lists:duplicate(255,255))),
 
@@ -1924,20 +1941,38 @@ bad_dist_fragments(Config) when is_list(Config) ->
                       [{hdr, 3, binary:part(Msg, 10,byte_size(Msg)-10)},
                        close]),
 
-    start_monitor(Offender,P),
-    ExitVictim = spawn(Victim, fun() -> receive ok -> ok end end),
-    send_bad_fragments(Offender, Victim, P,{?DOP_PAYLOAD_EXIT,P,ExitVictim},2,
+    ExitVictim = spawn(Victim, fun() ->
+                                       receive
+                                           {link, Proc} ->
+                                               link(Proc),
+                                               Parent ! {self(), linked}
+                                       end,
+                                       receive ok -> ok end
+                               end),
+    OP1 = start_link(Offender,ExitVictim),
+    ExitVictim ! {link, OP1},
+    receive {ExitVictim, linked} -> ok end,
+    send_bad_fragments(Offender, Victim, ExitVictim,{?DOP_PAYLOAD_EXIT,OP1,ExitVictim},0,
                       [{hdr, 1, [131]}]),
 
-    start_monitor(Offender,P),
     Exit2Victim = spawn(Victim, fun() -> receive ok -> ok end end),
-    send_bad_fragments(Offender, Victim, P,{?DOP_PAYLOAD_EXIT2,P,Exit2Victim},2,
+    {OP2, _} = start_monitor(Offender,Exit2Victim),
+    send_bad_fragments(Offender, Victim, Exit2Victim,{?DOP_PAYLOAD_EXIT2,OP2,Exit2Victim},0,
                       [{hdr, 1, [132]}]),
 
-    start_monitor(Offender,P),
-    DownVictim = spawn(Victim, fun() -> receive ok -> ok end end),
-    DownRef = erlang:monitor(process, DownVictim),
-    send_bad_fragments(Offender, Victim, P,{?DOP_PAYLOAD_MONITOR_P_EXIT,P,DownVictim,DownRef},2,
+    DownVictim = spawn(Victim, fun() ->
+                                       receive
+                                           {monitor, Proc} ->
+                                               DR = erlang:monitor(process, Proc),
+                                               Parent ! {self(), DR}
+                                       end,
+                                       Parent ! {self, DR},
+                                       receive ok -> ok end
+                               end),
+    {OP3, _} = start_monitor(Offender,DownVictim),
+    DownVictim ! {monitor, OP3},
+    DownRef = receive {DownVictim, DR} -> DR end,
+    send_bad_fragments(Offender, Victim, DownVictim,{?DOP_PAYLOAD_MONITOR_P_EXIT,OP3,DownVictim,DownRef},0,
                       [{hdr, 1, [133]}]),
 
     P ! two,
@@ -2014,8 +2049,9 @@ send_bad_fragments(Offender,VictimNode,Victim,Ctrl,WhereToPutSelf,Fragments) ->
     end.
 
 bad_dist_ext_receive(Config) when is_list(Config) ->
-    {ok, Offender} = start_node(bad_dist_ext_receive_offender),
-    {ok, Victim} = start_node(bad_dist_ext_receive_victim),
+    %% Disabled "connect all" so global wont interfere...
+    {ok, Offender} = start_node(bad_dist_ext_receive_offender, "-connect_all false"),
+    {ok, Victim} = start_node(bad_dist_ext_receive_victim, "-connect_all false"),
     start_node_monitors([Offender,Victim]),
 
     Parent = self(),
@@ -2086,8 +2122,9 @@ bad_dist_ext_receive(Config) when is_list(Config) ->
 
 
 bad_dist_ext_process_info(Config) when is_list(Config) ->
-    {ok, Offender} = start_node(bad_dist_ext_process_info_offender),
-    {ok, Victim} = start_node(bad_dist_ext_process_info_victim),
+    %% Disabled "connect all" so global wont interfere...
+    {ok, Offender} = start_node(bad_dist_ext_process_info_offender, "-connect_all false"),
+    {ok, Victim} = start_node(bad_dist_ext_process_info_victim, "-connect_all false"),
     start_node_monitors([Offender,Victim]),
 
     Parent = self(),
@@ -2146,8 +2183,9 @@ bad_dist_ext_process_info(Config) when is_list(Config) ->
     stop_node(Victim).
 
 bad_dist_ext_control(Config) when is_list(Config) ->
-    {ok, Offender} = start_node(bad_dist_ext_control_offender),
-    {ok, Victim} = start_node(bad_dist_ext_control_victim),
+    %% Disabled "connect all" so global wont interfere...
+    {ok, Offender} = start_node(bad_dist_ext_control_offender, "-connect_all false"),
+    {ok, Victim} = start_node(bad_dist_ext_control_victim, "-connect_all false"),
     start_node_monitors([Offender,Victim]),
 
     pong = rpc:call(Victim, net_adm, ping, [Offender]),
@@ -2165,8 +2203,9 @@ bad_dist_ext_control(Config) when is_list(Config) ->
     stop_node(Victim).
 
 bad_dist_ext_connection_id(Config) when is_list(Config) ->
-    {ok, Offender} = start_node(bad_dist_ext_connection_id_offender),
-    {ok, Victim} = start_node(bad_dist_ext_connection_id_victim),
+    %% Disabled "connect all" so global wont interfere...
+    {ok, Offender} = start_node(bad_dist_ext_connection_id_offender, "-connect_all false"),
+    {ok, Victim} = start_node(bad_dist_ext_connection_id_victim, "-connect_all false"),
     start_node_monitors([Offender,Victim]),
 
     Parent = self(),
@@ -2232,10 +2271,11 @@ bad_dist_ext_connection_id(Config) when is_list(Config) ->
 
 %% OTP-14661: Bad message is discovered by erts_msg_attached_data_size
 bad_dist_ext_size(Config) when is_list(Config) ->
-    {ok, Offender} = start_node(bad_dist_ext_process_info_offender),
+    %% Disabled "connect all" so global wont interfere...
+    {ok, Offender} = start_node(bad_dist_ext_process_info_offender, "-connect_all false"),
     %%Prog = "Prog=/home/uabseri/src/otp_new3/bin/cerl -rr -debug",
     Prog = [],
-    {ok, Victim} = start_node(bad_dist_ext_process_info_victim, [], Prog),
+    {ok, Victim} = start_node(bad_dist_ext_process_info_victim, "-connect_all false", Prog),
     start_node_monitors([Offender,Victim]),
 
     Parent = self(),
@@ -2520,6 +2560,169 @@ dmsg_bad_atom_cache_ref() ->
 dmsg_bad_tag() ->  %% Will fail early at heap size calculation
     [$?, 66].
 
+%% Test that processes exiting while sending a fragmented message works
+%% as it should. We test that this works while the process doing the send
+%% is suspended/resumed in order to trigger bugs in suspend/resume handling
+%% while exiting.
+%% We also make sure that the binary memory of the receiving node does not grow
+%% without shrinking back as there used to be a memory leak on the receiving side.
+exit_dist_fragments(_Config) ->
+    {ok, Node} = start_node(?FUNCTION_NAME),
+    try
+        ct:log("Allocations before:~n~p",[erpc:call(Node,instrument,allocations, [])]),
+        {BinInfo, BinInfoMref} =
+            spawn_monitor(Node,
+                          fun() ->
+                                  (fun F(Acc) ->
+                                           H = try erlang:memory(binary)
+                                               catch _:_ -> 0 end,
+                                           receive
+                                               {get, Pid} ->
+                                                   After = try erlang:memory(binary)
+                                                           catch _:_ -> 0 end,
+                                                   Pid ! lists:reverse([After,H|Acc])
+                                           after 100 ->
+                                                   F([H|Acc])
+                                           end
+                                   end)([])
+                          end),
+        {Tracer, Mref} = spawn_monitor(fun gather_exited/0),
+        erlang:trace(self(), true, [{tracer, Tracer}, set_on_spawn, procs, exiting]),
+        exit_suspend(Node),
+        receive
+            {'DOWN',Mref,_,_,_} ->
+                BinInfo ! {get, self()},
+                receive
+                    {'DOWN',BinInfoMref,_,_,Reason} ->
+                        ct:fail(Reason);
+                    Info ->
+                        Before = hd(Info),
+                        Max = lists:max(Info),
+                        After = lists:last(Info),
+                        ct:log("Binary memory before: ~p~n"
+                               "Binary memory max: ~p~n"
+                               "Binary memory after: ~p",
+                               [Before, Max, After]),
+                        ct:log("Allocations after:~n~p",
+                               [erpc:call(Node,instrument,allocations, [])]),
+                        %% We check that the binary data used after is not too large
+                        if
+                            (After - Before) / (Max - Before) > 0.05 ->
+                                ct:log("Memory ratio was ~p",[(After - Before) / (Max - Before)]),
+                                ct:fail("Potential binary memory leak!");
+                            true -> ok
+                        end
+                end
+        end
+    after
+        stop_node(Node)
+    end.
+
+%% Make sure that each spawned process also has exited
+gather_exited() ->
+    process_flag(message_queue_data, off_heap),
+    gather_exited(#{}).
+gather_exited(Pids) ->
+    receive
+        {trace,Pid,spawned,_,_} ->
+            gather_exited(Pids#{ Pid => true });
+        {trace,Pid,exited_out,_,_} ->
+            {true, NewPids} = maps:take(Pid, Pids),
+            gather_exited(NewPids);
+        _M ->
+            gather_exited(Pids)
+    after 1000 ->
+            if Pids == #{} -> ok;
+               true -> exit(Pids)
+            end
+    end.
+
+exit_suspend(RemoteNode) ->
+    exit_suspend(RemoteNode, 100).
+exit_suspend(RemoteNode, N) ->
+    Payload = case erlang:system_info(wordsize) of
+                  8 ->
+                      [<<0:100000/unit:8>> || _ <- lists:seq(1, 10)];
+                  4 ->
+                      [<<0:100000/unit:8>> || _ <- lists:seq(1, 2)]
+              end,
+    exit_suspend(RemoteNode, N, Payload).
+exit_suspend(RemoteNode, N, Payload) ->
+    Echo = fun F() ->
+                   receive
+                       {From, Msg} ->
+                           From ! erlang:iolist_size(Msg),
+                           F()
+                   end
+           end,
+    Pinger =
+        fun() ->
+                false = process_flag(trap_exit, true),
+                RemotePid = spawn_link(RemoteNode, Echo),
+                Iterations = case erlang:system_info(debug_compiled) of
+                                 false ->
+                                     100;
+                                 _ ->
+                                     10
+                             end,
+                exit_suspend_loop(RemotePid, 2, Payload, Iterations)
+        end,
+    Pids = [spawn_link(Pinger) || _ <- lists:seq(1, N)],
+    MRefs = [monitor(process, Pid) || Pid <- Pids],
+    [receive {'DOWN',MRef,_,_,_} -> ok end || MRef <- MRefs],
+    Pids.
+
+exit_suspend_loop(RemotePid, _Suspenders, _Payload, 0) ->
+    exit(RemotePid, die),
+    receive
+        {'EXIT', RemotePid, _} ->
+            ok
+    end;
+exit_suspend_loop(RemotePid, Suspenders, Payload, N) ->
+    LocalPid = spawn_link(
+                 fun() ->
+                         Parent = self(),
+                         [spawn_link(
+                            fun F() ->
+                                    try
+                                        begin
+                                            erlang:suspend_process(Parent),
+                                            erlang:yield(),
+                                            erlang:suspend_process(Parent),
+                                            erlang:yield(),
+                                            erlang:resume_process(Parent),
+                                            erlang:yield(),
+                                            erlang:suspend_process(Parent),
+                                            erlang:yield(),
+                                            erlang:resume_process(Parent),
+                                            erlang:yield(),
+                                            erlang:resume_process(Parent),
+                                            erlang:yield()
+                                        end of
+                                        _ ->
+                                            F()
+                                    catch _:_ ->
+                                            ok
+                                    end
+                            end) || _ <- lists:seq(1, Suspenders)],
+                         (fun F() ->
+                                  RemotePid ! {self(), Payload},
+                                  receive _IOListSize -> ok end,
+                                  F()
+                          end)()
+                 end),
+    exit_suspend_loop(LocalPid, RemotePid, Suspenders, Payload, N - 1).
+exit_suspend_loop(LocalPid, RemotePid, Suspenders, Payload, N) ->
+    receive
+        {'EXIT', LocalPid, _} ->
+            exit_suspend_loop(RemotePid, Suspenders, Payload, N);
+        {'EXIT', _, Reason} ->
+            exit(Reason)
+    after 100 ->
+            exit(LocalPid, die),
+            exit_suspend_loop(LocalPid, RemotePid, Suspenders, Payload, N)
+    end.
+
 start_epmd_false(Config) when is_list(Config) ->
     %% Start a node with the option -start_epmd false.
     {ok, OtherNode} = start_node(start_epmd_false, "-start_epmd false"),
@@ -2529,20 +2732,31 @@ start_epmd_false(Config) when is_list(Config) ->
 
     ok.
 
+no_epmd(Config) when is_list(Config) ->
+    %% Trying to start a node with -no_epmd but without passing the
+    %% --proto_dist option should fail.
+    {error, timeout} = start_node(no_epmd, "-no_epmd").
+
 epmd_module(Config) when is_list(Config) ->
     %% We need a relay node to test this, since the test node uses the
     %% standard epmd module.
-    Sock1 = start_relay_node(epmd_module_node1, "-epmd_module " ++ ?MODULE_STRING),
-    Node1 = inet_rpc_nodename(Sock1),
+    {N1,_,S1} = Sock1 = start_relay_node(
+                          epmd_module_node1,
+                          "-epmd_module " ++ ?MODULE_STRING,
+                         [{"ERL_AFLAGS","-sname epmd_module_node1@dummy " ++ os:getenv("ERL_AFLAGS","")}]),
+    Node1 = inet_rpc_nodename({N1,"dummy",S1}),
     %% Ask what port it's listening on - it won't have registered with
     %% epmd.
     {ok, {ok, Port1}} = do_inet_rpc(Sock1, application, get_env, [kernel, dist_listen_port]),
 
     %% Start a second node, passing the port number as a secret
     %% argument.
-    Sock2 = start_relay_node(epmd_module_node2, "-epmd_module " ++ ?MODULE_STRING
-			     ++ " -other_node_port " ++ integer_to_list(Port1)),
-    Node2 = inet_rpc_nodename(Sock2),
+    {N2,_,S2} = Sock2 = start_relay_node(
+                          epmd_module_node2,
+                          "-epmd_module " ++ ?MODULE_STRING
+                          ++ " -other_node_port " ++ integer_to_list(Port1),
+                          [{"ERL_AFLAGS","-sname epmd_module_node2@dummy " ++ os:getenv("ERL_AFLAGS","")}]),
+    Node2 = inet_rpc_nodename({N2,"dummy",S2}),
     %% Node 1 can't ping node 2
     {ok, pang} = do_inet_rpc(Sock1, net_adm, ping, [Node2]),
     {ok, []} = do_inet_rpc(Sock1, erlang, nodes, []),
@@ -2582,26 +2796,48 @@ port_please(_Name, _Ip) ->
 	    {port, Port, Version}
     end.
 
-address_please(_Name, _Address, _AddressFamily) ->
+address_please(_Name, "dummy", inet) ->
     %% Use localhost.
-    IP = {127,0,0,1},
-    {ok, IP}.
+    {ok, {127,0,0,1}};
+address_please(_Name, "dummy", inet6) ->
+    {ok, {0,0,0,0,0,0,0,1}}.
 
 hopefull_data_encoding(Config) when is_list(Config) ->
-    test_hopefull_data_encoding(Config, true),
-    test_hopefull_data_encoding(Config, false).
 
-test_hopefull_data_encoding(Config, Fallback) when is_list(Config) ->
+    FallbackCombos = [A bor B || A <- [0, ?DFLAG_EXPORT_PTR_TAG],
+                                 B <- [0, ?DFLAG_BIT_BINARIES]],
+
+    [hopefull_data_encoding_do(FB) || FB <- FallbackCombos],
+    ok.
+
+
+hopefull_data_encoding_do(Fallback) ->
+    io:format("Fallback = 16#~.16B\n", [Fallback]),
+
+    MkHopefullData = fun(Ref,Pid) -> mk_hopefull_data(Ref,Pid) end,
+    test_hopefull_data_encoding(Fallback, MkHopefullData),
+
+    %% Test funs with hopefully encoded term in environment
+    MkBitstringInFunEnv = fun(_,_) -> [mk_fun_with_env(<<5:7>>)] end,
+    test_hopefull_data_encoding(Fallback, MkBitstringInFunEnv),
+    MkExpFunInFunEnv = fun(_,_) -> [mk_fun_with_env(fun a:a/0)] end,
+    test_hopefull_data_encoding(Fallback, MkExpFunInFunEnv),
+    ok.
+
+mk_fun_with_env(Term) ->
+    fun() -> Term end.
+
+test_hopefull_data_encoding(Fallback, MkDataFun) ->
     {ok, ProxyNode} = start_node(hopefull_data_normal),
     {ok, BouncerNode} = start_node(hopefull_data_bouncer, "-hidden"),
     case Fallback of
-        false ->
+        0 ->
             ok;
-        true ->
+        _ ->
             rpc:call(BouncerNode, erts_debug, set_internal_state,
                      [available_internal_state, true]),
-            false = rpc:call(BouncerNode, erts_debug, set_internal_state,
-                            [remove_hopefull_dflags, true])
+            ok = rpc:call(BouncerNode, erts_debug, set_internal_state,
+                          [remove_hopefull_dflags, Fallback])
     end,
     Tester = self(),
     R1 = make_ref(),
@@ -2613,7 +2849,7 @@ test_hopefull_data_encoding(Config, Fallback) when is_list(Config) ->
                                register(bouncer, self()),
                                %% We create the data on the proxy node in order
                                %% to create the correct sub binaries
-                               HData = mk_hopefull_data(R1, Tester),
+                               HData = MkDataFun(R1, Tester),
                                %% Verify same result between this node and tester
                                Tester ! [R1, HData],
                                %% Test when connection has not been setup yet
@@ -2633,19 +2869,19 @@ test_hopefull_data_encoding(Config, Fallback) when is_list(Config) ->
     receive
         [R2, HData2] ->
             case Fallback of
-                false ->
+                0 ->
                     HData = HData2;
-                true ->
-                    check_hopefull_fallback_data(HData, HData2)
+                _ ->
+                    check_hopefull_fallback_data(HData, HData2, Fallback)
             end
     end,
     receive
         [R3, HData3] ->
             case Fallback of
-                false ->
+                0 ->
                     HData = HData3;
-                true ->
-                    check_hopefull_fallback_data(HData, HData3)
+                _ ->
+                    check_hopefull_fallback_data(HData, HData3, Fallback)
             end
     end,
     unlink(Proxy),
@@ -2712,17 +2948,18 @@ mk_hopefull_data(BS) ->
                          [NewBs]
                  end, lists:seq(BSsz-32, BSsz-17))]).
 
-check_hopefull_fallback_data([], []) ->
+check_hopefull_fallback_data([], [], _) ->
     ok;
-check_hopefull_fallback_data([X|Xs],[Y|Ys]) ->
-    chk_hopefull_fallback(X, Y),
-    check_hopefull_fallback_data(Xs,Ys).
+check_hopefull_fallback_data([X|Xs],[Y|Ys], FB) ->
+    chk_hopefull_fallback(X, Y, FB),
+    check_hopefull_fallback_data(Xs, Ys, FB).
 
-chk_hopefull_fallback(Binary, FallbackBinary) when is_binary(Binary) ->
+chk_hopefull_fallback(Binary, FallbackBinary, _) when is_binary(Binary) ->
     Binary = FallbackBinary;
-chk_hopefull_fallback([BitStr], [{Bin, BitSize}]) when is_bitstring(BitStr) ->
-    chk_hopefull_fallback(BitStr, {Bin, BitSize});
-chk_hopefull_fallback(BitStr, {Bin, BitSize}) when is_bitstring(BitStr) ->
+chk_hopefull_fallback([BitStr], [{Bin, BitSize}], FB) when is_bitstring(BitStr) ->
+    chk_hopefull_fallback(BitStr, {Bin, BitSize}, FB);
+chk_hopefull_fallback(BitStr, {Bin, BitSize}, FB) when is_bitstring(BitStr) ->
+    true = ((FB band ?DFLAG_BIT_BINARIES) =/= 0),
     true = is_binary(Bin),
     true = is_integer(BitSize),
     true = BitSize > 0,
@@ -2733,14 +2970,25 @@ chk_hopefull_fallback(BitStr, {Bin, BitSize}) when is_bitstring(BitStr) ->
     FallbackBitStr = list_to_bitstring([Head,<<IBits:BitSize>>]),
     BitStr = FallbackBitStr,
     ok;
-chk_hopefull_fallback(Func, {ModName, FuncName}) when is_function(Func) ->
+chk_hopefull_fallback(Func, {ModName, FuncName}, FB) when is_function(Func) ->
+    true = ((FB band ?DFLAG_EXPORT_PTR_TAG) =/= 0),
     {M, F, _} = erlang:fun_info_mfa(Func),
     M = ModName,
     F = FuncName,
     ok;
-chk_hopefull_fallback(Other, SameOther) ->
-    Other = SameOther,
-    ok.
+chk_hopefull_fallback(Fun1, Fun2, FB) when is_function(Fun1), is_function(Fun2) ->
+    %% Recursive diff of funs with their environments
+    FI1 = erlang:fun_info(Fun1),
+    FI2 = erlang:fun_info(Fun2),
+    {env, E1} = lists:keyfind(env, 1, FI1),
+    {env, E2} = lists:keyfind(env, 1, FI1),
+    chk_hopefull_fallback(E1, E2, FB),
+    assert_same(lists:keydelete(env, 1, FI1),
+                lists:keydelete(env, 1, FI2));
+chk_hopefull_fallback(A, B, _) ->
+    ok = assert_same(A,B).
+
+assert_same(A,A) -> ok.
 
 %% ERL-1254
 hopefull_export_fun_bug(Config) when is_list(Config) ->
@@ -2791,6 +3039,48 @@ mk_rand_bin(0, Data) ->
     list_to_binary(Data);
 mk_rand_bin(N, Data) ->
     mk_rand_bin(N-1, [rand:uniform(256) - 1 | Data]).
+
+
+%% Try provoke DistEntry refc bugs (OTP-17513).
+dist_entry_refc_race(_Config) ->
+    {ok, Node} = start_node(dist_entry_refc_race, "+zdntgc 1"),
+    Pid = spawn_link(Node, ?MODULE, derr_run, [self()]),
+    {Pid, done} = receive M -> M end,
+    stop_node(Node),
+    ok.
+
+derr_run(Papa) ->
+    inet_db:set_lookup([file]), % make connection attempt fail fast
+    NScheds = erlang:system_info(schedulers_online),
+    SeqList = lists:seq(1, 25 * NScheds),
+    Nodes = [list_to_atom("none@host" ++ integer_to_list(Seq))
+             || Seq <- SeqList],
+    Self = self(),
+    Pids = [spawn_link(fun () -> derr_sender(Self, Nodes) end)
+            || _ <- SeqList],
+    derr_count(1, 8000),
+    [begin unlink(P), exit(P,kill) end || P <- Pids],
+    Papa ! {self(), done},
+    ok.
+
+derr_count(Max, Max) ->
+    done;
+derr_count(N, Max) ->
+    receive
+        count -> ok
+    end,
+    case N rem 1000 of
+        0 ->
+            io:format("Total attempts: ~bk~n", [N div 1000]);
+        _ -> ok
+    end,
+    derr_count(N+1, Max).
+
+
+derr_sender(Main, Nodes) ->
+    [{none, Node} ! msg || Node <- Nodes],
+    Main ! count,
+    derr_sender(Main, Nodes).
 
 
 %%% Utilities
@@ -2897,6 +3187,8 @@ inet_rpc_server_loop(Sock) ->
 
 
 start_relay_node(Node, Args) ->
+    start_relay_node(Node, Args, []).
+start_relay_node(Node, Args, Env) ->
     Pa = filename:dirname(code:which(?MODULE)),
     Cookie = "NOT"++atom_to_list(erlang:get_cookie()),
     {ok, LSock} = gen_tcp:listen(0, [binary, {packet, 4}, {active, false}]),
@@ -2905,7 +3197,8 @@ start_relay_node(Node, Args) ->
     RunArg = "-run " ++ atom_to_list(?MODULE) ++ " inet_rpc_server " ++
     Host ++ " " ++ integer_to_list(Port),
     {ok, NN} = test_server:start_node(Node, peer,
-                                      [{args, Args ++
+                                      [{env,Env},
+                                       {args, Args ++
                                         " -setcookie "++Cookie++" -pa "++Pa++" "++
                                         RunArg}]),
     [N,H] = string:lexemes(atom_to_list(NN),"@"),
@@ -3260,5 +3553,3 @@ free_memory() ->
 	error : undef ->
 	    ct:fail({"os_mon not built"})
     end.
-
-

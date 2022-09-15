@@ -1,7 +1,7 @@
 /*
  * %CopyrightBegin%
  *
- * Copyright Ericsson AB 2002-2020. All Rights Reserved.
+ * Copyright Ericsson AB 2002-2021. All Rights Reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -54,6 +54,7 @@ typedef struct {
     int ramv;
     int atags;
     int cp;
+    int mmbc0;     /* create main mbc for instance 0 */
     UWord sbct;
     UWord asbcst;
     UWord rsbcst;
@@ -113,6 +114,7 @@ typedef struct {
     0,			/* (bool)   ramv:   realloc always moves         */\
     0,			/* (bool)   atags:  tagged allocations           */\
     -1,		        /* (ix)     cp:     carrier pool                 */\
+    1,                  /* (bool)   mmbc0:  main mbc in instance 0       */\
     512*1024,		/* (bytes)  sbct:   sbc threshold                */\
     2*1024*2024,	/* (amount) asbcst: abs sbc shrink threshold     */\
     20,			/* (%)      rsbcst: rel sbc shrink threshold     */\
@@ -152,6 +154,7 @@ typedef struct {
     0,			/* (bool)   ramv:   realloc always moves         */\
     0,			/* (bool)   atags:  tagged allocations           */\
     -1,		        /* (ix)     cp:     carrier pool                 */\
+    1,                  /* (bool)   mmbc0:  main mbc in instance 0       */\
     64*1024,		/* (bytes)  sbct:   sbc threshold                */\
     2*1024*2024,	/* (amount) asbcst: abs sbc shrink threshold     */\
     20,			/* (%)      rsbcst: rel sbc shrink threshold     */\
@@ -216,12 +219,6 @@ void* erts_alcu_mmapper_mseg_alloc(Allctr_t*, Uint *size_p, Uint flags);
 void* erts_alcu_mmapper_mseg_realloc(Allctr_t*, void *seg, Uint old_size, Uint *new_size_p);
 void  erts_alcu_mmapper_mseg_dealloc(Allctr_t*, void *seg, Uint size, Uint flags);
 # endif
-
-# if defined(ERTS_ALC_A_EXEC)
-void* erts_alcu_exec_mseg_alloc(Allctr_t*, Uint *size_p, Uint flags);
-void* erts_alcu_exec_mseg_realloc(Allctr_t*, void *seg, Uint old_size, Uint *new_size_p);
-void  erts_alcu_exec_mseg_dealloc(Allctr_t*, void *seg, Uint size, Uint flags);
-# endif
 #endif /* HAVE_ERTS_MSEG */
 
 #ifdef ARCH_32
@@ -262,9 +259,10 @@ typedef struct {
     struct alcu_blockscan *last;
 } ErtsAlcuBlockscanYieldData;
 
-int erts_handle_yielded_alcu_blockscan(struct ErtsSchedulerData_ *esdp,
-                                       ErtsAlcuBlockscanYieldData *yield);
-void erts_alcu_sched_spec_data_init(struct ErtsSchedulerData_ *esdp);
+struct ErtsAuxWorkData_;
+
+int erts_handle_yielded_alcu_blockscan(struct ErtsAuxWorkData_ *awdp);
+void erts_alcu_blockscan_init(struct ErtsAuxWorkData_ *awdp);
 
 #endif /* !ERL_ALLOC_UTIL__ */
 
@@ -313,7 +311,7 @@ void erts_alcu_sched_spec_data_init(struct ErtsSchedulerData_ *esdp);
 #  ifdef MSEG_ALIGN_BITS
 #    define ERTS_SUPER_ALIGN_BITS MSEG_ALIGN_BITS
 #  else
-#    define ERTS_SUPER_ALIGN_BITS 18
+#    define ERTS_SUPER_ALIGN_BITS ERTS_MMAP_SUPERALIGNED_BITS
 #  endif
 #  ifdef ARCH_64 
 #    define MBC_ABLK_OFFSET_BITS   23
@@ -679,7 +677,6 @@ struct Allctr_t_ {
     /* */
     Uint		mbc_header_size;
     Uint		min_mbc_size;
-    Uint		min_mbc_first_free_size;
     Uint		min_block_size;
     UWord               crr_set_flgs;
     UWord               crr_clr_flgs;

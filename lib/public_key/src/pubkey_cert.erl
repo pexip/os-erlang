@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2008-2020. All Rights Reserved.
+%% Copyright Ericsson AB 2008-2022. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -51,28 +51,16 @@
 
 -define(NULL, 0).
 
--export_type([cert_opt/0, chain_opts/0, conf_opt/0,
-              test_config/0, test_root_cert/0]).
-
--type cert_opt()  :: {digest, public_key:digest_type()} | 
-                     {key, public_key:key_params() | public_key:private_key()} | 
-                     {validity, {From::erlang:timestamp(), To::erlang:timestamp()}} |
-                     {extensions, [#'Extension'{}]}.
--type chain_end()   :: root | peer.
--type chain_opts()  :: #{chain_end() := [cert_opt()],  intermediates =>  [[cert_opt()]]}.
--type conf_opt()    :: {cert, public_key:der_encoded()} | 
-                       {key,  public_key:private_key()} |
-                       {cacerts, [public_key:der_encoded()]}.
--type test_config() ::
-        #{server_config := [conf_opt()],  client_config :=  [conf_opt()]}.
--type test_root_cert() ::
-        #{cert := binary(), key := public_key:private_key()}.
 %%====================================================================
-%% Internal application APIu
+%% Internal application APIs
 %%====================================================================
 
 %%--------------------------------------------------------------------
--spec verify_data(DER::binary()) -> {md5 | sha,  binary(), binary()}.
+-spec verify_data(DER::binary()) ->
+           {DigestType, PlainText, Signature}
+               when DigestType :: md5 | crypto:sha1() | crypto:sha2() | none,
+                    PlainText  :: binary(),
+                    Signature  :: binary().
 %%
 %% Description: Extracts data from DerCert needed to call public_key:verify/4.
 %%--------------------------------------------------------------------	 
@@ -256,12 +244,12 @@ validate_extensions(OtpCert, ValidationState, UserState, VerifyFun) ->
 	    {ValidationState, UserState}
     end.
 %%--------------------------------------------------------------------
--spec normalize_general_name({rdnSequence, term()}) -> {rdnSequence, term()}. 
+-spec normalize_general_name({rdnSequence, term()}| binary()) -> {rdnSequence, term()}. 
 %%
 %% Description: Normalizes a general name so that it can be easily
 %%              compared to another genral name. 
 %%--------------------------------------------------------------------	
-normalize_general_name({rdnSequence, Issuer}) ->
+normalize_general_name({rdnSequence, Issuer}) ->    
     NormIssuer = do_normalize_general_name(Issuer),
     {rdnSequence, NormIssuer}.
 
@@ -464,11 +452,11 @@ match_name(Fun, Name, PermittedName, [Head | Tail]) ->
     end.
 
 %%%
--spec gen_test_certs(#{server_chain:= chain_opts(),
-                       client_chain:= chain_opts()} |
-                     chain_opts()) ->
-                            test_config() |
-                            [conf_opt()].
+-spec gen_test_certs(#{server_chain:= public_key:chain_opts(),
+                       client_chain:= public_key:chain_opts()} |
+                     public_key:chain_opts()) ->
+                            public_key:test_config() |
+                            [public_key:conf_opt()].
 %%
 %% Generates server and and client configuration for testing
 %% purposes. All certificate options have default values
@@ -533,17 +521,17 @@ gen_test_certs(
 
 
 x509_pkix_sign_types(#'SignatureAlgorithm'{algorithm = ?'id-RSASSA-PSS',
-                                           parameters = #'RSASSA-PSS-params'{hashAlgorithm = #'HashAlgorithm'{algorithm = Alg}}}) ->
+                                           parameters = #'RSASSA-PSS-params'{saltLength = SaltLen, hashAlgorithm = #'HashAlgorithm'{algorithm = Alg}}}) ->
     Hash = public_key:pkix_hash_type(Alg),
     {Hash, rsa_pss_pss, [{rsa_padding, rsa_pkcs1_pss_padding},
-                         {rsa_pss_saltlen, -1},
+                         {rsa_pss_saltlen, SaltLen},
                          {rsa_mgf1_md, Hash}]};
 x509_pkix_sign_types(#'SignatureAlgorithm'{algorithm = Alg}) ->
     {Hash, Sign} = public_key:pkix_sign_types(Alg),
     {Hash, Sign, []}.
 
 %%%
--spec root_cert(string(), [cert_opt()]) -> test_root_cert().
+-spec root_cert(string(), [public_key:cert_opt()]) -> public_key:test_root_cert().
 %%
 %% Generate a self-signed root cert
 root_cert(Name, Opts) ->
@@ -635,9 +623,12 @@ public_key_info(PublicKeyInfo,
 	case PublicKeyParams of
 	    {null, 'NULL'} when WorkingAlgorithm == Algorithm ->
 		WorkingParams;
-	    {params, Params} ->
+            asn1_NOVALUE when Algorithm == ?'id-Ed25519';
+                              Algorithm == ?'id-Ed448' ->
+                {namedCurve, Algorithm};
+            {params, Params} ->
 		Params;
-	    Params ->
+            Params ->
 		Params
 	end,
     {Algorithm, PublicKey, NewPublicKeyParams}.
@@ -1214,13 +1205,28 @@ validity(Opts) ->
     DefFrom0 = calendar:gregorian_days_to_date(calendar:date_to_gregorian_days(date())-1),
     DefTo0   = calendar:gregorian_days_to_date(calendar:date_to_gregorian_days(date())+7),
     {DefFrom, DefTo} = proplists:get_value(validity, Opts, {DefFrom0, DefTo0}),
-    Format =
+    
+    GenFormat =
         fun({Y,M,D}) ->
                 lists:flatten(
                   io_lib:format("~4..0w~2..0w~2..0w130000Z",[Y,M,D]))
         end,
-    #'Validity'{notBefore={generalTime, Format(DefFrom)},
-		notAfter ={generalTime, Format(DefTo)}}.
+    
+    UTCFormat =
+        fun({Y,M,D}) ->
+                [_, _, Y3, Y4] = integer_to_list(Y),
+                lists:flatten(
+                  io_lib:format("~s~2..0w~2..0w130000Z",[[Y3, Y4],M,D]))
+        end,
+    
+    #'Validity'{notBefore = validity_format(DefFrom, GenFormat, UTCFormat),
+                notAfter = validity_format(DefTo, GenFormat, UTCFormat)}.
+
+validity_format({Year, _, _} = Validity, GenFormat, _UTCFormat) when Year >= 2049 ->
+    {generalTime, GenFormat(Validity)};
+validity_format(Validity, _GenFormat, UTCFormat) ->
+    {utcTime, UTCFormat(Validity)}.
+
 
 sign_algorithm(#'RSAPrivateKey'{} = Key , Opts) ->
       case proplists:get_value(rsa_padding, Opts, rsa_pkcs1_pss_padding) of
@@ -1237,6 +1243,10 @@ sign_algorithm({#'RSAPrivateKey'{} = Key,#'RSASSA-PSS-params'{} = Params}, _Opts
 sign_algorithm(#'DSAPrivateKey'{p=P, q=Q, g=G}, _Opts) ->
     #'SignatureAlgorithm'{algorithm  = ?'id-dsa-with-sha1',
                           parameters = {params,#'Dss-Parms'{p=P, q=Q, g=G}}};
+sign_algorithm(#'ECPrivateKey'{parameters = {namedCurve, EDCurve}}, _Opts) when EDCurve == ?'id-Ed25519';
+                                                                                EDCurve == ?'id-Ed448' ->
+    #'SignatureAlgorithm'{algorithm  = EDCurve,
+                          parameters = asn1_NOVALUE};
 sign_algorithm(#'ECPrivateKey'{parameters = Parms}, Opts) ->
     Type = ecdsa_digest_oid(proplists:get_value(digest, Opts, sha1)),
     #'SignatureAlgorithm'{algorithm  = Type,
@@ -1344,9 +1354,23 @@ public_key(#'DSAPrivateKey'{p=P, q=Q, g=G, y=Y}, _) ->
 				 parameters={params, #'Dss-Parms'{p=P, q=Q, g=G}}},
     #'OTPSubjectPublicKeyInfo'{algorithm = Algo, subjectPublicKey = Y};
 public_key(#'ECPrivateKey'{version = _Version,
-			  privateKey = _PrivKey,
-			  parameters = Params,
-			  publicKey = PubKey}, _) ->
+                           privateKey = _PrivKey,
+                           parameters = {namedCurve, ?'id-Ed25519' = ID},
+                           publicKey = PubKey}, _) ->
+    Algo = #'PublicKeyAlgorithm'{algorithm= ID, parameters=asn1_NOVALUE},
+    #'OTPSubjectPublicKeyInfo'{algorithm = Algo,
+			       subjectPublicKey = #'ECPoint'{point = PubKey}};
+public_key(#'ECPrivateKey'{version = _Version,
+                           privateKey = _PrivKey,
+                           parameters = {namedCurve, ?'id-Ed448' = ID},
+                           publicKey = PubKey}, _) ->
+    Algo = #'PublicKeyAlgorithm'{algorithm= ID, parameters=asn1_NOVALUE},
+    #'OTPSubjectPublicKeyInfo'{algorithm = Algo,
+			       subjectPublicKey = #'ECPoint'{point = PubKey}};
+public_key(#'ECPrivateKey'{version = _Version,
+                           privateKey = _PrivKey,
+                           parameters = Params,
+                           publicKey = PubKey}, _) ->
     Algo = #'PublicKeyAlgorithm'{algorithm= ?'id-ecPublicKey', parameters=Params},
     #'OTPSubjectPublicKeyInfo'{algorithm = Algo,
 			       subjectPublicKey = #'ECPoint'{point = PubKey}}.

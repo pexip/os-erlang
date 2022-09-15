@@ -9,7 +9,7 @@
 
 ;; %CopyrightBegin%
 ;;
-;; Copyright Ericsson AB 1996-2020. All Rights Reserved.
+;; Copyright Ericsson AB 1996-2021. All Rights Reserved.
 ;;
 ;; Licensed under the Apache License, Version 2.0 (the "License");
 ;; you may not use this file except in compliance with the License.
@@ -55,10 +55,8 @@
 ;; Reporting Bugs:
 ;; --------------
 ;;
-;; Please send bug reports to the following email address:
-;;      erlang-bugs@erlang.org
-;; or if you have a patch suggestion to:
-;;      erlang-patches@erlang.org
+;; Please report bugs at:
+;;      https://github.com/erlang/otp/issues
 ;; Please state as exactly as possible:
 ;;    - Version number of Erlang Mode (see the menu), Emacs, Erlang,
 ;;      and of any other relevant software.
@@ -67,6 +65,8 @@
 ;;    - A description of the unexpected result.
 ;;    - Relevant pieces of Erlang code causing the problem.
 ;;    - Personal Emacs customisations, if any.
+;; Patch suggestions are welcome at:
+;;      https://github.com/erlang/otp/pulls
 ;;
 ;; Should the Emacs generate an error, please set the Emacs variable
 ;; `debug-on-error' to `t'.  Repeat the error and enclose the debug
@@ -76,10 +76,14 @@
 ;;     M-x toggle-debug-on-error RET
 ;;; Code:
 
-(eval-when-compile (require 'cl))
 (require 'align)
 (require 'comint)
 (require 'tempo)
+
+;;; `caddr' is builtin since Emacs 26.
+(eval-and-compile
+  (or (fboundp 'caddr)
+      (defun caddr (x) (car (cdr (cdr x))))))
 
 ;; Variables:
 
@@ -778,6 +782,7 @@ resulting regexp is surrounded by \\_< and \\_>."
 (eval-and-compile
   (defvar erlang-int-bifs
     '("abs"
+      "alias"
       "apply"
       "atom_to_binary"
       "atom_to_list"
@@ -789,7 +794,6 @@ resulting regexp is surrounded by \\_< and \\_>."
       "binary_to_term"
       "binary_part"
       "bit_size"
-      "bitsize"
       "bitstring_to_list"
       "byte_size"
       "ceil"
@@ -895,6 +899,7 @@ resulting regexp is surrounded by \\_< and \\_>."
       "trunc"
       "tuple_size"
       "tuple_to_list"
+      "unalias"
       "unlink"
       "unregister"
       "whereis")
@@ -952,7 +957,6 @@ resulting regexp is surrounded by \\_< and \\_>."
       "gather_gc_info_result"
       "get_cookie"
       "get_module_info"
-      "get_stacktrace"
       "has_prepared_code_on_load"
       "hibernate"
       "insert_element"
@@ -1420,7 +1424,7 @@ Other commands:
   (erlang-electric-init)
   (erlang-menu-init)
   (erlang-mode-variables)
-  (erlang-check-module-name-init)
+  (add-hook 'before-save-hook 'erlang-check-module-name nil t)
   (erlang-man-init)
   (erlang-tags-init)
   (erlang-font-lock-init)
@@ -1431,7 +1435,6 @@ Other commands:
         (setq-local eldoc-documentation-function #'ignore))
     (add-function :before-until (local 'eldoc-documentation-function)
                   #'erldoc-eldoc-function))
-  (run-hooks 'erlang-mode-hook)
 
   ;; Align maps.
   (add-to-list 'align-rules-list
@@ -2674,8 +2677,6 @@ This is automagically called by the user level function `indent-region'."
 
 (defmacro erlang-push (x stack) (list 'setq stack (list 'cons x stack)))
 (defmacro erlang-pop (stack) (list 'setq stack (list 'cdr stack)))
-;; Would much prefer to make caddr a macro but this clashes.
-(defun erlang-caddr (x) (car (cdr (cdr x))))
 
 
 (defun erlang-calculate-indent (&optional parse-start)
@@ -3076,8 +3077,8 @@ Return nil if inside string, t if in a comment."
                         (if (eq (car stack-top) '->)
                             (erlang-pop stack))
                         (cond ((and stack (looking-at ";"))
-                               (+ (erlang-caddr (car stack)) (- erlang-indent-level 2)))
-                              (stack (erlang-caddr (car stack)))
+                               (+ (caddr (car stack)) (- erlang-indent-level 2)))
+                              (stack (caddr (car stack)))
                               (t off)))
                        ((looking-at "catch\\b\\($\\|[^_a-zA-Z0-9]\\)")
                         ;; Are we in a try
@@ -3091,12 +3092,12 @@ Return nil if inside string, t if in a comment."
                                    (if (eq (car stack-top) '->)
                                        (erlang-pop stack))
                                    (if stack
-                                       (erlang-caddr (car stack))
+                                       (caddr (car stack))
                                      0)))
                                 (t (erlang-indent-standard indent-point token base 'nil))))) ;; old catch
                        ;; Indent result types
                        ((eq (car (car (cdr stack))) 'spec_arg)
-                        (setq base (+ (erlang-caddr (car (last stack))) erlang-indent-level))
+                        (setq base (+ (caddr (car (last stack))) erlang-indent-level))
                         (erlang-indent-standard indent-point token base 'nil))
                        (t
                         (erlang-indent-standard indent-point token base 'nil)
@@ -3224,7 +3225,7 @@ Return nil if inside string, t if in a comment."
                   ;; Take parent identation + offset,
                   ;; else just erlang-indent-level if no parent
                   (if stack
-                      (+ (erlang-caddr (car stack))
+                      (+ (caddr (car stack))
                          offset)
                     erlang-indent-level))
               (erlang-skip-blank indent-point)
@@ -4084,11 +4085,11 @@ of arguments could be found, otherwise nil."
 (defun erlang-match-next-exported-function (max)
   "Returns non-nil if there is an exported function in the current
 buffer between point and MAX."
-  (block nil
-         (while (and (not erlang-inhibit-exported-function-name-face)
-                     (erlang-match-next-function max))
-           (when (erlang-last-match-exported-p)
-             (return (match-data))))))
+  (catch 'return
+    (while (and (not erlang-inhibit-exported-function-name-face)
+                (erlang-match-next-function max))
+      (when (erlang-last-match-exported-p)
+        (throw 'return (match-data))))))
 
 (defun erlang-match-next-function (max)
   "Searches forward in current buffer for the next erlang function,
@@ -4116,28 +4117,6 @@ exported function."
 
 ;;; Check module name
 
-;; The function `write-file', bound to C-x C-w, calls
-;; `set-visited-file-name' which clears the hook.  :-(
-;; To make sure that the hook always is present, we advise
-;; `set-visited-file-name'.
-(defun erlang-check-module-name-init ()
-  "Initialize the functionality to compare file and module names.
-
-Unless we have `before-save-hook', we advice the function
-`set-visited-file-name' since it clears the variable
-`local-write-file-hooks'."
-  (if (boundp 'before-save-hook)
-      (add-hook 'before-save-hook 'erlang-check-module-name nil t)
-    (require 'advice)
-    (when (fboundp 'ad-advised-definition-p)
-      (unless (ad-advised-definition-p 'set-visited-file-name)
-        (defadvice set-visited-file-name (after erlang-set-visited-file-name
-                                                activate)
-          (if (eq major-mode 'erlang-mode)
-              (add-hook 'local-write-file-hooks 'erlang-check-module-name))))
-      (add-hook 'local-write-file-hooks 'erlang-check-module-name))))
-
-
 (defun erlang-check-module-name ()
   "If the module name doesn't match file name, ask for permission to change.
 
@@ -4146,7 +4125,7 @@ function.  It it is nil, this function does nothing.  If it is t, the
 source is silently changed.  If it is set to the atom `ask', the user
 is prompted.
 
-This function is normally placed in the hook `local-write-file-hooks'."
+This function is normally placed in the hook `before-save-hook'."
   (if erlang-check-module-name
       (let ((mn (erlang-add-quotes-if-needed
                  (erlang-get-module)))
@@ -5141,14 +5120,19 @@ about Erlang modules."
 ;;
 ;; As mentioned this xref implementation is based on the etags xref
 ;; implementation.  But in the cases where arity is considered the
-;; etags information structures (class xref-etags-location) will be
-;; translated to our own structures which include arity (class
+;; etags information structures (struct xref-etags-location) will be
+;; translated to our own structures which include arity (struct
 ;; erlang-xref-location).  This translation is started in the function
 ;; `erlang-refine-xrefs'.
 
 ;; I mention this as a head up that some of the functions below deal
 ;; with xref items with xref-etags-location and some deal with xref
 ;; items with erlang-xref-location.
+
+;; NOTE: Around Sept 2021, the xrefs package changed all of its defined types
+;; (i.e.  xref-location, xref-file-location) from EIEIO classes to CL-Lib
+;; structures. These are both supported. Older Emacsen with earlier versions of
+;; xref will continue to use defclass. Newer Emacsen will use cl-defstruct.
 
 (defun erlang-etags--xref-backend () 'erlang-etags)
 
@@ -5158,6 +5142,7 @@ about Erlang modules."
 
 (when (and (erlang-soft-require 'xref)
            (erlang-soft-require 'cl-generic)
+           (erlang-soft-require 'cl-lib)
            (erlang-soft-require 'eieio)
            (erlang-soft-require 'etags))
   ;; The purpose of using eval here is to avoid compilation
@@ -5186,10 +5171,20 @@ about Erlang modules."
         (let ((erlang-replace-etags-tags-completion-table t))
           (tags-completion-table)))
 
-      (defclass erlang-xref-location (xref-file-location)
-        ((arity :type fixnum :initarg :arity
-                :reader erlang-xref-location-arity))
-        :documentation "An erlang location is a file location plus arity.")
+      ;; Xref 1.3.1 bundled with Emacs 28+ switched from using EIEIO classes to
+      ;; using CL-Lib structs.
+      (if (find-class 'xref-file-location)
+          (progn
+            (defclass erlang-xref-location (xref-file-location)
+              ((arity :type fixnum :initarg :arity
+                      :reader erlang-xref-location-arity))
+              :documentation "An erlang location is a file location plus arity.")
+            ;; Make a constructor with the same name that a CL structure would have.
+            (defalias 'make-erlang-xref-location 'erlang-xref-location))
+        (cl-defstruct (erlang-xref-location
+                       (:include xref-file-location))
+          "An erlang location is a file location plus arity."
+          (arity 0 :type fixnum)))
 
       ;; This method definition only calls the superclass which is
       ;; the default behaviour if it was not defined.  It is only
@@ -5352,13 +5347,12 @@ is non-nil then TAG is a regexp."
       xrefs
     (when (and xrefs
                (fboundp 'xref-item-location)
-               (fboundp 'xref-location-group)
-               (fboundp 'slot-value))
+               (fboundp 'xref-location-group))
       (let (files)
         (cl-loop for xref in xrefs
                  for loc = (xref-item-location xref)
                  for file = (xref-location-group loc)
-                 do (pushnew file files :test 'string-equal))
+                 do (cl-pushnew file files :test 'string-equal))
         (or (cl-loop for file in files
                      append (erlang-xrefs-in-file file kind tag is-regexp))
             ;; Failed for some reason.  Pretend like it is raining and
@@ -5378,7 +5372,8 @@ is non-nil then TAG is a regexp."
            t))))
 
 (defun erlang-xrefs-in-file (file kind tag is-regexp)
-  (when (fboundp 'make-instance)
+  (when (and (fboundp 'make-erlang-xref-location)
+             (fboundp 'xref-make))
     (with-current-buffer (find-file-noselect file)
       (save-excursion
         (goto-char (point-min))
@@ -5390,17 +5385,15 @@ is non-nil then TAG is a regexp."
                    for name = (match-string-no-properties 1)
                    for arity = (save-excursion
                                  (erlang-get-arity))
-                   for loc = (make-instance 'erlang-xref-location
-                                            :file file
-                                            :line (line-number-at-pos)
-                                            :column 0
-                                            :arity arity)
+                   for loc = (make-erlang-xref-location
+                              :file file
+                              :line (line-number-at-pos)
+                              :column 0
+                              :arity arity)
                    for sum = (erlang-xref-summary kind name arity)
                    when (and arity
                              (not (eq arity last-arity)))
-                   collect (make-instance 'xref-item
-                                          :summary sum
-                                          :location loc)
+                   collect (xref-make sum loc)
                    do (setq last-arity arity)))))))
 
 (defun erlang-xref-summary (kind tag arity)

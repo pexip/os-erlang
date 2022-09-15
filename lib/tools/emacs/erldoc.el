@@ -2,7 +2,7 @@
 
 ;; %CopyrightBegin%
 ;;
-;; Copyright Ericsson AB 2016-2020. All Rights Reserved.
+;; Copyright Ericsson AB 2016-2021. All Rights Reserved.
 ;;
 ;; Licensed under the Apache License, Version 2.0 (the "License");
 ;; you may not use this file except in compliance with the License.
@@ -60,9 +60,10 @@
 
 ;;; Code:
 
-(eval-when-compile (require 'url-parse))
 (require 'cl-lib)
+(require 'json)
 (require 'erlang)
+(eval-when-compile (require 'url-parse))
 
 (eval-and-compile                       ;for emacs < 24.3
   (or (fboundp 'user-error) (defalias 'user-error 'error)))
@@ -268,7 +269,6 @@ up the indexing."
     (with-temp-buffer
       (if (not json)
           (pp table (current-buffer))
-        (eval-and-compile (require 'json))
         (let ((json-encoding-pretty-print t))
           (insert (json-encode table))))
       (unless (file-directory-p (file-name-directory output))
@@ -427,7 +427,7 @@ up the indexing."
 (defvar erldoc-user-guides nil)
 
 (defvar erldoc-missing-user-guides
-  '("compiler" "hipe" "kernel" "os_mon" "parsetools")
+  '("compiler" "kernel" "os_mon" "parsetools")
   "List of standard Erlang applications with no user guides.")
 
 ;; Search in `code:lib_dir/0' using find LIB_DIR -type f -name
@@ -436,8 +436,7 @@ up the indexing."
                              "kernel" "observer" "os_mon"
                              "runtime_tools" "sasl" "snmp"
                              "ssl" "test_server"
-                             ("ssh" . "SSH") ("stdlib" . "STDLIB")
-                             ("hipe" . "HiPE"))
+                             ("ssh" . "SSH") ("stdlib" . "STDLIB"))
   "List of applications that come with a manual.")
 
 (defun erldoc-user-guide-chapters (user-guide)

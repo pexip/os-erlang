@@ -1,7 +1,7 @@
 /*
  * %CopyrightBegin%
  *
- * Copyright Ericsson AB and Kjell Winblad 2019. All Rights Reserved.
+ * Copyright Ericsson AB and Kjell Winblad 2019-2021. All Rights Reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -58,8 +58,8 @@ int main( int argc, const char* argv[] )
 #endif
   int ret = 0;
   int nr_of_yields = 0;
-  long nr_of_reductions;
 #ifdef YCF_YIELD_CODE_GENERATED
+  long nr_of_reductions;
   do{
     nr_of_reductions = 101;
     ret = fun_ycf_gen_yielding(&nr_of_reductions,&wb,NULL,allocator,freer,NULL,0,NULL,1);

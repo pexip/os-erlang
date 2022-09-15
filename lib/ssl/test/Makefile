@@ -1,7 +1,7 @@
 #
 # %CopyrightBegin%
 #
-# Copyright Ericsson AB 1999-2020. All Rights Reserved.
+# Copyright Ericsson AB 1999-2022. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -56,6 +56,7 @@ MODULES = \
 	openssl_sni_SUITE\
 	ssl_mfl_SUITE\
 	openssl_mfl_SUITE\
+	ssl_reject_SUITE\
         ssl_renegotiate_SUITE\
 	openssl_renegotiate_SUITE\
 	openssl_reject_SUITE\
@@ -76,6 +77,7 @@ MODULES = \
 	ssl_pem_cache_SUITE \
 	ssl_session_SUITE \
 	ssl_session_cache_SUITE	\
+	ssl_session_cache_api_SUITE\	\
 	ssl_session_ticket_SUITE \
 	openssl_session_ticket_SUITE \
 	openssl_session_SUITE \
@@ -93,12 +95,15 @@ MODULES = \
 	make_certs \
         x509_test \
 	inet_crypto_dist \
-	openssl_ocsp_SUITE
+	openssl_ocsp_SUITE \
+	tls_server_session_ticket_SUITE \
+	tls_client_ticket_store_SUITE
 
 
 ERL_FILES = $(MODULES:%=%.erl)
 
 HRL_FILES = \
+	ssl_test_lib.hrl\
 	ssl_dist_test_lib.hrl
 
 HRL_FILES_SRC = \

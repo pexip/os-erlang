@@ -1,7 +1,7 @@
 /*
  * %CopyrightBegin%
  *
- * Copyright Ericsson AB 2010-2020. All Rights Reserved.
+ * Copyright Ericsson AB 2010-2022. All Rights Reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -21,9 +21,9 @@
 #ifndef E_HMAC_H__
 #define E_HMAC_H__ 1
 
-#if !defined(HAS_EVP_PKEY_CTX) || DISABLE_EVP_HMAC
-
 #include "common.h"
+
+#if !defined(HAS_EVP_PKEY_CTX) || DISABLE_EVP_HMAC
 
 int init_hmac_ctx(ErlNifEnv *env);
 

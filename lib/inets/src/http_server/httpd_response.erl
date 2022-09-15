@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %% 
-%% Copyright Ericsson AB 1997-2018. All Rights Reserved.
+%% Copyright Ericsson AB 1997-2021. All Rights Reserved.
 %% 
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -154,8 +154,8 @@ send_response(ModData, Header, Body) ->
 	undefined ->
 	    %% No status code 
 	    %% Ooops this must be very bad:
-	    %% generate a 404 content not availible
-	    send_status(ModData, 404, "The file is not availible");
+	    %% generate a 404 content not available
+	    send_status(ModData, 404, "The file is not available");
 	StatusCode ->
 	    case send_header(ModData, StatusCode, lists:keydelete(code, 1,
 								  Header)) of
@@ -175,19 +175,16 @@ send_header(#mod{socket_type  = Type,
     Headers = create_header(ConfigDb, 
 			    lists:map(fun transform/1, KeyValueTupleHeaders)),
     NewVer = case {Ver, StatusCode} of
-		 {[], _} ->
-		     %% May be implicit!
-		     "HTTP/0.9";
 		 {unknown, 408} ->
-		     %% This will proably never happen! It means the
+		     %% This will probably never happen! It means the
 		     %% server has timed out the request without
 		     %% receiving a version for the request!  Send the
 		     %% lowest version so to ensure that the client
 		     %% will be able to handle it, probably the
 		     %% sensible thing to do!
-		     "HTTP/0.9";
+		     httpd_request:default_version();
 		 {undefined,_} ->
-		     "HTTP/1.0"; %% See rfc2145 2.3 last paragraph
+		     httpd_request:default_version(); %% See rfc2145 2.3 last paragraph
 		 _ ->
 		     Ver
 	     end,
@@ -218,7 +215,7 @@ send_body(#mod{socket_type = Type, socket = Socket}, _, nobody) ->
     ok;
 
 send_body(#mod{socket_type = Type, socket = Sock}, 
-	  _StatusCode, Body) when is_list(Body) ->
+	  _StatusCode, Body) when is_list(Body); is_binary(Body) ->
     case httpd_socket:deliver(Type, Sock, Body) of
 	socket_closed ->
 	    done;
@@ -414,7 +411,7 @@ send_response_old(#mod{socket_type = Type,
     end.
 
 content_length(Body)->
-    integer_to_list(httpd_util:flatlength(Body)).
+    integer_to_list(erlang:iolist_size(Body)).
 
 handle_headers([], NewHeaders) ->
     {ok, NewHeaders};

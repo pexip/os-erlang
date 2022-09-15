@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2020-2020. All Rights Reserved.
+%% Copyright Ericsson AB 2020-2022. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -24,15 +24,15 @@
 
 -module(ssl_server_session_cache_db).
 
-%%-behaviour(ssl_session_cache_api).
+-behaviour(ssl_session_cache_api).
 
 %% API
 -export([init/1,
+         terminate/1,
          lookup/2,
          update/3,
          delete/2,
-         size/1,
-         take_oldest/1]).
+         size/1]).
 
 %%%===================================================================
 %%% API
@@ -45,7 +45,7 @@ init(_Options) ->
     gb_trees:empty().
 
 %%--------------------------------------------------------------------
-%% Description: Looks up a cach entry. Should be callable from any
+%% Description: Looks up a cache entry. Should be callable from any
 %% process.
 %%--------------------------------------------------------------------
 lookup(Cache, Key) ->
@@ -64,7 +64,7 @@ update(Cache, Key, Session) ->
     gb_trees:insert(Key, Session, Cache).
 
 %%--------------------------------------------------------------------
-%% Description: Delets a cache entry.
+%% Description: Deletes a cache entry.
 %% Will only be called from the ssl_server_cache process.
 %%--------------------------------------------------------------------
 delete(Cache, Key) ->
@@ -76,8 +76,5 @@ delete(Cache, Key) ->
 size(Cache) ->
     gb_trees:size(Cache).
 
-%%--------------------------------------------------------------
-%% Description: Returns the oldest cache entry
-%%--------------------------------------------------------------------
-take_oldest(Cache) ->
-    gb_trees:take_smallest(Cache).
+terminate(_) ->
+    ok.

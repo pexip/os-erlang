@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2020. All Rights Reserved.
+%% Copyright Ericsson AB 2020-2021. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -38,12 +38,12 @@ groups() ->
 init_per_suite(Config0) ->
     case ct_property_test:init_per_suite(Config0) of
         [_|_]=Config ->
-            try proper_abstr:module() of
+            try proper_erlang_abstract_code:module() of
                 _ ->
                     Config
             catch
                 error:undef ->
-                    {skip,"No proper_abstr module"}
+                    {skip,"No proper_erlang_abstract_code module"}
             end;
         Other ->
             Other

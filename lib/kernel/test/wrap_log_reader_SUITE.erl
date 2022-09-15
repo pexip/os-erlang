@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 1998-2019. All Rights Reserved.
+%% Copyright Ericsson AB 1998-2021. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -27,7 +27,6 @@
 -define(line, put(line, ?LINE), ).
 -define(privdir(_), "./disk_log_SUITE_priv").
 -define(config(X,Y), foo).
--define(t,test_server).
 -else.
 -include_lib("common_test/include/ct.hrl").
 -define(format(S, A), ok).
@@ -431,8 +430,8 @@ stop() ->
 %% Give disk logs opened by 'wlr_logger' and 'wlt' time to close after
 %% receiving EXIT signals.
 dl_wait() ->
-    case disk_log:accessible_logs() of
-        {[], []} ->
+    case disk_log:all() of
+        [] ->
             ok;
         _X ->
             erlang:display(_X),

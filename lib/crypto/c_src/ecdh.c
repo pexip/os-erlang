@@ -1,7 +1,7 @@
 /*
  * %CopyrightBegin%
  *
- * Copyright Ericsson AB 2010-2020. All Rights Reserved.
+ * Copyright Ericsson AB 2010-2022. All Rights Reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -41,7 +41,7 @@ ERL_NIF_TERM ecdh_compute_key_nif(ErlNifEnv* env, int argc, const ERL_NIF_TERM a
 
     ASSERT(argc == 3);
 
-    if (!get_ec_key(env, argv[1], argv[2], atom_undefined, &key))
+    if (!get_ec_key_sz(env, argv[1], argv[2], atom_undefined, &key, NULL)) // my priv key
         goto bad_arg;
     if ((group = EC_GROUP_dup(EC_KEY_get0_group(key))) == NULL)
         goto bad_arg;

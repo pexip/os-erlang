@@ -4,7 +4,7 @@
 <erlref>
   <header>
     <copyright>
-      <year>2020</year><year>2020</year>
+      <year>2020</year><year>2021</year>
       <holder>Ericsson AB. All Rights Reserved.</holder>
     </copyright>
     <legalnotice>
@@ -36,10 +36,29 @@
   <modulesummary>Functions used to render EEP-48 style documentation for a shell.</modulesummary>
   <description>
     <p>This module can be used to render function and type documentation
-      to be printed in a shell. It can only render EEP-48 documentation of the format
-      <c>application/erlang+html</c>. For more information about this format see
-      <seeguide marker="erl_docgen:doc_storage">Documentation Storage</seeguide>
-      in Erl_Docgen's User's Guide.
+      to be printed in a shell. This is the module that is used to render the
+      docs accessed through the shell through <seemfa marker="c#h/1"><c>c:h/1,2,3</c></seemfa>.
+    Example:</p>
+    <code>
+1> h(maps,new,0).
+
+  -spec new() -> Map when Map :: #{}.
+
+Since:
+  OTP 17.0
+
+  Returns a new empty map.
+
+  Example:
+
+    > maps:new().
+    #{}
+</code>
+    <p>This module formats and renders EEP-48 documentation of
+      the format <c>application/erlang+html</c>. For more information about
+      this format see <seeguide marker="erl_docgen:doc_storage">Documentation
+      Storage</seeguide> in Erl_Docgen's User's Guide. It can also render
+      any other format of "text" type, although those will be rendered as is.
     </p>
   </description>
 
@@ -159,6 +178,15 @@
       <desc>
         <p>This function can be used to do whitespace normalization
           of <c>application/erlang+html</c> documentation.</p>
+      </desc>
+    </func>
+
+    <func>
+      <name name="supported_tags" arity="0" since="OTP 24.0"/>
+      <fsummary>Which tags are supported</fsummary>
+      <desc>
+        <p>This function can be used to find out which tags are
+          supported by <c>application/erlang+html</c> documentation.</p>
       </desc>
     </func>
 

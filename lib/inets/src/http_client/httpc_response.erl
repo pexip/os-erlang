@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2004-2018. All Rights Reserved.
+%% Copyright Ericsson AB 2004-2021. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -45,7 +45,7 @@ whole_body([Bin, Body, Length])  ->
     whole_body(<<Body/binary, Bin/binary>>, Length).
 
 %% Functions that may be returned during the decoding process
-%% if the input data is incompleate. 
+%% if the input data is incomplete. 
 parse_version([Bin, Version, MaxHeaderSize, Result, Relaxed]) ->
     parse_version(Bin, Version, MaxHeaderSize, Result, Relaxed).
 
@@ -65,8 +65,8 @@ whole_body(Body, Length) ->
 	N when (N < Length) andalso (N > 0)  ->
 	    {?MODULE, whole_body, [Body, Length]};
 	%% OBS!  The Server may close the connection to indicate that the
-	%% whole body is now sent instead of sending a lengh
-	%% indicator.In this case the lengh indicator will be
+	%% whole body is now sent instead of sending a length
+	%% indicator.In this case the length indicator will be
 	%% -1.
 	N when (N >= Length) andalso (Length >= 0) -> 
 	    %% Potential trailing garbage will be thrown away in
@@ -587,8 +587,6 @@ is_server_closing(Headers) when is_record(Headers, http_response_h) ->
 	    false
     end.
 
-format_response({{"HTTP/0.9", _, _} = StatusLine, _, Body}) ->
-    {{StatusLine, [], Body}, <<>>};
 format_response({StatusLine, Headers, Body = <<>>}) ->
     {{StatusLine, http_response:header_list(Headers), Body}, <<>>};
 

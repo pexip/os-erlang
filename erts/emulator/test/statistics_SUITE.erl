@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 1997-2020. All Rights Reserved.
+%% Copyright Ericsson AB 1997-2022. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -23,6 +23,7 @@
 %% Tests the statistics/1 bif.
 
 -export([all/0, suite/0, groups/0,
+         init_per_testcase/2,
          wall_clock_sanity/1,
 	 wall_clock_zero_diff/1, wall_clock_update/1,
          runtime_sanity/1,
@@ -60,6 +61,16 @@ groups() ->
      {runtime, [],
       [runtime_sanity, runtime_zero_diff, runtime_update, runtime_diff]},
      {run_queue, [], [run_queue_one]}].
+
+init_per_testcase(msacc, Config) ->
+    try erlang:statistics(microstate_accounting) of
+        _ ->
+            Config
+    catch _:_ ->
+            {skip, "Microstate accouning not available"}
+    end;
+init_per_testcase(_, Config) ->
+    Config.
 
 wall_clock_sanity(Config) when is_list(Config) ->
     erlang:yield(),
@@ -341,9 +352,9 @@ run_scheduler_wall_time_test(Type) ->
                                     Schedulers + DirtyCPUSchedulers
                         end,
 
-        Env = [io_lib:format("~s~n",[KV]) || KV <- os:getenv()],
+        Env = [io_lib:format("~ts~n",[KV]) || KV <- os:getenv()],
 
-        ct:log("Env:~n~s",[Env]),
+        ct:log("Env:~n~ts",[Env]),
 
         ct:log("Schedulers:               ~p~n"
                "SchedulersOnline:         ~p~n"
@@ -355,6 +366,9 @@ run_scheduler_wall_time_test(Type) ->
                 erlang:system_info(dirty_cpu_schedulers),
                 DirtyCPUSchedulers,
                 DirtyIOSchedulers]),
+
+        %% Assert that number of schedulers is the same as number of dirty schedulers
+        Schedulers = DirtyCPUSchedulers,
 
         %% Let testserver and everyone else finish their work
         timer:sleep(1500),

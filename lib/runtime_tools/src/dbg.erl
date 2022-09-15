@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 1996-2017. All Rights Reserved.
+%% Copyright Ericsson AB 1996-2021. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -34,7 +34,7 @@
 -export([fun2ms/1]).
 
 %% Local exports
--export([erlang_trace/3,get_info/0,deliver_and_flush/1]).
+-export([erlang_trace/3,get_info/0,deliver_and_flush/1,do_relay/2]).
 
 %% Debug exports
 -export([wrap_presort/2, wrap_sort/2, wrap_postsort/1, wrap_sortfix/2,
@@ -944,9 +944,9 @@ erlang_trace(AtomPid, How, Flags) ->
 
 relay(Node,To) when Node /= node() ->
     case get(Node) of
-	undefined -> 
+	undefined ->
 	    S = self(),
-	    Pid = spawn_link(Node, fun() -> do_relay(S,To) end),
+	    Pid = spawn_link(Node, dbg, do_relay, [S, To]),
 	    receive {started,Remote} -> put(Node, {Pid,Remote}) end,
 	    {ok,Pid};
 	{_Relay,PortOrPid} ->

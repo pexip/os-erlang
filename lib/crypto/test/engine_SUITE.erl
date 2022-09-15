@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2017-2020. All Rights Reserved.
+%% Copyright Ericsson AB 2017-2022. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -35,12 +35,8 @@
          end_per_testcase/2,
          get_all_possible_methods/0,
          get_all_possible_methods/1,
-         engine_load_all_methods/0,
-         engine_load_all_methods/1,
-         engine_load_some_methods/0,
-         engine_load_some_methods/1,
-         multiple_engine_load/0,
-         multiple_engine_load/1,
+         engine_load_register_method/0,
+         engine_load_register_method/1,
          engine_list/0,
          engine_list/1,
          get_id_and_name/0,
@@ -63,6 +59,8 @@
          ctrl_cmd_string_optional/1,
          ensure_load/0,
          ensure_load/1,
+	 gc_clean/0,
+	 gc_clean/1,
          sign_verify_rsa/1,
          sign_verify_rsa_fake/1,
          sign_verify_dsa/1,
@@ -92,9 +90,7 @@ suite() ->
 all() ->
     [
      get_all_possible_methods,
-     engine_load_all_methods,
-     engine_load_some_methods,
-     multiple_engine_load,
+     engine_load_register_method,
      engine_list,
      get_id_and_name,
      engine_by_id,
@@ -106,6 +102,7 @@ all() ->
      ctrl_cmd_string,
      ctrl_cmd_string_optional,
      ensure_load,
+     gc_clean,
      {group, engine_stored_key},
      {group, engine_fakes_rsa}
     ].
@@ -139,6 +136,9 @@ init_per_suite(Config) ->
         {_, [{_,_, <<"OpenSSL 1.0.1s-freebsd  1 Mar 2016">>}]} ->
             {skip, "Problem with engine on OpenSSL 1.0.1s-freebsd"};
 
+        {_, [{_,_,<<"LibreSSL 2.1.",_/binary>>}]} ->
+            {skip, "Problem with engine on older LibreSSL 2.1.*"};
+
         {{unix,darwin}, _} ->
             {skip, "Engine unsupported on Darwin"};
         
@@ -168,18 +168,28 @@ init_per_group(engine_stored_key, Config) ->
 init_per_group(engine_fakes_rsa, Config) ->
     case crypto:info_lib() of
         [{<<"OpenSSL">>,LibVer,_}] when is_integer(LibVer), LibVer >= 16#10100000 ->
-            group_load_engine(Config,  []);
+            CryptoInfo = crypto:info(),
+            ct:log("~p:~p  crypto:info() = ~p",[?MODULE,?LINE,CryptoInfo]),
+            case CryptoInfo of
+                #{link_type := static} ->
+                    ct:log("~p:~p  Statically linked",[?MODULE,?LINE]),
+                    {skip, "Statically linked"};
+                _Info ->
+                    %% Dynamically linked; use fake engine rsa implementation
+                    group_load_engine(Config,  [])
+            end;
         _ ->
             {skip, "Too low OpenSSL cryptolib version"}
     end;
 init_per_group(_Group, Config0) ->
     Config0.
 
-
 group_load_engine(Config, ExcludeMthds) ->
-    case load_storage_engine(Config, ExcludeMthds) of
+    case load_storage_engine(Config) of
         {ok, E} ->
+	    ok = crypto:engine_register(E, crypto:engine_get_all_methods() -- ExcludeMthds),
             KeyDir = key_dir(Config),
+            ct:log("storage engine ~p loaded.~nKeyDir = ~p", [E,KeyDir]),
             [{storage_engine,E}, {storage_dir,KeyDir} | Config];
         {error, notexist} ->
             {skip, "OTP Test engine not found"};
@@ -191,10 +201,6 @@ group_load_engine(Config, ExcludeMthds) ->
             ct:log("Engine load failed: ~p",[Other]),
             {fail, "Engine load failed"}
     end.
-
-
-
-
 
 end_per_group(_, Config) ->
     case proplists:get_value(storage_engine, Config) of
@@ -240,12 +246,13 @@ get_all_possible_methods(Config) when is_list(Config) ->
             {skip, "Engine not supported on this SSL version"}
     end.
 
-engine_load_all_methods()->
+%%-------------------------------------------------------------------------
+engine_load_register_method()->
     [{doc, "Use a dummy md5 engine that does not implement md5"
       "but rather returns a static binary to test that crypto:engine_load "
       "functions works."}].
 
-engine_load_all_methods(Config) when is_list(Config) ->
+engine_load_register_method(Config) when is_list(Config) ->
     case crypto:get_test_engine() of
         {error, notexist} ->
             {skip, "OTP Test engine not found"};
@@ -257,8 +264,10 @@ engine_load_all_methods(Config) when is_list(Config) ->
                 case crypto:engine_load(<<"dynamic">>,
                                         [{<<"SO_PATH">>, Engine},
                                          <<"LOAD">>],
-                                        []) of
+                                        []) of		    
                     {ok, E} ->
+			ok = crypto:engine_register(E, [engine_method_digests]),
+
                         case crypto:hash(md5, "Don't panic") of
                             Md5Hash1 ->
                                 ct:fail(fail_to_load_still_original_engine);
@@ -267,7 +276,10 @@ engine_load_all_methods(Config) when is_list(Config) ->
                             _ ->
                                 ct:fail(fail_to_load_engine)
                         end,
+
+			ok = crypto:engine_unregister(E, [engine_method_digests]),
                         ok = crypto:engine_unload(E),
+
                         case crypto:hash(md5, "Don't panic") of
                             Md5Hash2 ->
                                 ct:fail(fail_to_unload_still_test_engine);
@@ -285,127 +297,7 @@ engine_load_all_methods(Config) when is_list(Config) ->
            end
     end.
 
-engine_load_some_methods()->
-    [{doc, "Use a dummy md5 engine that does not implement md5"
-      "but rather returns a static binary to test that crypto:engine_load "
-      "functions works."}].
-
-engine_load_some_methods(Config) when is_list(Config) ->
-    case crypto:get_test_engine() of
-        {error, notexist} ->
-            {skip, "OTP Test engine not found"};
-        {ok, Engine} ->
-            try
-                Md5Hash1 =  <<106,30,3,246,166,222,229,158,244,217,241,179,50,232,107,109>>,
-                Md5Hash1 = crypto:hash(md5, "Don't panic"),
-                Md5Hash2 =  <<0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15>>,
-                EngineMethods = crypto:engine_get_all_methods() --
-                    [engine_method_dh, engine_method_rand,
-                     engine_method_ciphers, engine_method_store,
-                     engine_method_pkey_meths, engine_method_pkey_asn1_meths],
-                case crypto:engine_load(<<"dynamic">>,
-                                        [{<<"SO_PATH">>, Engine},
-                                         <<"LOAD">>],
-                                        [],
-                                        EngineMethods) of
-                    {ok, E} ->
-                        case crypto:hash(md5, "Don't panic") of
-                            Md5Hash1 ->
-                                ct:fail(fail_to_load_engine_still_original);
-                            Md5Hash2 ->
-                                ok;
-                            _ ->
-                                ct:fail(fail_to_load_engine)
-                        end,
-                        ok = crypto:engine_unload(E),
-                        case crypto:hash(md5, "Don't panic") of
-                            Md5Hash2 ->
-                                ct:fail(fail_to_unload_still_test_engine);
-                            Md5Hash1 ->
-                                ok;
-                            _ ->
-                                ct:fail(fail_to_unload_engine)
-                        end;
-                    {error, bad_engine_id} ->
-                    {skip, "Dynamic Engine not supported"}
-                end
-           catch
-               error:notsup ->
-                  {skip, "Engine not supported on this SSL version"}
-           end
-    end.
-
-multiple_engine_load()->
-    [{doc, "Use a dummy md5 engine that does not implement md5"
-      "but rather returns a static binary to test that crypto:engine_load "
-      "functions works when called multiple times."}].
-
-multiple_engine_load(Config) when is_list(Config) ->
-    case crypto:get_test_engine() of
-        {error, notexist} ->
-            {skip, "OTP Test engine not found"};
-        {ok, Engine} ->
-            try
-                Md5Hash1 =  <<106,30,3,246,166,222,229,158,244,217,241,179,50,232,107,109>>,
-                Md5Hash1 = crypto:hash(md5, "Don't panic"),
-                Md5Hash2 =  <<0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15>>,
-                case crypto:engine_load(<<"dynamic">>,
-                                        [{<<"SO_PATH">>, Engine},
-                                         <<"LOAD">>],
-                                        []) of
-                    {ok, E} ->
-                        {ok, E1} = crypto:engine_load(<<"dynamic">>,
-                                        [{<<"SO_PATH">>, Engine},
-                                         <<"LOAD">>],
-                                        []),
-                        {ok, E2} = crypto:engine_load(<<"dynamic">>,
-                                        [{<<"SO_PATH">>, Engine},
-                                         <<"LOAD">>],
-                                        []),
-                        case crypto:hash(md5, "Don't panic") of
-                            Md5Hash1 ->
-                                ct:fail(fail_to_load_still_original_engine);
-                            Md5Hash2 ->
-                                ok;
-                            _ ->
-                                ct:fail(fail_to_load_engine)
-                        end,
-                        ok = crypto:engine_unload(E2),
-                        case crypto:hash(md5, "Don't panic") of
-                            Md5Hash1 ->
-                                ct:fail(fail_to_load_still_original_engine);
-                            Md5Hash2 ->
-                                ok;
-                            _ ->
-                                ct:fail(fail_to_load_engine)
-                        end,
-                        ok = crypto:engine_unload(E),
-                        case crypto:hash(md5, "Don't panic") of
-                            Md5Hash1 ->
-                                ct:fail(fail_to_load_still_original_engine);
-                            Md5Hash2 ->
-                                ok;
-                            _ ->
-                                ct:fail(fail_to_load_engine)
-                        end,
-                        ok = crypto:engine_unload(E1),
-                        case crypto:hash(md5, "Don't panic") of
-                            Md5Hash2 ->
-                                ct:fail(fail_to_unload_still_test_engine);
-                            Md5Hash1 ->
-                                ok;
-                            _ ->
-                                ct:fail(fail_to_unload_engine)
-                        end;
-                    {error, bad_engine_id} ->
-                        {skip, "Dynamic Engine not supported"}
-                end
-           catch
-               error:notsup ->
-                  {skip, "Engine not supported on this SSL version"}
-           end
-    end.
-
+%%-------------------------------------------------------------------------
 engine_list()->
     [{doc, "Test add and remove engine ID to the SSL internal engine list."}].
 
@@ -436,6 +328,7 @@ engine_list(Config) when is_list(Config) ->
            end
     end.
 
+%%-------------------------------------------------------------------------
 get_id_and_name()->
     [{doc, "Test fetching id and name from an engine."}].
 
@@ -462,6 +355,7 @@ get_id_and_name(Config) when is_list(Config) ->
            end
     end.
 
+%%-------------------------------------------------------------------------
 engine_by_id()->
     [{doc, "Test fetching a new reference the the engine when the"
      "engine id is added to the SSL engine list."}].
@@ -539,7 +433,7 @@ bad_arguments(Config) when is_list(Config) ->
                                         <<"LOAD">>],
                                        [])
                 of
-                    {error,bad_engine_id} ->    % should have happend in the previous try...catch end!
+                    {error,bad_engine_id} ->    % should have happened in the previous try...catch end!
                         throw(dynamic_engine_unsupported);
                     X3 ->
                         ct:fail("3 Got ~p",[X3])
@@ -555,6 +449,7 @@ bad_arguments(Config) when is_list(Config) ->
           end
     end.
 
+%%-------------------------------------------------------------------------
 unknown_engine() ->
     [{doc, "Try to load a non existent engine."}].
 
@@ -567,6 +462,7 @@ unknown_engine(Config) when is_list(Config) ->
            {skip, "Engine not supported on this SSL version"}
     end.
 
+%%-------------------------------------------------------------------------
 pre_command_fail_bad_value() ->
     [{doc, "Test pre command due to bad value"}].
 
@@ -589,6 +485,7 @@ pre_command_fail_bad_value(Config) when is_list(Config) ->
            {skip, "Engine not supported on this SSL version"}
     end.
 
+%%-------------------------------------------------------------------------
 pre_command_fail_bad_key() ->
     [{doc, "Test pre command due to bad key"}].
 
@@ -614,6 +511,7 @@ pre_command_fail_bad_key(Config) when is_list(Config) ->
           {skip, "Engine not supported on this SSL version"}
    end.
 
+%%-------------------------------------------------------------------------
 failed_engine_init()->
     [{doc, "Test failing engine init due to missed pre command"}].
 
@@ -638,11 +536,10 @@ failed_engine_init(Config) when is_list(Config) ->
           {skip, "Engine not supported on this SSL version"}
    end.
 
-
 %%-------------------------------------------------------------------------
 %% Test the optional flag in ctrl comands
 ctrl_cmd_string()->
-    [{doc, "Test that a not known optional ctrl comand do not fail"}].
+    [{doc, "Test that a not known optional ctrl command do not fail"}].
 ctrl_cmd_string(Config) when is_list(Config) ->
     try
         case crypto:get_test_engine() of
@@ -671,8 +568,9 @@ ctrl_cmd_string(Config) when is_list(Config) ->
           {skip, "Engine not supported on this SSL version"}
    end.
 
+%%-------------------------------------------------------------------------
 ctrl_cmd_string_optional()->
-    [{doc, "Test that a not known optional ctrl comand do not fail"}].
+    [{doc, "Test that a not known optional ctrl command do not fail"}].
 ctrl_cmd_string_optional(Config) when is_list(Config) ->
     try
         case crypto:get_test_engine() of
@@ -702,6 +600,9 @@ ctrl_cmd_string_optional(Config) when is_list(Config) ->
           {skip, "Engine not supported on this SSL version"}
    end.
 
+%%-------------------------------------------------------------------------
+%
+%
 ensure_load()->
     [{doc, "Test the special ensure load function."}].
 
@@ -716,7 +617,8 @@ ensure_load(Config) when is_list(Config) ->
                 Md5Hash2 =  <<0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15>>,
                 case crypto:ensure_engine_loaded(<<"MD5">>, Engine) of
                     {ok, E} ->
-                        {ok, _E1} = crypto:ensure_engine_loaded(<<"MD5">>, Engine),
+			ok = crypto:engine_register(E, [engine_method_digests]),
+
                         case crypto:hash(md5, "Don't panic") of
                             Md5Hash1 ->
                                 ct:fail(fail_to_load_still_original_engine);
@@ -725,22 +627,155 @@ ensure_load(Config) when is_list(Config) ->
                             _ ->
                                 ct:fail(fail_to_load_engine)
                         end,
+
+                        {ok, E1} = crypto:ensure_engine_loaded(<<"MD5">>, Engine),
+                        case crypto:hash(md5, "Don't panic") of
+                            Md5Hash1 ->
+                                ct:fail(fail_to_load_still_original_engine);
+                            Md5Hash2 ->
+                                ok;
+                            _ ->
+                                ct:fail(fail_to_load_engine)
+                        end,
+
+                        ok = crypto:ensure_engine_unloaded(E1),
+                        case crypto:hash(md5, "Don't panic") of
+                            Md5Hash1 ->
+                                ct:fail(fail_test_engine_unloaded);
+                            Md5Hash2 ->
+				ok;
+                            _ ->
+                                ct:fail(fail_to_unload_engine)
+                        end,
+
+                        {ok, E2} = crypto:ensure_engine_loaded(<<"MD5">>, Engine),
+			case crypto:hash(md5, "Don't panic") of
+                            Md5Hash1 ->
+                                ct:fail(fail_test_engine_not_loaded);
+                            Md5Hash2 ->
+				ok;
+                            _ ->
+                                ct:fail(fail_to_load_engine)
+                        end,
+			ok = crypto:ensure_engine_unloaded(E2),
+
+                        {ok, E3} = crypto:ensure_engine_loaded(<<"MD5">>, Engine),
+			case crypto:hash(md5, "Don't panic") of
+                            Md5Hash1 ->
+                                ct:fail(fail_test_engine_not_loaded);
+                            Md5Hash2 ->
+				ok;
+                            _ ->
+                                ct:fail(fail_to_load_engine)
+                        end,
+
                         ok = crypto:ensure_engine_unloaded(E),
                         case crypto:hash(md5, "Don't panic") of
-                            Md5Hash2 ->
-                                ct:fail(fail_to_unload_still_test_engine);
                             Md5Hash1 ->
+                                ct:fail(fail_test_engine_not_loaded);
+                            Md5Hash2 ->
                                 ok;
                             _ ->
                                 ct:fail(fail_to_unload_engine)
+                        end,
+
+			ok = crypto:engine_unregister(E3, [engine_method_digests]),
+			ok = crypto:ensure_engine_unloaded(E3),
+                        case crypto:hash(md5, "Don't panic") of
+                            Md5Hash1 ->
+                                ok;
+                            Md5Hash2 ->
+                                ct:fail(fail_to_unload_still_test_engine);
+                            _ ->
+                                ct:fail(fail_to_unload_engine)
                         end;
+
                     {error, bad_engine_id} ->
                         {skip, "Dynamic Engine not supported"}
                 end
            catch
                error:notsup ->
-                  {skip, "Engine not supported on this SSL version"}
+                   {skip, "Engine not supported on this SSL version"}
            end
+    end.
+
+%%-------------------------------------------------------------------------
+gc_clean()->
+    [{doc, "Test the special ensure load function."}].
+
+gc_clean(Config) when is_list(Config) ->
+    case crypto:get_test_engine() of
+        {error, notexist} ->
+            {skip, "OTP Test engine not found"};
+        {ok, Engine} ->
+
+	    Md5Hash1 = <<106,30,3,246,166,222,229,158,244,217,241,179,50,232,107,109>>,
+	    Md5Hash1 = crypto:hash(md5, "Don't panic"),
+	    Md5Hash2 =  <<0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15>>,
+
+	    load_without_unload(Engine, Md5Hash1, Md5Hash2),
+
+	    erlang:garbage_collect(),
+	    timer:sleep(1000),
+
+	    case crypto:hash(md5, "Don't panic") of
+		Md5Hash2 ->
+		    ct:fail(fail_to_unload_still_test_engine);
+		Md5Hash1 ->
+		    ok;
+		_ ->
+		    ct:fail(fail_to_unload_engine)
+	    end,
+	    
+	    try
+		case crypto:ensure_engine_loaded(<<"MD5">>, Engine) of
+		    {ok, E} ->
+			ok = crypto:engine_register(E, [engine_method_digests]),
+			case crypto:hash(md5, "Don't panic") of
+			    Md5Hash1 ->
+				ct:fail(fail_to_load_still_original_engine);
+			    Md5Hash2 ->
+				ok;
+			    _ ->
+				ct:fail(fail_to_load_engine)
+			end,
+			
+			ok = crypto:engine_unregister(E, [engine_method_digests]),
+			ok = crypto:engine_remove(E),
+			ok = crypto:ensure_engine_unloaded(E),
+			
+			case crypto:hash(md5, "Don't panic") of
+			    Md5Hash2 ->
+				ct:fail(fail_to_unload_still_test_engine);
+			    Md5Hash1 ->
+				ok;
+			    _ ->
+				ct:fail(fail_to_unload_engine)
+			end;
+		    {error, bad_engine_id} ->
+                        {skip, "Dynamic Engine not supported"}
+		end
+	     catch
+		 error:notsup ->
+			     {skip, "Engine not supported on this SSL version"}
+	     end
+    end.
+    
+load_without_unload(Engine, Md5Hash1, Md5Hash2) ->
+    case crypto:ensure_engine_loaded(<<"MD5">>, Engine) of
+	{ok, E} ->
+	    ok = crypto:engine_register(E, [engine_method_digests]),
+	    case crypto:hash(md5, "Don't panic") of
+		Md5Hash1 ->
+		    ct:fail(fail_to_load_still_original_engine);
+		Md5Hash2 ->
+		    ok = crypto:engine_unregister(E, [engine_method_digests]),
+		    ok;
+		_ ->
+		    ct:fail(fail_to_load_engine)
+	    end;
+	 {error, bad_engine_id} ->
+	    io:format("load_without_unload: bad_engine_id\n", [])
     end.
 
 %%%----------------------------------------------------------------
@@ -791,7 +826,7 @@ sign_verify_rsa_pwd_bad_pwd(Config) ->
     Pub  = #{engine => engine_ref(Config),
              key_id => key_id(Config, "rsa_public_key_pwd.pem")},
     try sign_verify(rsa, sha, Priv, Pub) of
-        _ -> {fail, "PWD prot pubkey sign succeded with no pwd!"}
+        _ -> {fail, "PWD prot pubkey sign succeeded with no pwd!"}
     catch
         error:badarg -> ok
     end.
@@ -869,7 +904,7 @@ get_pub_from_priv_key_rsa_pwd_no_pwd(Config) ->
             {fail, {wrong_error,Error}};
         Pub ->
             ct:log("rsa Pub = ~p",[Pub]),
-            {fail, "PWD prot pubkey fetch succeded although no pwd!"}
+            {fail, "PWD prot pubkey fetch succeeded although no pwd!"}
     end.
 
 get_pub_from_priv_key_rsa_pwd_bad_pwd(Config) ->
@@ -885,7 +920,7 @@ get_pub_from_priv_key_rsa_pwd_bad_pwd(Config) ->
             {fail, {wrong_error,Error}};
         Pub ->
             ct:log("rsa Pub = ~p",[Pub]),
-            {fail, "PWD prot pubkey fetch succeded with bad pwd!"}
+            {fail, "PWD prot pubkey fetch succeeded with bad pwd!"}
     end.
 
 get_pub_from_priv_key_dsa(Config) ->
@@ -934,16 +969,14 @@ pkey_supported(Type) ->
     lists:member(Type, proplists:get_value(public_keys, crypto:supports(), [])).
 
 
-load_storage_engine(_Config, ExcludeMthds) ->
+load_storage_engine(_Config) ->
     case crypto:get_test_engine() of
-        {ok, Engine} ->
+        {ok, EngineLibPath} ->
             try crypto:engine_load(<<"dynamic">>,
-                                   [{<<"SO_PATH">>, Engine},
-                                    <<"LOAD">>],
-                                   [],
-                                   crypto:engine_get_all_methods() -- ExcludeMthds
-                                  )
-            catch
+				   [{<<"SO_PATH">>, EngineLibPath},
+				    <<"LOAD">>],
+				   [])
+	    catch
                 error:notsup ->
                     {error, notsup}
             end;
@@ -1017,6 +1050,8 @@ sign_verify(Alg, Sha, KeySign, KeyVerify) ->
 
 %%% Use fake engine rsa implementation
 sign_verify_fake(Alg, Sha, KeySign, KeyVerify) ->
+    ct:log("~p:~p  sign_verify_fake ~p~n Sha = ~p~n KeySign = ~p~n KeyVerify = ~p~n",
+           [?MODULE, ?LINE, Alg, Sha, KeySign, KeyVerify]),
     case pubkey_alg_supported(Alg) of
         true ->
             PlainText = <<"Fake me!">>,

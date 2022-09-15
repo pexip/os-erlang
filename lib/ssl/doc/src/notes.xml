@@ -4,7 +4,7 @@
 <chapter>
   <header>
     <copyright>
-      <year>1999</year><year>2020</year>
+      <year>1999</year><year>2022</year>
       <holder>Ericsson AB. All Rights Reserved.</holder>
     </copyright>
     <legalnotice>
@@ -26,6 +26,897 @@
     <file>notes.xml</file>
   </header>
   <p>This document describes the changes made to the SSL application.</p>
+
+<section><title>SSL 10.7.3.4</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+          <p>
+	    With this change, value of cacertfile option will be
+	    adjusted before loading certs from the file. Adjustments
+	    include converting relative paths to absolute and
+	    converting symlinks to actual file path.</p>
+          <p>
+	    Thanks to Marcus Johansson</p>
+          <p>
+	    Own Id: OTP-18099 Aux Id: PR-6287 </p>
+        </item>
+        <item>
+          <p>
+	    Incorrect handling of client middlebox negotiation for
+	    TLS-1.3 could result in that a TLS-1.3 server would not
+	    use middlebox mode although the client was expecting it
+	    too and failing the negotiation with unexpected message.</p>
+          <p>
+	    Own Id: OTP-18219 Aux Id: GH-6241, PR-6249 </p>
+        </item>
+        <item>
+          <p>
+	    If the "User" process, the process starting the TLS
+	    connection, gets killed in the middle of spawning the
+	    dynamic connection tree make sure we do not leave any
+	    processes behind.</p>
+          <p>
+	    Own Id: OTP-18233 Aux Id: GH-6244, PR-6270 </p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>SSL 10.7.3.3</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+          <p>
+	    Reject unexpected application data in all relevant places
+	    for all TLS versions. Also, handle TLS-1.3 middlebox
+	    compatibility with more care. This will make malicious
+	    connections fail early and further, mitigate possible DoS
+	    attacks, that would be caught by the handshake timeout.</p>
+          <p>
+	    Thanks to Aina Toky Rasoamanana and Olivier Levillain
+	    from Télécom SudParis for alerting us of the issues in
+	    our implementation.</p>
+          <p>
+	    Own Id: OTP-18044</p>
+        </item>
+        <item>
+	    <p> The link to crypto:engine_load refered the function
+	    with wrong arity. </p>
+          <p>
+	    Own Id: OTP-18173</p>
+        </item>
+        <item>
+          <p>
+	    Make sure periodical refresh of CA certificate files
+	    repopulates cache properly.</p>
+          <p>
+	    Own Id: OTP-18195</p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>SSL 10.7.3.2</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+          <p>
+	    Improved handling of unexpected messages during the
+	    handshake, taking the right action for unexpected
+	    messages.</p>
+          <p>
+	    Own Id: OTP-18145</p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>SSL 10.7.3.1</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+          <p>
+	    When a TLS-1.3 enabled client tried to talk to a TLS-1.2
+	    server that coalesces TLS-1.2 handshake message over one
+	    TLS record, the connection could fail due to some message
+	    being handled in the wrong state, this has been fixed.</p>
+          <p>
+	    Own Id: OTP-18087 Aux Id: GH-5961 </p>
+        </item>
+        <item>
+          <p>
+	    Fixed tls-1.3 session ticket lifetime which was discarded
+	    to quickly before.</p>
+          <p>
+	    Own Id: OTP-18092 Aux Id: PR-5959 </p>
+        </item>
+        <item>
+          <p>
+	    Correctly handles supported protocol version change from
+	    default to something else by sni_fun supplied to
+	    ssl:handshake/[2,3] together with a TCP-socket (so called
+	    upgrade).</p>
+          <p>
+	    Own Id: OTP-18100 Aux Id: GH-5985 </p>
+        </item>
+        <item>
+          <p>
+	    Also, TLS-1.3 should respond with a protocol version
+	    alert if previous versions, that are supported but not
+	    configured, are attempted.</p>
+          <p>
+	    Own Id: OTP-18129 Aux Id: GH-5950 </p>
+        </item>
+      </list>
+    </section>
+
+
+    <section><title>Improvements and New Features</title>
+      <list>
+        <item>
+          <p>
+	    Enhance handling of handshake decoding errors, especially
+	    for certificate authorities extension to ensure graceful
+	    termination.</p>
+          <p>
+	    Own Id: OTP-18085</p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>SSL 10.7.3</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+          <p>
+	    Client certification could fail if TLS-1.3 enabled client
+	    negotiated TLS-1.2 connection with the server, this is
+	    due to the wrong version being used when decoding the
+	    certificate request message from the server.</p>
+          <p>
+	    Own Id: OTP-18028 Aux Id: GH-5835 </p>
+        </item>
+        <item>
+          <p>
+	    socket option packet_size was not handled in ssl:setops/2
+	    and ssl:getotps/2</p>
+          <p>
+	    Own Id: OTP-18062 Aux Id: GH-5898 </p>
+        </item>
+        <item>
+          <p>
+	    Remove legacy code to fix interoperability with new
+	    socket inet_backend.</p>
+          <p>
+	    Own Id: OTP-18071 Aux Id: GH-5930 </p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>SSL 10.7.2</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+          <p>
+	    With this change, potential hanging of pre TLS1.3 client
+	    receiving OSCP staple message is avoided.</p>
+          <p>
+	    Own Id: OTP-17994</p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>SSL 10.7.1</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+          <p>
+	    Client certification could fail for TLS-1.3 servers that
+	    did not include the certificate_authorities extension in
+	    its certificate request message.</p>
+          <p>
+	    Own Id: OTP-17971 Aux Id: GH-5783 </p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>SSL 10.7</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+          <p>
+	    Improved error handling.</p>
+          <p>
+	    Own Id: OTP-17759 Aux Id: GH-5367 </p>
+        </item>
+        <item>
+          <p>
+	    Before this change, net_kernel used with TLS distribution
+	    might be leaking processes in case of connectivity
+	    issues.</p>
+          <p>
+	    Own Id: OTP-17815 Aux Id: GH-5332 </p>
+        </item>
+        <item>
+          <p>
+	    Fix makefile dependency bugs.</p>
+          <p>
+	    Own Id: OTP-17847 Aux Id: PR-5574 GH-5548 </p>
+        </item>
+        <item>
+          <p>
+	    Make sure the TLS sender process handles explicit calls
+	    to erlang:disconnect_node properly, avoiding potential
+	    hanging problems in net_kernel.</p>
+          <p>
+	    Own Id: OTP-17929 Aux Id: GH-5708 </p>
+        </item>
+      </list>
+    </section>
+
+
+    <section><title>Improvements and New Features</title>
+      <list>
+        <item>
+          <p>
+	    Add support for TLS-1.3 certificate_authorities
+	    extension. And process certificate_authorities field in
+	    pre-TLS-1.3 certificate requests.</p>
+          <p>
+	    Own Id: OTP-15719</p>
+        </item>
+        <item>
+          <p>
+	    Support password fun for protected keyfiles in
+	    ssl:connect function.</p>
+          <p>
+	    Own Id: OTP-17816 Aux Id: PR-5607 </p>
+        </item>
+        <item>
+          <p>
+	    Add in some cases earlier detection of possible DoS
+	    attacks by malicious clients sending unexpected TLS
+	    messages instead of the client hello. Note that such
+	    attacks are already mitigated by providing a timeout for
+	    the TLS handshake.</p>
+          <p>
+	    Own Id: OTP-17903</p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>SSL 10.6.1</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+          <p>
+	    Improve SNI (server name indication) handling so that
+	    protocol version can be selected with regards to SNI.
+	    Also, make sure that ssl:connection_information/1 returns
+	    the correct SNI value.</p>
+          <p>
+	    Own Id: OTP-17794 Aux Id: GH-5341, GH-4450 </p>
+        </item>
+        <item>
+          <p>
+	    Fixed cipher suite listing functions so that the listing
+	    of all cipher suites will be complete. Another fix for
+	    cipher suite handling in OTP-24.1 accidentally excludes a
+	    few cipher suites from the listing of all cipher suites.</p>
+          <p>
+	    Own Id: OTP-17829 Aux Id: ERIERL-708 </p>
+        </item>
+        <item>
+          <p>
+	    Reenable legacy cipher suite
+	    TLS_RSA_WITH_3DES_EDE_CBC_SHA for explicit configuration
+	    in TLS-1.2, not supported by default.</p>
+          <p>
+	    Own Id: OTP-17879 Aux Id: GH-5624 </p>
+        </item>
+      </list>
+    </section>
+
+
+    <section><title>Improvements and New Features</title>
+      <list>
+        <item>
+          <p>
+	    Avoid unnecessary logs by better adjusting the tls_sender
+	    process to the new supervisor structure in OTP-24.2</p>
+          <p>
+	    Own Id: OTP-17831</p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>SSL 10.6</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+          <p>
+	    Allow re-connect on DTLS sockets</p>
+          <p>
+	    Can happen when a computer reboots and connects from the
+	    same client port without the server noticing should be
+	    allowed according to RFC.</p>
+          <p>
+	    Own Id: OTP-17411 Aux Id: ERL-1203, GH-4393 </p>
+        </item>
+        <item>
+          <p>
+	    Fix tls and non-tls distribution to use
+	    erl_epmd:address_please to figure out if IPv4 or IPv6
+	    addresses should be used when connecting to the remote
+	    node.</p>
+          <p>
+	    Before this fix, a dns lookup of the remote node hostname
+	    determined which IP version was to be used which meant
+	    that the hostname had to resolve to a valid ip address.</p>
+          <p>
+	    Own Id: OTP-17809 Aux Id: PR-5337 GH-5334 </p>
+        </item>
+      </list>
+    </section>
+
+
+    <section><title>Improvements and New Features</title>
+      <list>
+        <item>
+          <p>
+	    Use supervisor significant child to manage tls connection
+	    process and tls sender process dependency.</p>
+          <p>
+	    Own Id: OTP-17417</p>
+        </item>
+        <item>
+          <p>
+	    Random generation adjustment for TLS1.3</p>
+          <p>
+	    Own Id: OTP-17699</p>
+        </item>
+        <item>
+          <p>
+	    Allow any {03,XX} TLS record version in the client hello
+	    for maximum interoperability</p>
+          <p>
+	    Own Id: OTP-17761 Aux Id: GH-5380 </p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>SSL 10.5.3</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+          <p>
+	    Correct typo of ECC curve name in signature algorithm
+	    handling. Will make the signature algorithm
+	    ecdsa_secp521r1_sha512 succeed.</p>
+          <p>
+	    Own Id: OTP-17756 Aux Id: GH-5383, PR-5397 </p>
+        </item>
+        <item>
+          <p>
+	    Suppress authenticity warning when option verify_none is
+	    explicitly supplied.</p>
+          <p>
+	    Own Id: OTP-17757 Aux Id: GH-5352, PR-5395 </p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>SSL 10.5.2</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+          <p>
+	    Fix TLS-1.2 RSA-PSS negotiation and also fix broken
+	    certificate request message for pre-TLS-1.3 servers.</p>
+          <p>
+	    Own Id: OTP-17688 Aux Id: GH-5255 </p>
+        </item>
+        <item>
+          <p>
+	    Fix CRL issuer verification that under some circumstances
+	    could fail with a function_clause error.</p>
+          <p>
+	    Own Id: OTP-17723 Aux Id: GH-5300 </p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>SSL 10.5.1</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+          <p>
+	    Before that change, TLS downgrade could occasionally fail
+	    when data intended for downgraded socket were delivered
+	    together with CLOSE_NOTIFY alert to ssl app.</p>
+          <p>
+	    Own Id: OTP-17393</p>
+        </item>
+        <item>
+          <p>
+	    Avoid re-encoding of decoded certificates. This could
+	    cause unexpected failures as some subtle encoding errors
+	    can be tolerated when decoding but hence creating another
+	    sequence of bytes if the decoded value is re-encoded.</p>
+          <p>
+	    Own Id: OTP-17657</p>
+        </item>
+        <item>
+          <p>
+	    Fix possible process leak when the process doing
+	    ssl:transport_accept dies before initiating the TLS
+	    handshake.</p>
+          <p>
+	    Own Id: OTP-17666 Aux Id: GH-5239 </p>
+        </item>
+        <item>
+          <p>
+	    Fix dtls memory leak, the replay window code was broken.</p>
+          <p>
+	    Own Id: OTP-17670 Aux Id: GH-5224 </p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>SSL 10.5</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+          <p>
+	    Fix Makefile dependency generation to work no matter what
+	    the <c>ERL_TOP</c> folder is called.</p>
+          <p>
+	    Own Id: OTP-17423 Aux Id: GH-4823 PR-4829 </p>
+        </item>
+        <item>
+          <p>
+	    If trying to downgrade a TLS-1.3 connection to a plain
+	    TCP connection, possible TLS-1.3 session ticket messages
+	    will be ignored in the "downgrade" state while waiting
+	    for the close notify alert.</p>
+          <p>
+	    Own Id: OTP-17517 Aux Id: GH-5009 </p>
+        </item>
+        <item>
+          <p>
+	    Corrected error handling to correctly generate an
+	    insufficient security alert when there are no suitable
+	    groups that can be negotiated in TLS-1.3 instead of
+	    crashing resulting in an internal error alert.</p>
+          <p>
+	    Own Id: OTP-17521</p>
+        </item>
+        <item>
+          <p>
+	    Properly handle default session data storage.</p>
+          <p>
+	    When a client tries to reuse an expired session the
+	    default server storage handling would crash losing other
+	    session data. This would cause a error report and
+	    possible loss of abbreviated handshakes.</p>
+          <p>
+	    Own Id: OTP-17635 Aux Id: GH-5192 </p>
+        </item>
+      </list>
+    </section>
+
+
+    <section><title>Improvements and New Features</title>
+      <list>
+        <item>
+          <p>
+	    Add support for RSA-PSS-PSS signatures and
+	    signature_algorithms_cert in TLS-1.2. This is a TLS-1.3
+	    RFC requirement to backport this functionality.</p>
+          <p>
+	    Own Id: OTP-16590 Aux Id: ERL-625, GH-5029 </p>
+        </item>
+        <item>
+          <p>
+	    Use inet:monitor/1 to monitor listen-sockets so that we
+	    are compatible with the new socket backend for gen_tcp.</p>
+          <p>
+	    Own Id: OTP-17392 Aux Id: PR-5050 </p>
+        </item>
+        <item>
+          <p>
+	    Enhance ssl:prf/4 handling and testing</p>
+          <p>
+	    Own Id: OTP-17464</p>
+        </item>
+        <item>
+          <p>
+	    Enhanced cipher suite filtering functionality, making
+	    sure TLS-1.3 and TLS-1.2 cipher suites can be supported
+	    correctly together even when TLS-1.2 anonymous ciphers
+	    are included.</p>
+          <p>
+	    Own Id: OTP-17501 Aux Id: GH-4978 </p>
+        </item>
+        <item>
+          <p>
+	    Enhance gracefulness especially in TLS-1.3</p>
+          <p>
+	    Own Id: OTP-17530</p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>SSL 10.4.2</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+          <p>
+	    Handle cross-signed root certificates when old root
+	    expired as reported in GH-4877.</p>
+          <p>
+	    Own Id: OTP-17475 Aux Id: GH-4877 </p>
+        </item>
+        <item>
+          <p>
+	    The signature selection algorithm has been changed to
+	    also verify if the client supports signatures using the
+	    elliptic curve of the server's public/private key pair.
+	    This change fixes #4958.</p>
+          <p>
+	    Own Id: OTP-17529 Aux Id: PR-4979, GH-4958 </p>
+        </item>
+      </list>
+    </section>
+
+
+    <section><title>Improvements and New Features</title>
+      <list>
+        <item>
+          <p>
+	    Slight optimization of certificate decoding.</p>
+          <p>
+	    Own Id: OTP-17150 Aux Id: GH-4877 </p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>SSL 10.4.1</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+          <p>
+	    Fix cache invalidation problem for CA certs provided by
+	    the cacertfile option.</p>
+          <p>
+	    Own Id: OTP-17435 Aux Id: ERIERL-653 </p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>SSL 10.4</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+	    <p>Missing runtime dependencies has been added to this
+	    application.</p>
+          <p>
+	    Own Id: OTP-17243 Aux Id: PR-4557 </p>
+        </item>
+        <item>
+          <p>
+	    TLS handshake should fail if OCSP staple is requested but
+	    missing. Note that OCSP support is still considered
+	    experimental and only partially implemented.</p>
+          <p>
+	    Own Id: OTP-17343</p>
+        </item>
+      </list>
+    </section>
+
+
+    <section><title>Improvements and New Features</title>
+      <list>
+        <item>
+          <p>
+	    Removed ssl:ssl_accept/1,2,3 and ssl:cipher:suites/0,1
+	    use ssl:handshake/1,2,3 and ssl:cipher_suites/2,3
+	    instead.</p>
+          <p>
+	    *** POTENTIAL INCOMPATIBILITY ***</p>
+          <p>
+	    Own Id: OTP-16974</p>
+        </item>
+        <item>
+          <p>
+	    Make TLS handshakes in Erlang distribution concurrent.</p>
+          <p>
+	    Own Id: OTP-17044 Aux Id: PR-2654 </p>
+        </item>
+        <item>
+          <p>
+	    Randomize internal <c>{active,n}</c> optimization when
+	    running Erlang distribution over TLS to spread RAM/CPU
+	    spike that may occur when starting up a big cluster.</p>
+          <p>
+	    Own Id: OTP-17117 Aux Id: PR-2933 </p>
+        </item>
+        <item>
+          <p>
+	    TLS connections now support EdDSA certificates.</p>
+          <p>
+	    Own Id: OTP-17142 Aux Id: PR-4756, GH-4637, GH-4650 </p>
+        </item>
+        <item>
+          <p>
+	    Enhance documentation and logging of certificate
+	    handling.</p>
+          <p>
+	    Own Id: OTP-17384 Aux Id: GH-4800 </p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>SSL 10.3.1.2</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+          <p>
+	    Handle cross-signed root certificates when old root
+	    expired as reported in GH-4877.</p>
+          <p>
+	    Own Id: OTP-17475 Aux Id: GH-4877 </p>
+        </item>
+        <item>
+          <p>
+	    The signature selection algorithm has been changed to
+	    also verify if the client supports signatures using the
+	    elliptic curve of the server's public/private key pair.
+	    This change fixes #4958.</p>
+          <p>
+	    Own Id: OTP-17529 Aux Id: PR-4979, GH-4958 </p>
+        </item>
+      </list>
+    </section>
+
+
+    <section><title>Improvements and New Features</title>
+      <list>
+        <item>
+          <p>
+	    Slight optimization of certificate decoding.</p>
+          <p>
+	    Own Id: OTP-17150 Aux Id: GH-4877 </p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>SSL 10.3.1.1</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+          <p>
+	    Fix cache invalidation problem for CA certs provided by
+	    the cacertfile option.</p>
+          <p>
+	    Own Id: OTP-17435 Aux Id: ERIERL-653 </p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>SSL 10.3.1</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+          <p>
+	    Retain backwards compatible behavior of verify_fun when
+	    handling incomplete chains that are not verifiable.</p>
+          <p>
+	    Own Id: OTP-17296 Aux Id: GH-4682 </p>
+        </item>
+        <item>
+          <p>
+	    Avoid server session handler crash, this will increase
+	    session ruse opportunities.</p>
+          <p>
+	    Own Id: OTP-17348 Aux Id: ERIERL-641 </p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>SSL 10.3</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+          <p>
+	    Fix CRL handling that previously could fail to find the
+	    issuer cert under some circumstances.</p>
+          <p>
+	    Own Id: OTP-17261 Aux Id: GH-4589 </p>
+        </item>
+        <item>
+          <p>
+	    TLS-1.3 client could, under some circumstances, select an
+	    incorrect algorithm to sign the certificate verification
+	    message causing a TLS Decrypt Alert being issued by the
+	    server.</p>
+          <p>
+	    Own Id: OTP-17281 Aux Id: GH-4620 </p>
+        </item>
+        <item>
+          <p>
+	    Correct handling of default values for emulated socket
+	    options and retain the order of the ssl options list to
+	    ensure backwards compatible behavior if options should be
+	    set more than once.</p>
+          <p>
+	    Own Id: OTP-17282</p>
+        </item>
+      </list>
+    </section>
+
+
+    <section><title>Improvements and New Features</title>
+      <list>
+        <item>
+          <p>
+	    Enhance pre TLS-1.3 session handling so the client and
+	    server side handling is completely separated and client
+	    disregards oldest session when reaching max limit of the
+	    session table.</p>
+          <p>
+	    Own Id: OTP-16876</p>
+        </item>
+        <item>
+          <p>
+	    This change implements the early data feature for TLS 1.3
+	    clients.</p>
+          <p>
+	    TLS 1.3 allows clients to send data in the first flight
+	    using a Pre-Shared Key to authenticate the server and to
+	    encrypt the early data.</p>
+          <p>
+	    Own Id: OTP-16985</p>
+        </item>
+        <item>
+          <p>
+	    This change implements the early data feature for TLS 1.3
+	    servers.</p>
+          <p>
+	    Own Id: OTP-17042</p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>SSL 10.2.4.3</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+          <p>
+	    Fix cache invalidation problem for CA certs provided by
+	    the cacertfile option.</p>
+          <p>
+	    Own Id: OTP-17435 Aux Id: ERIERL-653 </p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>SSL 10.2.4.2</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+          <p>
+	    Fix handling of emulated socket options, the previous
+	    patch was incomplete,</p>
+          <p>
+	    Own Id: OTP-17305</p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>SSL 10.2.4.1</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+          <p>
+	    Backport of OTP-17282</p>
+          <p>
+	    Correct handling of default values for emulated socket
+	    options and retain the order of the ssl options list to
+	    ensure backwards compatible behavior if options should be
+	    set more than once.</p>
+          <p>
+	    Own Id: OTP-17289 Aux Id: GH-4585 </p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>SSL 10.2.4</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+          <p>
+	    Enhance logging option log_level to support none and all,
+	    also restore backwards compatibility for log_alert
+	    option.</p>
+          <p>
+	    Own Id: OTP-17228 Aux Id: ERIERL-614 </p>
+        </item>
+      </list>
+    </section>
+
+</section>
 
 <section><title>SSL 10.2.3</title>
 
@@ -418,7 +1309,7 @@
         <item>
           <p>
 	    Improve interoperability by implementing the middlebox
-	    compatiblity mode.</p>
+	    compatibility mode.</p>
           <p>
 	    The middlebox compatibility mode makes the TLS 1.3
 	    handshake look more like a TLS 1.2 handshake and
@@ -958,14 +1849,14 @@
         <item>
           <p>
 	    Hibernation now works as expected in all cases, was
-	    accidently broken by optimization efforts.</p>
+	    accidentally broken by optimization efforts.</p>
           <p>
 	    Own Id: OTP-15910</p>
         </item>
         <item>
           <p>
 	    Fix interoperability problems with openssl when the TLS
-	    1.3 server is configured wirh the option
+	    1.3 server is configured with the option
 	    signature_algs_cert.</p>
           <p>
 	    Own Id: OTP-15913</p>
@@ -1184,7 +2075,7 @@
         <item>
           <p>
 	    Hibernation now works as expected in all cases, was
-	    accidently broken by optimization efforts.</p>
+	    accidentally broken by optimization efforts.</p>
           <p>
 	    Own Id: OTP-15910</p>
         </item>
@@ -1687,7 +2578,7 @@
           <p>
 	    Correct cipher suite handling for ECDHE_*, the incorrect
 	    handling could cause an incorrrect suite to be selected
-	    and most likly fail the handshake.</p>
+	    and most likely fail the handshake.</p>
           <p>
 	    Own Id: OTP-15203</p>
         </item>
@@ -1729,7 +2620,7 @@
         </item>
         <item>
           <p>
-	    Add suport for ECDHE_PSK cipher suites</p>
+	    Add support for ECDHE_PSK cipher suites</p>
           <p>
 	    Own Id: OTP-14547</p>
         </item>
@@ -1824,7 +2715,7 @@
         <item>
           <p>
 	    Add utility function for converting erlang cipher suites
-	    to a string represenation (ERL-600).</p>
+	    to a string representation (ERL-600).</p>
           <p>
 	    Own Id: OTP-15106</p>
         </item>
@@ -1885,7 +2776,7 @@
           <p>
 	    Correct cipher suite handling for ECDHE_*, the incorrect
 	    handling could cause an incorrrect suite to be selected
-	    and most likly fail the handshake.</p>
+	    and most likely fail the handshake.</p>
           <p>
 	    Own Id: OTP-15203</p>
         </item>
@@ -2201,7 +3092,7 @@
       <list>
         <item>
           <p>
-	    ECDH-ECDSA key exchange supported, was accidently
+	    ECDH-ECDSA key exchange supported, was accidentally
 	    dismissed in earlier versions.</p>
           <p>
 	    Own Id: OTP-14421</p>
@@ -2911,9 +3802,9 @@
       <list>
         <item>
           <p>
-	    Correct cipher suites conversion and gaurd expression.
+	    Correct cipher suites conversion and guard expression.
 	    Caused problems with GCM cipher suites and client side
-	    option to set signature_algorithms extention values.</p>
+	    option to set signature_algorithms extension values.</p>
           <p>
 	    Own Id: OTP-13525</p>
         </item>
@@ -3126,10 +4017,10 @@
           <p>
 	    If upper limit is reached, invalidate the current cache
 	    entries, e.i the session lifetime is the max time a
-	    session will be keept, but it may be invalidated earlier
+	    session will be kept, but it may be invalidated earlier
 	    if the max limit for the table is reached. This will keep
 	    the ssl manager process well behaved, not exhusting
-	    memeory. Invalidating the entries will incrementally
+	    memory. Invalidating the entries will incrementally
 	    empty the cache to make room for fresh sessions entries.</p>
           <p>
 	    Own Id: OTP-12392</p>
@@ -3308,7 +4199,7 @@
       <list>
         <item>
           <p>
-	    Terminate gracefully when receving bad input to premaster
+	    Terminate gracefully when receiving bad input to premaster
 	    secret calculation</p>
           <p>
 	    Own Id: OTP-12783</p>
@@ -3656,7 +4547,7 @@
 	    Added option honor_cipher_order. This instructs the
 	    server to prefer its own cipher ordering rather than the
 	    client's and can help protect against things like BEAST
-	    while maintaining compatability with clients which only
+	    while maintaining compatibility with clients which only
 	    support older ciphers. </p>
           <p>
 	    Thanks to Andrew Thompson for the implementation, and
@@ -3684,8 +4575,8 @@
         <item>
           <p>
 	    Correct clean up of certificate database when certs are
-	    inputed in pure DER format.The incorrect code could cause
-	    a memory leek when certs where inputed in DER. Thanks to
+	    inputted in pure DER format.The incorrect code could cause
+	    a memory leek when certs where inputted in DER. Thanks to
 	    Bernard Duggan for reporting this.</p>
           <p>
 	    Own Id: OTP-11733</p>
@@ -4146,9 +5037,9 @@
         <item>
           <p>
 	    ssl:recv/3 could "loose" data when the timeout occurs. If
-	    the timout in ssl:connect or ssl:ssl_accept expired the
+	    the timeout in ssl:connect or ssl:ssl_accept expired the
 	    ssl connection process was not terminated as it should,
-	    this due to gen_fsm:send_all_state_event timout is a
+	    this due to gen_fsm:send_all_state_event timeout is a
 	    client side time out. These timouts are now handled by
 	    the gen_fsm-procss instead.</p>
           <p>
@@ -4244,7 +5135,7 @@
           <p>
 	    Fix a bug where ssl_tls_dist_proxy would crash at caller
 	    timeout. Fix a bug where a timeout from the SSL layer
-	    would block the distribution indefinately. Run the proxy
+	    would block the distribution indefinitely. Run the proxy
 	    exclusively on the loopback interface. (Thanks to Paul
 	    Guyot)</p>
           <p>
@@ -4254,7 +5145,7 @@
           <p>
 	    Fix setup loop of SSL TLS dist proxy</p>
           <p>
-	    Fix potential leak of processes waiting indefinately for
+	    Fix potential leak of processes waiting indefinitely for
 	    data from closed sockets during socket setup phase.
 	    (Thanks to Paul Guyot)</p>
           <p>
@@ -4434,7 +5325,7 @@
       <item>
 	<p>Calling gen_tcp:connect with option {ip, {127,0,0,1}} results in 
 	an exit with reason badarg. Neither SSL nor INETS This was not 
-	catched, resulting in crashes with incomprehensible reasons.</p>
+	caught, resulting in crashes with incomprehensible reasons.</p>
 	<p>Own Id: OTP-9289 Aux Id: seq11845</p>
       </item>
     </list>

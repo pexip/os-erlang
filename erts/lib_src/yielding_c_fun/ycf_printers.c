@@ -1,7 +1,7 @@
 /*
  * %CopyrightBegin%
  *
- * Copyright Ericsson AB and Kjell Winblad 2019. All Rights Reserved.
+ * Copyright Ericsson AB and Kjell Winblad 2019-2021. All Rights Reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -322,8 +322,6 @@ void ycf_node_print(ycf_node* node, ycf_string_printable_buffer* b){
             node->type == ycf_node_type_on_return_code ||
             node->type == ycf_node_type_on_destroy_state_or_return_code){
     print_node_code_special_code_block(node->u.special_code_block, b);
-  } else if(node->type == ycf_node_type_consume_reds){
-    print_node_code_consume_reds(node->u.consume_reds, b);
   } else if(node->type == ycf_node_type_goto){
     print_node_code_goto(node->u.goto_n, b);
   } else if(node->type == ycf_node_type_return_statement){

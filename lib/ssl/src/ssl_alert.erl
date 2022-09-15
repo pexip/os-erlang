@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2007-2020. All Rights Reserved.
+%% Copyright Ericsson AB 2007-2022. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -44,7 +44,7 @@
 %%--------------------------------------------------------------------
 -spec decode(binary()) -> [#alert{}] | #alert{}.
 %%
-%% Description: Decode alert(s), will return a singel own alert if peer
+%% Description: Decode alert(s), will return a single own alert if peer
 %% sends garbage or too many warning alerts.
 %%--------------------------------------------------------------------
 decode(Bin) ->

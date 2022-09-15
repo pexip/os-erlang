@@ -4,7 +4,7 @@
 <chapter>
   <header>
     <copyright>
-      <year>2004</year><year>2020</year>
+      <year>2004</year><year>2021</year>
       <holder>Ericsson AB. All Rights Reserved.</holder>
     </copyright>
     <legalnotice>
@@ -31,6 +31,508 @@
   </header>
   <p>This document describes the changes made to the Compiler
     application.</p>
+
+<section><title>Compiler 8.1.1.1</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+	    <p>The <c>bin_opt_info</c> and <c>recv_opt_info</c>
+	    options would cause the compiler to crash when attempting
+	    to compile generated code without location
+	    information.</p>
+          <p>
+	    Own Id: OTP-18162 Aux Id: PR-6102 </p>
+        </item>
+        <item>
+	    <p>In rare circumstances involving floating point
+	    operations, the compiler could terminate with an internal
+	    consistency check failure.</p>
+          <p>
+	    Own Id: OTP-18182 Aux Id: GH-6163 </p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>Compiler 8.1.1</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+	    <p>Fixed a performance bug in the validator that made
+	    certain files take a very long time to compile.</p>
+          <p>
+	    Own Id: OTP-18066 Aux Id: GH-5915 </p>
+        </item>
+        <item>
+	    <p>In rare circumstances, the compiler would mistakenly
+	    assume that a call to <c>setelement/3</c> would always
+	    fail and remove all code following the call.</p>
+          <p>
+	    Own Id: OTP-18082</p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>Compiler 8.1</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+	    <p>The expression
+	    <c>&lt;&lt;0/native-float&gt;&gt;=Bin</c> would always
+	    fail to match, while
+	    <c>&lt;&lt;0/float-native&gt;&gt;=Bin</c> would match
+	    (provided that <c>Bin</c> contained the binary
+	    representation of <c>0.0</c>)</p>
+          <p>
+	    Own Id: OTP-17895</p>
+        </item>
+      </list>
+    </section>
+
+
+    <section><title>Improvements and New Features</title>
+      <list>
+        <item>
+	    <p>The compiler will now compile huge functions with
+	    straight-line code faster.</p>
+          <p>
+	    Own Id: OTP-17886 Aux Id: GH-5140, GH-5686 </p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>Compiler 8.0.4</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+	    <p>When the compiler is invoked by Dialyzer, it will no
+	    longer apply an optimization of binary patterns that
+	    would turn the pattern <c>&lt;&lt;"bar"&gt;&gt;</c> into
+	    <c>&lt;&lt;6447474:24&gt;&gt;</c>, which would be very
+	    confusing when printed out by Dialyzer.</p>
+          <p>
+	    Own Id: OTP-17768 Aux Id: GH-5429 </p>
+        </item>
+        <item>
+	    <p>The compiler would replace known failing calls (such
+	    as <c>atom_to_list(42)</c>) with a call to
+	    <c>error(badarg)</c>. With the extended error information
+	    introduced in OTP 24 (EEP 54), those "optimized" calls
+	    would not have extended error information. To ensure that
+	    as much extended error information as possible is
+	    available, the compiler now keeps the original call even
+	    when it is known to fail.</p>
+          <p>
+	    Own Id: OTP-17786 Aux Id: GH-5440 </p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>Compiler 8.0.3</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+          <p>
+	    If a parse transform raised an exception using
+	    <c>throw/1</c> or <c>exit/1</c>, the compiler would
+	    report that as an internal compiler error, which would be
+	    confusing. Amended to report that the parse transform
+	    failed.</p>
+          <p>
+	    Own Id: OTP-17421</p>
+        </item>
+        <item>
+	    <p>The failing call <c>io:format("~p\n")</c> would result
+	    in a warning for line number 0 instead of the correct
+	    line and column numbers. This has been corrected, and all
+	    warnings for failing calls to <c>io:format()</c> has been
+	    rephrased to make it clearer exactly what the problem
+	    is.</p>
+          <p>
+	    Own Id: OTP-17430</p>
+        </item>
+        <item>
+	    <p>When the options <c>warn_missing_spec</c> and
+	    <c>export_all</c> were given, there would only be
+	    warnings for missing specs for functions that had been
+	    explicitly exported using an <c>-export</c>
+	    attribute.</p>
+          <p>
+	    Own Id: OTP-17434 Aux Id: GH-4772 </p>
+        </item>
+        <item>
+	    <p>In rare circumstances, the compiler could emit an
+	    incorrect warning for a term that was constructed but
+	    never used.</p>
+          <p>
+	    Own Id: OTP-17446 Aux Id: PR-4899 </p>
+        </item>
+        <item>
+	    <p>Corrected bugs where builds were not reducible even
+	    when the <c>deterministic</c> option was given. In
+	    particular, modules with map literals with more than 32
+	    elements could cause this problem.</p>
+	    <p>As part of this fix, the <c>term_to_binary</c> BIF now
+	    accepts the option <c>deterministic</c>.</p>
+          <p>
+	    Own Id: OTP-17495 Aux Id: PR-5153 </p>
+        </item>
+        <item>
+	    <p>The <c>MODULE</c> and <c>MODULE_STRING</c> macros
+	    would always appear to be defined (when tested by
+	    <c>-ifdef</c>), even though no <c>-module()</c>
+	    declaration had been seen yet. Changed so that <c>-ifdef
+	    ?MODULE.</c> will not consider ?MODULE defined if
+	    <c>-module()</c> has not been previously seen.</p>
+          <p>
+	    Own Id: OTP-17505 Aux Id: GH-4995 </p>
+        </item>
+        <item>
+	    <p>In a guard, <c>not (X =:= true)</c> would incorrectly
+	    evaluate to <c>false</c> for non-boolean values of
+	    <c>X</c>.</p>
+          <p>
+	    Own Id: OTP-17510 Aux Id: GH-5007 </p>
+        </item>
+        <item>
+	    <p>When the <c>deterministic</c> option was given to the
+	    compiler, the <c>?FILE</c> macro would be expanded to
+	    full path of the source file before the first
+	    <c>include</c> directive and to base part of the filename
+	    after <c>include</c> directive.</p>
+          <p>
+	    Own Id: OTP-17581 Aux Id: PR-5141 </p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>Compiler 8.0.2</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+	    <p>A compiler optimization pass could crash when given
+	    odd but legal code using <c>throw/1</c>.</p>
+          <p>
+	    Own Id: OTP-17489 Aux Id: GH-4953 </p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>Compiler 8.0.1</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+	    <p>Fixed a bug that could cause <c>after</c> blocks to be
+	    ignored when <c>erlang:raise/3</c> was used in a catch
+	    block.</p>
+          <p>
+	    Own Id: OTP-17428 Aux Id: GH-4859 </p>
+        </item>
+        <item>
+	    <p>Fixed a bug in the validation pass that could cause it
+	    to reject valid code.</p>
+          <p>
+	    Own Id: OTP-17437 Aux Id: OTP-17357, GH-4774 </p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>Compiler 8.0</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+          <p>
+	    A floating point zero (0.0) can be both positive (+0.0)
+	    and negative (-0.0). Multiple bugs in the compiler,
+	    runtime system, and STDLIB have been fixed to ensure that
+	    the minus sign on 0.0 is not lost.</p>
+          <p>
+	    Own Id: OTP-17077 Aux Id: ERL-1431, PR-2903, PR-2905,
+	    PR-2906 </p>
+        </item>
+        <item>
+	    <p>A repeated stack trace variable in a try/catch was not
+	    rejected. The following example will now cause a
+	    compilation error:</p> <pre>try E catch _:A:A -&gt; A
+	    end.</pre>
+          <p>
+	    Own Id: OTP-17104 Aux Id: ERL-1380 </p>
+        </item>
+        <item>
+	    <p>Eliminated a Dialyzer crashed when the <c>-MMD</c>
+	    option is used to generate a dependency file and a BEAM
+	    file a the same time.</p>
+          <p>
+	    Own Id: OTP-17118 Aux Id: PR-2825 </p>
+        </item>
+        <item>
+	    <p>When the <c>makedep</c> option was given, the compiler
+	    would crash if the dependency output contained non-latin1
+	    characters. The compiler will now output the dependency
+	    information encoded in UTF-8 to avoid crashing.</p>
+          <p>
+	    Own Id: OTP-17206</p>
+        </item>
+      </list>
+    </section>
+
+
+    <section><title>Improvements and New Features</title>
+      <list>
+        <item>
+	    <p>Selective receive optimization will now be applied
+	    much more often.</p>
+	    <p>The new <seeguide
+	    marker="system/efficiency_guide:processes#recv_opt_info"><c>recv_opt_info</c></seeguide>
+	    compile flag can be used to print diagnostics relating to
+	    this optimization.</p>
+          <p>
+	    You can read more about the <seeguide
+	    marker="system/efficiency_guide:processes#receiving-messages">selective
+	    receive optimization</seeguide> in the Efficiency Guide.</p>
+          <p>
+	    Own Id: OTP-10391 Aux Id: OTP-16226 </p>
+        </item>
+        <item>
+	    <p><c>erlang:throw/1</c> will no longer build stack
+	    traces when we can prove that they will never be
+	    inspected.</p>
+          <p>
+	    Own Id: OTP-16334</p>
+        </item>
+        <item>
+	    <p>Variables bound between the keywords 'try' and 'of'
+	    can now be used in the clauses following the 'of' keyword
+	    (that is, in the success case when no exception was
+	    raised).</p>
+          <p>
+	    Own Id: OTP-16706 Aux Id: ERL-1281 </p>
+        </item>
+        <item>
+          <p>
+	    Compiler warnings and errors now include column numbers
+	    in addition to line numbers.</p>
+          <p>
+	    When a compiler message is emitted, the source line is
+	    printed along with a marker (a <c>^</c> character) that
+	    indicates the column position of the issue. The option
+	    '<c>brief</c>' removes the printout of the source line.</p>
+          <p>
+	    The compiler option <c>{error_location, line |
+	    column}</c> has been added. The default value is
+	    <c>column</c>. Besides adding column numbers to
+	    compilation warnings and errors, the option also
+	    determines whether column numbers are included in
+	    abstract code. If tools stop working, setting the
+	    environment variable <c>ERL_COMPILER_OPTIONS</c> can help
+	    (include <c>{error_location, line}</c>).</p>
+          <p>
+	    The compiler will now call the function
+	    <c>PT</c>:<c>parse_transform_info/0</c> in parse
+	    transforms (if it exists). It can be used by parse
+	    transforms to signal that they can only handle line
+	    numbers in abstract code.</p>
+          <p>
+	    *** POTENTIAL INCOMPATIBILITY ***</p>
+          <p>
+	    Own Id: OTP-16824 Aux Id: PR-2664, PR-3006 </p>
+        </item>
+        <item>
+	    <p>Fixed a performance bug that made functions with lots
+	    of <c>try/after</c> blocks slow to compile.</p>
+          <p>
+	    Own Id: OTP-16867 Aux Id: ERL-1354 </p>
+        </item>
+        <item>
+	    <p>The experimental HiPE application has been removed,
+	    together with all related functionality in other
+	    applications.</p>
+          <p>
+	    *** POTENTIAL INCOMPATIBILITY ***</p>
+          <p>
+	    Own Id: OTP-16963</p>
+        </item>
+        <item>
+	    <p>Generators in list and binary comprehensions will now
+	    raise a <c>{bad_generator,Generator}</c> exception if the
+	    generator has an incorrect type (instead of raising an
+	    ad-hoc <c>badarg</c> or <c>badarih</c> exception).
+	    Similarly, when a filter does not evaluate to a boolean,
+	    a <c>{bad_filter,Filter}</c> exception will be raised.
+	    Some minor bugs in the compilation of binary
+	    comprehensions have also been fixed.</p>
+          <p>
+	    Own Id: OTP-16964</p>
+        </item>
+        <item>
+	    <p>Some compiler warnings, such as the warning for an
+	    expression whose result is ignored, could not be
+	    suppressed by assigning to a variable beginning with
+	    '<c>_</c>', but only by assigning to the anonymous
+	    variable ('<c>_</c>'). This has now been changed so that
+	    any warning that can be suppressed by assigning to the
+	    anonymous variable can also be suppressed by assigning to
+	    a variable beginning with '<c>_</c>'.</p>
+          <p>
+	    Own Id: OTP-16981 Aux Id: ERL-1113 </p>
+        </item>
+        <item>
+          <p>
+	    The previously undocumented compiler options
+	    <c>warn_missing_spec</c> and <c>warn_missing_spec_all</c>
+	    are now documented.</p>
+          <p>
+	    Own Id: OTP-17078 Aux Id: ERL-1430, PR-2918 </p>
+        </item>
+        <item>
+	    <p>The compiler will now emit warnings when (previously
+	    bound) underscore-prefixed variables are matched.</p>
+          <p>
+	    Own Id: OTP-17123</p>
+        </item>
+        <item>
+	    <p>Erlang source files not encoded in utf-8 will no
+	    longer be accepted by the compiler unless it contains a
+	    "coding: latin-1" comment.</p>
+          <p>
+	    Own Id: OTP-17168</p>
+        </item>
+        <item>
+	    <p>New compiler options <c>from_abstr</c> and
+	    <c>no_lint</c> have been added. They are useful when
+	    implementing other languages running on the BEAM.</p>
+          <p>
+	    Own Id: OTP-17172</p>
+        </item>
+        <item>
+	    <p>The bit matching and construction syntax now supports
+	    16-bit floats (IEEE 754-2008).</p>
+          <p>
+	    Own Id: OTP-17207</p>
+        </item>
+        <item>
+	    <p>The compiler will now inline funs that are used only
+	    once immediately after their definition.</p>
+          <p>
+	    Own Id: OTP-17226 Aux Id: GH-4019, PR-4545 </p>
+        </item>
+        <item>
+	    <p>It is now possible to disable warnings emitted from
+	    the compiler's optimization passes with the new options
+	    <c>nowarn_opportunistic</c>, <c>nowarn_nomatch</c>,
+	    <c>nowarn_ignored</c>, and <c>nowarn_failed</c>.</p>
+          <p>
+	    Own Id: OTP-17260</p>
+        </item>
+        <item>
+          <p>
+	    Introduce new types <c>nonempty_binary()</c> and
+	    <c>nonempty_bitstring()</c>.</p>
+          <p>
+	    Own Id: OTP-17301 Aux Id: GH-4636 </p>
+        </item>
+        <item>
+          <p>
+	    Add compiler option <c>{nowarn_unused_record,
+	    RecordNames}</c>. Document compiler option
+	    <c>nowarn_unused_type</c>.</p>
+          <p>
+	    Own Id: OTP-17330</p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>Compiler 7.6.9.1</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+	    <p>Fixed a bug in the validation pass that could cause it
+	    to reject valid code.</p>
+          <p>
+	    Own Id: OTP-17437 Aux Id: OTP-17357, GH-4774 </p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>Compiler 7.6.9</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+	    <p>Reverted the fix for <c>OTP-17357</c> as it turned out
+	    to be incomplete and made the validator reject much more
+	    legal code than before.</p> <p>It will be fixed more
+	    thoroughly in a later patch.</p>
+          <p>
+	    Own Id: OTP-17386 Aux Id: ERIERL-650, OTP-17357 </p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>Compiler 7.6.8</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+	    <p>Fixed a bug in the validator that could cause it to
+	    reject valid code.</p>
+          <p>
+	    Own Id: OTP-17357 Aux Id: GH-4774 </p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>Compiler 7.6.7</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+	    <p>Fixed a bug in the type optimization pass that could
+	    yield incorrect values or cause the wrong clauses to be
+	    executed.</p>
+          <p>
+	    Own Id: OTP-17073</p>
+        </item>
+        <item>
+	    <p>Fixed a bug in the validator that could cause it to
+	    reject valid code.</p>
+          <p>
+	    Own Id: OTP-17126 Aux Id: ERL-1471 </p>
+        </item>
+      </list>
+    </section>
+
+</section>
 
 <section><title>Compiler 7.6.6</title>
 
@@ -281,6 +783,22 @@
 	    builds (e.g. <c>make -j128</c>).</p>
           <p>
 	    Own Id: OTP-16543 Aux Id: ERL-1186 </p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>Compiler 7.5.4.3</title>
+
+    <section><title>Improvements and New Features</title>
+      <list>
+        <item>
+	    <p>Fixed a bug in the type optimization pass that could
+	    yield incorrect values or cause the wrong clauses to be
+	    executed.</p>
+          <p>
+	    Own Id: OTP-17073</p>
         </item>
       </list>
     </section>

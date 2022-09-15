@@ -1,7 +1,7 @@
 #
 # %CopyrightBegin%
 # 
-# Copyright Ericsson AB 2009-2016. All Rights Reserved.
+# Copyright Ericsson AB 2009-2021. All Rights Reserved.
 # 
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -76,7 +76,7 @@ release_spec: opt
 release_html_spec: html
 	$(INSTALL_DIR) "$(RELEASE_PATH)/doc/js/flipmenu"
 	$(INSTALL_DATA) $(JS_FILES) $(GIF_FILES) "$(RELEASE_PATH)/doc/js/flipmenu"
-	$(INSTALL_DATA) ../highlight.js ../highlight.pack.js "$(RELEASE_PATH)/doc/js/"
+	$(INSTALL_DATA) ../highlight.js ../highlight.pack.js ../topbar.js "$(RELEASE_PATH)/doc/js/"
 
 release_docs_spec: $(DOC_TARGETS:%=release_%_spec)
 

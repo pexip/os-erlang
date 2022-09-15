@@ -1,7 +1,7 @@
 #
 # %CopyrightBegin%
 # 
-# Copyright Ericsson AB 1996-2020. All Rights Reserved.
+# Copyright Ericsson AB 1996-2021. All Rights Reserved.
 # 
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -99,6 +99,8 @@ EBIN = .
 # ----------------------------------------------------
 
 tests debug opt: $(TARGET_FILES)
+
+$(TARGET_FILES): $(HRL_FILES)
 
 $(EBIN)/%.beam: $(DocExamplesDir)/%.erl
 	$(ERLC) -bbeam $(ERL_COMPILE_FLAGS) -o$(EBIN) $<

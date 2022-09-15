@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2001-2020. All Rights Reserved.
+%% Copyright Ericsson AB 2001-2021. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -38,12 +38,10 @@ all() ->
     [overhead].
 
 init_per_suite(Config) ->
-    case {test_server:is_native(fprof_SUITE) or
-          (lists:any(fun(M) -> test_server:is_native(M) end, modules())) or
-          (whereis(cover_server) =/= undefined),
+    case {whereis(cover_server) =/= undefined,
           erlang:system_info(wordsize)}
     of
-        {true, _} -> {skip, "Native or cover code"};
+        {true, _} -> {skip, "Cover is running"};
         {_, 4} -> {skip, "Can't run on 32-bit as files will be large"};
         {false, 8} -> Config
     end.

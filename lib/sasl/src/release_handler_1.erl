@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 1996-2020. All Rights Reserved.
+%% Copyright Ericsson AB 1996-2021. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -637,14 +637,19 @@ maybe_supervisor_which_children(Proc, Name, Pid) ->
             error(suspended_supervisor);
 
         running ->
-            case catch supervisor:which_children(Pid) of
+            try supervisor:which_children(Pid) of
                 Res when is_list(Res) ->
-                    Res;
-                Other ->
+                    Res
+            catch
+                exit:Reason when Reason =/= timeout andalso
+                                 not (is_tuple(Reason) andalso
+                                      element(1,Reason) =:= nodedown) ->
+                    [];
+                exit:Other ->
                     error_logger:error_msg("release_handler: ~p~nerror during"
                                            " a which_children call to ~p (~w)."
                                            " [State: running] Exiting ... ~n",
-                                           [Other, Name, Pid]),
+                                           [{'EXIT',Other}, Name, Pid]),
                     error(which_children_failed)
             end
     end.

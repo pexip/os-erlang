@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %% 
-%% Copyright Ericsson AB 1997-2017. All Rights Reserved.
+%% Copyright Ericsson AB 1997-2022. All Rights Reserved.
 %% 
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -76,7 +76,7 @@ start_link(Manager, ConfigDB, AcceptTimeout) ->
 %%
 %% Description: Send a message to the request handler process
 %% confirming that the socket ownership has now sucssesfully been
-%% transfered to it. Intended to be called by the httpd acceptor
+%% transferred to it. Intended to be called by the httpd acceptor
 %% process.
 %%--------------------------------------------------------------------
 socket_ownership_transfered(Pid, SocketType, Socket) ->
@@ -233,12 +233,18 @@ handle_info({Proto, Socket, Data},
 	{error, {size_error, MaxSize, ErrCode, ErrStr}, Version} ->
 	    NewModData =  ModData#mod{http_version = Version},
 	    httpd_response:send_status(NewModData, ErrCode, ErrStr, {max_size, MaxSize}),
-	    {stop, normal, State#state{response_sent = true, 
+	    {stop, normal, State#state{response_sent = true,
 				       mod = NewModData}};
-        
-        {http_chunk = Module, Function, Args} when ChunkState =/= undefined ->
-            NewState = handle_chunk(Module, Function, Args, State),
-            {noreply, NewState};
+
+    {error, {version_error, ErrCode, ErrStr}, Version} ->
+        NewModData =  ModData#mod{http_version = Version},
+	    httpd_response:send_status(NewModData, ErrCode, ErrStr),
+	    {stop, normal, State#state{response_sent = true,
+				                   mod = NewModData}};
+
+    {http_chunk = Module, Function, Args} when ChunkState =/= undefined ->
+        NewState = handle_chunk(Module, Function, Args, State),
+        {noreply, NewState};
 	NewMFA ->
         setopts(Socket, SockType, [{active, once}]),
 	    case NewDataSize of
@@ -422,7 +428,9 @@ handle_http_msg({Method, Uri, Version, {RecordHeaders, Headers}, Body},
 				       400, URI, {malformed_syntax, URI}),
 	    {stop, normal, State#state{response_sent = true}};
 	{error, {bad_version, Ver}} ->
-	    httpd_response:send_status(ModData#mod{http_version = "HTTP/0.9"}, 400, Ver, {malformed_syntax, Ver}),
+	    httpd_response:send_status(
+            ModData#mod{http_version = httpd_request:default_version()},
+            400, Ver, {malformed_syntax, Ver}),
 	    {stop, normal, State#state{response_sent = true}}
     end;
 handle_http_msg(Body, State) ->
@@ -656,7 +664,7 @@ handle_next_request(#state{mod = #mod{connection = true} = ModData,
     TmpState = State#state{mod                    = NewModData,
 			   mfa                    = MFA,
 			   max_keep_alive_request = decrease(Max),
-			   headers                = undefined, 
+			   headers                = #http_request_h{}, 
 			   body                   = undefined,
                            chunk                  = chunk_start(MaxChunk),
 			   response_sent          = false},

@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2003-2016. All Rights Reserved.
+%% Copyright Ericsson AB 2003-2021. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -39,5 +39,4 @@
 %% Backward compatibility for test_server test suites.
 %% DO NOT USE IN NEW TEST SUITES.
 -define(line,).
--define(t,test_server).
 -define(config,test_server:lookup_config).

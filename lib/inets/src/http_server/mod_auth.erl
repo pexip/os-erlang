@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %% 
-%% Copyright Ericsson AB 1997-2016. All Rights Reserved.
+%% Copyright Ericsson AB 1997-2021. All Rights Reserved.
 %% 
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -292,7 +292,7 @@ update_password(Port, Dir, Old, New, New)->
 update_password(Addr, Port, Dir, Old, New, New) when is_list(New) ->
     mod_auth_server:update_password(Addr, Port, Dir, Old, New);
 
-update_password(_Addr, _Port, _Dir, _Old, _New, _New) ->
+update_password(_Addr, _Port, _Dir, _Old, New, New) ->
     {error, badtype};
 update_password(_Addr, _Port, _Dir, _Old, _New, _New1) ->
     {error, notqeual}.
@@ -435,7 +435,7 @@ check_password(User, Password, _Dir, DirData) ->
     end.
 
 
-%% Middle API. Theese functions call the appropriate authentication module.
+%% Middle API. These functions call the appropriate authentication module.
 int_get_user(DirData, User) ->    
     AuthMod = auth_mod_name(DirData), 
     apply(AuthMod, get_user, [DirData, User]).

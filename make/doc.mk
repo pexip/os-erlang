@@ -1,7 +1,7 @@
 #
 # %CopyrightBegin%
 #
-# Copyright Ericsson AB 1997-2019. All Rights Reserved.
+# Copyright Ericsson AB 1997-2021. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -37,9 +37,15 @@ HTML_FILES = $(XML_APPLICATION_FILES:%.xml=$(HTMLDIR)/%.html) \
 	$(XML_HTML_FILES:%.xml=$(HTMLDIR)/%.html) \
 	$(XML_PART_FILES:%.xml=$(HTMLDIR)/%.html)
 
-XML_ALL_REF3_FILES = $(XML_REF3_FILES) $(EDOC_REF3_FILES)
+XML_REF3_SRC_FILES=$(filter %.xmlsrc,$(XML_REF3_FILES))
+XML_REF3_XML_FILES=$(filter %.xml,$(XML_REF3_FILES))
+
+XML_ALL_REF3_FILES = $(XML_REF3_XML_FILES) $(XML_REF3_SRC_FILES:%.xmlsrc=%.xml) \
+	$(EDOC_REF3_FILES)
 XML_CHAPTER_FILES += $(EDOC_CHAPTER_FILE)
-XML_GEN_FILES += $(EDOC_REF3_FILES:%=$(XMLDIR)/%) $(EDOC_CHAPTER_FILE:%=$(XMLDIR)/%)
+XML_GEN_FILES += $(EDOC_REF3_FILES:%=$(XMLDIR)/%) \
+	$(EDOC_CHAPTER_FILE:%=$(XMLDIR)/%) \
+	$(XML_REF3_SRC_FILES:%.xmlsrc=$(XMLDIR)/%.xml)
 
 INFO_FILE = ../../info
 

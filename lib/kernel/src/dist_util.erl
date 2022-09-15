@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 1999-2020. All Rights Reserved.
+%% Copyright Ericsson AB 1999-2022. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -128,6 +128,10 @@ dflag2str(?DFLAG_SPAWN) ->
     "SPAWN";
 dflag2str(?DFLAG_NAME_ME) ->
     "NAME_ME";
+dflag2str(?DFLAG_V4_NC) ->
+    "V4_NC";
+dflag2str(?DFLAG_ALIAS) ->
+    "ALIAS";
 dflag2str(_) ->
     "UNKNOWN".
 
@@ -211,9 +215,9 @@ handshake_other_started(#hs_data{request_type=ReqType,
                               require_flags=ReqFlgs},
     check_dflags(HSData1, EDF),
     ?debug({"MD5 connection from ~p~n", [NodeOrHost]}),
-    HSData2 = mark_pending(HSData1),
+    {AcceptedPending, HSData2} = mark_pending(HSData1),
     Node = HSData2#hs_data.other_node,
-    {MyCookie,HisCookie} = get_cookies(Node),
+    Cookie = auth:get_cookie(Node),
     ChallengeA = gen_challenge(),
     send_challenge(HSData2, ChallengeA),
     reset_timer(HSData2#hs_data.timer),
@@ -223,8 +227,12 @@ handshake_other_started(#hs_data{request_type=ReqType,
                                HSData3#hs_data.other_flags),
     HSData4 = HSData3#hs_data{this_flags = ChosenFlags,
                               other_flags = ChosenFlags},
-    ChallengeB = recv_challenge_reply(HSData4, ChallengeA, MyCookie),
-    send_challenge_ack(HSData4, gen_digest(ChallengeB, HisCookie)),
+    ChallengeB = recv_challenge_reply(HSData4, ChallengeA, Cookie),
+    case AcceptedPending of
+        up_pending -> wait_pending(HSData4);
+        _ -> continue
+    end,
+    send_challenge_ack(HSData4, gen_digest(ChallengeB, Cookie)),
     ?debug({dist_util, self(), accept_connection, Node}),
     connection(HSData4);
 
@@ -284,8 +292,10 @@ check_mandatory(Mandatory, OtherFlags, Missing) ->
 mark_pending(#hs_data{kernel_pid=Kernel,
 		      other_node=Node,
 		      this_node=MyNode}=HSData) ->
-    case do_mark_pending(Kernel, MyNode, Node,
-			 HSData#hs_data.other_flags) of
+    KernelReply = do_mark_pending(Kernel, MyNode, Node,
+                                  HSData#hs_data.other_flags),
+    {KernelReply,
+     case KernelReply of
 	ok ->
 	    send_status(HSData, ok),
 	    reset_timer(HSData#hs_data.timer),
@@ -315,8 +325,12 @@ mark_pending(#hs_data{kernel_pid=Kernel,
 
 	    %% This can happen if the other node goes down,
 	    %% and goes up again and contact us before we have
-	    %% detected that the socket was closed. 
-	    wait_pending(Kernel),
+	    %% detected that the socket was closed.
+            %% It can also happen if the old connection went down silently,
+            %% without us knowing, a lost TCP FIN or RST packet for example.
+
+            %% Continue handshake to verify cookie and then wait for old
+            %% connection to die.
 	    reset_timer(HSData#hs_data.timer),
             HSData;
 
@@ -324,15 +338,17 @@ mark_pending(#hs_data{kernel_pid=Kernel,
 	    %% FIXME: is this a case ?
 	    ?debug({dist_util,self(),mark_pending,already_pending,Node}),
 	    ?shutdown(Node)
-    end.
+        end
+    }.
+
 
 
 %%
-%% Marking pending and negotiating away 
-%% simultaneous connection problems
+%% Tell net_kernel we are waiting for old connection to die.
 %%
-
-wait_pending(Kernel) ->
+wait_pending(#hs_data{kernel_pid=Kernel,
+		      other_node=Node}) ->
+    Kernel ! {self(), {wait_pending, Node}},
     receive
 	{Kernel, pending} ->
 	    ?trace("wait_pending returned for pid ~p.~n", 
@@ -423,13 +439,13 @@ handshake_we_started(#hs_data{request_type=ReqType,
                                other_version = flags_to_version(PreOtherFlags),
                                other_creation = Creation},
     check_dflags(HSData2, EDF),
-    MyChallenge = gen_challenge(),
-    {MyCookie,HisCookie} = get_cookies(Node),
+    ChallengeB = gen_challenge(),
+    Cookie = auth:get_cookie(Node),
     send_complement(HSData2, SendNameVersion),
-    send_challenge_reply(HSData2,MyChallenge,
-			 gen_digest(ChallengeA,HisCookie)),
+    send_challenge_reply(HSData2, ChallengeB,
+                         gen_digest(ChallengeA, Cookie)),
     reset_timer(HSData2#hs_data.timer),
-    recv_challenge_ack(HSData2, MyChallenge, MyCookie),
+    recv_challenge_ack(HSData2, ChallengeB, Cookie),
     connection(HSData2);
 
 handshake_we_started(OldHsData) when element(1,OldHsData) =:= hs_data ->
@@ -460,6 +476,17 @@ flags_to_version(Flags) ->
 %% The connection has been established.
 %% --------------------------------------------------------------
 
+-record(state, {kernel          :: pid(),
+                node            :: node(),
+                tick_intensity  :: 4..1000,
+                socket          :: term(),
+                publish_type    :: 'hidden' | 'normal',
+                handle          :: erlang:dist_handle(),
+                f_tick          :: function(),
+                f_getstat       :: function() | 'undefined',
+                f_setopts       :: function() | 'undefined',
+                f_getopts       :: function() | 'undefined'}).
+
 connection(#hs_data{other_node = Node,
 		    socket = Socket,
 		    f_address = FAddress,
@@ -471,22 +498,23 @@ connection(#hs_data{other_node = Node,
 	ok -> 
 	    {DHandle,NamedMe} = do_setnode(HSData), % Succeeds or exits the process.
 	    Address = FAddress(Socket,Node),
-	    mark_nodeup(HSData,Address,NamedMe),
+	    TickIntensity = mark_nodeup(HSData,Address,NamedMe),
 	    case FPostNodeup(Socket) of
 		ok ->
                     case HSData#hs_data.f_handshake_complete of
                         undefined -> ok;
                         HsComplete -> HsComplete(Socket, Node, DHandle)
                     end,
-		    con_loop({HSData#hs_data.kernel_pid,
-			      Node,
-			      Socket,
-			      PType,
-                              DHandle,
-			      HSData#hs_data.mf_tick,
-			      HSData#hs_data.mf_getstat,
-			      HSData#hs_data.mf_setopts,
-			      HSData#hs_data.mf_getopts},
+		    con_loop(#state{kernel = HSData#hs_data.kernel_pid,
+                                    node = Node,
+                                    socket = Socket,
+                                    tick_intensity = TickIntensity,
+                                    publish_type = PType,
+                                    handle = DHandle,
+                                    f_tick = HSData#hs_data.mf_tick,
+                                    f_getstat = HSData#hs_data.mf_getstat,
+                                    f_setopts = HSData#hs_data.mf_setopts,
+                                    f_getopts = HSData#hs_data.mf_getopts},
 			     #tick{});
 		_ ->
 		    ?shutdown2(Node, connection_setup_failed)
@@ -516,19 +544,6 @@ gen_challenge() ->
     ( ((A bsl 24) + (E bsl 16) + (G bsl 8) + F) bxor
       (B + (C bsl 16)) bxor 
       (D + (H bsl 16)) ) band 16#ffffffff.
-
-%%
-%% Get the cookies for a node from auth
-%%    
-get_cookies(Node) ->
-    case auth:get_cookie(Node) of
-	X when is_atom(X) ->
-	    {X,X}
-%	{Y,Z} when is_atom(Y), is_atom(Z) ->
-%	    {Y,Z};
-%	_ ->
-%	    erlang:error("Corrupt cookie database")
-    end.    
 
 %% No error return; either succeeds or terminates the process.
 do_setnode(#hs_data{other_node = Node, socket = Socket, 
@@ -576,8 +591,8 @@ mark_nodeup(#hs_data{kernel_pid = Kernel,
 	    Address, NamedMe) ->
     Kernel ! {self(), {nodeup,Node,Address,publish_type(Flags),NamedMe}},
     receive
-	{Kernel, inserted} ->
-	    ok;
+	{Kernel, inserted, TickIntensity} ->
+	    TickIntensity;
 	{Kernel, bad_request} ->
 	    TypeT = case OtherStarted of
 		       true ->
@@ -596,8 +611,10 @@ getstat(DHandle, _Socket, undefined) ->
 getstat(_DHandle, Socket, MFGetstat) ->
     MFGetstat(Socket).
 
-con_loop({Kernel, Node, Socket, Type, DHandle, MFTick, MFGetstat,
-          MFSetOpts, MFGetOpts}=ConData,
+con_loop(#state{kernel = Kernel, node = Node,
+                socket = Socket, handle = DHandle,
+                f_getstat = MFGetstat, f_setopts = MFSetOpts,
+                f_getopts = MFGetOpts} = ConData,
 	 Tick) ->
     receive
 	{tcp_closed, Socket} ->
@@ -607,14 +624,13 @@ con_loop({Kernel, Node, Socket, Type, DHandle, MFTick, MFGetstat,
 	{Kernel, aux_tick} ->
 	    case getstat(DHandle, Socket, MFGetstat) of
 		{ok, _, _, PendWrite} ->
-		    send_aux_tick(Type, Socket, PendWrite, MFTick);
+		    send_aux_tick(ConData, PendWrite);
 		_ ->
 		    ignore_it
 	    end,
 	    con_loop(ConData, Tick);
 	{Kernel, tick} ->
-	    case send_tick(DHandle, Socket, Tick, Type, 
-			   MFTick, MFGetstat) of
+	    case send_tick(ConData, Tick) of
 		{ok, NewTick} ->
 		    con_loop(ConData, NewTick);
 		{error, not_responding} ->
@@ -837,7 +853,9 @@ split_node(Node) ->
                     Split;
                 false ->
                     {host,Host}
-            end
+            end;
+        _ ->
+            {error, {invalid_node, Node}}
     end.
 
 %% Check if connecting node is allowed to connect
@@ -1184,13 +1202,16 @@ send_status(#hs_data{socket = Socket, other_node = Node,
 %% A HIDDEN node is always ticked if we haven't read anything
 %% as a (primitive) hidden node only ticks when it receives a TICK !!
 	
-send_tick(DHandle, Socket, Tick, Type, MFTick, MFGetstat) ->
+send_tick(#state{handle = DHandle, socket = Socket,
+                 tick_intensity = TickIntensity,
+                 publish_type = Type, f_tick = MFTick,
+                 f_getstat = MFGetstat}, Tick) ->
     #tick{tick = T0,
 	  read = Read,
 	  write = Write,
 	  ticked = Ticked0} = Tick,
     T = T0 + 1,
-    T1 = T rem 4,
+    T1 = T rem TickIntensity,
     case getstat(DHandle, Socket, MFGetstat) of
 	{ok, Read, _, _} when Ticked0 =:= T ->
 	    {error, not_responding};
@@ -1228,9 +1249,10 @@ need_to_tick(hidden, 0, _, _) ->  % nothing read from hidden
 need_to_tick(_, _, _, _) ->
     false.
 
-send_aux_tick(normal, _, Pend, _) when Pend /= false, Pend /= 0 ->
+send_aux_tick(#state{publish_type = normal}, Pend) when Pend /= false,
+                                                        Pend /= 0 ->
     ok; %% Dont send tick if pending write.
-send_aux_tick(_Type, Socket, _Pend, MFTick) ->
+send_aux_tick(#state{socket = Socket, f_tick = MFTick}, _Pend) ->
     MFTick(Socket).
 
 %% ------------------------------------------------------------

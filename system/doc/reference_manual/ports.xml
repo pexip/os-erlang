@@ -4,7 +4,7 @@
 <chapter>
   <header>
     <copyright>
-      <year>2004</year><year>2015</year>
+      <year>2004</year><year>2021</year>
       <holder>Ericsson AB. All Rights Reserved.</holder>
     </copyright>
     <legalnotice>
@@ -131,7 +131,7 @@
       <row>
         <cell align="left" valign="middle"><c>{Pid,{connect,NewPid}}</c></cell>
         <cell align="left" valign="middle">Sets the port owner of
-        <c>Port</c>to <c>NewPid</c>. Unless the port is already closed,
+        <c>Port</c> to <c>NewPid</c>. Unless the port is already closed,
         the port replies with<c>{Port,connected}</c> to the old
         port owner. Note that the old port owner is still linked
         to the port, but the new port owner is not.</cell>

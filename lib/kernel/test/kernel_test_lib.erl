@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %% 
-%% Copyright Ericsson AB 2020-2020. All Rights Reserved.
+%% Copyright Ericsson AB 2020-2022. All Rights Reserved.
 %% 
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -22,16 +22,38 @@
 
 -export([init_per_suite/1,
          end_per_suite/1]).
--export([tc_try/3]).
--export([listen/3,
+-export([tc_try/2, tc_try/3, tc_try/4, tc_try/5]).
+-export([socket_type/1,
+	 listen/3,
          connect/4, connect/5,
+         open/3,
+         is_socket_backend/1,
          inet_backend_opts/1,
          explicit_inet_backend/0,
-         test_inet_backends/0]).
+         test_inet_backends/0,
+         which_inet_backend/1]).
+-export([start_node/2, start_node/3,
+         stop_node/1]).
 -export([f/2,
          print/1, print/2]).
 -export([good_hosts/1,
          lookup/3]).
+-export([os_cmd/1, os_cmd/2]).
+
+-export([
+         proxy_call/3,
+
+         %% Generic 'has support' test function(s)
+         has_support_ipv6/0,
+
+         which_local_host_info/1, which_local_host_info/2,
+         which_local_addr/1, which_link_local_addr/1,
+
+         %% Skipping
+         not_yet_implemented/0,
+         skip/1
+        ]).
+
 
 -include("kernel_test_lib.hrl").
 
@@ -45,6 +67,17 @@ init_per_suite(Config) ->
 
 init_per_suite(AllowSkip, Config) when is_boolean(AllowSkip) ->
 
+    print("kernel environment: "
+          "~n   (kernel) app:  ~p"
+          "~n   (all)    init: ~p"
+          "~n   (kernel) init: ~p",
+          [application:get_all_env(kernel),
+           init:get_arguments(),
+           case init:get_argument(kernel) of
+               {ok, Args} -> Args;
+               error -> undefined
+           end]),
+
     ct:timetrap(timer:minutes(2)),
 
     try analyze_and_print_host_info() of
@@ -54,7 +87,16 @@ init_per_suite(AllowSkip, Config) when is_boolean(AllowSkip) ->
                 true ->
                     {skip, "Unstable host and/or os (or combo thererof)"};
                 false ->
-                    [{kernel_factor, Factor} | Config]
+                    print("try start (global) system monitor"),
+                    case kernel_test_global_sys_monitor:start() of
+                        {ok, _} ->
+                            print("(global) system monitor started"),
+                            [{kernel_factor, Factor} | Config];
+                        {error, Reason} ->
+                            print("Failed start (global) system monitor:"
+                                  "~n      ~p", [Reason]),
+                            {skip, "Failed start (global) system monitor"}
+                    end
             catch
                 throw:{skip, _} = SKIP ->
                     SKIP
@@ -71,6 +113,7 @@ init_per_suite(AllowSkip, Config) when is_boolean(AllowSkip) ->
 
 
 end_per_suite(Config) when is_list(Config) ->
+    kernel_test_global_sys_monitor:stop(),
     Config.
 
 analyze_and_print_host_info() ->
@@ -1383,7 +1426,7 @@ linux_info_lookup_collect(Key1, [Key2, Value|Rest], Values) ->
 linux_info_lookup_collect(_, _, Values) ->
     lists:reverse(Values).
 
-maybe_skip(HostInfo) ->
+maybe_skip(_HostInfo) ->
 
     %% We have some crap machines that causes random test case failures
     %% for no obvious reason. So, attempt to identify those without actually
@@ -1442,14 +1485,19 @@ maybe_skip(HostInfo) ->
                 true
         end,
     SkipWindowsOnVirtual =
+        %% fun() ->
+        %%         SysMan = win_sys_info_lookup(system_manufacturer, HostInfo),
+        %%         case string:to_lower(SysMan) of
+        %%             "vmware" ++ _ ->
+        %%                 true;
+        %%             _ ->
+        %%                 false
+        %%         end
+        %% end,
         fun() ->
-                SysMan = win_sys_info_lookup(system_manufacturer, HostInfo),
-                case string:to_lower(SysMan) of
-                    "vmware" ++ _ ->
-                        true;
-                    _ ->
-                        false
-                end
+                %% The host has been replaced and the VM has been reinstalled
+                %% so for now we give it a chance...
+                false
         end,
     COND = [{unix,  [{linux, LinuxVersionVerify}, 
                      {darwin, DarwinVersionVerify}]},
@@ -1572,68 +1620,108 @@ tc_end(Result) when is_list(Result) ->
              "", "----------------------------------------------------~n~n"),
     ok.
 
-%% *** tc_try/2,3 ***
-%% Case: Basically the test case name
-%% Cond: A fun that is evaluated before the actual test case
-%%       The point of this is that it can performs checks to
-%%       see if we shall run the test case at all.
-%%       For instance, the test case may only work in specific
-%%       conditions.
-%% TC:   The test case fun
-tc_try(Case, Cond, TC) 
+
+%% *** tc_try/2,3,4,5 ***
+%% Case:   Basically the test case name
+%% TCCond: A fun that is evaluated before the actual test case
+%%         The point of this is that it can performs checks to
+%%         see if we shall run the test case at all.
+%%         For instance, the test case may only work in specific
+%%         conditions.
+%% Pre:    A fun that is nominally part of the test case
+%%         but is an initiation that must be "undone". This is
+%%         done by the Post fun (regardless if the TC is successfull
+%%         or not). Example: Starts a couple of nodes,
+%% TC:     The test case fun
+%% Post:   A fun that undo what was done by the Pre fun.
+%%         Example: Stops the nodes created by the Pre function.
+tc_try(Case, TC) ->
+    tc_try(Case, fun() -> ok end, TC).
+
+tc_try(Case, TCCond, TC0) when is_function(TC0, 0) ->
+    Pre  = fun()  -> undefined end,
+    TC   = fun(_) -> TC0() end,
+    Post = fun(_) -> ok end,
+    tc_try(Case, TCCond, Pre, TC, Post).
+
+tc_try(Case, Pre, TC, Post)
   when is_atom(Case) andalso
-       is_function(Cond, 0) andalso
-       is_function(TC, 0) ->
+       is_function(Pre, 0) andalso
+       is_function(TC, 1) andalso
+       is_function(Post, 1) ->
+    TCCond = fun() -> ok end,
+    tc_try(Case, TCCond, Pre, TC, Post).
+
+tc_try(Case, TCCond, Pre, TC, Post)
+  when is_atom(Case) andalso
+       is_function(TCCond, 0) andalso
+       is_function(Pre, 0) andalso
+       is_function(TC, 1) andalso
+       is_function(Post, 1) ->
     tc_begin(Case),
-    try Cond() of
+    try TCCond() of
         ok ->
-            try 
-                begin
-                    TC(),
-                    ?SLEEP(?SECS(1)),
-                    tc_end("ok")
-                end
+            tc_print("starting: try pre"),
+            try Pre() of
+                State ->
+                    tc_print("pre done: try test case"),
+                    try
+                        begin
+                            TC(State),
+                            ?SLEEP(?SECS(1)),
+                            tc_print("test case done: try post"),
+                            (catch Post(State)),
+                            tc_end("ok")
+                        end
+                    catch
+                        C:{skip, _} = SKIP when (C =:= throw) orelse
+                                                (C =:= exit) ->
+                            tc_print("test case (~w) skip: try post", [C]),
+                            (catch Post(State)),
+                            tc_end( f("skipping(catched,~w,tc)", [C]) ),
+                            SKIP;
+                        C:E:S ->
+                            tc_print("test case failed: try post"),
+                            (catch Post(State)),
+                            tc_end( f("failed(catched,~w,tc)", [C]) ),
+                            erlang:raise(C, E, S)
+                    end
             catch
-                C:{skip, _} = SKIP when ((C =:= throw) orelse (C =:= exit)) ->
-                    %% i("catched[tc] (skip): "
-                    %%   "~n   C:    ~p"
-                    %%   "~n   SKIP: ~p"
-                    %%   "~n", [C, SKIP]),
-                    tc_end( f("skipping(catched,~w,tc)", [C]) ),
+                C:{skip, _} = SKIP when (C =:= throw) orelse
+                                        (C =:= exit) ->
+                    tc_end( f("skipping(catched,~w,tc-pre)", [C]) ),
                     SKIP;
                 C:E:S ->
-                    %% i("catched[tc]: "
-                    %%   "~n   C: ~p"
-                    %%   "~n   E: ~p"
-                    %%   "~n   S: ~p"
-                    %%    "~n", [C, E, S]),
-                    tc_end( f("failed(catched,~w,tc)", [C]) ),
-                    erlang:raise(C, E, S)
+                    tc_print("tc-pre failed: auto-skip"
+                             "~n   C: ~p"
+                             "~n   E: ~p"
+                             "~n   S: ~p",
+                             [C, E, S]),
+                    tc_end( f("auto-skip(catched,~w,tc-pre)", [C]) ),
+                    SKIP = {skip, f("TC-Pre failure (~w)", [C])},
+                    SKIP
             end;
         {skip, _} = SKIP ->
-            tc_end("skipping(tc)"),
+            tc_end("skipping(cond)"),
             SKIP;
         {error, Reason} ->
-            tc_end("failed(tc)"),
+            tc_end("failed(cond)"),
             exit({tc_cond_failed, Reason})
     catch
         C:{skip, _} = SKIP when ((C =:= throw) orelse (C =:= exit)) ->
-            %% i("catched[cond] (skip): "
-            %%   "~n   C:    ~p"
-            %%   "~n   SKIP: ~p"
-            %%   "~n", [C, SKIP]),
             tc_end( f("skipping(catched,~w,cond)", [C]) ),
             SKIP;
         C:E:S ->
-            %% i("catched[cond]: "
-            %%   "~n   C: ~p"
-            %%   "~n   E: ~p"
-            %%   "~n   S: ~p"
-            %%   "~n", [C, E, S]),
             tc_end( f("failed(catched,~w,cond)", [C]) ),
             erlang:raise(C, E, S)
     end.
 
+
+tc_print(F) ->
+    tc_print(F, [], "", "").
+
+tc_print(F, A) ->
+    tc_print(F, A, "", "").
 
 tc_print(F, Before, After) ->
     tc_print(F, [], Before, After).
@@ -1658,6 +1746,29 @@ tc_which_name() ->
     end.
     
 
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+start_node(Name, Args) ->
+    start_node(Name, Args, []).
+
+start_node(Name, Args, Opts) ->
+    Pa = filename:dirname(code:which(?MODULE)),
+    A = Args ++
+        " -pa " ++ Pa ++ 
+        " -s " ++ atom_to_list(kernel_test_sys_monitor) ++ " start" ++ 
+        " -s global sync",
+    case test_server:start_node(Name, peer, [{args, A}|Opts]) of
+        {ok, _Node} = OK ->
+            global:sync(),
+	    OK;
+        ERROR ->
+            ERROR
+    end.
+
+stop_node(Node) ->
+    test_server:stop_node(Node).
+
+
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
 timetrap_scale_factor() ->
@@ -1669,21 +1780,28 @@ timetrap_scale_factor() ->
     end.
 
 
-proxy_call(F, Timeout, Default)
-  when is_function(F, 0) andalso is_integer(Timeout) andalso (Timeout > 0) ->
-    {P, M} = erlang:spawn_monitor(fun() -> exit(F()) end),
-    receive
-        {'DOWN', M, process, P, Reply} ->
-            Reply
-    after Timeout ->
-            erlang:demonitor(M, [flush]),
-            exit(P, kill),
-            Default
-    end.
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
+os_cmd(Cmd) ->
+    os_cmd(Cmd, infinity).
+
+os_cmd(Cmd, infinity) ->
+    {ok, os:cmd(Cmd)};
+os_cmd(Cmd, Timeout) when is_integer(Timeout) andalso (Timeout > 0) ->
+    proxy_call(fun() -> {ok, os:cmd(Cmd)} end, Timeout, {error, timeout}).
 
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+socket_type(Config) ->
+    case is_socket_backend(Config) of
+	true ->
+	    socket;
+	false ->
+	    port
+    end.
+
+%% gen_tcp wrappers
 
 listen(Config, Port, Opts) ->
     InetBackendOpts = inet_backend_opts(Config),
@@ -1698,12 +1816,27 @@ connect(Config, Host, Port, Opts, Timeout) ->
     gen_tcp:connect(Host, Port, InetBackendOpts ++ Opts, Timeout).
 
 
+%% gen_udp wrappers
+
+open(Config, Port, Opts) ->
+    InetBackendOpts = inet_backend_opts(Config),
+    gen_udp:open(Port, InetBackendOpts ++ Opts).
+
+
 inet_backend_opts(Config) when is_list(Config) ->
     case lists:keysearch(socket_create_opts, 1, Config) of
         {value, {socket_create_opts, InetBackendOpts}} ->
             InetBackendOpts;
         false ->
             []
+    end.
+
+is_socket_backend(Config) when is_list(Config) ->
+    case lists:keysearch(socket_create_opts, 1, Config) of
+        {value, {socket_create_opts, [{inet_backend, socket}]}} ->
+            true;
+        _ ->
+            false
     end.
 
 
@@ -1731,9 +1864,218 @@ test_inet_backends() ->
                     false
             end;
         _ ->
-            false
+            false 
+    end.
+
+which_inet_backend(Config) ->
+    case lists:keysearch(socket_create_opts, 1, Config) of
+        {value, {socket_create_opts, [{inet_backend, Backend}]}} ->
+            Backend;
+        _ ->
+            default
     end.
     
+
+
+proxy_call(F, Timeout, Default)
+  when is_function(F, 0) andalso is_integer(Timeout) andalso (Timeout > 0) ->
+    {P, M} = erlang:spawn_monitor(fun() -> exit(F()) end),
+    receive
+        {'DOWN', M, process, P, Reply} ->
+            Reply
+    after Timeout ->
+            erlang:demonitor(M, [flush]),
+            exit(P, kill),
+            Default
+    end.
+
+
+
+%% This is an extremely simple check...
+has_support_ipv6() ->
+    case which_local_addr(inet6) of
+        {ok, _Addr} ->
+            ok;
+        {error, _R1} ->
+            skip("IPv6 Not Supported")
+    end.
+
+
+
+%% This gets the local "proper" address
+%% (not {127, ...} or {169,254, ...} or {0, ...} or {16#fe80, ...})
+%% We should really implement this using the (new) net module,
+%% but until that gets the necessary functionality...
+which_local_addr(Domain) ->
+    case which_local_host_info(false, Domain) of
+        {ok, [#{addr := Addr}|_]} ->
+            {ok, Addr};
+        {error, _Reason} = ERROR ->
+            ERROR
+    end.
+
+
+%% This function returns the link local address of the local host
+%% IPv4: 169.254.0.0/16 (169.254.0.0 - 169.254.255.255)
+%% IPv6: fe80::/10
+which_link_local_addr(Domain) ->
+    case which_local_host_info(true, Domain) of
+        {ok, [#{addr := Addr}|_]} ->
+            {ok, Addr};
+        {error, _Reason} = ERROR ->
+            ERROR
+    end.
+
+
+%% Returns the interface (name), flags and address (not 127...,
+%% or the equivalent IPv6 address) of the local host.
+which_local_host_info(Domain) ->
+    which_local_host_info(false, Domain).
+
+
+which_local_host_info(LinkLocal, Domain)
+  when is_boolean(LinkLocal) andalso ((Domain =:= inet) orelse (Domain =:= inet6)) ->
+    case inet:getifaddrs() of
+        {ok, IFL} ->
+            which_local_host_info(LinkLocal, Domain, IFL, []);
+        {error, _} = ERROR ->
+            ERROR
+    end.
+
+%% There are a bunch of "special" interfaces that we exclude:
+%% Here are some MacOS interfaces:
+%%   lo      (skip) is the loopback interface
+%%   en0     (keep) is your hardware interfaces (usually Ethernet and WiFi)
+%%   p2p0    (skip) is a point to point link (usually VPN)
+%%   stf0    (skip) is a "six to four" interface (IPv6 to IPv4)
+%%   gif01   (skip) is a software interface
+%%   bridge0 (skip) is a software bridge between other interfaces
+%%   utun0   (skip) is used for "Back to My Mac"
+%%   XHC20   (skip) is a USB network interface
+%%   awdl0   (skip) is Apple Wireless Direct Link (Bluetooth) to iOS devices
+%% What are these:
+%%   ap0
+%%   anpi0
+%%.  vmenet0
+%% On Mac, List hw: networksetup -listallhardwareports
+which_local_host_info(_LinkLocal, _Domain, [], []) ->
+    {error, no_address};
+which_local_host_info(_LinkLocal, _Domain, [], Acc) ->
+    {ok, lists:reverse(Acc)};
+which_local_host_info(LinkLocal, Domain, [{"tun" ++ _, _}|IFL], Acc) ->
+    which_local_host_info(LinkLocal, Domain, IFL, Acc);
+which_local_host_info(LinkLocal, Domain, [{"docker" ++ _, _}|IFL], Acc) ->
+    which_local_host_info(LinkLocal, Domain, IFL, Acc);
+which_local_host_info(LinkLocal, Domain, [{"br-" ++ _, _}|IFL], Acc) ->
+    which_local_host_info(LinkLocal, Domain, IFL, Acc);
+which_local_host_info(LinkLocal, Domain, [{"ap" ++ _, _}|IFL], Acc) ->
+    which_local_host_info(LinkLocal, Domain, IFL, Acc);
+which_local_host_info(LinkLocal, Domain, [{"anpi" ++ _, _}|IFL], Acc) ->
+    which_local_host_info(LinkLocal, Domain, IFL, Acc);
+which_local_host_info(LinkLocal, Domain, [{"vmenet" ++ _, _}|IFL], Acc) ->
+    which_local_host_info(LinkLocal, Domain, IFL, Acc);
+which_local_host_info(LinkLocal, Domain, [{"utun" ++ _, _}|IFL], Acc) ->
+    which_local_host_info(LinkLocal, Domain, IFL, Acc);
+which_local_host_info(LinkLocal, Domain, [{"bridge" ++ _, _}|IFL], Acc) ->
+    which_local_host_info(LinkLocal, Domain, IFL, Acc);
+which_local_host_info(LinkLocal, Domain, [{"llw" ++ _, _}|IFL], Acc) ->
+    which_local_host_info(LinkLocal, Domain, IFL, Acc);
+which_local_host_info(LinkLocal, Domain, [{"awdl" ++ _, _}|IFL], Acc) ->
+    which_local_host_info(LinkLocal, Domain, IFL, Acc);
+which_local_host_info(LinkLocal, Domain, [{"p2p" ++ _, _}|IFL], Acc) ->
+    which_local_host_info(LinkLocal, Domain, IFL, Acc);
+which_local_host_info(LinkLocal, Domain, [{"stf" ++ _, _}|IFL], Acc) ->
+    which_local_host_info(LinkLocal, Domain, IFL, Acc);
+which_local_host_info(LinkLocal, Domain, [{"XHCZ" ++ _, _}|IFL], Acc) ->
+    which_local_host_info(LinkLocal, Domain, IFL, Acc);
+which_local_host_info(LinkLocal, Domain, [{Name, IFO}|IFL], Acc) ->
+    case if_is_running_and_not_loopback(IFO) of
+        true ->
+            try which_local_host_info2(LinkLocal, Domain, IFO) of
+                Info ->
+                    which_local_host_info(LinkLocal, Domain, IFL,
+                                          [Info#{name => Name}|Acc])
+            catch
+                throw:_:_ ->
+                    which_local_host_info(LinkLocal, Domain, IFL, Acc)
+            end;
+        false ->
+            which_local_host_info(LinkLocal, Domain, IFL, Acc)
+    end;
+which_local_host_info(LinkLocal, Domain, [_|IFL], Acc) ->
+    which_local_host_info(LinkLocal, Domain, IFL, Acc).
+
+if_is_running_and_not_loopback(If) ->
+    lists:keymember(flags, 1, If) andalso
+        begin
+            {value, {flags, Flags}} = lists:keysearch(flags, 1, If),
+            (not lists:member(loopback, Flags)) andalso
+                lists:member(running, Flags)
+        end.
+
+
+which_local_host_info2(LinkLocal, inet = _Domain, IFO) ->
+    Addr      = which_local_host_info3(
+                  addr,  IFO,
+                  fun({A, _, _, _}) when (A =:= 127) -> false;
+                     ({A, B, _, _}) when (A =:= 169) andalso 
+                                         (B =:= 254) -> LinkLocal;
+                     ({_, _, _, _}) -> not LinkLocal;
+                     (_) -> false
+                  end),
+    NetMask   = which_local_host_info3(netmask,  IFO,
+                                       fun({_, _, _, _}) -> true;
+                                          (_) -> false
+                                       end),
+    BroadAddr = which_local_host_info3(broadaddr,  IFO,
+                                       fun({_, _, _, _}) -> true;
+                                          (_) -> false
+                                       end),
+    Flags     = which_local_host_info3(flags, IFO, fun(_) -> true end),
+    #{flags     => Flags,
+      addr      => Addr,
+      broadaddr => BroadAddr,
+      netmask   => NetMask};
+which_local_host_info2(LinkLocal, inet6 = _Domain, IFO) ->
+    Addr    = which_local_host_info3(addr,  IFO,
+                                     fun({A, _, _, _, _, _, _, _}) 
+                                           when (A =:= 0) -> false;
+                                        ({A, _, _, _, _, _, _, _})
+                                           when (A =:= 16#fe80) -> LinkLocal;
+                                        ({_, _, _, _, _, _, _, _}) -> not LinkLocal;
+                                        (_) -> false
+                                     end),
+    NetMask = which_local_host_info3(netmask,  IFO,
+                                       fun({_, _, _, _, _, _, _, _}) -> true;
+                                          (_) -> false
+                                       end),
+    Flags   = which_local_host_info3(flags, IFO, fun(_) -> true end),
+    #{flags   => Flags,
+      addr    => Addr,
+      netmask => NetMask}.
+
+which_local_host_info3(_Key, [], _) ->
+    throw({error, no_address});
+which_local_host_info3(Key, [{Key, Val}|IFO], Check) ->
+    case Check(Val) of
+        true ->
+            Val;
+        false ->
+            which_local_host_info3(Key, IFO, Check)
+    end;
+which_local_host_info3(Key, [_|IFO], Check) ->
+    which_local_host_info3(Key, IFO, Check).
+
+
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+not_yet_implemented() ->
+    skip("not yet implemented").
+
+skip(Reason) ->
+    throw({skip, Reason}).
+
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 

@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2007-2020. All Rights Reserved.
+%% Copyright Ericsson AB 2007-2022. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -142,6 +142,8 @@ end_per_group(GroupName, Config) ->
 
 init_per_testcase(TestCase, Config) ->
     ssl_test_lib:ct_log_supported_protocol_versions(Config),
+    Version = proplists:get_value(version, Config),
+    ct:log("Ciphers: ~p~n ", [ssl:cipher_suites(default, Version)]),
     end_per_testcase(TestCase, Config),
     ssl:start(),
     ct:timetrap({seconds, 15}),
@@ -154,8 +156,8 @@ end_per_testcase(_TestCase, Config) ->
 %%--------------------------------------------------------------------
 %% Test Cases --------------------------------------------------------
 %%--------------------------------------------------------------------
-%% Test diffrent certificate chain types, note that it is the servers
-%% chain that affect what cipher suite that will be choosen
+%% Test different certificate chain types, note that it is the servers
+%% chain that affect what cipher suite that will be chosen
 
 client_ecdsa_server_ecdsa_with_raw_key(Config)  when is_list(Config) ->
      Default = ssl_test_lib:default_cert_chain_conf(),

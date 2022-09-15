@@ -1,7 +1,7 @@
 %% 
 %% %CopyrightBegin%
 %% 
-%% Copyright Ericsson AB 2005-2016. All Rights Reserved.
+%% Copyright Ericsson AB 2005-2021. All Rights Reserved.
 %% 
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -39,28 +39,28 @@
 %% External exports
 %%----------------------------------------------------------------------
 -export([
-         start_link/0, start_link/1, start_link/2, 
-	 start/0, start/1, start/2, 
+         start_link/0, start_link/1, start_link/2,
+	 start/0, start/1, start/2,
 	 stop/0,
-	 info/0, 
-	 system_info/0, 
+	 info/0,
+	 system_info/0,
 	 simulate_crash/1,
-	 register_agent/2, 
-	 unregister_agent/1, 
-	 agent_info/2, 
-	 update_agent_info/3, 
-	 which_all_agents/0, which_own_agents/0, 
-	 load_mib/1, unload_mib/1, 
-         sync_get2/3, 
+	 register_agent/2,
+	 unregister_agent/1,
+	 agent_info/2,
+	 update_agent_info/3,
+	 which_all_agents/0, which_own_agents/0,
+	 load_mib/1, unload_mib/1,
+         sync_get2/3,
          async_get2/3,
          sync_get_next2/3,
          async_get_next2/3,
-         sync_set2/3, 
-         async_set2/3, 
+         sync_set2/3,
+         async_set2/3,
          sync_get_bulk2/5,
          async_get_bulk2/5,
-	 name_to_oid/1, oid_to_name/1, 
-	 purify_oid/1	 
+	 name_to_oid/1, oid_to_name/1,
+	 purify_oid/1
         ]).
 
 
@@ -321,11 +321,14 @@ loop(#state{parent = Parent, id = Id} = S) ->
 
 	{{sync_get2, TargetName, Oids, SendOpts}, From, Ref} 
 	  when is_list(TargetName) ->
+            snmpm:verbosity(server, trace),
 	    d("loop -> received sync_get2 request with"
 	      "~n   TargetName: ~p"
 	      "~n   Oids:       ~p"
 	      "~n   SendOpts:   ~p", [TargetName, Oids, SendOpts]),
 	    Res = snmpm:sync_get2(Id, TargetName, Oids, SendOpts), 
+            d("loop -> result:"
+              "~n   ~p", [Res]),
 	    reply(From, Res, Ref),
 	    loop(S);
 
@@ -637,6 +640,6 @@ d(F, A) ->
     d(get(debug), F, A).
 
 d(true, F, A) ->
-    io:format("~w:" ++ F ++ "~n", [?SERVER|A]);
+    ?IPRINT("~w:" ++ F, [?SERVER|A]);
 d(_, _, _) ->
     ok.

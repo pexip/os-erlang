@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 1996-2020. All Rights Reserved.
+%% Copyright Ericsson AB 1996-2021. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -83,9 +83,9 @@
 		going_down = [], tm_started = false, early_connects = [],
 		connecting, mq = [], remote_node_status = []}).
 
--define(current_protocol_version,  {8,5}).
+-define(current_protocol_version,  {8,6}).
 
--define(previous_protocol_version, {8,4}).
+-define(previous_protocol_version, {8,5}).
 
 start() ->
     gen_server:start_link({local, ?MODULE}, ?MODULE,
@@ -196,7 +196,7 @@ protocol_version() ->
 %% A sorted list of acceptable protocols the
 %% preferred protocols are first in the list
 acceptable_protocol_versions() ->
-    [protocol_version(), ?previous_protocol_version, {8,3}].
+    [protocol_version(), ?previous_protocol_version, {8,4}, {8,3}].
 
 needs_protocol_conversion(Node) ->
     case {?catch_val({protocol, Node}), protocol_version()} of
@@ -691,6 +691,7 @@ env() ->
      no_table_loaders,
      dc_dump_limit,
      send_compressed,
+     max_transfer_size,
      schema
     ].
 
@@ -741,6 +742,8 @@ default_env(dc_dump_limit) ->
     4;
 default_env(send_compressed) ->
     0;
+default_env(max_transfer_size) ->
+    64000;
 default_env(schema) ->
     [].
 
@@ -790,6 +793,7 @@ do_check_type(pid_sort_order, _) -> false;
 do_check_type(no_table_loaders, N) when is_integer(N), N > 0 -> N;
 do_check_type(dc_dump_limit,N) when is_number(N), N > 0 -> N;
 do_check_type(send_compressed, L) when is_integer(L), L >= 0, L =< 9 -> L;
+do_check_type(max_transfer_size, N) when is_integer(N), N > 0 -> N;
 do_check_type(schema, L) when is_list(L) -> L.
 
 bool(true) -> true;

@@ -1,7 +1,7 @@
 /*
  * %CopyrightBegin%
  *
- * Copyright Ericsson AB 2010-2020. All Rights Reserved.
+ * Copyright Ericsson AB 2010-2022. All Rights Reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -28,6 +28,8 @@ extern ERL_NIF_TERM atom_true;
 extern ERL_NIF_TERM atom_false;
 extern ERL_NIF_TERM atom_sha;
 extern ERL_NIF_TERM atom_error;
+extern ERL_NIF_TERM atom_encrypt;
+extern ERL_NIF_TERM atom_padding;
 extern ERL_NIF_TERM atom_pkcs_padding;
 extern ERL_NIF_TERM atom_zero;
 extern ERL_NIF_TERM atom_random;
@@ -46,17 +48,15 @@ extern ERL_NIF_TERM atom_none;
 extern ERL_NIF_TERM atom_notsup;
 extern ERL_NIF_TERM atom_badarg;
 extern ERL_NIF_TERM atom_digest;
-#ifdef FIPS_SUPPORT
 extern ERL_NIF_TERM atom_enabled;
 extern ERL_NIF_TERM atom_not_enabled;
-#else
 extern ERL_NIF_TERM atom_not_supported;
-#endif
 
 extern ERL_NIF_TERM atom_type;
 extern ERL_NIF_TERM atom_size;
 extern ERL_NIF_TERM atom_block_size;
 extern ERL_NIF_TERM atom_key_length;
+extern ERL_NIF_TERM atom_prop_aead;
 extern ERL_NIF_TERM atom_iv_length;
 extern ERL_NIF_TERM atom_mode;
 extern ERL_NIF_TERM atom_encrypt;
@@ -82,9 +82,11 @@ extern ERL_NIF_TERM atom_ppbasis;
 extern ERL_NIF_TERM atom_onbasis;
 #endif
 
+extern ERL_NIF_TERM atom_aes_cbc;
+extern ERL_NIF_TERM atom_aes_ecb;
+extern ERL_NIF_TERM atom_aes_ctr;
 extern ERL_NIF_TERM atom_aes_cfb8;
 extern ERL_NIF_TERM atom_aes_cfb128;
-extern ERL_NIF_TERM atom_aes_ige256;
 #ifdef HAVE_GCM
 extern ERL_NIF_TERM atom_aes_gcm;
 #endif
@@ -141,6 +143,6 @@ extern ERL_NIF_TERM atom_key_id;
 extern ERL_NIF_TERM atom_password;
 #endif
 
-int init_atoms(ErlNifEnv *env, const ERL_NIF_TERM fips_mode, const ERL_NIF_TERM load_info);
+int init_atoms(ErlNifEnv *env);
 
 #endif /* E_ATOMS_H__ */

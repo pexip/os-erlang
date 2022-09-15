@@ -1,7 +1,7 @@
 #
 # %CopyrightBegin%
 #
-# Copyright Ericsson AB 2004-2018. All Rights Reserved.
+# Copyright Ericsson AB 2004-2021. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -26,6 +26,7 @@ include $(ERL_TOP)/make/$(TARGET)/otp.mk
 # ----------------------------------------------------
 
 MODULES= \
+	ssh_cth \
 	ssh_algorithms_SUITE \
 	ssh_options_SUITE \
 	ssh_basic_SUITE \
@@ -48,6 +49,7 @@ MODULES= \
 	ssh_to_openssh_SUITE \
 	ssh_upgrade_SUITE \
 	ssh_test_lib \
+	ssh_log_h \
 	ssh_key_cb \
 	ssh_key_cb_options \
 	ssh_key_cb_engine_keys \

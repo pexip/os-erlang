@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2013-2020. All Rights Reserved.
+%% Copyright Ericsson AB 2013-2021. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -44,7 +44,7 @@
 
 %%% Internal API
 -export([start_link/5,
-         get_print_info/1
+         get_print_info/1, get_print_info/2
         ]).
 
 start_link(ConnectionManager, ChannelId, CallBack, CbInitArgs, Exec) ->
@@ -53,3 +53,6 @@ start_link(ConnectionManager, ChannelId, CallBack, CbInitArgs, Exec) ->
 
 get_print_info(Pid) ->
     ssh_client_channel:get_print_info(Pid).
+
+get_print_info(Pid, Arg) ->
+    ssh_client_channel:get_print_info(Pid, Arg).

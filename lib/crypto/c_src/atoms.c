@@ -1,7 +1,7 @@
 /*
  * %CopyrightBegin%
  *
- * Copyright Ericsson AB 2010-2020. All Rights Reserved.
+ * Copyright Ericsson AB 2010-2022. All Rights Reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -24,6 +24,8 @@ ERL_NIF_TERM atom_true;
 ERL_NIF_TERM atom_false;
 ERL_NIF_TERM atom_sha;
 ERL_NIF_TERM atom_error;
+ERL_NIF_TERM atom_encrypt;
+ERL_NIF_TERM atom_padding;
 ERL_NIF_TERM atom_pkcs_padding;
 ERL_NIF_TERM atom_zero;
 ERL_NIF_TERM atom_random;
@@ -42,16 +44,14 @@ ERL_NIF_TERM atom_none;
 ERL_NIF_TERM atom_notsup;
 ERL_NIF_TERM atom_badarg;
 ERL_NIF_TERM atom_digest;
-#ifdef FIPS_SUPPORT
 ERL_NIF_TERM atom_enabled;
 ERL_NIF_TERM atom_not_enabled;
-#else
 ERL_NIF_TERM atom_not_supported;
-#endif
 
 ERL_NIF_TERM atom_type;
 ERL_NIF_TERM atom_size;
 ERL_NIF_TERM atom_block_size;
+ERL_NIF_TERM atom_prop_aead;
 ERL_NIF_TERM atom_key_length;
 ERL_NIF_TERM atom_iv_length;
 ERL_NIF_TERM atom_mode;
@@ -78,9 +78,11 @@ ERL_NIF_TERM atom_ppbasis;
 ERL_NIF_TERM atom_onbasis;
 #endif
 
+ERL_NIF_TERM atom_aes_cbc;
+ERL_NIF_TERM atom_aes_ecb;
+ERL_NIF_TERM atom_aes_ctr;
 ERL_NIF_TERM atom_aes_cfb8;
 ERL_NIF_TERM atom_aes_cfb128;
-ERL_NIF_TERM atom_aes_ige256;
 #ifdef HAVE_GCM
 ERL_NIF_TERM atom_aes_gcm;
 #endif
@@ -142,26 +144,14 @@ ERL_NIF_TERM atom_key_id;
 ERL_NIF_TERM atom_password;
 #endif
 
-int init_atoms(ErlNifEnv *env, const ERL_NIF_TERM fips_mode, const ERL_NIF_TERM load_info) {
+int init_atoms(ErlNifEnv *env) {
     atom_true  = enif_make_atom(env,"true");
     atom_false = enif_make_atom(env,"false");
-    /* Enter FIPS mode */
-    if (fips_mode == atom_true) {
-#ifdef FIPS_SUPPORT
-        if (!FIPS_mode_set(1)) {
-#else
-        {
-#endif
-            PRINTF_ERR0("CRYPTO: Could not setup FIPS mode");
-            return 0;
-        }
-    } else if (fips_mode != atom_false) {
-        PRINTF_ERR1("CRYPTO: Invalid load_info '%T'", load_info);
-        return 0;
-    }
 
     atom_sha = enif_make_atom(env,"sha");
     atom_error = enif_make_atom(env,"error");
+    atom_encrypt = enif_make_atom(env,"encrypt");
+    atom_padding = enif_make_atom(env,"padding");
     atom_pkcs_padding = enif_make_atom(env,"pkcs_padding");
     atom_zero = enif_make_atom(env,"zero");
     atom_random = enif_make_atom(env,"random");
@@ -184,6 +174,7 @@ int init_atoms(ErlNifEnv *env, const ERL_NIF_TERM fips_mode, const ERL_NIF_TERM 
     atom_type = enif_make_atom(env,"type");
     atom_size = enif_make_atom(env,"size");
     atom_block_size = enif_make_atom(env,"block_size");
+    atom_prop_aead = enif_make_atom(env,"prop_aead");
     atom_key_length = enif_make_atom(env,"key_length");
     atom_iv_length = enif_make_atom(env,"iv_length");
     atom_mode = enif_make_atom(env,"mode");
@@ -210,9 +201,11 @@ int init_atoms(ErlNifEnv *env, const ERL_NIF_TERM fips_mode, const ERL_NIF_TERM 
     atom_onbasis = enif_make_atom(env,"onbasis");
 #endif
 
+    atom_aes_cbc = enif_make_atom(env, "aes_cbc");
+    atom_aes_ecb = enif_make_atom(env, "aes_ecb");
+    atom_aes_ctr = enif_make_atom(env, "aes_ctr");
     atom_aes_cfb8 = enif_make_atom(env, "aes_cfb8");
     atom_aes_cfb128 = enif_make_atom(env, "aes_cfb128");
-    atom_aes_ige256 = enif_make_atom(env, "aes_ige256");
 #ifdef HAVE_GCM
     atom_aes_gcm = enif_make_atom(env, "aes_gcm");
 #endif
@@ -220,12 +213,10 @@ int init_atoms(ErlNifEnv *env, const ERL_NIF_TERM fips_mode, const ERL_NIF_TERM 
     atom_aes_ccm = enif_make_atom(env, "aes_ccm");
 #endif
 
-#ifdef FIPS_SUPPORT
     atom_enabled = enif_make_atom(env,"enabled");
     atom_not_enabled = enif_make_atom(env,"not_enabled");
-#else
     atom_not_supported = enif_make_atom(env,"not_supported");
-#endif
+
     atom_rsa = enif_make_atom(env,"rsa");
     atom_dss = enif_make_atom(env,"dss");
     atom_ecdsa = enif_make_atom(env,"ecdsa");

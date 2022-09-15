@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %% 
-%% Copyright Ericsson AB 1996-2018. All Rights Reserved.
+%% Copyright Ericsson AB 1996-2021. All Rights Reserved.
 %% 
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -3880,9 +3880,7 @@ bad_object({error,{{{bad_object,_,_},_,_,_}, FileName}}, FileName) ->
     ok. % Debug.
 
 check_badarg({'EXIT', {badarg, [{M,F,Args,_} | _]}}, M, F, Args) ->
-    true;
-check_badarg({'EXIT', {badarg, [{M,F,A,_} | _]}}, M, F, Args)  ->
-    true = test_server:is_native(M) andalso length(Args) =:= A.
+    true.
 
 check_pps({Ports0,Procs0} = P0) ->
     ok = check_dets_tables(),

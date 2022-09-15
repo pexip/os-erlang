@@ -4,7 +4,7 @@
 <chapter>
   <header>
     <copyright>
-      <year>1997</year><year>2018</year>
+      <year>1997</year><year>2021</year>
       <holder>Ericsson AB. All Rights Reserved.</holder>
     </copyright>
     <legalnotice>
@@ -30,6 +30,68 @@
     <file>notes.xml</file>
   </header>
   <p>This document describes the changes made to the Parsetools application.</p>
+
+<section><title>Parsetools 2.3.2</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+	    <p>The default parser include file for yecc
+	    (<c>yeccpre</c>) will no longer crash when attempting to
+	    print tokens when reporting an error.</p>
+          <p>
+	    Own Id: OTP-17721</p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>Parsetools 2.3.1</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+          <p>
+	    Fix a bug in Leex which caused the Erlang Compiler to
+	    generate warnings.</p>
+          <p>
+	    Own Id: OTP-17499 Aux Id: GH-4918 </p>
+        </item>
+        <item>
+          <p>
+	    Fix a bug in Yecc which caused the Erlang Compiler to
+	    generate warnings.</p>
+          <p>
+	    Own Id: OTP-17535 Aux Id: GH-5067 </p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>Parsetools 2.3</title>
+
+    <section><title>Improvements and New Features</title>
+      <list>
+        <item>
+          <p>
+	    Add types and specifications for documentation.</p>
+          <p>
+	    Own Id: OTP-16957</p>
+        </item>
+        <item>
+          <p>
+	    Let Leex and Yecc recognize the environment variable
+	    ERL_COMPILER_OPTIONS. Add Yecc option <c>{error_location,
+	    column | line}</c>.</p>
+          <p>
+	    Own Id: OTP-17023</p>
+        </item>
+      </list>
+    </section>
+
+</section>
 
 <section><title>Parsetools 2.2</title>
 

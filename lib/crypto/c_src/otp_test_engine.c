@@ -1,7 +1,7 @@
 /*
  * %CopyrightBegin%
  *
- * Copyright Ericsson AB 2017-2020. All Rights Reserved.
+ * Copyright Ericsson AB 2017-2022. All Rights Reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -59,6 +59,7 @@
 /* If OPENSSL_NO_EC is set, there will be an error in ec.h included from engine.h
    So if EC is disabled, you can't use Engine either....
 */
+
 #include <openssl/engine.h>
 #include <openssl/pem.h>
 
@@ -111,6 +112,15 @@ err:
     fprintf(stderr, "Setup RSA_METHOD failed\r\n");
     return 0;
 #endif
+}
+
+static int test_finish(ENGINE *e) {
+    printf("OTP Test Engine Finish!\r\n");
+
+    //    EVP_cleanup();
+
+    return 111;
+
 }
 
 static void add_test_data(unsigned char *md, unsigned int len)
@@ -192,7 +202,9 @@ static EVP_MD test_engine_md5_method=  {
         EVP_PKEY_NULL_method,         /* IGNORED: pkey methods */
         MD5_CBLOCK,                   /* Internal blocksize, see rfc1321/md5.h */
         sizeof(EVP_MD *) + sizeof(MD5_CTX),
+# if OPENSSL_VERSION_NUMBER >= PACKED_OPENSSL_VERSION_PLAIN(1,0,0)
         NULL,                          /* IGNORED: control function */
+# endif
 };
 #endif
 
@@ -263,6 +275,8 @@ static int bind_helper(ENGINE * e, const char *id)
     if (!ENGINE_set_name(e, test_engine_name))
         goto err;
     if (!ENGINE_set_init_function(e, test_init))
+        goto err;
+    if (!ENGINE_set_finish_function(e, test_finish))
         goto err;
     if (!ENGINE_set_digests(e, &test_engine_digest_selector))
         goto err;
@@ -375,8 +389,6 @@ int pem_passwd_cb_fun(char *buf, int size, int rwflag, void *password)
     return 0;
 }
 
-#endif
-
 #if defined(FAKE_RSA_IMPL)
 /* RSA sign. This returns a fixed string so the test case can test that it was called
    instead of the cryptolib default RSA sign */
@@ -454,3 +466,5 @@ static int test_rsa_free(RSA *rsa)
 }
 
 #endif /* if defined(FAKE_RSA_IMPL) */
+
+#endif /* if defined(HAVE_EC) */

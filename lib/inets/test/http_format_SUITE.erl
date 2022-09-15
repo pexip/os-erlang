@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2004-2018. All Rights Reserved.
+%% Copyright Ericsson AB 2004-2021. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -298,7 +298,7 @@ chunk_max_bodysize(Config) when is_list(Config) ->
 %%-------------------------------------------------------------------------
 http_response() ->
     [{doc, "Test httpc_response:parse*. This test case will simulate that the "
-     "message will be recived a little at the time on a socket and the "
+     "message will be received a little at the time on a socket and the "
      "package may be broken up into smaller parts at arbitrary point."}].
 http_response(Config) when is_list(Config) ->
 
@@ -369,7 +369,7 @@ http_response(Config) when is_list(Config) ->
 %%-------------------------------------------------------------------------
 http_request() ->
     [{doc, "Test httpd_request:parse* This test case will simulate that the " 
-     "message will be recived a little at the time on a socket and the " 
+     "message will be received a little at the time on a socket and the " 
       "package may be broken up into smaller parts at arbitrary point."}].
 http_request(Config) when is_list(Config) ->
 
@@ -450,20 +450,17 @@ http_request(Config) when is_list(Config) ->
 validate_request_line() ->
     [{doc, "Test httpd_request:validate/3. Makes sure you cannot get past"
      " the server_root and that the request is recognized by the server"
-     " and protcol version."}].
+     " and protocol version."}].
 validate_request_line(Config) when is_list(Config) ->
 
-    %% HTTP/0.9 only has GET requests
-    {ok, "http://www.erlang/org"} = 
+    %% HTTP/0.9 not supported
+    {error, {bad_version, "HTTP/0.9"}} = 
 	httpd_request:validate("GET", "http://www.erlang/org", "HTTP/0.9"),
-    {error, {not_supported, 
-	     {"HEAD", "http://www.erlang/org", "HTTP/0.9"}}} =
+    {error, {bad_version, "HTTP/0.9"}} =
 	httpd_request:validate("HEAD", "http://www.erlang/org", "HTTP/0.9"),
-    {error, {not_supported, 
-	     {"TRACE", "http://www.erlang/org", "HTTP/0.9"}}} =
+    {error, {bad_version, "HTTP/0.9"}} =
 	httpd_request:validate("TRACE", "http://www.erlang/org", "HTTP/0.9"),
-    {error, {not_supported, 
-	     {"POST", "http://www.erlang/org", "HTTP/0.9"}}} =
+    {error, {bad_version, "HTTP/0.9"}} =
 	httpd_request:validate("POST", "http://www.erlang/org", "HTTP/0.9"),
 
     %% HTTP/1.* 
@@ -551,7 +548,7 @@ esi_parse_headers(Config) when is_list(Config) ->
 %%--------------------------------------------------------------------
 cgi_parse_headers() ->
     [{doc, "Test httpd_cgi:*. This test case will simulate that the "
-     "message will be recived a little at the time on a socket and the "
+     "message will be received a little at the time on a socket and the "
      "package may be broken up into smaller parts at arbitrary point."}].
 
 cgi_parse_headers(Config) when is_list(Config) ->

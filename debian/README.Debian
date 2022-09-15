@@ -27,8 +27,8 @@ GDK_BACKEND=x11 wings3d
 
 ----------------
 
-Starting from version 1:21.2.2+dfsg-1 the erlang-base and erlang-base-hipe
-packages provide systemd socket and unit files for the epmd daemon, which
+Starting from version 1:21.2.2+dfsg-1 the erlang-base
+package provides systemd socket and unit files for the epmd daemon, which
 are enabled by default. This causes the executed epmd to be owned by a separate
 user which is more secure in multi-user environment. (By default, the first
 distributed Erlang application starts the epmd daemon, and then it can kill

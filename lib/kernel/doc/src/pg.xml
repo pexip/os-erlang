@@ -61,12 +61,10 @@
       It is only allowed to join processes running on local node.
     </p>
 
-    <p>Process Groups implement strong eventual consistency.
-      Unlike <seeerl marker="pg2"><c>pg2</c></seeerl>, that provides
-      strong ordering guarantees, Process Groups membership view may temporarily
-      diverge. For example, when processes on <c>node1</c> and <c>node2</c>
-      join concurrently, <c>node3</c> and <c>node4</c> may receive updates in
-      a different order.</p>
+    <p>Process Groups implement strong eventual consistency. Process Groups
+      membership view may temporarily diverge. For example, when processes on
+      <c>node1</c> and <c>node2</c> join concurrently, <c>node3</c> and
+      <c>node4</c> may receive updates in a different order.</p>
 
     <p> Membership view is not transitive. If <c>node1</c> is not directly
       connected to <c>node2</c>, they will not see each other groups. But if
@@ -91,9 +89,7 @@
       If there is another process registered under this name, or another ETS table
       exists, scope fails to start.</p>
       <p>Local membership is not preserved if scope process exits and
-        restarts. This behaviour is different from
-        <seeerl marker="pg2"><c>pg2</c></seeerl>, that recovers
-        local membership from remote nodes.
+        restarts.
     </p></note>
 
   </description>
@@ -133,7 +129,7 @@
       <fsummary>Join a process or a list of processes to a group.</fsummary>
       <desc>
         <p>Joins single process or multiple processes to the
-          group <c>Name</c>. A process can join a group many times and
+          group <c>Group</c>. A process can join a group many times and
           must then leave the group the same number of times.</p>
         <p><c>PidOrPids</c> may contain the same process multiple times.</p>
       </desc>
@@ -144,7 +140,7 @@
       <name name="leave" arity="3" since="OTP 23.0"/>
       <fsummary>Make a process leave a group.</fsummary>
       <desc>
-        <p>Makes the process <c>PidOrPids</c> leave the group <c>Name</c>.
+        <p>Makes the process <c>PidOrPids</c> leave the group <c>Group</c>.
 	  If the process is not a member of the group, <c>not_joined</c> is
 	  returned.</p>
         <p>When list of processes is passed as <c>PidOrPids</c>, function
@@ -159,7 +155,7 @@
       <fsummary>Return all local processes in a group.</fsummary>
       <desc>
         <p>Returns all processes running on the local node in the
-          group <c>Name</c>. Processes are returned in no specific order.
+          group <c>Group</c>. Processes are returned in no specific order.
           This function is optimised for speed.
         </p>
       </desc>
@@ -170,7 +166,7 @@
       <name name="get_members" arity="2" since="OTP 23.0"/>
       <fsummary>Return all processes in a group.</fsummary>
       <desc>
-        <p>Returns all processes in the group <c>Name</c>.
+        <p>Returns all processes in the group <c>Group</c>.
           Processes are returned in no specific order.
           This function is optimised for speed.</p>
       </desc>

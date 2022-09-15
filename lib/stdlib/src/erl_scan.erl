@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 1996-2019. All Rights Reserved.
+%% Copyright Ericsson AB 1996-2021. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -63,15 +63,15 @@
 -export_type([error_info/0,
               options/0,
               return_cont/0,
-              token/0,
+              token/0, tokens/0,
               tokens_result/0]).
 
 %% Removed functions and types
 -removed([{set_attribute,3,"use erl_anno:set_line/2 instead"},
           {attributes_info,'_',
-           "erl_anno:{column,line,location,text}/1 instead"},
+           "use erl_anno:{column,line,location,text}/1 instead"},
           {token_info,'_',
-           "erl_scan:{category,column,line,location,symbol,text}/1 instead"}]).
+           "use erl_scan:{category,column,line,location,symbol,text}/1 instead"}]).
 
 -removed_type([{column,0,"use erl_anno:column() instead"},
                {line,0,"use erl_anno:line() instead"},

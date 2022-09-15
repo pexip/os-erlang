@@ -1,7 +1,7 @@
 /*
  * %CopyrightBegin%
  * 
- * Copyright Ericsson AB 2002-2018. All Rights Reserved.
+ * Copyright Ericsson AB 2002-2022. All Rights Reserved.
  * 
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -87,6 +87,12 @@
 #define DEBUG_PRINT(fmt, ...) fprintf(stderr, "%d:" fmt "\r\n", getpid(), ##__VA_ARGS__)
 #else
 #define DEBUG_PRINT(fmt, ...)
+#endif
+
+#ifdef __clang_analyzer__
+   /* CodeChecker does not seem to understand inline asm in FD_ZERO */
+#  undef FD_ZERO
+#  define FD_ZERO(FD_SET_PTR) memset(FD_SET_PTR, 0, sizeof(fd_set))
 #endif
 
 static char abort_reason[200]; /* for core dump inspection */
@@ -251,7 +257,6 @@ start_new_child(int pipes[])
         res = read(pipes[0], &proto, sizeof(proto));
         if (res > 0) {
             ASSERT(proto.action == ErtsSysForkerProtoAction_Ack);
-            ASSERT(res == sizeof(proto));
         }
     } while(res < 0 && (errno == EINTR || errno == ERRNO_BLOCK));
 
@@ -422,7 +427,7 @@ main(int argc, char *argv[])
 #endif
     struct sigaction sa;
 
-    if (argc < 1 || sscanf(argv[1],"%d",&max_files) != 1) {
+    if (argc < 2 || sscanf(argv[1],"%d",&max_files) != 1) {
         ABORT("Invalid arguments to child_setup");
     }
 

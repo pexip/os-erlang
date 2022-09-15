@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %% 
-%% Copyright Ericsson AB 2018-2020. All Rights Reserved.
+%% Copyright Ericsson AB 2018-2022. All Rights Reserved.
 %% 
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -93,8 +93,8 @@ tls_msg(?'TLS_v1.3'= Version) ->
            %%new_session_ticket()
           #end_of_early_data{},
            encrypted_extensions(),
-           certificate_1_3(),
-           %%certificate_request_1_3,
+           certificate(),
+           certificate_request_1_3(),
            certificate_verify_1_3(),
            finished(),
            key_update()
@@ -193,7 +193,7 @@ key_update() ->
 
 
 %%--------------------------------------------------------------------
-%% Messge Data Generators  -------------------------------------------
+%% Message Data Generators  -------------------------------------------
 %%--------------------------------------------------------------------
 
 tls_version() ->
@@ -310,7 +310,7 @@ extensions(?'TLS_v1.3' = Version, MsgType = client_hello) ->
            %% EarlyData,
            %% Cookie,
            SupportedVersions,
-           %% CertAuthorities,
+           CertAuthorities,
            %% PostHandshakeAuth,
            SignatureAlgorithmsCert
           },
@@ -333,7 +333,7 @@ extensions(?'TLS_v1.3' = Version, MsgType = client_hello) ->
            %% oneof([early_data(), undefined]),
            %% oneof([cookie(), undefined]),
            oneof([client_hello_versions(Version)]),
-           %% oneof([cert_authorities(), undefined]),
+           oneof([cert_auths(), undefined]),
            %% oneof([post_handshake_auth(), undefined]),
            oneof([signature_algs_cert(), undefined])
           },
@@ -361,7 +361,7 @@ extensions(?'TLS_v1.3' = Version, MsgType = client_hello) ->
                         %% early_data => EarlyData,
                         %% cookie => Cookie,
                         client_hello_versions => SupportedVersions,
-                        %% cert_authorities => CertAuthorities,
+                        certificate_authorities => CertAuthorities,
                         %% post_handshake_auth => PostHandshakeAuth,
                         signature_algs_cert => SignatureAlgorithmsCert
                        }));
@@ -605,7 +605,7 @@ certificate_chain(Conf) ->
     CAs = proplists:get_value(cacerts, Conf),
     Cert = proplists:get_value(cert, Conf),
     %% Middle argument are of correct type but will not be used
-    {ok, _, Chain} = ssl_certificate:certificate_chain(Cert, ets:new(foo, []), make_ref(), CAs), 
+    {ok, _, Chain} = ssl_certificate:certificate_chain(Cert, ets:new(foo, []), make_ref(), CAs, encoded), 
     Chain.
 
 cert_conf()->
@@ -625,19 +625,20 @@ cert_conf()->
                                       intermediates => [[{key, ssl_test_lib:hardcode_rsa_key(5)}]],
                                       peer => [{key, ssl_test_lib:hardcode_rsa_key(6)}]}}).
 
+cert_auths() ->
+    certificate_authorities(?'TLS_v1.3').
+
+certificate_request_1_3() ->
+    #certificate_request_1_3{certificate_request_context = <<>>,
+                             extensions = #{certificate_authorities => certificate_authorities(?'TLS_v1.3')}
+                            }.
 certificate_request(Version) ->
     #certificate_request{certificate_types = certificate_types(Version),
 			 hashsign_algorithms = hashsign_algorithms(Version),
-			 certificate_authorities = certificate_authorities()}.
+			 certificate_authorities = certificate_authorities(Version)}.
 
-certificate_types(?'TLS_v1.3') ->
-    iolist_to_binary([<<?BYTE(?ECDSA_SIGN)>>, <<?BYTE(?RSA_SIGN)>>]);
-certificate_types(?'TLS_v1.2') ->
-    iolist_to_binary([<<?BYTE(?ECDSA_SIGN)>>, <<?BYTE(?RSA_SIGN)>>, <<?BYTE(?DSS_SIGN)>>]);
 certificate_types(_) ->
     iolist_to_binary([<<?BYTE(?ECDSA_SIGN)>>, <<?BYTE(?RSA_SIGN)>>, <<?BYTE(?DSS_SIGN)>>]).
-
-
 
 signature_algs({3,4}) ->
     ?LET(Algs, signature_algorithms(),
@@ -681,16 +682,16 @@ sign_algorithm(?'TLS_v1.3') ->
 sign_algorithm(_) ->
     oneof([rsa, dsa, ecdsa]).
 
-certificate_authorities() ->
+certificate_authorities(?'TLS_v1.3') ->
+    Auths = certificate_authorities(?'TLS_v1.2'),
+    #certificate_authorities{authorities = Auths};
+certificate_authorities(_) ->
     #{server_config := ServerConf} = cert_conf(), 
-    Authorities = proplists:get_value(cacerts, ServerConf),
-    Enc = fun(#'OTPCertificate'{tbsCertificate=TBSCert}) ->
-		  OTPSubj = TBSCert#'OTPTBSCertificate'.subject,
-		  DNEncodedBin = public_key:pkix_encode('Name', OTPSubj, otp),
-		  DNEncodedLen = byte_size(DNEncodedBin),
-		  <<?UINT16(DNEncodedLen), DNEncodedBin/binary>>
-	  end,
-    list_to_binary([Enc(public_key:pkix_decode_cert(DERCert, otp)) || DERCert <- Authorities]).
+    Certs = proplists:get_value(cacerts, ServerConf),
+    Auths = fun(#'OTPCertificate'{tbsCertificate = TBSCert}) ->
+                    public_key:pkix_normalize_name(TBSCert#'OTPTBSCertificate'.subject)
+            end,
+    [Auths(public_key:pkix_decode_cert(Cert, otp)) || Cert <- Certs].
 
 digest_size()->
    oneof([160,224,256,384,512]).

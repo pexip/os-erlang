@@ -1,7 +1,7 @@
 /*
  * %CopyrightBegin%
  *
- * Copyright Ericsson AB 1996-2020. All Rights Reserved.
+ * Copyright Ericsson AB 1996-2022. All Rights Reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -50,7 +50,8 @@
 #define DFLAG_EXIT_PAYLOAD        ((Uint64)0x400000)
 #define DFLAG_FRAGMENTS           ((Uint64)0x800000)
 #define DFLAG_HANDSHAKE_23       ((Uint64)0x1000000)
-#define DFLAG_RESERVED                   0xfe000000
+#define DFLAG_UNLINK_ID          ((Uint64)0x2000000)
+#define DFLAG_RESERVED          ((Uint64)0xfc000000)
 /*
  * As the old handshake only support 32 flag bits, we reserve the remaining
  * bits in the lower 32 for changes in the handshake protocol or potentially
@@ -58,7 +59,15 @@
  */
 #define DFLAG_SPAWN            (((Uint64)0x1) << 32)
 #define DFLAG_NAME_ME          (((Uint64)0x2) << 32)
+#define DFLAG_V4_NC            (((Uint64)0x4) << 32)
+#define DFLAG_ALIAS            (((Uint64)0x8) << 32)
 
+/*
+ * In term_to_binary/2, we will use DFLAG_ATOM_CACHE to mean
+ * DFLAG_DETERMINISTIC.
+ */
+
+#define DFLAG_DETERMINISTIC            DFLAG_ATOM_CACHE
 
 /* Mandatory flags for distribution */
 #define DFLAG_DIST_MANDATORY (DFLAG_EXTENDED_REFERENCES         \
@@ -76,7 +85,9 @@
                               | DFLAG_BIT_BINARIES              \
                               | DFLAG_DIST_MONITOR              \
                               | DFLAG_DIST_MONITOR_NAME         \
-                              | DFLAG_SPAWN)
+                              | DFLAG_SPAWN                     \
+			      | DFLAG_ALIAS			\
+                              | DFLAG_UNLINK_ID)
 
 /* Our preferred set of flags. Used for connection setup handshake */
 #define DFLAG_DIST_DEFAULT (DFLAG_DIST_MANDATORY | DFLAG_DIST_HOPEFULLY \
@@ -92,7 +103,10 @@
                             | DFLAG_EXIT_PAYLOAD              \
                             | DFLAG_FRAGMENTS                 \
                             | DFLAG_HANDSHAKE_23              \
-                            | DFLAG_SPAWN)
+                            | DFLAG_SPAWN                     \
+                            | DFLAG_V4_NC		      \
+                            | DFLAG_ALIAS		      \
+                            | DFLAG_UNLINK_ID)
 
 /* Flags addable by local distr implementations */
 #define DFLAG_DIST_ADDABLE    DFLAG_DIST_DEFAULT
@@ -149,7 +163,13 @@ enum dop {
     DOP_SPAWN_REQUEST       = 29,
     DOP_SPAWN_REQUEST_TT    = 30,
     DOP_SPAWN_REPLY         = 31,
-    DOP_SPAWN_REPLY_TT      = 32
+    DOP_SPAWN_REPLY_TT      = 32,
+
+    DOP_ALIAS_SEND          = 33,
+    DOP_ALIAS_SEND_TT       = 34,
+
+    DOP_UNLINK_ID           = 35,
+    DOP_UNLINK_ID_ACK       = 36
 };
 
 #define ERTS_DIST_SPAWN_FLAG_LINK       (1 << 0)
@@ -198,7 +218,7 @@ extern int erts_is_alive;
 #define ERTS_DIST_CTRL_OPT_GET_SIZE     ((Uint32) (1 << 0))
 
 /* for emulator internal testing... */
-extern int erts_dflags_test_remove_hopefull_flags;
+extern Uint64 erts_dflags_test_remove_hopefull_flags;
 
 #ifdef DEBUG
 #define ERTS_DBG_CHK_NO_DIST_LNK(D, R, L) \
@@ -249,6 +269,9 @@ typedef struct TTBEncodeContext_ {
     byte* ep;
     Eterm obj;
     ErtsWStack wstack;
+    Eterm* map_array;
+    Eterm* next_map_element;
+    void* ycf_yield_state;
     Binary *result_bin;
     byte *cptr;
     Sint vlen;
@@ -271,8 +294,10 @@ typedef struct TTBEncodeContext_ {
 #define ERTS_INIT_TTBEncodeContext(Ctx, Flags)                  \
     do {                                                        \
         (Ctx)->wstack.wstart = NULL;                            \
-        (Ctx)->dflags = (Flags);                                 \
+        (Ctx)->dflags = (Flags);                                \
         (Ctx)->level = 0;                                       \
+        (Ctx)->map_array = 0;                                   \
+        (Ctx)->ycf_yield_state = 0;                             \
         (Ctx)->vlen = 0;                                        \
         (Ctx)->size = 0;                                        \
         (Ctx)->termv = NULL;                                    \
@@ -375,8 +400,9 @@ struct dist_sequences {
 extern int erts_dsig_send_msg(ErtsDSigSendContext*, Eterm, Eterm);
 extern int erts_dsig_send_reg_msg(ErtsDSigSendContext*, Eterm, Eterm, Eterm);
 extern int erts_dsig_send_link(ErtsDSigSendContext *, Eterm, Eterm);
-extern int erts_dsig_send_exit_tt(ErtsDSigSendContext *, Eterm, Eterm, Eterm, Eterm);
-extern int erts_dsig_send_unlink(ErtsDSigSendContext *, Eterm, Eterm);
+extern int erts_dsig_send_exit_tt(ErtsDSigSendContext *, Process *, Eterm, Eterm, Eterm);
+extern int erts_dsig_send_unlink(ErtsDSigSendContext *, Eterm, Eterm, Uint64);
+extern int erts_dsig_send_unlink_ack(ErtsDSigSendContext *, Eterm, Eterm, Uint64);
 extern int erts_dsig_send_group_leader(ErtsDSigSendContext *, Eterm, Eterm);
 extern int erts_dsig_send_exit(ErtsDSigSendContext *, Eterm, Eterm, Eterm);
 extern int erts_dsig_send_exit2(ErtsDSigSendContext *, Eterm, Eterm, Eterm);
