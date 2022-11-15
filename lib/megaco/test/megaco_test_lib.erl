@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %% 
-%% Copyright Ericsson AB 1999-2020. All Rights Reserved.
+%% Copyright Ericsson AB 1999-2022. All Rights Reserved.
 %% 
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -49,6 +49,7 @@
          display_alloc_info/0,
          display_system_info/1, display_system_info/2, display_system_info/3,
 
+         executor/1, executor/2,
          try_tc/6,
 
          prepare_test_case/5,
@@ -60,7 +61,13 @@
          start_node/3,  start_node/4,
 
          stop_nodes/3,
-         stop_node/3
+         stop_node/3,
+
+         is_socket_backend/1,
+         inet_backend_opts/1,
+         explicit_inet_backend/0, test_inet_backends/0,
+         open/3,
+         listen/3, connect/3
 
         ]).
 -export([init_per_suite/1,    end_per_suite/1,
@@ -475,6 +482,17 @@ pprint(F, A) ->
 
 init_per_suite(Config) ->
 
+    p("megaco environment: "
+      "~n   (megaco) app:  ~p"
+      "~n   (all)    init: ~p"
+      "~n   (megaco) init: ~p",
+      [application:get_all_env(megaco),
+       init:get_arguments(),
+       case init:get_argument(megaco) of
+           {ok, Args} -> Args;
+           error -> undefined
+       end]),
+
     ct:timetrap(minutes(3)),
 
     try analyze_and_print_host_info() of
@@ -494,7 +512,7 @@ init_per_suite(Config) ->
             SKIP
     end.
 
-maybe_skip(HostInfo) ->
+maybe_skip(_HostInfo) ->
 
     %% We have some crap machines that causes random test case failures
     %% for no obvious reason. So, attempt to identify those without actually
@@ -520,6 +538,16 @@ maybe_skip(HostInfo) ->
            (V) when (V =:= {2,6,32}) ->
                 case string:trim(os:cmd("cat /etc/issue")) of
                     "Debian GNU/Linux 6.0 " ++ _ -> % Stone age Debian => Skip
+                        true;
+                    _ ->
+                        false
+                end;
+           (V) when (V =:= {2,6,16}) ->
+                case string:trim(os:cmd("cat /etc/issue")) of
+                    %% Stone age SLES => Skip
+                    %% We have atleast one VM that has this version,
+                    %% and it causes randome timeout glitches...
+                    "Welcome to SUSE Linux Enterprise Server 10 SP1 " ++ _ ->
                         true;
                     _ ->
                         false
@@ -553,14 +581,19 @@ maybe_skip(HostInfo) ->
                 true
         end,
     SkipWindowsOnVirtual =
+        %% fun() ->
+        %%         SysMan = win_sys_info_lookup(system_manufacturer, HostInfo),
+        %%         case string:to_lower(SysMan) of
+        %%             "vmware" ++ _ ->
+        %%                 true;
+        %%             _ ->
+        %%                 false
+        %%         end
+        %% end,
         fun() ->
-                SysMan = win_sys_info_lookup(system_manufacturer, HostInfo),
-                case string:to_lower(SysMan) of
-                    "vmware" ++ _ ->
-                        true;
-                    _ ->
-                        false
-                end
+                %% The host has been replaced and the VM has been reinstalled
+                %% so for now we give it a chance...
+                false
         end,
     COND = [
             {unix, [{linux,  LinuxVersionVerify}, 
@@ -730,18 +763,38 @@ analyze_and_print_linux_host_info(Version) ->
                           "~n   Num Online Schedulers: ~s"
                           "~n", [CPU, BogoMIPS, str_num_schedulers()]),
                 if
-                    (BogoMIPS > 20000) ->
+                    (BogoMIPS > 50000) ->
                         1;
-                    (BogoMIPS > 10000) ->
+                    (BogoMIPS > 30000) ->
                         2;
-                    (BogoMIPS > 5000) ->
+                    (BogoMIPS > 10000) ->
                         3;
-                    (BogoMIPS > 2000) ->
+                    (BogoMIPS > 5000) ->
                         5;
-                    (BogoMIPS > 1000) ->
+                    (BogoMIPS > 3000) ->
                         8;
                     true ->
                         10
+                end;
+            {ok, "POWER9" ++ _ = CPU} ->
+                %% For some reason this host is really slow
+                %% Consider the CPU, it really should not be...
+                %% But, to not fail a bunch of test cases, we add 5
+                case linux_cpuinfo_clock() of
+                    Clock when is_integer(Clock) andalso (Clock > 0) ->
+                        io:format("CPU: "
+                                  "~n   Model:                 ~s"
+                                  "~n   CPU Speed:             ~w"
+                                  "~n   Num Online Schedulers: ~s"
+                                  "~n", [CPU, Clock, str_num_schedulers()]),
+                        if
+                            (Clock > 2000) ->
+                                5 + num_schedulers_to_factor();
+                            true ->
+                                10 + num_schedulers_to_factor()
+                        end;
+                    _ ->
+                        num_schedulers_to_factor()
                 end;
             {ok, CPU} ->
                 io:format("CPU: "
@@ -765,24 +818,10 @@ analyze_and_print_linux_host_info(Version) ->
 linux_cpuinfo_lookup(Key) when is_list(Key) ->
     linux_info_lookup(Key, "/proc/cpuinfo").
 
-linux_cpuinfo_cpu() ->
-    case linux_cpuinfo_lookup("cpu") of
-        [Model] ->
-            Model;
-        _ ->
-            "-"
-    end.
-
-linux_cpuinfo_motherboard() ->
-    case linux_cpuinfo_lookup("motherboard") of
-        [MB] ->
-            MB;
-        _ ->
-            "-"
-    end.
-
 linux_cpuinfo_bogomips() ->
     case linux_cpuinfo_lookup("bogomips") of
+        [] ->
+            "-";
         BMips when is_list(BMips) ->
             try lists:sum([bogomips_to_int(BM) || BM <- BMips])
             catch
@@ -844,12 +883,57 @@ linux_cpuinfo_model_name() ->
             "-"
     end.
 
+linux_cpuinfo_cpu() ->
+    case linux_cpuinfo_lookup("cpu") of
+        [C|_] ->
+            C;
+        _ ->
+            "-"
+    end.
+
+linux_cpuinfo_motherboard() ->
+    case linux_cpuinfo_lookup("motherboard") of
+        [MB] ->
+            MB;
+        _ ->
+            "-"
+    end.
+
 linux_cpuinfo_processor() ->
     case linux_cpuinfo_lookup("Processor") of
         [P] ->
             P;
         _ ->
             "-"
+    end.
+
+linux_cpuinfo_clock() ->
+    %% This is written as: "3783.000000MHz"
+    %% So, check unit MHz (handle nothing else).
+    %% Also, check for both float and integer
+    %% Also,  the freq is per core, and can vary...
+    case linux_cpuinfo_lookup("clock") of
+        [C|_] when is_list(C) ->
+            case lists:reverse(string:to_lower(C)) of
+                "zhm" ++ CRev ->
+                    try trunc(list_to_float(lists:reverse(CRev))) of
+                        I ->
+                            I
+                    catch
+                        _:_:_ ->
+                            try list_to_integer(lists:reverse(CRev)) of
+                                I ->
+                                    I
+                            catch
+                                _:_:_ ->
+                                    0
+                            end
+                    end;
+                _ ->
+                    0
+            end;
+        _ ->
+            0
     end.
 
 linux_which_cpuinfo(montavista) ->
@@ -908,15 +992,21 @@ linux_which_cpuinfo(wind_river) ->
     end;
 
 linux_which_cpuinfo(other) ->
-    %% Check for x86 (Intel or AMD)
+    %% Check for x86 (Intel or AMD or Power)
     CPU =
         case linux_cpuinfo_model_name() of
             "-" ->
                 %% ARM (at least some distros...)
                 case linux_cpuinfo_processor() of
                     "-" ->
-                        %% Ok, we give up
-                        throw(noinfo);
+                        %% POWER (at least some distros...)
+                        case linux_cpuinfo_cpu() of
+                            "-" ->
+                                %% Ok, we give up
+                                throw(noinfo);
+                            C ->
+                                C
+                        end;
                     Proc ->
                         Proc
                 end;
@@ -965,14 +1055,16 @@ linux_which_meminfo() ->
                                 throw(noinfo)
                         end,
                     if
-                        (MemSz3 >= 8388608) ->
+                        (MemSz3 >= 16777216) ->
                             0;
-                        (MemSz3 >= 4194304) ->
+                        (MemSz3 >= 8388608) ->
                             1;
-                        (MemSz3 >= 2097152) ->
+                        (MemSz3 >= 4194304) ->
                             3;
+                        (MemSz3 >= 2097152) ->
+                            5;
                         true ->
-                            5
+                            8
                     end;
                 _X ->
                     0
@@ -1415,13 +1507,23 @@ analyze_darwin_hw_model_identifier(HwInfo) ->
     proplists:get_value("model identifier", HwInfo, "-").
 
 analyze_darwin_hw_processor_name(HwInfo) ->
-    proplists:get_value("processor name", HwInfo, "-").
+    case proplists:get_value("processor name", HwInfo, "-") of
+        "-" ->
+            proplists:get_value("chip", HwInfo, "-");
+        N ->
+            N
+    end.
 
 analyze_darwin_hw_processor_speed(HwInfo) ->
     proplists:get_value("processor speed", HwInfo, "-").
 
 analyze_darwin_hw_number_of_processors(HwInfo) ->
-    proplists:get_value("number of processors", HwInfo, "-").
+    case analyze_darwin_hw_processor_name(HwInfo) of
+        "Apple M" ++ _ ->
+            proplists:get_value("number of processors", HwInfo, "1");
+        _ ->
+            proplists:get_value("number of processors", HwInfo, "-")
+    end.
 
 analyze_darwin_hw_total_number_of_cores(HwInfo) ->
     proplists:get_value("total number of cores", HwInfo, "-").
@@ -1502,8 +1604,65 @@ analyze_darwin_memory_to_factor(Mem) ->
 %% the speed may be a float, which we transforms into an integer of MHz.
 %% To calculate a factor based on processor speed, number of procs
 %% and number of cores is ... not an exact ... science ...
+%%
+%% If Apple processor, we don't know the speed, so ignore that for now...
+analyze_darwin_cpu_to_factor("Apple M" ++ _ = _ProcName,
+                             _ProcSpeedStr, NumProcStr, NumCoresStr) ->
+    %% io:format("analyze_darwin_cpu_to_factor(apple) -> entry with"
+    %%           "~n  ProcName:     ~p"
+    %%           "~n  ProcSpeedStr: ~p"
+    %%           "~n  NumProcStr:   ~p"
+    %%           "~n  NumCoresStr:  ~p"
+    %%           "~n", [_ProcName, _ProcSpeedStr, NumProcStr, NumCoresStr]),
+    NumProc = try list_to_integer(NumProcStr) of
+                  NumProcI ->
+                      NumProcI
+              catch
+                  _:_:_ ->
+                      1
+              end,
+    %% This is a string that looks like this: X (Y performance and Z efficiency)
+    NumCores = try string:tokens(NumCoresStr, [$\ ]) of
+                   [NCStr | _] ->
+                       try list_to_integer(NCStr) of
+                           NumCoresI ->
+                               NumCoresI
+                       catch
+                           _:_:_ ->
+                               1
+                       end
+               catch
+                   _:_:_ ->
+                       1
+               end,
+    if
+        (NumProc =:= 1) ->
+            if
+                (NumCores < 2) ->
+                    5;
+                (NumCores < 4) ->
+                    3;
+                (NumCores < 6) ->
+                    2;
+                true ->
+                    1
+            end;
+        true ->
+            if
+                (NumCores < 4) ->
+                    2;
+                true ->
+                    1
+            end
+    end;
 analyze_darwin_cpu_to_factor(_ProcName,
                              ProcSpeedStr, NumProcStr, NumCoresStr) ->
+    %% io:format("analyze_darwin_cpu_to_factor -> entry with"
+    %%           "~n  ProcName:     ~p"
+    %%           "~n  ProcSpeedStr: ~p"
+    %%           "~n  NumProcStr:   ~p"
+    %%           "~n  NumCoresStr:  ~p"
+    %%           "~n", [_ProcName, ProcSpeedStr, NumProcStr, NumCoresStr]),
     Speed = 
         case [string:to_lower(S) || S <- string:tokens(ProcSpeedStr, [$\ ])] of
             [SpeedStr, "mhz"] ->
@@ -1763,10 +1922,10 @@ analyze_and_print_win_host_info(Version) ->
               "~n   System Manufacturer:    ~s"
               "~n   System Model:           ~s"
               "~n   Number of Processor(s): ~s"
-              "~n   Total Physical Memory:  ~s"
+              "~n   Total Physical Memory:  ~s (~w)"
               "~n   Num Online Schedulers:  ~s"
               "~n", [OsName, OsVersion, Version,
-		     SysMan, SysMod, NumProcs, TotPhysMem,
+		     SysMan, SysMod, NumProcs, TotPhysMem, TotPhysMem,
 		     str_num_schedulers()]),
     MemFactor =
         try
@@ -1938,6 +2097,42 @@ reset_kill_timer(Config) ->
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
+executor(Fun) ->
+    executor(Fun, infinity).
+
+executor(Fun, Timeout)
+  when is_function(Fun, 0) andalso
+       ((Timeout =:= infinity) orelse (is_integer(Timeout) andalso (Timeout > 0))) ->
+    {Pid, MRef} = erlang:spawn_monitor(Fun),
+    receive
+        {'DOWN', MRef, process, Pid, Info} ->
+            p("executor process terminated (normal) with"
+              "~n      ~p", [Info]),
+            Info;
+        {'EXIT', TCPid, {timetrap_timeout = R, TCTimeout, TCSTack}} ->
+            p("received timetrap timeout (~w ms) from ~p => Kill executor process"
+              "~n      TC Stack: ~p", [TCTimeout, TCPid, TCSTack]),
+            exit(Pid, kill),
+            %% We do this in case we get some info about 'where'
+            %% the process is hanging...
+            receive
+                {'DOWN', MRef, process, Pid, Info} ->
+                    p("executor process terminated (forced) with"
+                      "~n      ~p", [Info]),
+                    ok
+            after 1000 -> % Give it a second...
+                    ok
+            end,
+            {error, R}
+    after Timeout ->
+            p("executor process termination timeout - kill executor process"),
+            exit(kill, Pid),
+            {error, executor_timeout}
+    end.
+            
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
 try_tc(TCName, Name, Verbosity, Pre, Case, Post)
   when is_function(Pre, 0)  andalso 
        is_function(Case, 1) andalso
@@ -1953,23 +2148,23 @@ try_tc(TCName, Name, Verbosity, Pre, Case, Post)
             try Case(State) of
                 Res ->
                     p("try_tc -> test case done: try post"),
-                    (catch Post(State)),
+                    _ = executor(fun() -> Post(State) end),
                     p("try_tc -> done"),
                     Res
             catch
                 throw:{skip, _} = SKIP:_ ->
                     p("try_tc -> test case (throw) skip: try post"),
-                    (catch Post(State)),
+                    _ = executor(fun() -> Post(State) end),
                     p("try_tc -> test case (throw) skip: done"),
                     SKIP;
                 exit:{skip, _} = SKIP:_ ->
                     p("try_tc -> test case (exit) skip: try post"),
-                    (catch Post(State)),
+                    _ = executor(fun() -> Post(State) end),
                     p("try_tc -> test case (exit) skip: done"),
                     SKIP;
                 C:E:S ->
                     p("try_tc -> test case failed: try post"),
-                    (catch Post(State)),
+                    _ = executor(fun() -> Post(State) end),
                     case megaco_test_global_sys_monitor:events() of
                         [] ->
                             p("try_tc -> test case failed: done"),
@@ -2155,7 +2350,6 @@ stop_nodes([Node|Nodes], Acc, File, Line) ->
     
 
 stop_node(Node, File, Line) when is_atom(Node) ->
-    p("try stop node ~p", [Node]),
     case stop_node(Node) of
         ok ->
             ok;
@@ -2166,13 +2360,22 @@ stop_node(Node, File, Line) when is_atom(Node) ->
 stop_node(Node) ->
     p("try stop node ~p", [Node]),
     erlang:monitor_node(Node, true),
-    rpc:call(Node, erlang, halt, []),
+    %% Make sure we do not hang in case 'Node' has problems
+    erlang:spawn(fun() -> rpc:call(Node, erlang, halt, []) end),
     receive
         {nodedown, Node} ->
+            p("node ~p stopped", [Node]),
             ok
     after 10000 ->
             e("failed stop node ~p", [Node]),
-            error
+            erlang:monitor_node(Node, false),
+            receive
+                {nodedown, Node} ->
+                    p("node ~p stopped after timeout (race)", [Node]),
+                    ok
+            after 0 ->
+                    error
+            end
     end.
 
 
@@ -2193,4 +2396,77 @@ p(F, A) ->
 
 print(Pre, F, A) ->
     io:format("*** [~s] [~s] ~p " ++ F ++ "~n", [?FTS(), Pre, self() | A]).
+
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+explicit_inet_backend() ->
+    %% This is intentional!
+    %% This is a kernel flag, which if set disables
+    %% our own special handling of the inet_backend
+    %% in our test suites.
+    case application:get_all_env(kernel) of
+        Env when is_list(Env) ->
+            case lists:keysearch(inet_backend, 1, Env) of
+                {value, {inet_backend, _}} ->
+                    true;
+                _ ->
+                    false
+            end;
+        _ ->
+            false
+    end.
+
+test_inet_backends() ->
+    case init:get_argument(megaco) of
+        {ok, SnmpArgs} when is_list(SnmpArgs) ->
+            test_inet_backends(SnmpArgs, atom_to_list(?FUNCTION_NAME));
+        error ->
+            false
+    end.
+
+test_inet_backends([], _) ->
+    false;
+test_inet_backends([[Key, Val] | _], Key) ->
+    case list_to_atom(string:to_lower(Val)) of
+        Bool when is_boolean(Bool) ->
+            Bool;
+        _ ->
+            false
+    end;
+test_inet_backends([_|Args], Key) ->
+    test_inet_backends(Args, Key).
+
+
+inet_backend_opts(Config) when is_list(Config) ->
+    case lists:keysearch(socket_create_opts, 1, Config) of
+        {value, {socket_create_opts, InetBackendOpts}} ->
+            InetBackendOpts;
+        false ->
+            []
+    end.
+
+is_socket_backend(Config) when is_list(Config) ->
+    case lists:keysearch(socket_create_opts, 1, Config) of
+        {value, {socket_create_opts, [{inet_backend, socket}]}} ->
+            true;
+        _ ->
+            false
+    end.
+
+
+open(Config, Pid, Opts)
+  when is_list(Config) andalso is_pid(Pid) andalso is_list(Opts) ->
+    InetBackendOpts = inet_backend_opts(Config),
+    megaco_udp:open(Pid, InetBackendOpts ++ Opts).
+
+listen(Config, Pid, Opts)
+  when is_list(Config) andalso is_pid(Pid) andalso is_list(Opts) ->
+    InetBackendOpts = inet_backend_opts(Config),
+    megaco_tcp:listen(Pid, InetBackendOpts ++ Opts).
+
+connect(Config, Ref, Opts)
+  when is_list(Config) andalso is_list(Opts) ->
+    InetBackendOpts = inet_backend_opts(Config),
+    megaco_tcp:connect(Ref, InetBackendOpts ++ Opts).
 

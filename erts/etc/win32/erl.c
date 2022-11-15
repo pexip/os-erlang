@@ -1,7 +1,7 @@
 /*
  * %CopyrightBegin%
  * 
- * Copyright Ericsson AB 2003-2016. All Rights Reserved.
+ * Copyright Ericsson AB 2003-2021. All Rights Reserved.
  * 
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -74,7 +74,8 @@ int wmain(int argc, wchar_t **argv)
           wslpathlen = wcslen(wslpath);
       }
   }
-  pathlen = (wcslen(path) + wslpathlen + wcslen(erlexec_dir) + 2);
+  /* Add size for path delimiters and eos */
+  pathlen = (wcslen(path) + wslpathlen + wcslen(erlexec_dir) + 3);
   npath = (wchar_t *) malloc(pathlen*sizeof(wchar_t));
   if(wslpathlen > 0) {
       swprintf(npath,pathlen,L"%s;%s;%s",erlexec_dir,path,wslpath);

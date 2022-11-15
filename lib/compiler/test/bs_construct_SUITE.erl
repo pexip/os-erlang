@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %% 
-%% Copyright Ericsson AB 2004-2020. All Rights Reserved.
+%% Copyright Ericsson AB 2004-2021. All Rights Reserved.
 %% 
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -140,10 +140,16 @@ l(I_13, I_big1, I_16, Bin) ->
 	[129]),
      ?T(<<1:3,"string",9:5>>,
 	[46,110,142,77,45,204,233]),
+
+     %% Test the native flag.
      ?T(<<37.98:64/native-float>>,
 	native_3798()),
      ?T(<<32978297842987249827298387697777669766334937:128/native-integer>>,
 	native_bignum()),
+     ?T(<<$э/native-utf16,$т/native-utf16,$о/native-utf16," спутник"/native-utf16>>,
+        native_utf16()),
+     ?T(<<$в/native-utf32,"ода"/native-utf32>>,
+	native_utf32()),
 
      ?T(<<Bin/binary>>,
         [165,90,195]),
@@ -189,6 +195,18 @@ native_bignum() ->
 	<<1,0>> -> [217,73,11,176,128,109,231,39,101,170,213,1,177,18,205,129]
     end.
 
+native_utf16() ->
+    case <<1:16/native>> of
+	<<0,1>> -> [4,77,4,66,4,62,0,32,4,65,4,63,4,67,4,66,4,61,4,56,4,58];
+        <<1,0>> -> [77,4,66,4,62,4,32,0,65,4,63,4,67,4,66,4,61,4,56,4,58,4]
+    end.
+
+native_utf32() ->
+    case <<1:16/native>> of
+	<<0,1>> -> [0,0,4,50,0,0,4,62,0,0,4,52,0,0,4,48];
+        <<1,0>> -> [50,4,0,0,62,4,0,0,52,4,0,0,48,4,0,0]
+    end.
+
 evaluate(Str, Vars) ->
     {ok,Tokens,_} =
 	erl_scan:string(Str ++ " . "),
@@ -210,13 +228,13 @@ eval_list([{C_bin, Str, Bytes} | Rest], Vars) ->
     end.
 
 one_test({C_bin, E_bin, Str, Bytes}) when is_list(Bytes) ->
-    io:format("  ~s, ~p~n", [Str, Bytes]),
+    io:format("  ~ts, ~p~n", [Str, Bytes]),
     Bin = list_to_bitstring(Bytes),
     if
 	C_bin == Bin ->
 	    ok;
 	true ->
-	    io:format("ERROR: Compiled: ~p. Expected ~p. Got ~p.~n",
+	    io:format("ERROR: Compiled: ~p.~nExpected ~p.~nGot ~p.~n",
 		      [Str, Bytes, bitstring_to_list(C_bin)]),
 	    ct:fail(comp)
     end,
@@ -224,12 +242,12 @@ one_test({C_bin, E_bin, Str, Bytes}) when is_list(Bytes) ->
 	E_bin == Bin ->
 	    ok;
 	true ->
-	    io:format("ERROR: Interpreted: ~p. Expected ~p. Got ~p.~n",
+	    io:format("ERROR: Interpreted: ~p.~nExpected ~p.~nGot ~p.~n",
 		      [Str, Bytes, bitstring_to_list(E_bin)]),
 	    ct:fail(comp)
     end;
 one_test({C_bin, E_bin, Str, Result}) ->
-    io:format("  ~s ~p~n", [Str, C_bin]),
+    io:format("  ~ts ~p~n", [Str, C_bin]),
     if
 	C_bin == E_bin ->
 	    ok;
@@ -392,6 +410,9 @@ in_guard(Config) when is_list(Config) ->
 
     ok = in_guard_4(<<15:4>>, 255),
     nope = in_guard_4(<<15:8>>, 255),
+
+    nope = catch in_guard_5(),
+
     ok.
 
 in_guard_1(Bin, A, B) when <<A:13,B:3>> == Bin -> 1;
@@ -411,6 +432,10 @@ in_guard_3(_, _) -> nope.
 
 in_guard_4(Bin, A) when <<A:4>> =:= Bin -> ok;
 in_guard_4(_, _) -> nope.
+
+%% Would crash beam_ssa_recv when the no_copt option was given.
+in_guard_5() when 0; <<'':32,<<42/native>>>> -> ok;
+in_guard_5() -> nope.
 
 in_catch(Config) when is_list(Config) ->
     <<42,0,5>> = small(42, 5),
@@ -488,6 +513,16 @@ nasty_literals(Config) when is_list(Config) ->
 
 -define(COF(Int0),
 	(fun(Int) ->
+		 true = <<Int:16/float>> =:= <<(float(Int)):16/float>>,
+		 true = <<Int:32/float>> =:= <<(float(Int)):32/float>>,
+		 true = <<Int:64/float>> =:= <<(float(Int)):64/float>>
+	 end)(nonliteral(Int0)),
+	true = <<Int0:16/float>> =:= <<(float(Int0)):16/float>>,
+	true = <<Int0:32/float>> =:= <<(float(Int0)):32/float>>,
+	true = <<Int0:64/float>> =:= <<(float(Int0)):64/float>>).
+
+-define(COF32(Int0),
+	(fun(Int) ->
 		 true = <<Int:32/float>> =:= <<(float(Int)):32/float>>,
 		 true = <<Int:64/float>> =:= <<(float(Int)):64/float>>
 	 end)(nonliteral(Int0)),
@@ -510,8 +545,10 @@ coerce_to_float(Config) when is_list(Config) ->
     ?COF(255),
     ?COF(-255),
     ?COF(38474),
-    ?COF(387498738948729893849444444443),
-    ?COF(-37489378937773899999999999999993),
+    ?COF(65504),
+    ?COF(-65504),
+    ?COF32(387498738948729893849444444443),
+    ?COF32(-37489378937773899999999999999993),
     ?COF64(298748888888888888888888888883478264866528467367364766666666666666663),
     ?COF64(-367546729879999999999947826486652846736736476555566666663),
     ok.
@@ -536,7 +573,6 @@ opt(Config) when is_list(Config) ->
     <<1,65,136,0,0>> = id(<<1,17.0:32/float>>),
     <<1,64,8,0,0,0,0,0,0>> = id(<<1,3.0:N/float-unit:4>>),
     <<1,0,0,0,0,0,0,8,64>> = id(<<1,3.0:N/little-float-unit:4>>),
-    {'EXIT',{badarg,_}} = (catch id(<<3.1416:N/float>>)),
 
     B = <<1,2,3,4,5>>,
     <<0,1,2,3,4,5>> = id(<<0,B/binary>>),

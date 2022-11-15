@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2000-2016. All Rights Reserved.
+%% Copyright Ericsson AB 2000-2021. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -1542,8 +1542,8 @@ verify_val(Item, Val) ->
         encoding_config  when is_list(Val) ->
             case Val of
                 [{version3, V3}|_] when (V3 =/= v3) ->
-                    warning_msg("Encoding Config version3 ~p is deprecated!~n"
-                                "It will be removed in OTP 24. Use 'v3' instead!"),
+                    error_msg("Encoding Config version3 ~p is "
+                              "no longer supported!~n"),
                     ok;
                 _ ->
                     ok
@@ -2174,11 +2174,13 @@ snmp_counters() ->
 
 %%-----------------------------------------------------------------
 
-warning_msg(F) ->
-    warning_msg(F, []).
+%% warning_msg(F) ->
+%%     warning_msg(F, []).
 warning_msg(F, A) ->
     ?megaco_warning("Config server: " ++ F, A).
 
+error_msg(F) ->
+    error_msg(F, []).
 error_msg(F, A) ->
     ?megaco_error("Config server: " ++ F, A).
 

@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %% 
-%% Copyright Ericsson AB 2006-2020. All Rights Reserved.
+%% Copyright Ericsson AB 2006-2021. All Rights Reserved.
 %% 
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -163,7 +163,7 @@ core_lint_function(Exports, Attributes, Body) ->
     MainFun = cerl:c_fun([], Body),
     MainVar = cerl:c_var({main,0}),
     Mod = cerl:c_module(ModName, Exports, Attributes, [{MainVar,MainFun}]),
-    {error,[{core_lint_test,Errors}],[]} =
+    {error,[{"core_lint_test",Errors}],[]} =
         compile:forms(Mod, [from_core,clint0,return]),
     io:format("~p\n", [Errors]),
     [] = lists:filter(fun({none,core_lint,_}) -> false;

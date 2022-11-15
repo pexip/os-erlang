@@ -1,7 +1,7 @@
 /*
  * %CopyrightBegin%
  *
- * Copyright Ericsson AB 2000-2017. All Rights Reserved.
+ * Copyright Ericsson AB 2000-2022. All Rights Reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -700,24 +700,22 @@ public class OtpOutputStream extends ByteArrayOutputStream {
      *            the nodename.
      *
      * @param id
-     *            an arbitrary number. Only the low order 15 bits will be used.
+     *            an arbitrary number.
      *
      * @param serial
-     *            another arbitrary number. Only the low order 13 bits will be
-     *            used.
+     *            another arbitrary number.
      *
      * @param creation
-     *            yet another arbitrary number. Only the low order 2 bits will
-     *            be used.
+     *            node incarnation number.
      *
      */
     public void write_pid(final String node, final int id, final int serial,
             final int creation) {
 	write1(OtpExternal.newPidTag);
 	write_atom(node);
-	write4BE(id & 0x7fff); // 15 bits
-	write4BE(serial & 0x1fff); // 13 bits
-	write1(creation & 0x3); // 2 bits
+	write4BE(id);
+	write4BE(serial);
+	write4BE(creation);
     }
 
     /**
@@ -748,11 +746,19 @@ public class OtpOutputStream extends ByteArrayOutputStream {
      *            another arbitrary number. Only the low order 2 bits will
      *            be used.
      */
-    public void write_port(final String node, final int id, final int creation) {
-	write1(OtpExternal.newPortTag);
-	write_atom(node);
-	write4BE(id & 0xfffffff); // 28 bits
-	write1(creation & 0x3); // 2 bits
+    public void write_port(final String node, final long id, final int creation) {
+        if ((id & ~0xfffffffL) != 0) { /* > 28 bits */
+            write1(OtpExternal.v4PortTag);
+            write_atom(node);
+            write8BE(id);
+            write4BE(creation);
+        }
+        else {
+            write1(OtpExternal.newPortTag);
+            write_atom(node);
+            write4BE(id);
+            write4BE(creation);
+        }
     }
 
     /**
@@ -762,10 +768,18 @@ public class OtpOutputStream extends ByteArrayOutputStream {
      *            the port.
      */
     public void write_port(OtpErlangPort port) {
-	write1(OtpExternal.newPortTag);
-	write_atom(port.node());
-	write4BE(port.id());
-        write4BE(port.creation());
+        if ((port.id() & ~0xfffffffL) != 0) { /* > 28 bits */
+            write1(OtpExternal.v4PortTag);
+            write_atom(port.node());
+            write8BE(port.id());
+            write4BE(port.creation());
+        }
+        else {
+            write1(OtpExternal.newPortTag);
+            write_atom(port.node());
+            write4BE((int) port.id());
+            write4BE(port.creation());
+        }
     }
 
     /**
@@ -797,18 +811,17 @@ public class OtpOutputStream extends ByteArrayOutputStream {
      *            the nodename.
      *
      * @param ids
-     *            an array of arbitrary numbers. Only the low order 18 bits of
-     *            the first number will be used. At most three numbers
+     *            an array of arbitrary numbers. At most three numbers
      *            will be read from the array.
      *
      * @param creation
-     *            another arbitrary number. Only the low order 2 bits will be used.
+     *            another arbitrary number.
      *
      */
     public void write_ref(final String node, final int[] ids, final int creation) {
         int arity = ids.length;
-        if (arity > 3) {
-            arity = 3; // max 3 words in ref
+        if (arity > 5) {
+            arity = 5; // max 5 words in ref
         }
 
 	write1(OtpExternal.newerRefTag);
@@ -818,13 +831,9 @@ public class OtpOutputStream extends ByteArrayOutputStream {
 
 	write_atom(node);
 
-	write1(creation & 0x3); // 2 bits
+	write4BE(creation);
 
-	// first int gets truncated to 18 bits
-	write4BE(ids[0] & 0x3ffff);
-
-	// remaining ones are left as is
-	for (int i = 1; i < arity; i++) {
+	for (int i = 0; i < arity; i++) {
 	    write4BE(ids[i]);
 	}
     }

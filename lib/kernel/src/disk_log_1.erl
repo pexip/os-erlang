@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 1997-2018. All Rights Reserved.
+%% Copyright Ericsson AB 1997-2021. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -1347,7 +1347,7 @@ inc_wrap(FName, CurF, MaxF) ->
 			CurF > NewMaxF ->
 			    %% The change was done while the current file was 
 			    %% greater than the new number of files.
-			    %% The index file is not trunctated here, since
+			    %% The index file is not truncated here, since
 			    %% writing the index file while opening the file
 			    %% with index 1 will write the value for the file
 			    %% with extension CurF as well. Next time the 

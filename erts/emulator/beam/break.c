@@ -1,7 +1,7 @@
 /*
  * %CopyrightBegin%
  *
- * Copyright Ericsson AB 1996-2020. All Rights Reserved.
+ * Copyright Ericsson AB 1996-2022. All Rights Reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -35,7 +35,7 @@
 #include "erl_version.h"
 #include "hash.h"
 #include "atom.h"
-#include "beam_load.h"
+#include "beam_code.h"
 #include "erl_hl_timer.h"
 #include "erl_thr_progress.h"
 #include "erl_proc_sig_queue.h"
@@ -44,7 +44,7 @@
 /* Forward declarations -- should really appear somewhere else */
 static void process_killer(void);
 void do_break(void);
-void erl_crash_dump_v(char *file, int line, char* fmt, va_list args);
+void erl_crash_dump_v(char *file, int line, const char* fmt, va_list args);
 
 #ifdef DEBUG
 static void bin_check(void);
@@ -55,7 +55,7 @@ static void print_garb_info(fmtfn_t to, void *to_arg, Process* p);
 static void dump_frequencies(void);
 #endif
 
-static void dump_attributes(fmtfn_t to, void *to_arg, byte* ptr, int size);
+static void dump_attributes(fmtfn_t to, void *to_arg, const byte* ptr, int size);
 
 extern char* erts_system_version[];
 
@@ -186,6 +186,7 @@ static int doit_print_monitor(ErtsMonitor *mon, void *vpcontext, Sint reds)
     case ERTS_MON_TYPE_PORT:
     case ERTS_MON_TYPE_TIME_OFFSET:
     case ERTS_MON_TYPE_DIST_PROC:
+    case ERTS_MON_TYPE_DIST_PORT:
     case ERTS_MON_TYPE_RESOURCE:
     case ERTS_MON_TYPE_NODE:
 
@@ -348,11 +349,11 @@ print_process_info(fmtfn_t to, void *to_arg, Process *p, ErtsProcLocks orig_lock
 	     if (j < 0)
 		j += scb->len;
 	     if (scb->ct[j] == &exp_send)
-		erts_print(to, to_arg, "send");
+		erts_print(to, to_arg, "send\n");
 	     else if (scb->ct[j] == &exp_receive)
-		erts_print(to, to_arg, "'receive'");
+		erts_print(to, to_arg, "'receive'\n");
 	     else if (scb->ct[j] == &exp_timeout)
-		   erts_print(to, to_arg, "timeout");
+		   erts_print(to, to_arg, "timeout\n");
 	     else
 		 erts_print(to, to_arg, "%T:%T/%bpu\n",
 			    scb->ct[j]->info.mfa.module,
@@ -471,7 +472,7 @@ loaded(fmtfn_t to, void *to_arg)
     int i;
     int old = 0;
     int cur = 0;
-    BeamCodeHeader* code;
+    const BeamCodeHeader* code;
     Module* modp;
     ErtsCodeIndex code_ix;
 
@@ -553,7 +554,7 @@ loaded(fmtfn_t to, void *to_arg)
 
 
 static void
-dump_attributes(fmtfn_t to, void *to_arg, byte* ptr, int size)
+dump_attributes(fmtfn_t to, void *to_arg, const byte* ptr, int size)
 {
     erts_print_base64(to, to_arg, ptr, size);
     erts_print(to, to_arg, "\n");
@@ -616,9 +617,6 @@ do_break(void)
 	    erts_printf("Erlang (%s) emulator version "
 		       ERLANG_VERSION "\n",
 		       EMULATOR);
-#if ERTS_SAVED_COMPILE_TIME
-	    erts_printf("Compiled on " ERLANG_COMPILE_DATE "\n");
-#endif
 	    return;
 	case 'd':
 	    distribution_info(ERTS_PRINT_STDOUT, NULL);
@@ -770,7 +768,7 @@ crash_dump_limited_writer(void* vfdp, char* buf, size_t len)
 
 /* XXX THIS SHOULD BE IN SYSTEM !!!! */
 void
-erl_crash_dump_v(char *file, int line, char* fmt, va_list args)
+erl_crash_dump_v(char *file, int line, const char* fmt, va_list args)
 {
     ErtsThrPrgrData tpd_buf; /* in case we aren't a managed thread... */
     int fd;
@@ -797,27 +795,9 @@ erl_crash_dump_v(char *file, int line, char* fmt, va_list args)
        crash dump. */
     erts_thr_progress_fatal_error_block(&tpd_buf);
 
-#ifdef ERTS_SYS_SUSPEND_SIGNAL
-    /*
-     * We suspend all scheduler threads so that we can dump some
-     * data about the currently running processes and scheduler data.
-     * We have to be very very careful when doing this as the schedulers
-     * could be anywhere.
-     */
-    sys_init_suspend_handler();
-
-    for (i = 0; i < erts_no_schedulers; i++) {
-        erts_tid_t tid = ERTS_SCHEDULER_IX(i)->tid;
-        if (!erts_equal_tids(tid,erts_thr_self()))
-            sys_thr_suspend(tid);
-    }
-
-#endif
-
     /* Allow us to pass certain places without locking... */
     erts_atomic32_set_mb(&erts_writing_erl_crash_dump, 1);
     erts_tsd_set(erts_is_crash_dumping_key, (void *) 1);
-
 
     envsz = sizeof(env);
     /* ERL_CRASH_DUMP_SECONDS not set
@@ -916,6 +896,27 @@ erl_crash_dump_v(char *file, int line, char* fmt, va_list args)
     time(&now);
     erts_cbprintf(to, to_arg, "=erl_crash_dump:0.5\n%s", ctime(&now));
 
+#ifdef ERTS_SYS_SUSPEND_SIGNAL
+    /*
+     * We suspend all scheduler threads so that we can dump some
+     * data about the currently running processes and scheduler data.
+     * We have to be very very careful when doing this as the schedulers
+     * could be anywhere.
+     * It may happen that scheduler thread is suspended while holding
+     * malloc lock. Therefore code running in this thread must not use
+     * it, or it will deadlock. ctime and fdopen calls both use malloc
+     * internally and must be executed prior to.
+     */
+    sys_init_suspend_handler();
+
+    for (i = 0; i < erts_no_schedulers; i++) {
+        erts_tid_t tid = ERTS_SCHEDULER_IX(i)->tid;
+        if (!erts_equal_tids(tid,erts_thr_self()))
+            sys_thr_suspend(tid);
+    }
+
+#endif
+
     if (file != NULL)
        erts_cbprintf(to, to_arg, "The error occurred in file %s, line %d\n", file, line);
 
@@ -925,9 +926,6 @@ erl_crash_dump_v(char *file, int line, char* fmt, va_list args)
     }
     erts_cbprintf(to, to_arg, "System version: ");
     erts_print_system_version(to, to_arg, NULL);
-#if ERTS_SAVED_COMPILE_TIME
-    erts_cbprintf(to, to_arg, "%s\n", "Compiled: " ERLANG_COMPILE_DATE);
-#endif
 
     erts_cbprintf(to, to_arg, "Taints: ");
     erts_print_nif_taints(to, to_arg);
@@ -1019,15 +1017,18 @@ erl_crash_dump_v(char *file, int line, char* fmt, va_list args)
     dump_atoms(to, to_arg);
 
     erts_cbprintf(to, to_arg, "=end\n");
+
     if (fp) {
         fclose(fp);
+    } else {
+        close(fd);
     }
-    close(fd);
+
     erts_fprintf(stderr,"done\n");
 }
 
 void
-erts_print_base64(fmtfn_t to, void *to_arg, byte* src, Uint size)
+erts_print_base64(fmtfn_t to, void *to_arg, const byte* src, Uint size)
 {
     static const byte base64_chars[] =
         "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";

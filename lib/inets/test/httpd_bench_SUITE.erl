@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2012-2018. All Rights Reserved.
+%% Copyright Ericsson AB 2012-2021. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -280,9 +280,9 @@ cert_opts(Config) ->
 			     "server", "key.pem"]),
     ClientKeyFile = filename:join([?config(priv_dir, Config), 
 				   "client", "key.pem"]),
-    [{server_verification_opts, [{reuseaddr, true}, 
-				 {cacertfile, ServerCaCertFile},
-				 {ciphers, ["ECDHE-RSA-AES256-GCM-SHA384"]},
+    [{server_verification_opts, [{cacertfile, ServerCaCertFile},
+				 {ciphers, ["ECDHE-RSA-AES256-GCM-SHA384",
+                                            "TLS_AES_256_GCM_SHA384"]},
 				 {certfile, ServerCertFile}, {keyfile, ServerKeyFile}]},
      {client_verification_opts, [
 				 %%{verify, verify_peer},
@@ -518,7 +518,7 @@ start_dummy("https" = Protocol, Config) ->
     %% DataDir= ?config(data_dir, Config),
     Host = ?config(server_host, Config),
     SSLOpts =  proplists:get_value(server_verification_opts, cert_opts(Config)),
-    Opts = [{active, true}, {nodelay, true}, {reuseaddr, true} | SSLOpts],
+    Opts = [{active, true}, {nodelay, true} | SSLOpts],
     Conf = [%%{big, filename:join(DataDir, "1M_file")},
 	    %%{small, filename:join(DataDir, "1k_file")},
 	    {big, {gen, crypto:strong_rand_bytes(1000000)}},

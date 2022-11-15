@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2013-2019. All Rights Reserved.
+%% Copyright Ericsson AB 2013-2021. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -48,12 +48,15 @@
 	 is_higher/2, supported_protocol_versions/0,
 	 is_acceptable_version/2, hello_version/2]).
 
+%% Debug (whitebox testing)
+-export([init_replay_window/0, is_replay/2, update_replay_window/2]).
+
 
 -export_type([dtls_atom_version/0]).
 
 -type dtls_atom_version()  :: dtlsv1 | 'dtlsv1.2'.
 
--define(REPLAY_WINDOW_SIZE, 64).
+-define(REPLAY_WINDOW_SIZE, 58).  %% No bignums
 
 -compile(inline).
 
@@ -72,6 +75,9 @@ init_connection_states(Role, BeastMitigation) ->
     ConnectionEnd = ssl_record:record_protocol_role(Role),
     Initial = initial_connection_state(ConnectionEnd, BeastMitigation),
     Current = Initial#{epoch := 0},
+    %% No need to pass Version to ssl_record:empty_connection_state since
+    %% random nonce is generated with same algorithm for DTLS version
+    %% Might require a change for DTLS-1.3
     InitialPending = ssl_record:empty_connection_state(ConnectionEnd, BeastMitigation),
     Pending = empty_connection_state(InitialPending),
     #{saved_read  => Current,
@@ -82,7 +88,7 @@ init_connection_states(Role, BeastMitigation) ->
       pending_write => Pending}.
 
 empty_connection_state(Empty) ->    
-    Empty#{epoch => undefined, replay_window => init_replay_window(?REPLAY_WINDOW_SIZE)}.
+    Empty#{epoch => undefined, replay_window => init_replay_window()}.
 
 %%--------------------------------------------------------------------
 -spec save_current_connection_state(ssl_record:connection_states(), read | write) ->
@@ -100,12 +106,12 @@ save_current_connection_state(#{current_write := Current} = States, write) ->
 next_epoch(#{pending_read := Pending,
 	     current_read := #{epoch := Epoch}} = States, read) ->
     States#{pending_read := Pending#{epoch := Epoch + 1,
-                                     replay_window := init_replay_window(?REPLAY_WINDOW_SIZE)}};
+                                     replay_window := init_replay_window()}};
 
 next_epoch(#{pending_write := Pending,
 	     current_write := #{epoch := Epoch}} = States, write) ->
     States#{pending_write := Pending#{epoch := Epoch + 1,
-                                      replay_window := init_replay_window(?REPLAY_WINDOW_SIZE)}}.
+                                      replay_window := init_replay_window()}}.
 
 get_connection_state_by_epoch(Epoch, #{current_write := #{epoch := Epoch} = Current},
 			      write) ->
@@ -201,16 +207,17 @@ encode_alert_record(#alert{level = Level, description = Description},
 
 %%--------------------------------------------------------------------
 -spec encode_change_cipher_spec(ssl_record:ssl_version(), integer(), ssl_record:connection_states()) ->
-				       {iolist(), ssl_record:connection_states()}.
+          {[iolist()], ssl_record:connection_states()}.
 %%
 %% Description: Encodes a change_cipher_spec-message to send on the ssl socket.
 %%--------------------------------------------------------------------
 encode_change_cipher_spec(Version, Epoch, ConnectionStates) ->
-    encode_plain_text(?CHANGE_CIPHER_SPEC, Version, Epoch, ?byte(?CHANGE_CIPHER_SPEC_PROTO), ConnectionStates).
+    {Enc, Cs} = encode_plain_text(?CHANGE_CIPHER_SPEC, Version, Epoch, ?byte(?CHANGE_CIPHER_SPEC_PROTO), ConnectionStates),
+    {[Enc], Cs}.
 
 %%--------------------------------------------------------------------
 -spec encode_data(binary(), ssl_record:ssl_version(), ssl_record:connection_states()) ->
-			 {iolist(),ssl_record:connection_states()}.
+          {[iolist()],ssl_record:connection_states()}.
 %%
 %% Description: Encodes data to send on the ssl-socket.
 %%--------------------------------------------------------------------
@@ -233,7 +240,8 @@ encode_data(Data, Version, ConnectionStates) ->
                             end, {[], ConnectionStates}, Frags),
             {lists:reverse(RevCipherText), ConnectionStates1};
         _ ->
-            encode_plain_text(?APPLICATION_DATA, Version, Epoch, Data, ConnectionStates)
+            {Enc, Cs} = encode_plain_text(?APPLICATION_DATA, Version, Epoch, Data, ConnectionStates),
+            {[Enc], Cs}
     end.
 
 encode_plain_text(Type, Version, Epoch, Data, ConnectionStates) ->
@@ -404,7 +412,7 @@ initial_connection_state(ConnectionEnd, BeastMitigation) ->
 	  ssl_record:initial_security_params(ConnectionEnd),
       epoch => undefined,
       sequence_number => 0,
-      replay_window => init_replay_window(?REPLAY_WINDOW_SIZE),
+      replay_window => init_replay_window(),
       beast_mitigation => BeastMitigation,
       compression_state  => undefined,
       cipher_state  => undefined,
@@ -452,12 +460,13 @@ get_dtls_records_aux({_, _, Version, _} = Vinfo, <<?BYTE(Type),?BYTE(MajVer),?BY
             ?ALERT_REC(?FATAL, ?BAD_RECORD_MAC)
     end;
 get_dtls_records_aux(_, <<?BYTE(_), ?BYTE(_MajVer), ?BYTE(_MinVer),
-		       ?UINT16(Length), _/binary>>,
+                          ?UINT16(_Epoch), ?UINT48(_Seq),
+                          ?UINT16(Length), _/binary>>,
 		     _Acc, _) when Length > ?MAX_CIPHER_TEXT_LENGTH ->
     ?ALERT_REC(?FATAL, ?RECORD_OVERFLOW);
 
 get_dtls_records_aux(_, Data, Acc, _) ->
-    case size(Data) =< ?MAX_CIPHER_TEXT_LENGTH + ?INITIAL_BYTES of
+    case byte_size(Data) =< ?MAX_CIPHER_TEXT_LENGTH + ?INITIAL_BYTES of
 	true ->
 	    {lists:reverse(Acc), Data};
 	false ->
@@ -465,39 +474,49 @@ get_dtls_records_aux(_, Data, Acc, _) ->
     end.
 %%--------------------------------------------------------------------
 
+init_replay_window() ->
+    init_replay_window(?REPLAY_WINDOW_SIZE).
+
 init_replay_window(Size) ->
-    #{size => Size,
-      top => Size,
+    #{top => Size-1,
       bottom => 0,
-      mask => 0 bsl 64
+      mask => 0
      }.
 
 replay_detect(#ssl_tls{sequence_number = SequenceNumber}, #{replay_window := Window}) ->
     is_replay(SequenceNumber, Window).
 
-
-is_replay(SequenceNumber, #{bottom := Bottom}) when SequenceNumber < Bottom ->
+is_replay(SequenceNumber, #{bottom := Bottom})
+  when SequenceNumber < Bottom ->
     true;
-is_replay(SequenceNumber, #{size := Size,
-                            top := Top,
-                            bottom := Bottom,
-                            mask :=  Mask})  when (SequenceNumber >= Bottom) andalso (SequenceNumber =< Top) ->
-    Index = (SequenceNumber rem Size),
-    (Index band Mask) == 1;
-
+is_replay(SequenceNumber, #{top := Top, bottom := Bottom, mask :=  Mask})
+  when (Bottom =< SequenceNumber) andalso (SequenceNumber =< Top) ->
+    Index = SequenceNumber - Bottom,
+    ((Mask bsr Index) band 1) =:= 1;
 is_replay(_, _) ->
     false.
 
-update_replay_window(SequenceNumber,  #{replay_window := #{size := Size,
-                                                           top := Top,
-                                                           bottom := Bottom,
-                                                           mask :=  Mask0} = Window0} = ConnectionStates) ->
+update_replay_window(SequenceNumber,
+                     #{replay_window :=
+                           #{top := Top,
+                             bottom := Bottom,
+                             mask :=  Mask0} = Window0}
+                     = ConnectionStates) ->
     NoNewBits = SequenceNumber - Top,
-    Index = SequenceNumber rem Size,
-    Mask = (Mask0 bsl NoNewBits) bor Index,
-    Window =  Window0#{top => SequenceNumber,
-                       bottom => Bottom + NoNewBits,
-                       mask => Mask},
+    Window =
+        case NoNewBits > 0 of
+            true ->
+                NewBottom = Bottom + NoNewBits,
+                Index = SequenceNumber - NewBottom,
+                Mask = (Mask0 bsr NoNewBits) bor (1 bsl Index),
+                Window0#{top => Top + NoNewBits,
+                         bottom => NewBottom,
+                         mask => Mask};
+            false ->
+                Index = SequenceNumber - Bottom,
+                Mask = Mask0 bor (1 bsl Index),
+                Window0#{mask => Mask}
+        end,
     ConnectionStates#{replay_window := Window}.
 
 %%--------------------------------------------------------------------

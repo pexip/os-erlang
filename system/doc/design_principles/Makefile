@@ -1,7 +1,7 @@
 #
 # %CopyrightBegin%
 #
-# Copyright Ericsson AB 1997-2020. All Rights Reserved.
+# Copyright Ericsson AB 1997-2021. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -56,13 +56,14 @@ GIF_FILES = \
 	dist4.gif \
 	dist5.gif \
 	inclappls.gif \
-	sup4.gif \
-	sup5.gif \
 	sup6.gif
 
 SVG_FILES = \
 	code_lock.svg \
-	code_lock_2.svg
+	code_lock_2.svg \
+	sup-one_for_all.svg \
+	sup-one_for_one.svg \
+	sup-rest_for_one.svg
 
 IMAGE_FILES = $(GIF_FILES) $(SVG_FILES)
 

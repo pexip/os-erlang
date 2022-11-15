@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %% 
-%% Copyright Ericsson AB 2005-2016. All Rights Reserved.
+%% Copyright Ericsson AB 2005-2021. All Rights Reserved.
 %% 
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -194,8 +194,9 @@ guard(Config) when is_list(Config) ->
 
     ok = file:write_file(File, Test),
     {ok, guard, Ws} = compile:file(File, [return,{outdir,?privdir}]),
-    Warnings = [L || {_File,WL} <- Ws, {L,_M,nomatch_guard} <- WL],
-    [7,9,11,13,15,17,19,21,23,25,27] = Warnings,
+    Warnings = [L || {_File,WL} <- Ws, {L,sys_core_fold,{nomatch,guard}} <- WL],
+    [{7,15}, {9,15}, {11,15}, {13,15}, {15,15}, {17,15},
+     {19,15}, {21,15}, {23,15}, {25,15}, {27,15}] = Warnings,
 
     ok = file:delete(File),
     ok = file:delete(Beam),

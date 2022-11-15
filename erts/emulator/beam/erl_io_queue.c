@@ -1,7 +1,7 @@
 /*
  * %CopyrightBegin%
  * 
- * Copyright Ericsson AB 2017-2018. All Rights Reserved.
+ * Copyright Ericsson AB 2017-2021. All Rights Reserved.
  * 
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -25,9 +25,7 @@
 #include "sys.h"
 #include "global.h"
 
-#define ERL_WANT_HIPE_BIF_WRAPPER__
 #include "bif.h"
-#undef ERL_WANT_HIPE_BIF_WRAPPER__
 
 #include "erl_bits.h"
 #include "erl_io_queue.h"
@@ -1078,7 +1076,7 @@ static BIF_RETTYPE iol2v_yield(iol2v_state_t *state) {
         state = boxed_state;
     }
 
-    ERTS_BIF_YIELD1(&bif_trap_export[BIF_iolist_to_iovec_1],
+    ERTS_BIF_YIELD1(BIF_TRAP_EXPORT(BIF_iolist_to_iovec_1),
         state->process, state->magic_reference);
 }
 
@@ -1185,8 +1183,6 @@ l_badarg:
 
     BIF_ERROR(state->process, BADARG);
 }
-
-HIPE_WRAPPER_BIF_DISABLE_GC(iolist_to_iovec, 1)
 
 BIF_RETTYPE iolist_to_iovec_1(BIF_ALIST_1) {
     BIF_RETTYPE result;

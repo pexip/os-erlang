@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2008-2020. All Rights Reserved.
+%% Copyright Ericsson AB 2008-2021. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -20,6 +20,15 @@
 
 %%
 -module(pubkey_ssh_SUITE).
+
+%% This test suite tests thoose functions until they are removed
+-compile([{nowarn_deprecated_function,
+           [{public_key,ssh_decode,2},
+            {public_key,ssh_encode,2},
+            {public_key,ssh_hostkey_fingerprint,1},
+            {public_key,ssh_hostkey_fingerprint,2}
+           ]}
+         ]).
 
 -include_lib("common_test/include/ct.hrl").
 -include_lib("public_key/include/public_key.hrl").

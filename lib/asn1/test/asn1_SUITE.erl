@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2001-2020. All Rights Reserved.
+%% Copyright Ericsson AB 2001-2022. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -198,10 +198,16 @@ end_per_testcase(_Func, Config) ->
 %% Test runners
 %%------------------------------------------------------------------------------
 
+have_jsonlib() ->
+    case code:which(jsx) of
+        non_existing -> false;
+    _ -> true
+    end.
+
 test(Config, TestF) ->
-    TestJer = case code:which(jsx) of
-                  non_existing -> [];
-                  _ -> [jer]
+    TestJer = case have_jsonlib() of
+                  true -> [jer];
+                  false -> []
               end,
     test(Config, TestF, [per,
                          uper,
@@ -424,11 +430,21 @@ testExtensionDefault(Config, Rule, Opts) ->
     testExtensionDefault:main(Rule).
 
 testMaps(Config) ->
-    test(Config, fun testMaps/3,
+    Jer = case have_jsonlib() of
+        true -> [{jer,[maps,no_ok_wrapper]}];
+        false -> []
+    end,
+    RulesAndOptions = 
          [{ber,[maps,no_ok_wrapper]},
           {ber,[maps,der,no_ok_wrapper]},
           {per,[maps,no_ok_wrapper]},
-          {uper,[maps,no_ok_wrapper]}]).
+          {uper,[maps,no_ok_wrapper]}] ++ Jer,
+    test(Config, fun testMaps/3, RulesAndOptions),
+    case Jer of
+        [] -> {comment,"skipped JER"};
+        _ -> ok
+    end.
+
 testMaps(Config, Rule, Opts) ->
     asn1_test_lib:compile_all(['Maps'], Config, [Rule|Opts]),
     testMaps:main(Rule).
@@ -587,7 +603,7 @@ constraint_equivalence_abs(Config) ->
 	[_|_] ->
 	    io:put_chars("Not equivalent:\n"),
 	    [io:format("~s: ~p\n", [N,D]) || {N,D} <- Diff],
-	    test_server:fail(length(Diff))
+	    ct:fail(length(Diff))
     end.
 
 parse(Config) ->
@@ -727,7 +743,7 @@ otp_14440(_Config) ->
             ok = slave:stop(N);
         _ ->
             _ = slave:stop(N),
-            ?t:fail(Result)
+            ct:fail(Result)
     end.
 %%
 otp_14440_decode() ->
@@ -1345,8 +1361,7 @@ xref(_Config) ->
 	{ok,[]} ->
 	    ok;
 	{ok,[_|_]=Res} ->
-	    io:format("Exported, but unused: ~p\n", [Res]),
-	    ?t:fail()
+	    ct:fail("Exported, but unused: ~p\n", [Res])
     end.
 
 %% Ensure that all functions that are implicitly exported by
@@ -1367,8 +1382,7 @@ xref_export_all(_Config) ->
             ok;
         [_|_] ->
             Msg = [io_lib:format("~p:~p/~p\n", [M,F,A]) || {M,F,A} <- Unused],
-            io:format("There are unused functions:\n\n~s\n", [Msg]),
-            ?t:fail(unused_functions)
+            ct:fail("There are unused functions:\n\n~s\n", [Msg])
     end.
 
 %% Collect all functions that common_test will call in this module.

@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2003-2018. All Rights Reserved.
+%% Copyright Ericsson AB 2003-2021. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -140,11 +140,14 @@
 %% helper functions. To xmerl_lib ??
 -export([accumulate_whitespace/4]).
 
+-export_type([xmlElement/0]).
+
 %-define(debug, 1).
 -include("xmerl.hrl").		% record def, macros
 -include("xmerl_internal.hrl").
 -include_lib("kernel/include/file.hrl").
 
+-type xmlElement() :: #xmlElement{}.
 
 -define(fatal(Reason, S),
 	if

@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2012-2020. All Rights Reserved.
+%% Copyright Ericsson AB 2012-2021. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -47,17 +47,19 @@
 -export([is_process_executing_dirty/1]).
 -export([dirty_process_handle_signals/1]).
 
--export([release_literal_area_switch/0, wait_release_literal_area_switch/1]).
+-export([wait_release_literal_area_switch/1]).
 
 -export([purge_module/2]).
 
--export([flush_monitor_messages/3]).
+-export([flush_monitor_messages/3,
+         '@flush_monitor_messages_refopt'/0]).
 
 -export([await_result/1, gather_io_bytes/2]).
 
 -export([time_unit/0, perf_counter_unit/0]).
 
--export([is_system_process/1]).
+-export([is_system_process/1,
+         set_code_and_literal_cleaner_prio/1]).
 
 -export([await_microstate_accounting_modifications/3,
 	 gather_microstate_accounting_result/2]).
@@ -109,6 +111,10 @@
 -export([spawn_request/4, spawn_init/1, dist_spawn_request/4, dist_spawn_init/1]).
 
 -export([crasher/6]).
+
+-export([prepare_loading/2, beamfile_chunk/2, beamfile_module_md5/1]).
+
+-export([no_aux_work_threads/0]).
 
 %%
 %% Await result of send to port
@@ -252,7 +258,7 @@ port_info(_Result, _Item) ->
     erlang:nif_error(undefined).
 
 -spec request_system_task(Pid, Prio, Request) -> 'ok' when
-      Prio :: 'max' | 'high' | 'normal' | 'low',
+      Prio :: 'max' | 'high' | 'normal' | 'low' | 'inherit',
       Type :: 'major' | 'minor',
       Request :: {'garbage_collect', term(), Type}
 	       | {'check_process_code', term(), module()}
@@ -294,10 +300,8 @@ check_process_code(Pid, Module, OptionList)  ->
     Async = get_cpc_opts(OptionList, sync),
     case Async of
 	{async, ReqId} ->
-	    {priority, Prio} = erlang:process_info(erlang:self(),
-						   priority),
 	    erts_internal:request_system_task(Pid,
-					      Prio,
+					      inherit,
 					      {check_process_code,
 					       ReqId,
 					       Module}),
@@ -307,11 +311,9 @@ check_process_code(Pid, Module, OptionList)  ->
 		true ->
 		    erts_internal:check_process_code(Module);
 		false ->
-		    {priority, Prio} = erlang:process_info(erlang:self(),
-							   priority),
 		    ReqId = erlang:make_ref(),
 		    erts_internal:request_system_task(Pid,
-						      Prio,
+						      inherit,
 						      {check_process_code,
 						       ReqId,
 						       Module}),
@@ -322,14 +324,15 @@ check_process_code(Pid, Module, OptionList)  ->
 	    end
     end.
 
-% gets async opt and verify valid option list
+%% gets async opt and verify valid option list
 get_cpc_opts([{async, _ReqId} = AsyncTuple | Options], _OldAsync) ->
     get_cpc_opts(Options, AsyncTuple);
-get_cpc_opts([{allow_gc, AllowGC} | Options], Async) when AllowGC == true;
-							  AllowGC == false ->
+get_cpc_opts([{allow_gc, AllowGC} | Options], Async) when is_boolean(AllowGC) ->
     get_cpc_opts(Options, Async);
 get_cpc_opts([], Async) ->
-    Async.
+    Async;
+get_cpc_opts(_, _) ->
+    error(bad_option).
 
 -spec check_dirty_process_code(Pid, Module) -> Result when
       Result :: boolean() | 'normal' | 'busy',
@@ -350,11 +353,6 @@ is_process_executing_dirty(_Pid) ->
 dirty_process_handle_signals(_Pid) ->
     erlang:nif_error(undefined).
 
--spec release_literal_area_switch() -> 'true' | 'false'.
-
-release_literal_area_switch() ->
-    erlang:nif_error(undefined).
-
 -spec wait_release_literal_area_switch(WaitMsg) -> 'true' | 'false' when
       WaitMsg :: term().
 
@@ -362,7 +360,7 @@ wait_release_literal_area_switch(WaitMsg) ->
     %% release_literal_area_switch() traps to here
     %% when it needs to wait
     receive WaitMsg -> ok end,
-    erts_internal:release_literal_area_switch().
+    erts_literal_area_collector:release_area_switch().
 
 -spec purge_module(Module, Op) -> boolean() when
       Module :: module(),
@@ -461,6 +459,18 @@ flush_monitor_messages(Ref, Multi, Res) when is_reference(Ref) ->
 	    Res
     end.
 
+-spec '@flush_monitor_messages_refopt'() -> ok.
+'@flush_monitor_messages_refopt'() ->
+    %% Enables reference optimization in flush_monitor_messages/3. Note that we
+    %% both body- and tail-call it to ensure that the reference isn't cleared,
+    %% in case the caller to demonitor/2 wants to continue using it.
+    %%
+    %% This never actually runs and is only used to trigger the optimization,
+    %% see the module comment in beam_ssa_recv for details.
+    Ref = make_ref(),
+    flush_monitor_messages(Ref, true, ok),
+    flush_monitor_messages(Ref, true, ok).
+
 -spec erts_internal:time_unit() -> pos_integer().
 
 time_unit() ->
@@ -476,6 +486,26 @@ perf_counter_unit() ->
 
 is_system_process(_Pid) ->
     erlang:nif_error(undefined).
+
+set_code_and_literal_cleaner_prio(Prio) ->
+    Ref1 = make_ref(),
+    erts_code_purger ! {change_prio, self(), Ref1, Prio},
+    Ref2 = make_ref(),
+    LAC = find_lac(),
+    LAC ! {change_prio, self(), Ref2, Prio},
+    [{code_purger, receive {Ref1, OP1} -> OP1 end},
+     {literal_area_collector, receive {Ref2, OP2} -> OP2 end}].
+
+find_lac() ->
+    find_lac(erlang:processes()).
+
+find_lac([Pid|Pids]) ->
+    case process_info(Pid, initial_call) of
+        {initial_call, {erts_literal_area_collector, start, 0}} ->
+            Pid;
+        _ ->
+            find_lac(Pids)
+    end.
 
 -spec await_microstate_accounting_modifications(Ref, Result, Threads) -> boolean() when
       Ref :: reference(),
@@ -508,7 +538,7 @@ microstate_accounting(Ref, Threads) ->
                    | existing | existing_processes | existing_ports
                    | new | new_processes | new_ports,
       How :: boolean(),
-      FlagList :: [].
+      FlagList :: list().
 trace(_PidSpec, _How, _FlagList) ->
     erlang:nif_error(undefined).
 
@@ -524,7 +554,7 @@ trace(_PidSpec, _How, _FlagList) ->
                  | boolean()
                  | restart
                  | pause,
-      FlagList :: [ ].
+      FlagList :: list().
 trace_pattern(_MFA, _MatchSpec, _FlagList) ->
     erlang:nif_error(undefined).
 
@@ -846,7 +876,7 @@ get_internal_state_blocked(Arg) ->
       Function :: atom(),
       Args :: [term()],
       Opts :: [term()],
-      Res :: reference() | 'badarg'.
+      Res :: reference() | 'badarg' | 'badopt'.
 
 spawn_request(_Module, _Function, _Args, _Opts) ->
     erlang:nif_error(undef).
@@ -922,3 +952,30 @@ crasher(Node,Mod,Fun,Args,Opts,Reason) ->
     error_logger:warning_msg("** Can not start ~w:~w,~w (~w) on ~w **~n",
 			     [Mod,Fun,Args,Opts,Node]),
     erlang:exit(Reason).
+
+%%
+%% Actual BIF for erlang:prepare_loading/2, which decompresses the module when
+%% necessary to save us from having to do it in C code.
+%%
+-spec prepare_loading(Module, Code) -> PreparedCode | {error, Reason} when
+      Module :: module(),
+      Code :: binary(),
+      PreparedCode :: erlang:prepared_code(),
+      Reason :: badfile.
+prepare_loading(_Module, _Code) ->
+    erlang:nif_error(undefined).
+
+-spec beamfile_chunk(Bin, Chunk) -> binary() | undefined when
+      Bin :: binary(),
+      Chunk :: string().
+beamfile_chunk(_Bin, _Chunk) ->
+    erlang:nif_error(undefined).
+
+-spec beamfile_module_md5(binary()) -> binary() | undefined.
+beamfile_module_md5(_Bin) ->
+    erlang:nif_error(undefined).
+
+-spec no_aux_work_threads() -> pos_integer().
+
+no_aux_work_threads() ->
+    erlang:nif_error(undefined).

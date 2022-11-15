@@ -4,7 +4,7 @@
 <appref>
   <header>
     <copyright>
-      <year>1996</year><year>2020</year>
+      <year>1996</year><year>2022</year>
       <holder>Ericsson AB. All Rights Reserved.</holder>
     </copyright>
     <legalnotice>
@@ -200,6 +200,12 @@
             <c>logger:set_primary_config(level, Level)</c></seemfa>.</p>
 	<p>Defaults to <c>notice</c>.</p>
       </item>
+      <tag><marker id="logger_metadata"/><c>logger_metadata = Metadata</c></tag>
+      <item>
+	<p>Specifies primary metadata for log events.</p>
+	<p><c>Metadata = map()</c></p>
+	<p>Defaults to <c>#{}</c>.</p>
+      </item>
       <tag><marker id="logger_sasl_compatible"/>
 	<c>logger_sasl_compatible = true | false</c></tag>
       <item>
@@ -313,34 +319,82 @@
           setup time, but rather each individual network operation during
           the connection setup and handshake.</p>
       </item>
-      <tag><c>net_ticktime = TickTime</c></tag>
+      <tag><marker id="net_tickintensity"/><c>net_tickintensity = NetTickIntensity</c></tag>
       <item>
-        <marker id="net_ticktime"></marker>
-        <p>Specifies the <c>net_kernel</c> tick time in seconds. This is the
+        <p><i>Net tick intensity</i> specifies how many ticks to send during a
+        <seeapp marker="#net_ticktime">net tick time</seeapp> period when
+        no other data is sent over a connection to another node. This also
+        determines how often to check for data from the other node. The
+        higher net tick intensity, the closer to the chosen net tick time period
+        the node will detect an unresponsive node. The net tick intensity
+        defaults to <c>4</c>. The value of <c>NetTickIntensity</c> should be
+        an integer in the range <c>4..1000</c>. If the <c>NetTickIntensity</c>
+        is not an integer or an integer less than <c>4</c>, <c>4</c> will
+        silently be used. If <c>NetTickIntensity</c> is an integer larger than
+        <c>1000</c>, <c>1000</c> will silently be used.
+        </p>
+        <note>
+          <p>Note that all communicating nodes are expected to use the same
+          <i>net tick intensity</i> as well as the same <i>net tick time</i>.</p>
+        </note>
+        <warning>
+          <p>Be careful not to set a too high net tick intensity, since you
+          can overwhelm the node with work if it is set too high.</p>
+        </warning>
+      </item>
+      <tag><marker id="net_ticktime"/><c>net_ticktime = NetTickTime</c></tag>
+      <item>
+        <p>Specifies the <i>net tick time</i> in seconds. This is the
 	approximate time a connected node may be unresponsive until it is
 	considered down and thereby disconnected.</p>
-	<p>Once every <c>TickTime/4</c> seconds, each connected node is ticked
-	if nothing has been sent to it during that last <c>TickTime/4</c>
-	interval. A tick is a small package sent on the connection. A connected
-	node is considered to be down if no ticks or payload packages have been
-	received during the last four <c>TickTime/4</c> intervals. This ensures
-	that nodes that are not responding, for reasons such as hardware errors,
-	are considered to be down.</p>
-        <p>As the availability is only checked every <c>TickTime/4</c> seconds,
+        <p>Net tick time together with <seeapp marker="#net_tickintensity">net
+        tick intensity</seeapp> determines an interval <c>TickInterval =
+        NetTickTime/NetTickIntensity</c>. Once every <c>TickInterval</c> seconds,
+        each connected node is ticked if nothing has been sent to it during that
+        last <c>TickInterval</c> seconds. A tick is a small package sent on the
+        connection.
+        A connected node is considered to be down if no ticks or payload packages
+        have been received during the last <c>NetTickIntensity</c> number of
+        <c>TickInterval</c> seconds intervals. This ensures that nodes that
+        are not responding, for reasons such as hardware errors, are considered
+        to be down.</p>
+        <p>As the availability is only checked every <c>TickInterval</c> seconds,
 	the actual time <c>T</c> a node have been unresponsive when
 	detected may vary between <c>MinT</c> and <c>MaxT</c>,
 	where:</p>
         <code type="none">
-MinT = TickTime - TickTime / 4
-MaxT = TickTime + TickTime / 4</code>
-        <p><c>TickTime</c> defaults to <c>60</c> seconds. Thus,
+MinT = NetTickTime - NetTickTime / NetTickIntensity
+MaxT = NetTickTime + NetTickTime / NetTickIntensity</code>
+        <p><c>NetTickTime</c> defaults to <c>60</c> seconds and
+        <c>NetTickIntensity</c> defaults to <c>4</c>. Thus,
         <c><![CDATA[45 < T < 75]]></c> seconds.</p>
+        <note>
         <p>Notice that <em>all</em> communicating nodes are to have the
-	<em>same</em> <c>TickTime</c> value specified, as it determines both the
-	frequency of outgoing ticks and the expected frequency of incominging
-	ticks.</p>
+	<em>same</em> <c>NetTickTime</c> and <c>NetTickIntensity</c> values
+        specified, as it determines both the frequency of outgoing ticks and
+        the expected frequency of incominging ticks.</p>
+        </note>
+        <p><c>NetTickTime</c> needs to be a multiple of <c>NetTickIntensity</c>.
+        If the configured values are not, <c>NetTickTime</c> will internally be
+        rounded up to the nearest millisecond.
+        <seemfa marker="net_kernel#get_net_ticktime/0"><c>net_kernel:get_net_ticktime()</c></seemfa>
+        will, however, report net tick time truncated to the nearest second.
+        </p>
         <p>Normally, a terminating node is detected immediately by the transport
 	protocol (like TCP/IP).</p>
+      </item>
+      <tag><marker id="prevent_overlapping_partitions"/>
+      <c>prevent_overlapping_partitions = true | false</c></tag>
+      <item>
+        <p>
+          If enabled (<c>true</c>), <c>global</c> will actively prevent
+          overlapping partitions from forming when connections are lost
+          between nodes. This fix is, however, currently disabled by
+          default. See the
+          <seeerl marker="kernel:global#prevent_overlapping_partitions">
+            <c>global(3)</c></seeerl> documentation for more
+            information.
+        </p>
       </item>
       <tag><c>shutdown_timeout = integer() | infinity</c></tag>
       <item>
@@ -429,15 +483,6 @@ MaxT = TickTime + TickTime / 4</code>
           <c>true</c> in an embedded system that uses this service.</p>
         <p>Defaults to <c>false</c>.</p>
       </item>
-      <tag><c>start_pg2 = true | false</c></tag>
-      <item>
-        <marker id="start_pg2"></marker>
-        <p>Starts the <c>pg2</c> server (see
-	  <seeerl marker="pg2"><c>pg2(3)</c></seeerl>) if
-          the parameter is <c>true</c>. This parameter is to be set to
-          <c>true</c> in an embedded system that uses this service.</p>
-        <p>Defaults to <c>false</c>.</p>
-      </item>
       <tag><c>start_timer = true | false</c></tag>
       <item>
         <p>Starts the <c>timer_server</c> if the parameter is
@@ -446,10 +491,16 @@ MaxT = TickTime + TickTime / 4</code>
 	  using this service.</p>
         <p>Defaults to <c>false</c>.</p>
       </item>
-      <tag><c>shell_history = enabled | disabled </c></tag>
+      <tag><c>shell_history = enabled | disabled | module()</c></tag>
       <item>
         <p>Specifies whether shell history should be logged to disk
-           between usages of <c>erl</c>.</p>
+           between usages of <c>erl</c> (<c>enabled</c>), not logged
+           at all (<c>disabled</c>), or a user-specified module will
+           be used to log shell history. This module should export
+           <c>load() -> [string()]</c> returning a list of strings to
+           load in the shell when it starts, and <c>add(iodata()) -> ok.</c>
+           called every time new line is entered in the shell. By default
+           logging is disabled.</p>
       </item>
       <tag><c>shell_history_drop = [string()]</c></tag>
       <item>
@@ -460,7 +511,7 @@ MaxT = TickTime + TickTime / 4</code>
       </item>
       <tag><c>shell_history_file_bytes = integer()</c></tag>
       <item>
-        <p>how many bytes the shell should remember. By default, the
+        <p>How many bytes the shell should remember. By default, the
            value is set to 512kb, and the minimal value is 50kb.</p>
       </item>
       <tag><c>shell_history_path = string()</c></tag>
@@ -572,7 +623,6 @@ erl -kernel logger '[{handler,default,logger_std_h,#{formatter=>{logger_formatte
       <seeerl marker="net_kernel"><c>net_kernel(3)</c></seeerl>,
       <seeerl marker="os"><c>os(3)</c></seeerl>,
       <seeerl marker="pg"><c>pg(3)</c></seeerl>,
-      <seeerl marker="pg2"><c>pg2(3)</c></seeerl>,
       <seeerl marker="rpc"><c>rpc(3)</c></seeerl>,
       <seeerl marker="seq_trace"><c>seq_trace(3)</c></seeerl>,
       <seeerl marker="user"><c>user(3)</c></seeerl>,

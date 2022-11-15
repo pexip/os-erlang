@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2013-2018. All Rights Reserved.
+%% Copyright Ericsson AB 2013-2021. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -229,7 +229,7 @@ setup(#state{frame=Frame, notebook=Notebook}=State) ->
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
 %%Callbacks
-handle_event(#wx{event=#wxNotebook{type=command_notebook_page_changing}},
+handle_event(#wx{event=#wxBookCtrl{type=command_notebook_page_changing}},
 	     #state{active_tab=Previous} = State) ->
     case get_active_pid(State) of
 	Previous -> {noreply, State};

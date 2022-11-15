@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %% 
-%% Copyright Ericsson AB 2018-2020. All Rights Reserved.
+%% Copyright Ericsson AB 2018-2022. All Rights Reserved.
 %% 
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -27,6 +27,9 @@
          %% Proxy call
          pcall/3,
 
+         %% OS commands
+         os_cmd/1, os_cmd/2,
+
          %% Time stuff
          timestamp/0,
          tdiff/2,
@@ -35,6 +38,7 @@
 
          %% String and format
          f/2,
+         print/1, print/2,
 
          %% Generic 'has support' test function(s)
          has_support_ipv6/0,
@@ -71,18 +75,16 @@ pi(Node, Pid, Item) when is_pid(Pid) andalso is_atom(Item) ->
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
-pcall(F, Timeout, Default)
-  when is_function(F, 0) andalso is_integer(Timeout) andalso (Timeout > 0) ->
-    {P, M} = erlang:spawn_monitor(fun() -> exit(F()) end),
-    receive
-        {'DOWN', M, process, P, Reply} ->
-            Reply
-    after Timeout ->
-            erlang:demonitor(M, [flush]),
-            exit(P, kill),
-            Default
-    end.
-    
+pcall(F, Timeout, Default) ->
+    kernel_test_lib:proxy_call(F, Timeout, Default).
+
+
+os_cmd(C) ->
+    kernel_test_lib:os_cmd(C).
+
+os_cmd(C, T) ->
+    kernel_test_lib:os_cmd(C, T).
+
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
@@ -101,11 +103,7 @@ formated_timestamp() ->
 
 format_timestamp({_N1, _N2, _N3} = TS) ->
     {_Date, Time}   = calendar:now_to_local_time(TS),
-    %% {YYYY,MM,DD}   = Date,
     {Hour,Min,Sec} = Time,
-    %% FormatTS = 
-    %%     io_lib:format("~.4w-~.2.0w-~.2.0w ~.2.0w:~.2.0w:~.2.0w.~w",
-    %%                   [YYYY, MM, DD, Hour, Min, Sec, N3]),  
     FormatTS = io_lib:format("~.2.0w:~.2.0w:~.2.0w", [Hour, Min, Sec]),  
     lists:flatten(FormatTS).
 
@@ -114,6 +112,13 @@ format_timestamp({_N1, _N2, _N3} = TS) ->
 
 f(F, A) ->
     lists:flatten(io_lib:format(F, A)).
+
+
+print(F) ->
+    print(F, []).
+
+print(F, A) ->
+    io:format("~s ~p " ++ F ++ "~n", [formated_timestamp(), self() | A]).
 
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -143,7 +148,8 @@ has_support_ipv6() ->
     LocalSA = #{family => Domain, addr => LocalAddr},
     ServerPort =
         case socket:bind(ServerSock, LocalSA) of
-            {ok, P1} ->
+            ok ->
+                {ok, #{port := P1}} = socket:sockname(ServerSock),
                 P1;
             {error, R3} ->
                 socket:close(ServerSock),
@@ -158,7 +164,7 @@ has_support_ipv6() ->
                 skip(f("(client) socket open failed: ~p", [R4]))
         end,
     case socket:bind(ClientSock, LocalSA) of
-        {ok, _} ->
+        ok ->
             ok;
         {error, R5} ->
             socket:close(ServerSock),

@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 1997-2018. All Rights Reserved.
+%% Copyright Ericsson AB 1997-2021. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -146,13 +146,13 @@ silly() ->
 
 %% Test structure of the mnesia application resource file
 app(Config) when is_list(Config) ->
-    ok = ?t:app_test(mnesia).
+    ok = test_server:app_test(mnesia).
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
 %% Test that all required versions have appup directives
 appup(Config) when is_list(Config) ->
-    ok = ?t:appup_test(mnesia).
+    ok = test_server:appup_test(mnesia).
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 

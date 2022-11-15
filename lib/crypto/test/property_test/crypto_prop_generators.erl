@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %% 
-%% Copyright Ericsson AB 2004-2020. All Rights Reserved.
+%% Copyright Ericsson AB 2004-2022. All Rights Reserved.
 %% 
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -41,14 +41,14 @@
 
 text_plain() -> iolist().
 
-cipher() -> oneof( non_aead_ciphers() -- [aes_ige256] ).
+cipher() -> oneof(non_aead_ciphers()).
 
 key(Cipher) ->
-    %% Can't be shrinked
+    %% Can't be shrunk
     crypto:strong_rand_bytes( key_length(Cipher) ).
     
 iv(Cipher) ->
-    %% Can't be shrinked
+    %% Can't be shrunk
     crypto:strong_rand_bytes( iv_length(Cipher) ).
 
 iolist() -> frequency([{5, list( oneof([list(byte()),

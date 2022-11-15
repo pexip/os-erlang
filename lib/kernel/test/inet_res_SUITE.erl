@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2009-2020. All Rights Reserved.
+%% Copyright Ericsson AB 2009-2021. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -32,8 +32,9 @@
 	 init_per_testcase/2, end_per_testcase/2
         ]).
 -export([basic/1, resolve/1, edns0/1, txt_record/1, files_monitor/1,
-	 last_ms_answer/1, intermediate_error/1,
-         servfail_retry_timeout_default/1, servfail_retry_timeout_1000/1
+	 nxdomain_reply/1, last_ms_answer/1, intermediate_error/1,
+         servfail_retry_timeout_default/1, servfail_retry_timeout_1000/1,
+         label_compression_limit/1
         ]).
 -export([
 	 gethostbyaddr/0, gethostbyaddr/1,
@@ -46,9 +47,10 @@
 	 host_and_addr/0, host_and_addr/1
 	]).
 
--define(RUN_NAMED, "run-named").
+-define(RUN_NS, "run-ns").
+-define(LOG_FILE, "ns.log").
 
-%% This test suite use a script ?RUN_NAMED that tries to start
+%% This test suite use a script ?RUN_NS that tries to start
 %% a temporary local nameserver BIND 8 or 9 that must be installed
 %% on your machine.
 %%
@@ -70,8 +72,10 @@ suite() ->
 
 all() -> 
     [basic, resolve, edns0, txt_record, files_monitor,
-     last_ms_answer,
-     intermediate_error, servfail_retry_timeout_default, servfail_retry_timeout_1000,
+     nxdomain_reply, last_ms_answer,
+     intermediate_error,
+     servfail_retry_timeout_default, servfail_retry_timeout_1000,
+     label_compression_limit,
      gethostbyaddr, gethostbyaddr_v6, gethostbyname,
      gethostbyname_v6, getaddr, getaddr_v6, ipv4_to_ipv6,
      host_and_addr].
@@ -123,6 +127,7 @@ zone_dir(TC) ->
 	resolve            -> otptest;
 	edns0              -> otptest;
 	files_monitor      -> otptest;
+	nxdomain_reply     -> otptest;
 	last_ms_answer     -> otptest;
         intermediate_error ->
             {internal,
@@ -215,7 +220,7 @@ ns_init(ZoneDir, PrivDir, DataDir) ->
 			      PNum
 		      end,
             ?P("ns_init -> use port number ~p", [PortNum]),
-	    RunNamed = filename:join(DataDir, ?RUN_NAMED),
+	    RunNamed = filename:join(DataDir, ?RUN_NS),
             ?P("ns_init -> use named ~p", [RunNamed]),
 	    NS = {{127,0,0,1},PortNum},
             ?P("ns_init -> try open port (exec)"),
@@ -247,7 +252,7 @@ ns_start(ZoneDir, PrivDir, NS, P) ->
 	"Error: "++Error ->
             ?P("ns_start -> error: "
                "~n      ~p", [Error]),
-	    ns_printlog(filename:join([PrivDir,ZoneDir,"named.log"])),
+	    ns_printlog(filename:join([PrivDir,ZoneDir,?LOG_FILE])),
 	    throw(Error);
 	_X ->
             ?P("ns_start -> retry"),
@@ -289,7 +294,7 @@ ns_end(undefined, _PrivDir) -> undefined;
 ns_end({ZoneDir,_NS,P}, PrivDir) when is_port(P) ->
     port_command(P, ["quit",io_lib:nl()]),
     ns_stop(P),
-    ns_printlog(filename:join([PrivDir,ZoneDir,"named.log"])),
+    ns_printlog(filename:join([PrivDir,ZoneDir,"ns.log"])),
     ok;
 ns_end({Tag,_NS,P}, _PrivDir) when is_pid(P) ->
     Mref = erlang:monitor(process, P),
@@ -582,7 +587,9 @@ resolve(Config) when is_list(Config) ->
 	 {cname,"cname."++Name,[{cname,Name}],undefined},
 	 {a,"cname."++Name,[{cname,Name},{a,{127,0,0,28}}],undefined},
 	 {ns,"ns."++Name,[],[{ns,Name}]},
-	 {soa,Domain,[],[{soa,{"ns.otptest","lsa.otptest",1,60,10,300,30}}]},
+	 {soa,Domain,
+          undefined,
+          [{soa,{"ns.otptest","lsa\\.soa.otptest",1,60,10,300,30}}]},
 	 %% WKS: protocol TCP (6), services (bits) TELNET (23) and SMTP (25)
 	 {wks,"wks."++Name,[{wks,{{127,0,0,28},6,<<0,0,1,64>>}}],undefined},
 	 {ptr,"28."++RDomain4,[{ptr,Name}],undefined},
@@ -597,16 +604,20 @@ resolve(Config) when is_list(Config) ->
 	  [{txt,["Hej ","du ","glade "]},{txt,["ta ","en ","spade!"]}],
 	  undefined},
 	 {mb,"mb."++Name,[{mb,"mx."++Name}],undefined},
-	 {mg,"mg."++Name,[{mg,"Lsa."++Domain}],undefined},
-	 {mr,"mr."++Name,[{mr,"LSA."++Domain}],undefined},
+	 {mg,"mg."++Name,[{mg,"lsa\\.mg."++Domain}],undefined},
+	 {mr,"mr."++Name,[{mr,"lsa\\.mr."++Domain}],undefined},
 	 {minfo,"minfo."++Name,
-	  [{minfo,{"minfo-OWNER."++Name,"MinfoBounce."++Name}}],
+	  [{minfo,{"minfo-owner."++Name,"minfo-bounce."++Name}}],
 	  undefined},
+         {uri,"uri."++Name,[{uri,{10,3,"http://erlang.org"}}],undefined},
+         {caa,"caa."++Name,
+          [{caa,{1,"iodef","http://iodef.erlang.org"}}],
+          undefined},
 	 {any,"cname."++Name,[{cname,Name}],undefined},
 	 {any,Name,
-	  [{a,{127,0,0,28}},
-	   {aaaa,{0,0,0,0,0,0,32512,28}},
-	   {hinfo,{"BEAM","Erlang/OTP"}}],
+	  #{ {a,{127,0,0,28}} => [],
+             {aaaa,{0,0,0,0,0,0,32512,28}} => [],
+             {hinfo,{"BEAM","Erlang/OTP"}} => [] },
 	  undefined}
 	],
     ?P("resolve -> with edns 0"),
@@ -635,82 +646,107 @@ resolve(Class, Opts, [{Type,Nm,Answers,Authority}=Q|Qs]) ->
 	    _ ->
 		{caseflip(Nm),Nm}
 	end,
-    AnList =
-	if
-	    Answers =/= undefined ->
-		normalize_answers(Answers);
-	    true ->
-		undefined
-	end,
-    NsList =
-	if
-	    Authority =/= undefined ->
-		normalize_answers(Authority);
-	    true ->
-		undefined
-	end,
+    NormAnswers = normalize_rrs(Answers),
+    NormNSs = normalize_rrs(Authority),
     ?P("resolve -> resolve with ~p", [Name]),
     {ok,Msg} = inet_res:resolve(Name, Class, Type, Opts),
-    check_msg(Class, Type, Msg, AnList, NsList),
+    check_msg(Class, Type, Msg, NormAnswers, NormNSs),
     ?P("resolve -> resolve with ~p", [NameC]),
     {ok,MsgC} = inet_res:resolve(NameC, Class, Type, Opts),
-    check_msg(Class, Type, MsgC, AnList, NsList),
+    check_msg(Class, Type, MsgC, NormAnswers, NormNSs),
     ?P("resolve -> next"),
     resolve(Class, Opts, Qs).
 
 
 
-normalize_answers(AnList) ->
-    lists:sort([normalize_answer(Answer) || Answer <- AnList]).
+normalize_rrs(undefined = RRs) -> RRs;
+normalize_rrs(RRList) when is_list(RRList) ->
+    lists:sort([normalize_rr(RR) || RR <- RRList]);
+normalize_rrs(RRs) when is_map(RRs) ->
+    maps:fold(
+      fun (RR, V, NormRRs) ->
+              NormRRs#{(normalize_rr(RR)) => V}
+      end, #{}, RRs).
 
-normalize_answer({soa,{NS,HM,Ser,Ref,Ret,Exp,Min}}) ->
+normalize_rr({soa,{NS,HM,Ser,Ref,Ret,Exp,Min}}) ->
     {tolower(NS),tolower_email(HM),Ser,Ref,Ret,Exp,Min};
-normalize_answer({mx,{Prio,DN}}) ->
+normalize_rr({mx,{Prio,DN}}) ->
     {Prio,tolower(DN)};
-normalize_answer({srv,{Prio,Weight,Port,DN}}) ->
+normalize_rr({srv,{Prio,Weight,Port,DN}}) ->
     {Prio,Weight,Port,tolower(DN)};
-normalize_answer({naptr,{Order,Pref,Flags,Service,RE,Repl}}) ->
+normalize_rr({naptr,{Order,Pref,Flags,Service,RE,Repl}}) ->
     {Order,Pref,Flags,Service,RE,tolower(Repl)};
-normalize_answer({minfo,{RespM,ErrM}}) ->
+normalize_rr({minfo,{RespM,ErrM}}) ->
     {tolower_email(RespM),tolower_email(ErrM)};
-normalize_answer({T,MN}) when T =:= mg; T =:= mr ->
+normalize_rr({T,MN}) when T =:= mg; T =:= mr ->
     tolower_email(MN);
-normalize_answer({T,DN}) when T =:= cname; T =:= ns; T =:= ptr; T =:= mb ->
+normalize_rr({T,DN}) when T =:= cname; T =:= ns; T =:= ptr; T =:= mb ->
     tolower(DN);
-normalize_answer(Answer) ->
-    Answer.
+normalize_rr(RR) ->
+    RR.
 
-check_msg(Class, Type, Msg, AnList, NsList) ->
+check_msg(Class, Type, Msg, ExpectedAnswers, ExpectedNSs) ->
     ?P("check_msg ->"
        "~n      Type: ~p"
        "~n      Msg:  ~p", [Type,Msg]),
-    case {normalize_answers(
-	    [begin
-		 Class = inet_dns:rr(RR, class),
-		 {inet_dns:rr(RR, type),inet_dns:rr(RR, data)}
-	     end || RR <- inet_dns:msg(Msg, anlist)]),
-	  normalize_answers(
-	    [begin
-		 Class = inet_dns:rr(RR, class),
-		 {inet_dns:rr(RR, type),inet_dns:rr(RR, data)}
-	     end || RR <- inet_dns:msg(Msg, nslist)])} of
-	{AnList,NsList} ->
-	    ok;
-	{NsList,AnList} when Type =:= ns ->
-	    %% This whole case statement is kind of inside out just
-	    %% to accept this case when some legacy DNS resolvers
-	    %% return the answer to a NS query in the answer section
-	    %% instead of in the authority section.
-	    ok;
-	{AnList,_} when NsList =:= undefined ->
-	    ok;
-	{_,NsList} when AnList =:= undefined ->
-	    ok
+    NormAnList =
+        normalize_rrs(
+          [begin
+               Class = inet_dns:rr(RR, class),
+               {inet_dns:rr(RR, type),inet_dns:rr(RR, data)}
+           end || RR <- inet_dns:msg(Msg, anlist)]),
+    NormNsList =
+           normalize_rrs(
+             [begin
+                  Class = inet_dns:rr(RR, class),
+                  {inet_dns:rr(RR, type),inet_dns:rr(RR, data)}
+              end || RR <- inet_dns:msg(Msg, nslist)]),
+    case
+        check_msg(ExpectedAnswers, NormAnList) andalso
+        check_msg(ExpectedNSs, NormNsList)
+    of
+        true ->
+            ok;
+        false
+          when Type =:= ns;
+               Type =:= soa ->
+            %% Some resolvers return the answer to a NS query
+            %% in the answer section instead of in the authority section,
+            %% and some do the same for a SOA query
+            case
+                check_msg(ExpectedAnswers, NormNsList) andalso
+                check_msg(ExpectedNSs, NormAnList)
+            of
+                true ->
+                    ok;
+                false ->
+                    error({Type,
+                           {expected,ExpectedAnswers,ExpectedNSs},
+                           {got,NormAnList,NormNsList}})
+            end;
+        false ->
+            error({Type,
+                   {expected,ExpectedAnswers,ExpectedNSs},
+                   {got,NormAnList,NormNsList}})
     end,
+    %% Test the encoder against the decoder; the least we can do
     Buf = inet_dns:encode(Msg),
     {ok,Msg} = inet_dns:decode(Buf),
     ok.
 
+check_msg(undefined, RRs) when is_list(RRs)-> true;
+check_msg(RRs1, RRs2) when is_list(RRs1), is_list(RRs2) ->
+    RRs1 =:= RRs2;
+check_msg(Expected, [RR|RRs]) when is_map(Expected) ->
+    case Expected of
+        #{RR := _} ->
+            case RRs of
+                []    -> true;
+                [_|_] -> check_msg(Expected, RRs)
+            end;
+        #{} -> false
+    end;
+check_msg(#{}, []) -> false. % At least one has to be ok
 
 %% %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
@@ -899,6 +935,26 @@ do_files_monitor(Config) ->
     ok.
 
 %% %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%% Get full DNS answer on nxdomain (when option set)
+%% Check that we get the error code from the first server.
+
+nxdomain_reply(Config) when is_list(Config) ->
+    NS    = ns(Config),
+    Name  = "nxdomain.otptest",
+    Class = in,
+    Type  = a,
+    Opts  =
+        [{nameservers,[NS]}, {servfail_retry_timeout, 1000}, verbose],
+    ?P("try resolve"),
+    {error, nxdomain} = inet_res:resolve(Name, Class, Type, Opts),
+    {error, {nxdomain, Rec}} =
+        inet_res:resolve(Name, Class, Type, [nxdomain_reply|Opts]),
+    ?P("resolved: "
+       "~n      ~p", [Rec]),
+    ok.
+
+
+%% %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
 %% Answer just when timeout is triggered (OTP-9221).
 last_ms_answer(Config) when is_list(Config) ->
@@ -971,6 +1027,79 @@ servfail_retry_timeout_1000(Config) when is_list(Config) ->
     ?P("resolved: "
        "~n      ~p", [Rec]),
     ok.
+
+
+%% %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%% Test that label encoding compression limits at 14 bits pointer size
+
+label_compression_limit(Config) when is_list(Config) ->
+    FirstSz = 4,
+    Count = 512,
+    Sz = 16,
+    %% We create a long DNS message with an answer list containing
+    %% 1+512+1 RR:s.  The first label is 4 chars that with message
+    %% and RR overhead places the second label on offset 32.
+    %% All other labels are 16 chars that with RR overhead
+    %% places them on offsets of N * 32.
+    %%
+    %% The labels are: "ZZZZ", then; "AAAAAAAAAAAAAAAA",
+    %% "AAAAAAAAAAAAAAAB", incrementing, so no one is
+    %% equal and can not be compressed, until the last one
+    %% that refers to the second to last one, so it could be compressed.
+    %%
+    %% However, the second to last label lands on offset 512 * 32 = 16384
+    %% which is out of reach for compression since compression uses
+    %% a 14 bit reference from the start of the message.
+    %%
+    %% The last label can only be compressed when we instead
+    %% generate a message with *one less* char in the first label,
+    %% placing the second to last label on offset 16383.
+    %%
+    %% So, MsgShort can use compression for the last RR
+    %% by referring to the second to last RR, but MsgLong can not.
+    %%
+    %% Disclaimer:
+    %%    All offsets and overheads are deduced
+    %%    through trial and observation
+    %%
+    [D | Domains] = gen_domains(Count, lists:duplicate(Sz, $A), []),
+    LastD = "Y." ++ D,
+    DomainsCommon = lists:reverse(Domains, [D, LastD]),
+    DomainsShort =  [lists:duplicate(FirstSz-1, $Z) | DomainsCommon],
+    DomainsLong =   [lists:duplicate(FirstSz, $Z) | DomainsCommon],
+    MsgShort = gen_msg(DomainsShort),
+    MsgLong = gen_msg(DomainsLong),
+    DataShort = inet_dns:encode(MsgShort),
+    DataShortSz = byte_size(DataShort),
+    ?P("DataShort[~w]:~n    ~p~n", [DataShortSz, DataShort]),
+    DataLong = inet_dns:encode(MsgLong),
+    DataLongSz = byte_size(DataLong),
+    ?P("DataLong[~w]:~n    ~p~n", [DataLongSz, DataLong]),
+    %% When the first (long) RR size pushes the last compressed label out,
+    %% that occupied a 2 bytes reference, it instead becomes a label
+    %% with 1 byte size and a final empty label size 1
+    0 = DataLongSz - (DataShortSz+1 - 2 + 1+Sz+1),
+    ok.
+
+gen_msg(Domains) ->
+    inet_dns:make_msg(
+      [{header, inet_dns:make_header()},
+       {anlist, gen_rrs(Domains)}]).
+
+gen_rrs(Domains) ->
+    [inet_dns:make_rr([{class,in},{type,a},{domain,D},{data,{17,18,19,20}}]) ||
+        D <- Domains].
+
+gen_domains(0, _Domain, Acc) ->
+    Acc;
+gen_domains(N, Domain, Acc) ->
+    gen_domains(
+      N - 1, incr_domain(Domain), [lists:reverse(Domain) | Acc]).
+
+incr_domain([$Z | Domain]) ->
+    [$A | incr_domain(Domain)];
+incr_domain([Char | Domain]) ->
+    [Char+1 | Domain].
 
 
 %% %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%

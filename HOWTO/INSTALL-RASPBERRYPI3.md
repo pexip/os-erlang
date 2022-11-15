@@ -257,9 +257,9 @@ Uncheck option:
 
   (20)
 
-    $ wget http://zlib.net/zlib-1.2.11.tar.gz
-    $ tar xf zlib-1.2.11.tar.gz
-    $ pushd zlib-1.2.11
+    $ wget http://zlib.net/zlib-1.2.12.tar.gz
+    $ tar xf zlib-1.2.12.tar.gz
+    $ pushd zlib-1.2.12
     $ CHOST=armv8-rpi3-linux-gnueabihf ./configure --prefix=/Volumes/xtools-build-env/local
     $ make
     $ make install
@@ -322,7 +322,6 @@ Uncheck option:
 
   (25)
 
-    $ LC_CTYPE=C && LANG=C && ./otp_build autoconf
     $ ./otp_build configure --xcomp-conf=./xcomp/erl-xcomp-armv8-rpi3-linux-gnueabihf.conf
     $ ./otp_build boot -a
     $ ./otp_build release -a /Volumes/xtools-build-env/otp_22.0

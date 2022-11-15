@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2005-2020. All Rights Reserved.
+%% Copyright Ericsson AB 2005-2021. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -107,7 +107,7 @@ compile_and_load(_Config) ->
                 %% Workaround byte-compile-error-on-warn which seem broken in
                 %% Emacs 25.
                 "\"(advice-add #'display-warning :after "
-                    "(lambda (_ f _ _) (error \"%s\" f)))\"";
+                    "(lambda (_ f &optional _ _) (error \\\"%s\\\" f)))\"";
             _ ->
                 "\"(setq byte-compile-error-on-warn t)\""
         end,

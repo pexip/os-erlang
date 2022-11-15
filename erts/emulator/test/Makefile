@@ -1,7 +1,7 @@
 #
 # %CopyrightBegin%
 #
-# Copyright Ericsson AB 1997-2020. All Rights Reserved.
+# Copyright Ericsson AB 1997-2021. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -73,8 +73,8 @@ MODULES= \
 	guard_SUITE \
 	hash_SUITE \
 	hash_property_test_SUITE \
+	hello_SUITE \
 	hibernate_SUITE \
-	hipe_SUITE \
 	iovec_SUITE \
 	list_bif_SUITE \
 	lttng_SUITE \
@@ -92,6 +92,7 @@ MODULES= \
 	message_queue_data_SUITE \
 	op_SUITE \
 	os_signal_SUITE \
+	perf_SUITE \
 	port_SUITE \
 	port_bif_SUITE \
 	prim_eval_SUITE \
@@ -160,6 +161,9 @@ ERL_FILES= $(MODULES:%=%.erl)
 
 TARGET_FILES = $(MODULES:%=$(EBIN)/%.$(EMULATOR))
 
+KERNEL_MODULES=gen_tcp_dist
+KERNEL_ERL_FILES=$(ERL_TOP)/lib/kernel/examples/gen_tcp_dist/src/gen_tcp_dist.erl
+
 EMAKEFILE=Emakefile
 
 TEST_SPEC_FILES= emulator.spec \
@@ -183,12 +187,12 @@ ERL_COMPILE_FLAGS +=
 # Targets
 # ----------------------------------------------------
 
-make_emakefile: $(NO_OPT_ERL_FILES) $(NATIVE_ERL_FILES)
+make_emakefile: $(NO_OPT_ERL_FILES) $(NATIVE_ERL_FILES) $(KERNEL_ERL_FILES)
 	$(ERL_TOP)/make/make_emakefile $(ERL_COMPILE_FLAGS) +compressed -o$(EBIN) \
-	$(MODULES) >> $(EMAKEFILE)
+	$(MODULES) $(KERNEL_MODULES) >> $(EMAKEFILE)
 	$(ERL_TOP)/make/make_emakefile +no_copt +no_postopt +no_ssa_opt +no_bsm_opt \
         $(ERL_COMPILE_FLAGS) -o$(EBIN) $(NO_OPT_MODULES) >> $(EMAKEFILE)
-	$(ERL_TOP)/make/make_emakefile +native $(ERL_COMPILE_FLAGS) \
+	$(ERL_TOP)/make/make_emakefile $(ERL_COMPILE_FLAGS) \
 	-o$(EBIN) $(NATIVE_MODULES) >> $(EMAKEFILE)
 
 tests debug opt: make_emakefile
@@ -226,6 +230,7 @@ release_tests_spec: make_emakefile
 		$(ERL_FILES) "$(RELSYSDIR)"
 	$(INSTALL_DATA) $(NO_OPT_ERL_FILES) "$(RELSYSDIR)"
 	$(INSTALL_DATA) $(NATIVE_ERL_FILES) "$(RELSYSDIR)"
+	$(INSTALL_DATA) $(KERNEL_ERL_FILES) "$(RELSYSDIR)"
 	chmod -R u+w "$(RELSYSDIR)"
 	tar cf - *_SUITE_data property_test | (cd "$(RELSYSDIR)"; tar xf -)
 

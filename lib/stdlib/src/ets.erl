@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 1996-2020. All Rights Reserved.
+%% Copyright Ericsson AB 1996-2021. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -24,7 +24,6 @@
 
 -export([file2tab/1,
 	 file2tab/2,
-	 filter/3,
 	 foldl/3, foldr/3,
 	 match_delete/2,
 	 tab2file/2,
@@ -764,25 +763,7 @@ match_delete(Table, Pattern) ->
 tab2list(T) ->
     ets:match_object(T, '_').
 
--spec filter(tab(), function(), [term()]) -> [term()].
 
-filter(Tn, F, A) when is_atom(Tn) ; is_integer(Tn) ->
-    do_filter(Tn, ets:first(Tn), F, A, []).
-
-do_filter(_Tab, '$end_of_table', _, _, Ack) -> 
-    Ack;
-do_filter(Tab, Key, F, A, Ack) ->
-    case apply(F, [ets:lookup(Tab, Key)|A]) of
-	false ->
-	    do_filter(Tab, ets:next(Tab, Key), F, A, Ack);
-	true ->
-            Ack2 = ets:lookup(Tab, Key) ++ Ack,
-	    do_filter(Tab, ets:next(Tab, Key), F, A, Ack2);
-	{true, Value} ->
-	    do_filter(Tab, ets:next(Tab, Key), F, A, [Value|Ack])
-    end.
-
-    
 %% Dump a table to a file using the disk_log facility
 
 %% Options := [Option]

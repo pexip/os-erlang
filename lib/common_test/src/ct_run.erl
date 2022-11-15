@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2004-2020. All Rights Reserved.
+%% Copyright Ericsson AB 2004-2021. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -237,7 +237,7 @@ script_start1(Parent, Args) ->
 			    [], Args),
     Verbosity = verbosity_args2opts(Args),
     MultTT = get_start_opt(multiply_timetraps,
-			   fun([MT]) -> list_to_integer(MT) end, Args),
+			   fun([MT]) -> list_to_number(MT) end, Args),
     ScaleTT = get_start_opt(scale_timetraps,
 			    fun([CT]) -> list_to_atom(CT);
 			       ([]) -> true
@@ -1148,7 +1148,8 @@ run_all_specs([], _, _, TotResult) ->
 				    {Ok1,Fail1,{UserSkip1,AutoSkip1}}) ->
 					{Ok1+Ok,Fail1+Fail,
 					 {UserSkip1+UserSkip,
-					  AutoSkip1+AutoSkip}}
+					  AutoSkip1+AutoSkip}};
+				(Pid, Acc) when is_pid(Pid) -> Acc
 				end, {0,0,{0,0}}, TotResult1)
 	    end
     end;
@@ -2049,8 +2050,23 @@ final_tests1([{TestDir,Suite,GrsOrCs}|Tests], Final, Skip, Bad) when
 			  [ct_groups:make_conf(TestDir, Suite,
 					       GroupName, Props, TCs)];
 		     ({GroupOrGroups,TCs}) ->
-			  [ct_groups:make_conf(TestDir, Suite,
-					       GroupOrGroups, [], TCs)];
+			  case GroupOrGroups of
+			   [GroupList] when is_list(GroupList) ->
+				   {GrpNames, Props} = lists:foldl(
+				   fun({GrpName,_} = GrSpec, {GrpNames, Props}) -> 
+				      {lists:append(GrpNames, [GrpName]), [GrSpec | Props]};
+				   ({GrpName,_,_} = GrSpec, {GrpNames, Props}) -> 
+				      {lists:append(GrpNames, [GrpName]), [GrSpec | Props]};
+				   (GrpName, {GrpNames, Props}) -> 
+				      {lists:append(GrpNames, [GrpName]), Props} 
+					end,
+					{[], []}, GroupList),
+				   [ct_groups:make_conf(TestDir, Suite,
+				    [GrpNames], [{override, Props}], TCs)];
+			    _ -> 
+				   [ct_groups:make_conf(TestDir, Suite,
+				    GroupOrGroups, [], TCs)]
+			end;
 		     (TC) ->
 			  [TC]
 		  end, GrsOrCs),
@@ -3147,6 +3163,8 @@ opts2args(EnvStartOpts) ->
 			  [{Opt,[atom_to_list(A)]}];
 		     ({Opt,I}) when is_integer(I) ->
 			  [{Opt,[integer_to_list(I)]}];
+		     ({Opt,I}) when is_float(I) ->
+			  [{Opt,[float_to_list(I)]}];
 		     ({Opt,S}) when is_list(S) ->
 			  [{Opt,[S]}];
 		     (Opt) ->
@@ -3261,6 +3279,11 @@ stop_trace(true) ->
     dbg:stop_clear();
 stop_trace(false) ->
     ok.
+
+list_to_number(S) ->
+    try list_to_integer(S)
+    catch error:badarg -> list_to_float(S)
+    end.
 
 ensure_atom(Atom) when is_atom(Atom) ->
     Atom;

@@ -1,7 +1,7 @@
 /*
  * %CopyrightBegin%
  * 
- * Copyright Ericsson AB 1996-2020. All Rights Reserved.
+ * Copyright Ericsson AB 1996-2021. All Rights Reserved.
  * 
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -78,9 +78,7 @@ typedef struct {
 } DbTableRelease;
 
 struct ErtsSchedulerData_;
-int erts_handle_yielded_ets_all_request(struct ErtsSchedulerData_ *esdp,
-                                        ErtsEtsAllYieldData *eadp);
-
+int erts_handle_yielded_ets_all_request(ErtsAuxWorkData *awdp);
 void erts_ets_sched_spec_data_init(struct ErtsSchedulerData_ *esdp);
 
 /*
@@ -143,7 +141,7 @@ void erts_lcnt_update_db_locks(int enable);
 #endif
 
 #ifdef ETS_DBG_FORCE_TRAP
-extern erts_aint_t erts_ets_dbg_force_trap;
+extern int erts_ets_dbg_force_trap;
 #endif
 
 #endif /* ERL_DB_H__ */

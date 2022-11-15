@@ -1,7 +1,7 @@
 %% 
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 1996-2020. All Rights Reserved.
+%% Copyright Ericsson AB 1996-2022. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -150,10 +150,15 @@ receive_response(Timeout) ->
     d("await response within ~w ms",[Timeout]),
     receive
 	{snmp_pdu, PDU} when is_record(PDU, pdu) ->
-	    d("received PDU: ~n\t~p",[PDU]),
-	    PDU
+	    d("[await response] received PDU: "
+              "~n      ~p", [PDU]),
+	    PDU;
+        {error, Reason} = ERROR ->
+	    ?EPRINT("[await response] received unexpected error: "
+                    "~n      ~p", [Reason]),
+            ERROR
     after Timeout ->
-	    d("response timeout",[]),
+	    ?EPRINT("[await response] unexpected timeout"),
 	    {error, timeout}
     end.
 
@@ -167,6 +172,7 @@ get_timeout() ->
     end.
 
 get_timeout(_)       -> 10000. % Trying to improve test results % 3500.
+
 
 %%----------------------------------------------------------------------
 %% Receives a trap from the agent.
@@ -261,7 +267,7 @@ init({Options, CallerPid}) ->
 			   Addr;
 		       {value, Host} when is_list(Host) ->
                            ?IPRINT("init -> Host: ~p", [Host]),
-			   {ok, Ip} = snmp_misc:ip(Host, IpFamily),
+			   {ok, Ip} = ?LIB:which_host_ip(Host, IpFamily),
 			   Ip
 		   end,
 	    ?IPRINT("init -> AgIp: ~p", [AgIp]),

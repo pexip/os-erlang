@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 1996-2018. All Rights Reserved.
+%% Copyright Ericsson AB 1996-2021. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -672,7 +672,7 @@ do_prepare([delete_schema | Actions], Selected, All, Config, File, Line) ->
     end,
     do_prepare(Actions, Selected, All, Config, File, Line);
 do_prepare([create_schema | Actions], Selected, All, Config, File, Line) ->
-    Ext = ?BACKEND,
+    Ext = proplists:get_value(default_properties, Config, ?BACKEND),
     case diskless(Config) of
 	true ->
 	    rpc:multicall(Selected, application, set_env, [mnesia, schema, Ext]),

@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %% 
-%% Copyright Ericsson AB 1999-2020. All Rights Reserved.
+%% Copyright Ericsson AB 1999-2022. All Rights Reserved.
 %% 
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -49,6 +49,9 @@
 -define(SKIP(Reason),
 	?LIB:skip(Reason, ?MODULE, ?LINE)).
 
+-define(FAIL(Reason),
+	exit({Reason, ?MODULE, ?LINE})).
+
 -define(VERIFYL(Expected, Expr),
 	fun(A,B) when list(A), list(B) ->
 		A1 = lists:sort(A),
@@ -82,6 +85,9 @@
 -define(MULTI_RECEIVE(Expected),
 	?VERIFY(lists:sort(Expected), lists:sort(?LIB:flush()))).
 
+-define(EXEC(F),     ?LIB:executor(F)).
+-define(EXEC(F, TO), ?LIB:executor(F, TO)).
+
 -define(TRY_TC(TCN, N, V, PRE, CASE, POST),
         ?LIB:try_tc(TCN, N, V, PRE, CASE, POST)).
 
@@ -106,6 +112,16 @@
 -define(FTS(TS),        megaco:format_timestamp(TS)).
 -define(F(F,A),         lists:flatten(io_lib:format(F, A))).
 
+-define(INET_BACKEND_OPTS(C),    ?LIB:inet_backend_opts(C)).
+-define(EXPLICIT_INET_BACKEND(), ?LIB:explicit_inet_backend()).
+-define(TEST_INET_BACKENDS(),    ?LIB:test_inet_backends()).
+-define(IS_SOCKET_BACKEND(C),    ?LIB:is_socket_backend(C)).
+
+-define(OPEN(C, P, O),           ?LIB:open(C, P, O)).
+-define(LISTEN(C, P, O),         ?LIB:listen(C, P, O)).
+-define(CONNECT(C, R, O),        ?LIB:connect(C, R, O)).
+
+
 -define(ANNOUNCE_SUITE_INIT(),
 	io:format(user, "~n*** ~s *** suite ~w init~n~n", [?FTS(), ?MODULE])).
 -define(ANNOUNCE_GROUP_INIT(GR),
@@ -115,3 +131,6 @@
 	io:format(user, "~n*** ~s *** case ~w:~w init~n~n", 
 		  [?FTS(), ?MODULE, C])).
 
+-define(UNIQUE(__PreName__),
+        list_to_atom(
+          ?F("~w_~w", [__PreName__, erlang:system_time(millisecond)]))).

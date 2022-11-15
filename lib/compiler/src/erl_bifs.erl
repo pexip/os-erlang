@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2001-2020. All Rights Reserved.
+%% Copyright Ericsson AB 2001-2021. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -139,7 +139,6 @@ is_pure(erlang, round, 1) -> true;
 is_pure(erlang, setelement, 3) -> true;
 is_pure(erlang, size, 1) -> true;
 is_pure(erlang, split_binary, 2) -> true;
-is_pure(erlang, term_to_binary, 1) -> true;
 is_pure(erlang, tl, 1) -> true;
 is_pure(erlang, trunc, 1) -> true;
 is_pure(erlang, tuple_size, 1) -> true;

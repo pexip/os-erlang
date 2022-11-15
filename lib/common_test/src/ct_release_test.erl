@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2014-2020. All Rights Reserved.
+%% Copyright Ericsson AB 2014-2021. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -123,7 +123,7 @@
 
 %%-----------------------------------------------------------------
 -define(testnode, 'ct_release_test-upgrade').
--define(exclude_apps, [hipe, dialyzer]). % never include these apps
+-define(exclude_apps, [dialyzer]). % never include these apps
 
 %%-----------------------------------------------------------------
 -record(ct_data, {from,to}).
@@ -885,7 +885,7 @@ wait_node_up(ExpStatus,ExpVsn,ExpAppsVsns0) ->
     wait_node_up(Node,ExpStatus,ExpVsn,lists:keysort(1,ExpAppsVsns),60).
 
 wait_node_up(Node,ExpStatus,ExpVsn,ExpAppsVsns,0) ->
-    test_server:fail({node_not_started,app_check_failed,ExpVsn,ExpAppsVsns,
+    ct:fail({node_not_started,app_check_failed,ExpVsn,ExpAppsVsns,
 		      rpc:call(Node,release_handler,which_releases,[ExpStatus]),
 		      rpc:call(Node,application,which_applications,[])});
 wait_node_up(Node,ExpStatus,ExpVsn,ExpAppsVsns,N) ->

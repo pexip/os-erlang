@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %% 
-%% Copyright Ericsson AB 2012-2016. All Rights Reserved.
+%% Copyright Ericsson AB 2012-2022. All Rights Reserved.
 %% 
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -314,7 +314,7 @@ http_proxy_auth(doc) ->
 http_proxy_auth(Config) when is_list(Config) ->
     %% Our proxy seems to ignore the header, however our proxy
     %% does not requirer an auth header, but we want to know
-    %% atleast the code for sending the header does not crash!
+    %% at least the code for sending the header does not crash!
     Method = get,
     URL = url("/index.html", Config),
     Request = {URL,[]},
@@ -377,26 +377,21 @@ http_stream(RequestId, Body) ->
 %%--------------------------------------------------------------------
 
 http_emulate_lower_versions(doc) ->
-    ["Perform requests as 0.9 and 1.0 clients."];
+    ["Perform requests as 1.0 and 1.1 clients."];
 http_emulate_lower_versions(Config) when is_list(Config) ->
     Method = get,
     URL = url("/index.html", Config),
     Request = {URL,[]},
     Opts = [],
 
-    HttpOpts1 = [{version,"HTTP/0.9"}],
-    {ok,[_|_]=B1} =
-	httpc:request(Method, Request, HttpOpts1, Opts),
-    inets_test_lib:check_body(B1),
-
-    HttpOpts2 = [{version,"HTTP/1.0"}],
+    HttpOpts1 = [{version,"HTTP/1.0"}],
     {ok,{{_,200,_},[_|_],[_|_]=B2}} =
-	httpc:request(Method, Request, HttpOpts2, Opts),
+	httpc:request(Method, Request, HttpOpts1, Opts),
     inets_test_lib:check_body(B2),
 
-    HttpOpts3 = [{version,"HTTP/1.1"}],
+    HttpOpts2 = [{version,"HTTP/1.1"}],
     {ok,{{_,200,_},[_|_],[_|_]=B3}} =
-	httpc:request(Method, Request, HttpOpts3, Opts),
+	httpc:request(Method, Request, HttpOpts2, Opts),
     inets_test_lib:check_body(B3),
 
     ok.
@@ -495,15 +490,19 @@ app_stop(App) ->
     application:stop(App).
 
 make_cert_files(Alg, Prefix, Config) ->
-    PrivDir = proplists:get_value(priv_dir, Config),
-    CaInfo = {CaCert,_} = erl_make_certs:make_cert([{key,Alg}]),
-    {Cert,CertKey} = erl_make_certs:make_cert([{key,Alg},{issuer,CaInfo}]),
-    CaCertFile = filename:join(PrivDir, Prefix++"cacerts.pem"),
-    CertFile = filename:join(PrivDir, Prefix++"cert.pem"),
-    KeyFile = filename:join(PrivDir, Prefix++"key.pem"),
-    der_to_pem(CaCertFile, [{'Certificate', CaCert, not_encrypted}]),
-    der_to_pem(CertFile, [{'Certificate', Cert, not_encrypted}]),
-    der_to_pem(KeyFile, [CertKey]),
+    ClientFileBase = filename:join([proplists:get_value(priv_dir, Config), "client"]),
+    ServerFileBase = filename:join([proplists:get_value(priv_dir, Config), "server"]),
+    GenCertData =
+        public_key:pkix_test_data(#{server_chain =>
+                                        #{root => [{key, inets_test_lib:hardcode_rsa_key(1)}],
+                                          intermediates => [[{key, inets_test_lib:hardcode_rsa_key(2)}]],
+                                          peer => [{key, inets_test_lib:hardcode_rsa_key(3)}
+                                                  ]},
+                                    client_chain =>
+                                        #{root => [{key, inets_test_lib:hardcode_rsa_key(4)}],
+                                          intermediates => [[{key, inets_test_lib:hardcode_rsa_key(5)}]],
+                                          peer => [{key, inets_test_lib:hardcode_rsa_key(6)}]}}),
+    inets_test_lib:gen_pem_config_files(GenCertData, ClientFileBase, ServerFileBase),
     ok.
 
 der_to_pem(File, Entries) ->

@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2007-2019. All Rights Reserved.
+%% Copyright Ericsson AB 2007-2022. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -58,8 +58,6 @@
          eccs/1,
          cipher_suites/0,
          cipher_suites/1,
-         old_cipher_suites/0,
-         old_cipher_suites/1,
          cipher_suites_mix/0,
          cipher_suites_mix/1,
          unordered_protocol_versions_server/0,
@@ -75,7 +73,11 @@
          fake_root_no_intermediate_legacy/0,
          fake_root_no_intermediate_legacy/1,
          fake_intermediate_cert/0,
-         fake_intermediate_cert/1
+         fake_intermediate_cert/1,
+         incompleat_chain_length/0,
+         incompleat_chain_length/1,
+         user_dies/0,
+         user_dies/1
         ]).
 
 %% Apply export
@@ -85,7 +87,8 @@
          version_info_result/1,
          connect_dist_s/1,
          connect_dist_c/1,
-         dummy/1
+         dummy/1,
+         many_client_starter/4
         ]).
 
 -define(TIMEOUT, 20000).
@@ -121,13 +124,14 @@ basic_tests() ->
      tls_versions_option,
      eccs,
      cipher_suites,
-     old_cipher_suites,
-     cipher_suites_mix,
+     cipher_suites_mix,     
      fake_root,
      fake_root_no_intermediate,
      fake_root_legacy,
      fake_root_no_intermediate_legacy,
-     fake_intermediate_cert
+     fake_intermediate_cert,
+     incompleat_chain_length,
+     user_dies
     ].
 
 options_tests() ->
@@ -140,14 +144,7 @@ init_per_suite(Config0) ->
     try crypto:start() of
 	ok ->
 	    ssl_test_lib:clean_start(),
-	    %% make rsa certs using openssl
-	    {ok, _} = make_certs:all(proplists:get_value(data_dir, Config0),
-				     proplists:get_value(priv_dir, Config0)),
-	    Config1 = ssl_test_lib:make_dsa_cert(Config0),
-	    Config2 = ssl_test_lib:make_ecdsa_cert(Config1),
-            Config3 = ssl_test_lib:make_rsa_cert(Config2),
-	    Config = ssl_test_lib:make_ecdh_rsa_cert(Config3),
-	    ssl_test_lib:cert_options(Config)
+            ssl_test_lib:make_rsa_cert(Config0)
     catch _:_ ->
 	    {skip, "Crypto did not start"}
     end.
@@ -179,12 +176,12 @@ end_per_testcase(_TestCase, Config) ->
 app() ->
     [{doc, "Test that the ssl app file is ok"}].
 app(Config) when is_list(Config) ->
-    ok = ?t:app_test(ssl).
+    ok = test_server:app_test(ssl).
 %%--------------------------------------------------------------------
 appup() ->
     [{doc, "Test that the ssl appup file is ok"}].
 appup(Config) when is_list(Config) ->
-    ok = ?t:appup_test(ssl).
+    ok = test_server:appup_test(ssl).
 %%--------------------------------------------------------------------
 version_option() ->
     [{doc, "Use version option and do no specify ciphers list. Bug specified incorrect ciphers"}].
@@ -196,8 +193,8 @@ version_option(Config) when is_list(Config) ->
 connect_twice() ->
     [{doc,""}].
 connect_twice(Config) when is_list(Config) ->
-    ClientOpts = ssl_test_lib:ssl_options(client_opts, Config),
-    ServerOpts = ssl_test_lib:ssl_options(server_opts, Config),
+    ClientOpts = ssl_test_lib:ssl_options(client_rsa_verify_opts, Config),
+    ServerOpts = ssl_test_lib:ssl_options(server_rsa_verify_opts, Config),
 
     {ClientNode, ServerNode, Hostname} = ssl_test_lib:run_where(Config),
 
@@ -245,12 +242,6 @@ defaults(Config) when is_list(Config)->
     false = lists:member('tlsv1.1',  proplists:get_value(supported, Versions)),
     true = lists:member('tlsv1.2', proplists:get_value(available, Versions)),
     true = lists:member('tlsv1.2',  proplists:get_value(supported, Versions)),    
-    false = lists:member({rsa,rc4_128,sha}, ssl:cipher_suites()),
-    true = lists:member({rsa,rc4_128,sha}, ssl:cipher_suites(all)),
-    false = lists:member({rsa,des_cbc,sha}, ssl:cipher_suites()),
-    true = lists:member({rsa,des_cbc,sha}, ssl:cipher_suites(all)),
-    false = lists:member({dhe_rsa,des_cbc,sha}, ssl:cipher_suites()),
-    true = lists:member({dhe_rsa,des_cbc,sha}, ssl:cipher_suites(all)),
     true = lists:member('dtlsv1.2', proplists:get_value(available_dtls, Versions)),
     true = lists:member('dtlsv1', proplists:get_value(available_dtls, Versions)),
     true = lists:member('dtlsv1.2', proplists:get_value(supported_dtls, Versions)),
@@ -261,8 +252,8 @@ fallback() ->
     [{doc, "Test TLS_FALLBACK_SCSV downgrade prevention"}].
 
 fallback(Config) when is_list(Config) ->
-    ClientOpts = ssl_test_lib:ssl_options(client_opts, Config),
-    ServerOpts = ssl_test_lib:ssl_options(server_opts, Config),
+    ClientOpts = ssl_test_lib:ssl_options(client_rsa_verify_opts, Config),
+    ServerOpts = ssl_test_lib:ssl_options(server_rsa_verify_opts, Config),
     {ClientNode, ServerNode, Hostname} = ssl_test_lib:run_where(Config),
     
     Server = 
@@ -283,15 +274,10 @@ fallback(Config) when is_list(Config) ->
    
 %%--------------------------------------------------------------------
 cipher_format() ->
-    [{doc, "Test that cipher conversion from maps | tuples | stings to binarys works"}].
+    [{doc, "Test that cipher conversion from maps | tuples | strings to binarys works"}].
 cipher_format(Config) when is_list(Config) ->
     {ok, Socket0} = ssl:listen(0, [{ciphers, ssl:cipher_suites(default, 'tlsv1.2')}]),
-    ssl:close(Socket0),
-    %% Legacy
-    {ok, Socket1} = ssl:listen(0, [{ciphers, ssl:cipher_suites()}]),
-    ssl:close(Socket1),
-    {ok, Socket2} = ssl:listen(0, [{ciphers, ssl:cipher_suites(openssl)}]),
-    ssl:close(Socket2).
+    ssl:close(Socket0).
 
 %%--------------------------------------------------------------------
 
@@ -300,70 +286,19 @@ cipher_suites() ->
       " and prepend|append_cipher_suites/2"}].
 
 cipher_suites(Config) when is_list(Config) -> 
-    MandatoryCipherSuiteTLS1_0TLS1_1 = #{key_exchange => rsa,
-                                         cipher => '3des_ede_cbc',
-                                         mac => sha,
-                                         prf => default_prf},
-    MandatoryCipherSuiteTLS1_0TLS1_2 = #{key_exchange =>rsa,
-                                         cipher => 'aes_128_cbc',
-                                         mac => sha,
-                                         prf => default_prf}, 
-    Version = tls_record:highest_protocol_version([]),
-    All = [_|_] = ssl:cipher_suites(all, Version),
-    Default = [_|_] = ssl:cipher_suites(default, Version),
-    Anonymous = [_|_] = ssl:cipher_suites(anonymous, Version),
-    true = length(Default) < length(All),
-    Filters = [{key_exchange, 
-                fun(dhe_rsa) -> 
-                        true;
-                   (_) -> 
-                        false
-                end
-               }, 
-               {cipher, 
-                fun(aes_256_cbc) ->
-                        true;
-                   (_) -> 
-                        false
-                end
-               },
-               {mac, 
-                fun(sha) ->
-                        true;
-                   (_) -> 
-                        false
-                end
-               }
-              ],
-    Cipher = #{cipher => aes_256_cbc,
-               key_exchange => dhe_rsa,
-               mac => sha,
-               prf => default_prf},
-    [Cipher] = ssl:filter_cipher_suites(All, Filters),    
-    [Cipher | Rest0] = ssl:prepend_cipher_suites([Cipher], Default),
-    [Cipher | Rest0] = ssl:prepend_cipher_suites(Filters, Default),
-    true = lists:member(Cipher, Default), 
-    false = lists:member(Cipher, Rest0), 
-    [Cipher | Rest1] = lists:reverse(ssl:append_cipher_suites([Cipher], Default)),
-    [Cipher | Rest1] = lists:reverse(ssl:append_cipher_suites(Filters, Default)),
-    true = lists:member(Cipher, Default),
-    false = lists:member(Cipher, Rest1),
-    [] = lists:dropwhile(fun(X) -> not lists:member(X, Default) end, Anonymous),
-    [] = lists:dropwhile(fun(X) -> not lists:member(X, All) end, Anonymous),        
-    true = lists:member(MandatoryCipherSuiteTLS1_0TLS1_1, All),
-    true = lists:member(MandatoryCipherSuiteTLS1_0TLS1_2, All).
+    chipher_suite_checks('tlsv1.3'),
+    chipher_suite_checks('tlsv1.2'),
+    chipher_suite_checks('tlsv1.1'),
+    chipher_suite_checks('tlsv1'),
+    chipher_suite_checks('dtlsv1.2'),
+    chipher_suite_checks('dtlsv1'),
+    anon_chipher_suite_checks('tlsv1.3'),
+    anon_chipher_suite_checks('tlsv1.2'),
+    anon_chipher_suite_checks('tlsv1.1'),
+    anon_chipher_suite_checks('tlsv1'),
+    anon_chipher_suite_checks('dtlsv1.2'),
+    anon_chipher_suite_checks('dtlsv1').
 
-%%--------------------------------------------------------------------
-
-old_cipher_suites() ->
-    [{doc,"Test API function cipher_suites/0"}].
-
-old_cipher_suites(Config) when is_list(Config) -> 
-    MandatoryCipherSuite = {rsa, '3des_ede_cbc', sha},
-    [_|_] = Suites = ssl:cipher_suites(),
-    Suites = ssl:cipher_suites(erlang),
-    [_|_] = ssl:cipher_suites(openssl),
-    true = lists:member(MandatoryCipherSuite,  ssl:cipher_suites(all)).
 
 %%--------------------------------------------------------------------
 cipher_suites_mix() ->
@@ -395,8 +330,8 @@ unordered_protocol_versions_server() ->
       " when it is not first in the versions list."}].
 
 unordered_protocol_versions_server(Config) when is_list(Config) -> 
-    ClientOpts = ssl_test_lib:ssl_options(client_opts, Config),
-    ServerOpts = ssl_test_lib:ssl_options(server_opts, Config),  
+    ClientOpts = ssl_test_lib:ssl_options(client_rsa_verify_opts, Config),
+    ServerOpts = ssl_test_lib:ssl_options(server_rsa_verify_opts, Config),  
 
     {ClientNode, ServerNode, Hostname} = ssl_test_lib:run_where(Config),
     Server = ssl_test_lib:start_server([{node, ServerNode}, {port, 0}, 
@@ -420,8 +355,8 @@ unordered_protocol_versions_client() ->
       " when it is not first in the versions list."}].
 
 unordered_protocol_versions_client(Config) when is_list(Config) -> 
-    ClientOpts = ssl_test_lib:ssl_options(client_opts, Config),
-    ServerOpts = ssl_test_lib:ssl_options(server_opts, Config),  
+    ClientOpts = ssl_test_lib:ssl_options(client_rsa_verify_opts, Config),
+    ServerOpts = ssl_test_lib:ssl_options(server_rsa_verify_opts, Config),  
 
     {ClientNode, ServerNode, Hostname} = ssl_test_lib:run_where(Config),
     Server = ssl_test_lib:start_server([{node, ServerNode}, {port, 0}, 
@@ -443,10 +378,10 @@ connect_dist() ->
     [{doc,"Test a simple connect as is used by distribution"}].
 
 connect_dist(Config) when is_list(Config) -> 
-    ClientOpts0 = ssl_test_lib:ssl_options(client_kc_opts, Config),
-    ClientOpts = [{ssl_imp, new},{active, false}, {packet,4}|ClientOpts0],
-    ServerOpts0 = ssl_test_lib:ssl_options(server_kc_opts, Config),
-    ServerOpts = [{ssl_imp, new},{active, false}, {packet,4}|ServerOpts0],
+    ClientOpts0 = ssl_test_lib:ssl_options(client_rsa_opts, Config),
+    ClientOpts = [{active, false}, {packet,4}|ClientOpts0],
+    ServerOpts0 = ssl_test_lib:ssl_options(server_rsa_opts, Config),
+    ServerOpts = [{active, false}, {packet,4}|ServerOpts0],
 
     {ClientNode, ServerNode, Hostname} = ssl_test_lib:run_where(Config),
 
@@ -482,8 +417,8 @@ eccs(Config) when is_list(Config) ->
 tls_versions_option() ->
     [{doc,"Test API versions option to connect/listen."}].
 tls_versions_option(Config) when is_list(Config) ->
-    ClientOpts = ssl_test_lib:ssl_options(client_opts, Config),
-    ServerOpts = ssl_test_lib:ssl_options(server_opts, Config),
+    ClientOpts = ssl_test_lib:ssl_options(client_rsa_verify_opts, Config),
+    ServerOpts = ssl_test_lib:ssl_options(server_rsa_verify_opts, Config),
 
     Supported = proplists:get_value(supported, ssl:versions()),
     Available = proplists:get_value(available, ssl:versions()),
@@ -756,6 +691,96 @@ fake_intermediate_cert(Config) when is_list(Config) ->
     
     ssl_test_lib:check_client_alert(Client1, bad_certificate).
 
+incompleat_chain_length() -> 
+    [{doc,"Test that attempts to reconstruct incomplete chains does not make shorter incomplete chains"}].
+incompleat_chain_length(Config) when is_list(Config)-> 
+    {ClientNode, ServerNode, Hostname} = ssl_test_lib:run_where(Config),   
+    Ext = x509_test:extensions([{key_usage, [keyCertSign, cRLSign, digitalSignature, keyAgreement]}]),
+    ROOT = public_key:pkix_test_root_cert("SERVER ROOT CA", [{key, ssl_test_lib:hardcode_rsa_key(6)},
+                                                             {extensions, Ext}]),
+    
+    OtherROOT = public_key:pkix_test_root_cert("OTHER SERVER ROOT CA", [{key, ssl_test_lib:hardcode_rsa_key(3)},
+                                                                                              {extensions, Ext}]),
+    
+    
+    #{client_config := ClientConf} = public_key:pkix_test_data(#{server_chain => 
+                                                                     #{root => ROOT,
+                                                                       intermediates => [[{key, ssl_test_lib:hardcode_rsa_key(5)}]],
+                                                                       peer =>  [{key, ssl_test_lib:hardcode_rsa_key(4)}]},
+                                                                 client_chain => 
+                                                                     #{root => [{key, ssl_test_lib:hardcode_rsa_key(1)}], 
+                                                                       intermediates => [[{key, ssl_test_lib:hardcode_rsa_key(2)}]],
+                                                                       peer => [{key, ssl_test_lib:hardcode_rsa_key(3)}]}}
+                                                              ),
+    
+    #{server_config := ServerConf} = public_key:pkix_test_data(#{server_chain => 
+                                                                     #{root => OtherROOT,
+                                                                       intermediates => [[{key, ssl_test_lib:hardcode_rsa_key(2)}],
+                                                                                         [{key, ssl_test_lib:hardcode_rsa_key(3)}]
+                                                                                         ],
+                                                                       peer =>  [{key, ssl_test_lib:hardcode_rsa_key(1)}]},
+                                                                 client_chain => 
+                                                                     #{root => [{key, ssl_test_lib:hardcode_rsa_key(1)}], 
+                                                                       intermediates => [[{key, ssl_test_lib:hardcode_rsa_key(2)}]],
+                                                                       peer => [{key, ssl_test_lib:hardcode_rsa_key(3)}]}}
+                                                              ),
+
+
+    VerifyFun = {fun(_,{bad_cert, unknown_ca}, UserState) -> 
+                         %% accept this error to provoke the 
+                         %% building of an shorter incomplete chain
+                         %% than the one received  
+                         {valid, UserState};
+                    (_,{extension, _} = Extension, #{ext := N} = UserState) ->
+                         ct:pal("~p", [Extension]),
+                         {unknown,  UserState#{ext => N +1}};
+                    (_, valid, #{intermediates := N} = UserState) ->
+                         {valid, UserState#{intermediates => N +1}};
+                    (_, valid_peer, #{intermediates := 2,
+                                      ext := 1} = UserState) ->
+                         {valid, UserState};
+                    (_, valid_peer, UserState) ->
+                         ct:pal("~p", [UserState]),
+                         {error, {bad_cert, too_short_path}}
+                 end, #{intermediates => 0,
+                        ext => 0}},
+
+    Server = ssl_test_lib:start_server([{node, ServerNode}, {port, 0}, 
+                                        {from, self()}, 
+                                        {mfa, {ssl_test_lib, send_recv_result_active, []}},
+                                        {options, ServerConf}
+                                        ]),
+    Port = ssl_test_lib:inet_port(Server),
+    
+    Client = ssl_test_lib:start_client([{node, ClientNode}, {port, Port}, 
+                                        {host, Hostname},
+                                        {from, self()}, 
+                                        {mfa, {ssl_test_lib, send_recv_result_active, []}},
+                                        {options, [{verify, verify_peer}, {verify_fun, VerifyFun} | ClientConf]}]),
+    ssl_test_lib:check_result(Client, ok, Server, ok).
+
+
+user_dies() ->
+    [{doc, "Test that we do no leak processess when user dies during startup of connection"}].
+user_dies(Config) when is_list(Config) ->
+    process_flag(trap_exit, true),
+    ServerOpts = ssl_test_lib:ssl_options(server_rsa_verify_opts, Config),
+    ClientOpts = ssl_test_lib:ssl_options(client_rsa_verify_opts, Config),
+    {_, ServerNode, Hostname} = ssl_test_lib:run_where(Config),
+
+    Port = ssl_test_lib:inet_port(ServerNode),
+    Server = spawn_link(fun() ->
+                                {ok, L} = ssl:listen(Port, ServerOpts),
+                                loop(L)
+                        end),
+    {ok, _} = ssl:connect(Hostname, Port, ClientOpts),
+    2 = proplists:get_value(supervisors, supervisor:count_children(tls_connection_sup)), 
+    Pid = spawn_link(fun() -> many_client_starter(Hostname, Port, ClientOpts, Server) end),
+    receive
+        {'EXIT', Pid, _} ->
+            check_process_count()
+    end.
+
 %%--------------------------------------------------------------------
 %% callback functions ------------------------------------------------
 %%--------------------------------------------------------------------
@@ -788,14 +813,14 @@ connect_dist_c(S) ->
 
 dummy(_Socket) ->
     %% Should not happen as the ssl connection will not be established
-    %% due to fatal handshake failiure
+    %% due to fatal handshake failure
     exit(kill).
 %%--------------------------------------------------------------------
 %% Internal functions ------------------------------------------------
 %%--------------------------------------------------------------------
 version_option_test(Config, Version) ->
-    ClientOpts = ssl_test_lib:ssl_options(client_opts, Config),
-    ServerOpts = ssl_test_lib:ssl_options(server_opts, Config),
+    ClientOpts = ssl_test_lib:ssl_options(client_rsa_verify_opts, Config),
+    ServerOpts = ssl_test_lib:ssl_options(server_rsa_verify_opts, Config),
     {ClientNode, ServerNode, Hostname} = ssl_test_lib:run_where(Config),
     Server = 
 	ssl_test_lib:start_server([{node, ServerNode}, {port, 0}, 
@@ -882,7 +907,115 @@ test_fake_root(Hostname, ServerNode, ClientNode, ServerConf, ClientConf, FakeCer
     
     ssl_test_lib:close(FakeServer1).
 
+anon_chipher_suite_checks('tlsv1.3' = Version) ->
+    [] = ssl:cipher_suites(anonymous, Version),
+    [] = ssl:cipher_suites(exclusive_anonymous, Version);
+anon_chipher_suite_checks(Version) ->
+    [_|_] = ssl:cipher_suites(anonymous, Version),
+    [_|_] = ssl:cipher_suites(exclusive_anonymous, Version).
 
-
-    
+chipher_suite_checks(Version) ->
+    MandatoryCipherSuiteTLS1_0TLS1_1 = #{key_exchange => rsa,
+                                         cipher => '3des_ede_cbc',
+                                         mac => sha,
+                                         prf => default_prf},
+    MandatoryCipherSuiteTLS1_0TLS1_2 = #{key_exchange =>rsa,
+                                         cipher => 'aes_128_cbc',
+                                         mac => sha,
+                                         prf => default_prf},
+    All = [_|_] = ssl:cipher_suites(all, Version),
+    Default = [_|_] = ssl:cipher_suites(default, Version),
+    Anonymous = ssl:cipher_suites(anonymous, Version),
+    true = length(Default) < length(All),
+    Filters = [{key_exchange,
+                fun(dhe_rsa) ->
+                        true;
+                   (_) ->
+                        false
+                end
+               },
+               {cipher,
+                fun(aes_256_cbc) ->
+                        true;
+                   (_) ->
+                        false
+                end
+               },
+               {mac,
+                fun(sha) ->
+                        true;
+                   (_) ->
+                        false
+                end
+               }
+              ],
+    Cipher = #{cipher => aes_256_cbc,
+               key_exchange => dhe_rsa,
+               mac => sha,
+               prf => default_prf},
+    [Cipher] = ssl:filter_cipher_suites(All, Filters),
+    [Cipher | Rest0] = ssl:prepend_cipher_suites([Cipher], Default),
+    [Cipher | Rest0] = ssl:prepend_cipher_suites(Filters, Default),
+    true = lists:member(Cipher, Default),
+    false = lists:member(Cipher, Rest0),
+    [Cipher | Rest1] = lists:reverse(ssl:append_cipher_suites([Cipher], Default)),
+    [Cipher | Rest1] = lists:reverse(ssl:append_cipher_suites(Filters, Default)),
+    true = lists:member(Cipher, Default),
+    false = lists:member(Cipher, Rest1),
+    [] = lists:dropwhile(fun(X) -> not lists:member(X, Default) end, Anonymous),
+    [] = lists:dropwhile(fun(X) -> not lists:member(X, All) end, Anonymous),
+    case Version of
+        tlsv1 ->
+            true = lists:member(MandatoryCipherSuiteTLS1_0TLS1_1, All);
+        'tlsv1.1' ->
+            true = lists:member(MandatoryCipherSuiteTLS1_0TLS1_1, All),
+            true = lists:member(MandatoryCipherSuiteTLS1_0TLS1_2, All);
+        'tlsv1.2' ->
+            ok;
+        'tlsv1.3' ->
+            ok;
+        'dtlsv1' ->
+            true = lists:member(MandatoryCipherSuiteTLS1_0TLS1_2, All);
+        'dtlsv1.2' ->
+            ok
+    end.
    
+many_client_starter(Hostname, Port, ClientOpts, Server) ->
+    spawn_clients(Hostname, Port, ClientOpts, 50),
+    ct:sleep(100),
+    many_client_starter(Hostname, Port, ClientOpts, Server).
+
+spawn_clients(_, _, _, 0) ->
+    ok;
+spawn_clients(Hostname, Port, ClientOpts, N) ->
+    spawn_link(fun() ->
+                     case N of
+                         20 ->
+                             exit(self(), kill);
+                         _ ->
+                             {ok, _} = ssl:connect(Hostname, Port, ClientOpts) 
+                     end
+               end),
+    spawn_clients(Hostname, Port, ClientOpts, N-1).
+
+loop(L) ->
+    {ok, A} = ssl:transport_accept(L),
+    spawn(fun() ->
+                  ssl:handshake(A)
+          end),
+    loop(L).
+                 
+check_process_count() ->
+    check_process_count(5).
+
+check_process_count(0) ->
+    2 = proplists:get_value(supervisors, supervisor:count_children(tls_connection_sup));
+check_process_count(N) ->
+    case proplists:get_value(supervisors, supervisor:count_children(tls_connection_sup)) of
+        2 ->
+            ok;
+        Other ->
+            ct:pal("Other ~p", [Other]),
+            ct:sleep(500),
+            check_process_count(N-1)
+    end.

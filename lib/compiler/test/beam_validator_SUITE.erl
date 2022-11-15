@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2004-2020. All Rights Reserved.
+%% Copyright Ericsson AB 2004-2022. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -28,7 +28,7 @@
 	 dead_code/1,
 	 overwrite_catchtag/1,overwrite_trytag/1,accessing_tags/1,bad_catch_try/1,
 	 cons_guard/1,
-	 freg_range/1,freg_uninit/1,freg_state/1,
+	 freg_range/1,freg_uninit/1,
 	 bad_bin_match/1,bad_dsetel/1,
 	 state_after_fault_in_catch/1,no_exception_in_catch/1,
 	 undef_label/1,illegal_instruction/1,failing_gc_guard_bif/1,
@@ -39,7 +39,8 @@
          branch_to_try_handler/1,call_without_stack/1,
          receive_marker/1,safe_instructions/1,
          missing_return_type/1,will_bif_succeed/1,
-         bs_saved_position_units/1,parent_container/1]).
+         bs_saved_position_units/1,parent_container/1,
+         container_performance/1]).
 
 -include_lib("common_test/include/ct.hrl").
 
@@ -63,7 +64,7 @@ groups() ->
        unsafe_catch,dead_code,
        overwrite_catchtag,overwrite_trytag,accessing_tags,
        bad_catch_try,cons_guard,freg_range,freg_uninit,
-       freg_state,bad_bin_match,bad_dsetel,
+       bad_bin_match,bad_dsetel,
        state_after_fault_in_catch,no_exception_in_catch,
        undef_label,illegal_instruction,failing_gc_guard_bif,
        map_field_lists,cover_bin_opt,val_dsetel,
@@ -73,7 +74,8 @@ groups() ->
        branch_to_try_handler,call_without_stack,
        receive_marker,safe_instructions,
        missing_return_type,will_bif_succeed,
-       bs_saved_position_units,parent_container]}].
+       bs_saved_position_units,parent_container,
+       container_performance]}].
 
 init_per_suite(Config) ->
     test_lib:recompile(?MODULE),
@@ -99,7 +101,7 @@ compiler_bug(Config) when is_list(Config) ->
     %% the beam_validator module.
     {error,
      [{"compiler_bug",
-       [{beam_validator,_}]}],
+       [{_Pos,beam_validator,_}]}],
      []} = compile:file(File, [from_asm,return_errors,time]),
     ok.
 
@@ -262,19 +264,19 @@ freg_range(Config) when is_list(Config) ->
     Errors = do_val(freg_range, Config),
     [{{t,sum_1,2},
       {{bif,fadd,{f,0},[{fr,-1},{fr,1}],{fr,0}},
-       5,
+       4,
        {bad_source,{fr,-1}}}},
      {{t,sum_2,2},
       {{bif,fadd,{f,0},[{fr,0},{fr,1024}],{fr,0}},
-       6,
+       5,
        {uninitialized_reg,{fr,1024}}}},
      {{t,sum_3,2},
       {{bif,fadd,{f,0},[{fr,0},{fr,1}],{fr,-1}},
-       7,
+       6,
        {bad_register,{fr,-1}}}},
      {{t,sum_4,2},
       {{bif,fadd,{f,0},[{fr,0},{fr,1}],{fr,1024}},
-       7,
+       6,
        limit}}] = Errors,
     ok.
 
@@ -282,34 +284,12 @@ freg_uninit(Config) when is_list(Config) ->
     Errors = do_val(freg_uninit, Config),
     [{{t,sum_1,2},
       {{bif,fadd,{f,0},[{fr,0},{fr,1}],{fr,0}},
-       6,
+       5,
        {uninitialized_reg,{fr,1}}}},
      {{t,sum_2,2},
       {{bif,fadd,{f,0},[{fr,0},{fr,1}],{fr,0}},
-       10,
+       8,
        {uninitialized_reg,{fr,0}}}}] = Errors,
-    ok.
-
-freg_state(Config) when is_list(Config) ->
-    Errors = do_val(freg_state, Config),
-    [{{t,sum_1,2},
-      {{bif,fmul,{f,0},[{fr,0},{fr,1}],{fr,0}},
-       6,
-       {bad_floating_point_state,undefined}}},
-     {{t,sum_2,2},
-      {{fmove,{fr,0},{x,0}},
-       8,
-       {bad_floating_point_state,cleared}}},
-     {{t,sum_3,2},
-      {{bif,'-',{f,0},[{x,1},{x,0}],{x,1}},
-       8,
-       {unsafe_instruction,{float_error_state,cleared}}}},
-     {{t,sum_4,2},
-      {{fcheckerror,{f,0}},
-       4,
-       {bad_floating_point_state,undefined}}},
-     {{t,sum_5,2},
-      {fclearerror,5,{bad_floating_point_state,cleared}}}] = Errors,
     ok.
 
 bad_bin_match(Config) when is_list(Config) ->
@@ -779,10 +759,13 @@ receive_marker(Config) when is_list(Config) ->
 
     [{{receive_marker,t1,1},
       {return,_,
-       {return_with_receive_marker,committed}}},
+       {return_in_receive,entered_loop}}},
      {{receive_marker,t2,1},
       {{call_last,1,{f,2},1},_,
-       {return_with_receive_marker,committed}}}] = Errors,
+       {return_in_receive,entered_loop}}},
+     {{receive_marker,t3,1},
+      {return,_,
+       {return_in_receive,entered_loop}}}] = Errors,
 
     ok.
 
@@ -911,7 +894,7 @@ do_val(Mod, Config) ->
     case compile:file(File, [from_asm,no_postopt,return_errors]) of
 	{error,L,[]} ->
 	    [{Base,Errors0}] = L,
-	    Errors = [E || {beam_validator,E} <- Errors0],
+	    Errors = [E || {_Pos,beam_validator,E} <- Errors0],
 	    _ = [io:put_chars(beam_validator:format_error(E)) ||
 		    E <- Errors],
 	    Errors;
@@ -922,7 +905,7 @@ do_val(Mod, Config) ->
 beam_val(M) ->
     Name = atom_to_list(element(1, M)),
     {error,[{Name,Errors0}]} = beam_validator:validate(M, strong),
-    Errors = [E || {beam_validator,E} <- Errors0],
+    Errors = [E || {_Pos,beam_validator,E} <- Errors0],
     _ = [io:put_chars(beam_validator:format_error(E)) ||
 	    E <- Errors],
     Errors.
@@ -981,6 +964,42 @@ pc_1(#pc{a=A}=R) ->
 
 pc_2(_R) ->
     ok.
+
+%% GH-5915: The following function took an incredibly long time to validate.
+container_performance(Config) ->
+    case Config of
+        ({b,_}) -> {k1};
+        ({a,{b,_}}) -> {k2};
+        ({a,{a,{b,_}}}) -> {k3};
+        ({a,{a,{a,{b,_}}}}) -> {k4};
+        ({a,{a,{a,{a,{b,_}}}}}) -> {k5};
+        ({a,{a,{a,{a,{a,{b,_}}}}}}) -> {k6};
+        ({a,{a,{a,{a,{a,{a,{b,_}}}}}}}) -> {k7};
+        ({a,{a,{a,{a,{a,{a,{a,{b,_}}}}}}}}) -> {k8};
+        ({a,{a,{a,{a,{a,{a,{a,{a,{b,_}}}}}}}}}) -> {k9};
+        ({a,{a,{a,{a,{a,{a,{a,{a,{a,{b,_}}}}}}}}}}) -> {k10};
+        ({a,{a,{a,{a,{a,{a,{a,{a,{a,{a,{b,_}}}}}}}}}}}) -> {k11};
+        ({a,{a,{a,{a,{a,{a,{a,{a,{a,{a,{a,{b,_}}}}}}}}}}}}) -> {k12};
+        ({a,{a,{a,{a,{a,{a,{a,{a,{a,{a,{a,{a,{b,_}}}}}}}}}}}}}) -> {k13};
+        ({a,{a,{a,{a,{a,{a,{a,{a,{a,{a,{a,{a,{a,{b,_}}}}}}}}}}}}}}) -> {k14};
+        ({a,{a,{a,{a,{a,{a,{a,{a,{a,{a,{a,{a,{a,{a,{b,_}}}}}}}}}}}}}}}) -> {k15};
+        ({a,{a,{a,{a,{a,{a,{a,{a,{a,{a,{a,{a,{a,{a,{a,{b,_}}}}}}}}}}}}}}}}) -> {k16};
+        ({a,{a,{a,{a,{a,{a,{a,{a,{a,{a,{a,{a,{a,{a,{a,{a,{b,_}}}}}}}}}}}}}}}}}) -> {k17};
+        ({a,{a,{a,{a,{a,{a,{a,{a,{a,{a,{a,{a,{a,{a,{a,{a,{a,{b,_}}}}}}}}}}}}}}}}}}) -> {k18};
+        ({a,{a,{a,{a,{a,{a,{a,{a,{a,{a,{a,{a,{a,{a,{a,{a,{a,{a,{b,_}}}}}}}}}}}}}}}}}}}) -> {k19};
+        ({a,{a,{a,{a,{a,{a,{a,{a,{a,{a,{a,{a,{a,{a,{a,{a,{a,{a,{a,{b,_}}}}}}}}}}}}}}}}}}}}) -> {k20};
+        ({a,{a,{a,{a,{a,{a,{a,{a,{a,{a,{a,{a,{a,{a,{a,{a,{a,{a,{a,{a,{b,_}}}}}}}}}}}}}}}}}}}}}) -> {k21};
+        ({a,{a,{a,{a,{a,{a,{a,{a,{a,{a,{a,{a,{a,{a,{a,{a,{a,{a,{a,{a,{a,{b,_}}}}}}}}}}}}}}}}}}}}}}) -> {k22};
+        ({a,{a,{a,{a,{a,{a,{a,{a,{a,{a,{a,{a,{a,{a,{a,{a,{a,{a,{a,{a,{a,{a,{b,_}}}}}}}}}}}}}}}}}}}}}}}) -> {k23};
+        ({a,{a,{a,{a,{a,{a,{a,{a,{a,{a,{a,{a,{a,{a,{a,{a,{a,{a,{a,{a,{a,{a,{a,{b,_}}}}}}}}}}}}}}}}}}}}}}}}) -> {k24};
+        ({a,{a,{a,{a,{a,{a,{a,{a,{a,{a,{a,{a,{a,{a,{a,{a,{a,{a,{a,{a,{a,{a,{a,{a,{b,_}}}}}}}}}}}}}}}}}}}}}}}}}) -> {k25};
+        ({a,{a,{a,{a,{a,{a,{a,{a,{a,{a,{a,{a,{a,{a,{a,{a,{a,{a,{a,{a,{a,{a,{a,{a,{a,{b,_}}}}}}}}}}}}}}}}}}}}}}}}}}) -> {k26};
+        ({a,{a,{a,{a,{a,{a,{a,{a,{a,{a,{a,{a,{a,{a,{a,{a,{a,{a,{a,{a,{a,{a,{a,{a,{a,{a,{b,_}}}}}}}}}}}}}}}}}}}}}}}}}}}) -> {k27};
+        ({a,{a,{a,{a,{a,{a,{a,{a,{a,{a,{a,{a,{a,{a,{a,{a,{a,{a,{a,{a,{a,{a,{a,{a,{a,{a,{a,{b,_}}}}}}}}}}}}}}}}}}}}}}}}}}}}) -> {k28};
+        ({a,{a,{a,{a,{a,{a,{a,{a,{a,{a,{a,{a,{a,{a,{a,{a,{a,{a,{a,{a,{a,{a,{a,{a,{a,{a,{a,{a,{b,_}}}}}}}}}}}}}}}}}}}}}}}}}}}}}) -> {k29};
+        ({a,{a,{a,{a,{a,{a,{a,{a,{a,{a,{a,{a,{a,{a,{a,{a,{a,{a,{a,{a,{a,{a,{a,{a,{a,{a,{a,{a,{a,_}}}}}}}}}}}}}}}}}}}}}}}}}}}}}) -> {k30};
+        _ -> ok
+    end.
 
 id(I) ->
     I.

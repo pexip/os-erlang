@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2017-2020. All Rights Reserved.
+%% Copyright Ericsson AB 2017-2021. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -19,8 +19,6 @@
 %%
 
 -module(ssl_dist_test_lib).
-
--behaviour(ct_suite).
 
 -include_lib("common_test/include/ct.hrl").
 -include_lib("public_key/include/public_key.hrl").
@@ -73,8 +71,10 @@ apply_on_ssl_node(Node, Ref, Msg) ->
 
 stop_ssl_node(#node_handle{connection_handler = Handler,
 			   socket = Socket,
-			   name = Name}) ->
-    ?t:format("Trying to stop ssl node ~s.~n", [Name]),
+			   name = Name,
+                           logfile = LogPath,
+                           dumpfile = DumpPath}) ->
+    test_server:format("Trying to stop ssl node ~s.~n", [Name]),
     Mon = erlang:monitor(process, Handler),
     unlink(Handler),
     case gen_tcp:send(Socket, term_to_binary(stop)) of
@@ -93,23 +93,34 @@ stop_ssl_node(#node_handle{connection_handler = Handler,
 	Error ->
 	    erlang:demonitor(Mon, [flush]),
 	    ct:pal("stop_ssl_node/1 ~s Warning ~p ~n", [Name,Error])
-    end.
+    end,
+    case file:read_file(LogPath) of
+        {ok, Binary} ->
+            ct:pal("LogPath(~pB) = ~p~n~s", [filelib:file_size(LogPath), LogPath,
+                                             Binary]);
+        _ ->
+            ok
+    end,
+    ct:pal("DumpPath(~pB) = ~p~n", [filelib:file_size(DumpPath), DumpPath]).
 
 start_ssl_node(Name, Args) ->
     {ok, LSock} = gen_tcp:listen(0,
 				 [binary, {packet, 4}, {active, false}]),
     {ok, ListenPort} = inet:port(LSock),
-    CmdLine = mk_node_cmdline(ListenPort, Name, Args),
-    ?t:format("Attempting to start ssl node ~ts: ~ts~n", [Name, CmdLine]),
+    {ok, Pwd} = file:get_cwd(),
+    LogFilePath = filename:join([Pwd, "error_log." ++ Name]),
+    DumpFilePath = filename:join([Pwd, "erl_crash_dump." ++ Name]),
+    CmdLine = mk_node_cmdline(ListenPort, Name, Args, LogFilePath, DumpFilePath),
+    test_server:format("Attempting to start ssl node ~ts: ~ts~n", [Name, CmdLine]),
     case open_port({spawn, CmdLine}, []) of
 	Port when is_port(Port) ->
 	    unlink(Port),
-	    erlang:port_close(Port),
+	    catch erlang:port_close(Port),
 	    case await_ssl_node_up(Name, LSock) of
 		#node_handle{} = NodeHandle ->
-		    ?t:format("Ssl node ~s started.~n", [Name]),
-		    NodeName = list_to_atom(Name ++ "@" ++ host_name()),
-		    NodeHandle#node_handle{nodename = NodeName};
+		    test_server:format("Ssl node ~s started.~n", [Name]),
+		    NodeHandle#node_handle{logfile = LogFilePath,
+                                           dumpfile = DumpFilePath};
 		Error ->
 		    exit({failed_to_start_node, Name, Error})
 	    end;
@@ -123,7 +134,7 @@ host_name() ->
     %%     			  atom_to_list(node())),
     Host.
 
-mk_node_cmdline(ListenPort, Name, Args) ->
+mk_node_cmdline(ListenPort, Name, Args, LogPath, DumpPath) ->
     Static = "-detached -noinput",
     Pa = filename:dirname(code:which(?MODULE)),
     Prog = case catch init:get_argument(progname) of
@@ -134,7 +145,6 @@ mk_node_cmdline(ListenPort, Name, Args) ->
 		 false -> "-sname ";
 		 _ -> "-name "
 	     end,
-    {ok, Pwd} = file:get_cwd(),
     "\"" ++ Prog ++ "\" "
 	++ Static ++ " "
 	++ NameSw ++ " " ++ Name ++ " "
@@ -145,10 +155,10 @@ mk_node_cmdline(ListenPort, Name, Args) ->
 	++ host_name() ++ " "
 	++ integer_to_list(ListenPort) ++ " "
 	++ Args ++ " "
-	++ "-env ERL_CRASH_DUMP " ++ Pwd ++ "/erl_crash_dump." ++ Name ++ " "
+	++ "-env ERL_CRASH_DUMP " ++ DumpPath ++ " "
         ++ "-kernel inet_dist_connect_options \"[{recbuf,12582912},{sndbuf,12582912},{high_watermark,8388608},{low_watermark,4194304}]\" "
         ++ "-kernel inet_dist_listen_options \"[{recbuf,12582912},{sndbuf,12582912},{high_watermark,8388608},{low_watermark,4194304}]\" "
-	++ "-kernel error_logger \"{file,\\\"" ++ Pwd ++ "/error_log." ++ Name ++ "\\\"}\" "
+	++ "-kernel error_logger \"{file,\\\"" ++ LogPath ++ "\\\"}\" "
 	++ "-setcookie " ++ atom_to_list(erlang:get_cookie()).
 
 %%
@@ -168,36 +178,41 @@ await_ssl_node_up(Name, LSock) ->
 	    end;
 	{error, Error} ->
 	    gen_tcp:close(LSock),
-            ?t:format("Accept failed for ssl node ~s: ~p~n", [Name,Error]),
+            test_server:format("Accept failed for ssl node ~s: ~p~n", [Name,Error]),
 	    exit({accept_failed, Error})
     end.
 
 check_ssl_node_up(Socket, Name, Bin) ->
+    NodeName =
+        case string:find(Name,"@") of
+            nomatch ->
+                list_to_atom(Name++"@"++host_name());
+            _ ->
+                list_to_atom(Name)
+        end,
     case catch binary_to_term(Bin) of
 	{'EXIT', _} ->
 	    gen_tcp:close(Socket),
 	    exit({bad_data_received_from_ssl_node, Name, Bin});
 	{ssl_node_up, NodeName} ->
-	    case list_to_atom(Name++"@"++host_name()) of
-		NodeName ->
-		    Parent = self(),
-		    Go = make_ref(),
-		    %% Spawn connection handler on test server side
-		    Pid = spawn(
-			    fun () ->
-                                    link(group_leader()),
-				    receive Go -> ok end,
-                                    process_flag(trap_exit, true),
-				    tstsrvr_con_loop(Name, Socket, Parent)
-			    end),
-		    ok = gen_tcp:controlling_process(Socket, Pid),
-		    Pid ! Go,
-		    #node_handle{connection_handler = Pid,
-				 socket = Socket,
-				 name = Name};
-		_ ->
-		    exit({unexpected_ssl_node_connected, NodeName})
-	    end;
+            Parent = self(),
+            Go = make_ref(),
+            %% Spawn connection handler on test server side
+            Pid = spawn(
+                    fun () ->
+                            link(group_leader()),
+                            receive Go -> ok end,
+                            process_flag(trap_exit, true),
+                            tstsrvr_con_loop(Name, Socket, Parent)
+                    end),
+            ok = gen_tcp:controlling_process(Socket, Pid),
+            Pid ! Go,
+            #node_handle{connection_handler = Pid,
+                         socket = Socket,
+                         nodename = NodeName,
+                         name = Name};
+        {ssl_node_up, OtherNodeName} ->
+            exit({unexpected_ssl_node_connected, OtherNodeName});
 	Msg ->
 	    exit({unexpected_msg_instead_of_ssl_node_up, Name, Msg})
     end.
@@ -220,15 +235,15 @@ tstsrvr_con_loop(Name, Socket, Parent) ->
 	{tcp, Socket, Bin} ->
 	    try binary_to_term(Bin) of
 		{format, FmtStr, ArgList} ->
-		    ?t:format(FmtStr, ArgList);
+		    test_server:format(FmtStr, ArgList);
 		{message, Msg} ->
-		    ?t:format("Got message ~p", [Msg]),
+		    test_server:format("Got message ~p", [Msg]),
 		    Parent ! Msg;
 		{apply_res, To, Ref, Res} ->
 		    To ! {Ref, Res};
 		bye ->
                     {error, closed} = gen_tcp:recv(Socket, 0),
-		    ?t:format("Ssl node ~s stopped.~n", [Name]),
+		    test_server:format("Ssl node ~s stopped.~n", [Name]),
 		    gen_tcp:close(Socket),
 		    exit(normal);
 		Unknown ->

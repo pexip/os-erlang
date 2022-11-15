@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 1997-2018. All Rights Reserved.
+%% Copyright Ericsson AB 1997-2021. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -109,12 +109,12 @@ end_per_testcase(_, Config) ->
 app() ->
     [{doc, "Test that the inets app file is ok"}].
 app(Config) when is_list(Config) ->
-    ok = ?t:app_test(inets).
+    ok = test_server:app_test(inets).
 %%--------------------------------------------------------------------
 appup() ->
     [{doc, "Test that the inets appup file is ok"}].
 appup(Config) when is_list(Config) ->
-    ok = ?t:appup_test(inets).
+    ok = test_server:appup_test(inets).
 
 start_inets() ->
     [{doc, "Test inets API functions"}].

@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %% 
-%% Copyright Ericsson AB 1997-2016. All Rights Reserved.
+%% Copyright Ericsson AB 1997-2021. All Rights Reserved.
 %% 
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -38,7 +38,7 @@ do(Info) ->
 	undefined ->
 	  Path = mod_alias:path(Info#mod.data,Info#mod.config_db,
 			      Info#mod.request_uri),
-	  Suffix = httpd_util:suffix(Path),
+	  Suffix = httpd_util:strip_extension_dot(Path),
 	  MimeType = httpd_util:lookup_mime(Info#mod.config_db,Suffix,
 					  "text/plain"),
 	  Actions = httpd_util:multi_lookup(Info#mod.config_db,action),

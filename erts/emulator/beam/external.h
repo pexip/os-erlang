@@ -1,7 +1,7 @@
 /*
  * %CopyrightBegin%
  *
- * Copyright Ericsson AB 1996-2020. All Rights Reserved.
+ * Copyright Ericsson AB 1996-2022. All Rights Reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -56,11 +56,13 @@
 #define FUN_EXT           'u'
 #define ATOM_UTF8_EXT     'v'
 #define SMALL_ATOM_UTF8_EXT 'w'
+#define V4_PORT_EXT       'x'
 
 #define DIST_HEADER       'D'
 #define DIST_FRAG_HEADER  'E'
 #define DIST_FRAG_CONT    'F'
 #define HOPEFUL_DATA      'H'
+#define HOPEFUL_END_OF_FUN 'Q'
 #define ATOM_CACHE_REF    'R'
 #define ATOM_INTERNAL_REF2 'I'
 #define ATOM_INTERNAL_REF3 'K'
@@ -210,10 +212,10 @@ ErtsPrepDistExtRes erts_prepare_dist_ext(ErtsDistExternal *, byte *, Uint, struc
 Sint erts_decode_dist_ext_size(ErtsDistExternal *, int, int);
 Eterm erts_decode_dist_ext(ErtsHeapFactory*, ErtsDistExternal *, int);
 
-Sint erts_decode_ext_size(byte*, Uint);
-Sint erts_decode_ext_size_ets(byte*, Uint);
-Eterm erts_decode_ext(ErtsHeapFactory*, byte**, Uint32 flags);
-Eterm erts_decode_ext_ets(ErtsHeapFactory*, byte*);
+Sint erts_decode_ext_size(const byte*, Uint);
+Sint erts_decode_ext_size_ets(const byte*, Uint);
+Eterm erts_decode_ext(ErtsHeapFactory*, const byte**, Uint32 flags);
+Eterm erts_decode_ext_ets(ErtsHeapFactory*, const byte*);
 
 Eterm erts_term_to_binary(Process* p, Eterm Term, int level, Uint64 flags);
 Eterm erts_debug_term_to_binary(Process *p, Eterm term, Eterm opts);

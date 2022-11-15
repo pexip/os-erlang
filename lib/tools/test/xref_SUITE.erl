@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2000-2018. All Rights Reserved.
+%% Copyright Ericsson AB 2000-2021. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -25,7 +25,6 @@
 -define(format(S, A), io:format(S, A)).
 -define(line, put(line, ?LINE), ).
 -define(config(X,Y), "./log_dir/").
--define(t,test_server).
 -define(datadir, "xref_SUITE_data").
 -define(privdir, "xref_SUITE_priv").
 -define(copydir, "xref_SUITE_priv/datacopy").
@@ -45,7 +44,7 @@
 
 -export([add/1, default/1, info/1, lib/1, read/1, read2/1, remove/1,
          replace/1, update/1, deprecated/1, trycatch/1,
-         fun_mfa/1, fun_mfa_r14/1,
+         fun_mfa/1,
          fun_mfa_vars/1, qlc/1]).
 
 -export([analyze/1, basic/1, md/1, q/1, variables/1, unused_locals/1,
@@ -81,7 +80,7 @@ groups() ->
      {files, [],
       [add, default, info, lib, read, read2, remove, replace,
        update, deprecated, trycatch, fun_mfa,
-       fun_mfa_r14, fun_mfa_vars, qlc]},
+       fun_mfa_vars, qlc]},
      {analyses, [],
 
       [analyze, basic, md, q, variables, unused_locals, behaviour]},
@@ -668,7 +667,7 @@ modules(Conf) when is_list(Conf) ->
     xref_base:analyze(S, {call, foo}),
     {{error, _, {unavailable_analysis, {use, foo}}}, _} =
     xref_base:analyze(S, {use, foo}),
-    analyze(undefined_functions, [{x,undef,0}], S),
+    {ok, _} = analyze(undefined_functions, [{x,undef,0}], S),
     5 = length(xref_base:info(S)),
 
     %% More: all info, conversions.
@@ -742,7 +741,8 @@ add(Conf) when is_list(Conf) ->
     case os:type() of
         {unix, _} ->
             {error, _, {file_error, _, _}} =
-            xref_base:add_release(S, UDir);
+            xref_base:add_release(S, UDir),
+            true;
         _ ->
             true
     end,
@@ -763,7 +763,8 @@ add(Conf) when is_list(Conf) ->
     case os:type() of
         {unix, _} ->
             {error, _, {file_error, _, _}} =
-            xref_base:add_directory(S6, UDir);
+            xref_base:add_directory(S6, UDir),
+            true;
         _ ->
             true
     end,
@@ -1341,7 +1342,8 @@ replace(Conf) when is_list(Conf) ->
         {unix, _} ->
             hide_file(Ybeam),
             {error, _, {file_error, _, _}} =
-            xref:replace_module(s, x, Ybeam);
+            xref:replace_module(s, x, Ybeam),
+            true;
         _ ->
             true
     end,
@@ -1675,28 +1677,6 @@ fun_mfa(Conf) when is_list(Conf) ->
 
     ok = file:delete(File),
     ok = file:delete(Beam),
-    ok.
-
-%% Same as the previous test case, except that we use a BEAM file
-%% that was compiled by an R14 compiler to test backward compatibility.
-fun_mfa_r14(Conf) when is_list(Conf) ->
-    Dir = proplists:get_value(data_dir, Conf),
-    MFile = fname(Dir, "fun_mfa_r14"),
-
-    A = fun_mfa_r14,
-    {ok, _} = xref:start(s),
-    {ok, A} = xref:add_module(s, MFile, {warnings,false}),
-    {ok, [{{{A,t,0},{'$M_EXPR','$F_EXPR',0}},[7]},
-          {{{A,t,0},{A,t,0}},[6]},
-          {{{A,t1,0},{'$M_EXPR','$F_EXPR',0}},[11]},
-          {{{A,t1,0},{A,t,0}},[10]},
-          {{{A,t2,0},{A,t,0}},[14]},
-          {{{A,t3,0},{A,t3,0}},[17]}]} =
-    xref:q(s, "(Lin) E"),
-
-    ok = check_state(s),
-    xref:stop(s),
-
     ok.
 
 %% fun M:F/A with varibles.
@@ -2202,14 +2182,14 @@ variables(Conf) when is_list(Conf) ->
 
     S = set_up(S2),
 
-    eval("T1=E, T2=E*T1, T3 = T2*T2, T4=range T3, T5=T3|T4, T5",
-         [E1,E2,E3], S),
-    eval("((E*E)*(E*E)) | (range ((E*E)*(E*E)))",
-         [E1,E2,E3], S),
-    eval("T1=V*V,T2=T1*V,T3=V*V*V,T3",
-         [F1,F2,Lib], S),
-    eval("T1=V*V, T2=V*V, T1*T2",
-         [F1,F2,Lib], S),
+    {ok, _} = eval("T1=E, T2=E*T1, T3 = T2*T2, T4=range T3, T5=T3|T4, T5",
+                   [E1,E2,E3], S),
+    {ok, _} = eval("((E*E)*(E*E)) | (range ((E*E)*(E*E)))",
+                   [E1,E2,E3], S),
+    {ok, _} = eval("T1=V*V,T2=T1*V,T3=V*V*V,T3",
+                   [F1,F2,Lib], S),
+    {ok, _} = eval("T1=V*V, T2=V*V, T1*T2",
+                   [F1,F2,Lib], S),
 
     {ok, S100} = eval("T0 := E", [E1, E2, E3], S),
     {ok, S101} = eval("T1 := E  | m1", [E1, E3], S100),
@@ -2555,7 +2535,8 @@ add_modules([{Mod, Test} |Tests], Conf) ->
 %%%
 
 copy_file(Src, Dest) ->
-    file:copy(Src, Dest).
+    {ok, _} = file:copy(Src, Dest),
+    ok.
 
 fname(N) ->
     filename:join(N).

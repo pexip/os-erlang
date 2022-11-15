@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2008-2020. All Rights Reserved.
+%% Copyright Ericsson AB 2008-2022. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -68,14 +68,18 @@
 all() ->
     [{group, 'tlsv1.2'},
      {group, 'tlsv1.1'},
-     {group, 'tlsv1'}
+     {group, 'tlsv1'},
+     {group, 'dtlsv1.2'},
+     {group, 'dtlsv1'}
     ].
 
 groups() ->
     [
      {'tlsv1.2', [], next_protocol_tests()},
      {'tlsv1.1', [], next_protocol_tests()},
-     {'tlsv1', [], next_protocol_tests()}
+     {'tlsv1', [], next_protocol_tests()},
+     {'dtlsv1.2', [], next_protocol_tests()},
+     {'dtlsv1', [], next_protocol_tests()}
     ].
 
 next_protocol_tests() ->
@@ -117,7 +121,8 @@ end_per_group(GroupName, Config) ->
 
 init_per_testcase(_TestCase, Config) ->
     ssl_test_lib:ct_log_supported_protocol_versions(Config),
-    ct:log("Ciphers: ~p~n ", [ ssl:cipher_suites()]),
+    Version = proplists:get_value(version, Config),
+    ct:log("Ciphers: ~p~n ", [ ssl:cipher_suites(default, Version)]),
     ct:timetrap(?TIMEOUT),
     Config.
 

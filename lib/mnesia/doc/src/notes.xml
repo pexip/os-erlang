@@ -4,7 +4,7 @@
 <chapter>
   <header>
     <copyright>
-      <year>1996</year><year>2020</year>
+      <year>1996</year><year>2021</year>
       <holder>Ericsson AB. All Rights Reserved.</holder>
     </copyright>
     <legalnotice>
@@ -39,7 +39,175 @@
     thus constitutes one section in this document. The title of each
     section is the version number of Mnesia.</p>
 
-  <section><title>Mnesia 4.18.1</title>
+  <section><title>Mnesia 4.20.4.1</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+          <p>
+	    Fixed <c>add_table_copy</c> which could leave a table
+	    lock if the receiving node went down during the
+	    operation.</p>
+          <p>
+	    Own Id: OTP-18128 Aux Id: PR-6013 </p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>Mnesia 4.20.4</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+          <p>
+	    Fixed <c>mnesia:add_table_copy/3</c> so that calling it
+	    when mnesia started on another node does not fail or
+	    cause hanging nodes.</p>
+          <p>
+	    Own Id: OTP-18056</p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>Mnesia 4.20.3</title>
+
+    <section><title>Improvements and New Features</title>
+      <list>
+        <item>
+          <p>
+	    Optimize locker to handle many read locks on the same
+	    record.</p>
+          <p>
+	    Own Id: OTP-17973 Aux Id: ERIERL-772 </p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>Mnesia 4.20.2</title>
+
+    <section><title>Improvements and New Features</title>
+      <list>
+        <item>
+          <p>
+	    Reduce the number of locks taken during table copying,
+	    should reduce the startup time on large systems.</p>
+          <p>
+	    Own Id: OTP-17656 Aux Id: ERIERL-688 </p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>Mnesia 4.20.1</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+          <p>
+	    Documentation and minor code cleanup.</p>
+          <p>
+	    Own Id: OTP-17727</p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>Mnesia 4.20</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+          <p>
+	    Fixed that index keys was deleted for set tables when
+	    mnesia:delete_object/1 tried to delete a non-existing
+	    record.</p>
+          <p>
+	    Own Id: OTP-17564 Aux Id: GH-5040 </p>
+        </item>
+      </list>
+    </section>
+
+
+    <section><title>Improvements and New Features</title>
+      <list>
+        <item>
+          <p>
+	    Optimized table loading and added
+	    <c>max_transfer_size</c> configuration parameter.</p>
+          <p>
+	    Own Id: OTP-17508</p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>Mnesia 4.19.1</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+	    <p>Suppression of deprecation warnings has been added to
+	    the source files of the Mnesia application.</p>
+          <p>
+	    Own Id: OTP-17217</p>
+        </item>
+        <item>
+          <p>
+	    Fixed that the backend plugin initialization is done only
+	    once.</p>
+          <p>
+	    Own Id: OTP-17294 Aux Id: GH-4525 PR-4674 </p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>Mnesia 4.19</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+          <p>
+	    Fixed the type spec for <c>disc_only_copies</c>.</p>
+          <p>
+	    Own Id: OTP-17249 Aux Id: PR-4578 </p>
+        </item>
+        <item>
+          <p>
+	    Do not crash in <c>mnesia:change_config/2</c> if mnesia
+	    is stopping or starting.</p>
+          <p>
+	    Own Id: OTP-17274 Aux Id: GH-4616 </p>
+        </item>
+      </list>
+    </section>
+
+
+    <section><title>Improvements and New Features</title>
+      <list>
+        <item>
+          <p>
+	    Optimized table loading time for tables that are updated
+	    during the loading.</p>
+          <p>
+	    Own Id: OTP-17271 Aux Id: PR-4575 </p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>Mnesia 4.18.1</title>
 
     <section><title>Fixed Bugs and Malfunctions</title>
       <list>

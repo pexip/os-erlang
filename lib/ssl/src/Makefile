@@ -1,7 +1,7 @@
 #
 # %CopyrightBegin%
 #
-# Copyright Ericsson AB 1999-2020. All Rights Reserved.
+# Copyright Ericsson AB 1999-2022. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -65,6 +65,7 @@ MODULES= \
 	ssl_certificate \
 	ssl_cipher \
 	ssl_cipher_format \
+	ssl_client_session_cache_db \
 	ssl_config \
 	ssl_connection_sup \
 	ssl_crl \
@@ -87,7 +88,6 @@ MODULES= \
 	ssl_server_session_cache_sup \
 	ssl_upgrade_server_session_cache_sup \
 	ssl_session \
-	ssl_session_cache \
 	ssl_srp_primes \
 	ssl_sup \
 	tls_bloom_filter \
@@ -103,6 +103,7 @@ MODULES= \
 	tls_client_ticket_store \
 	tls_dist_sup \
 	tls_dist_server_sup \
+	tls_dyn_connection_sup\
 	tls_sender \
 	tls_server_session_ticket\
 	tls_server_session_ticket_sup\
@@ -172,12 +173,16 @@ ERL_COMPILE_FLAGS += -I$(ERL_TOP)/lib/kernel/src \
 # Targets
 # ----------------------------------------------------
 
+opt debug: $(TARGET_FILES) $(APP_TARGET) $(APPUP_TARGET) $(DEP_FILE)
+
+deps: $(DEP_FILE)
+
 $(TARGET_FILES): $(BEHAVIOUR_TARGET_FILES)
 
 $(DEP_FILE): $(ERL_FILES)
 	@echo SED $(TARGET) $(ERL_TOP_NATIVE)
 	$(gen_verbose)erlc -M $(ERL_FILES) \
-	| sed "s@[a-zA-Z]\?$(ERL_TOP_NATIVE)@../../..@g" \
+	| perl -pe "s@ [a-zA-Z]?$(ERL_TOP_NATIVE)/(?:bootstrap/)?lib/([^/]+)@ ../../\1@g" 2> /dev/null \
 	| sed "s/\.$(EMULATOR)/\.$$\(EMULATOR\)/" \
 	| sed 's@^dtls_@$$(EBIN)/dtls_@' \
 	| sed 's@^inet_@$$(EBIN)/inet_@' \
@@ -185,7 +190,6 @@ $(DEP_FILE): $(ERL_FILES)
 	| sed 's@^tls_@$$(EBIN)/tls_@' \
 	> $(DEP_FILE)
 
-debug opt: $(TARGET_FILES) $(APP_TARGET) $(APPUP_TARGET) $(DEP_FILE)
 
 clean:
 	rm -f $(TARGET_FILES) $(APP_TARGET) $(APPUP_TARGET) $(BEHAVIOUR_TARGET_FILES) 

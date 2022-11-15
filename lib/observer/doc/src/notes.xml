@@ -4,7 +4,7 @@
 <chapter>
   <header>
     <copyright>
-      <year>2004</year><year>2018</year>
+      <year>2004</year><year>2021</year>
       <holder>Ericsson AB. All Rights Reserved.</holder>
     </copyright>
     <legalnotice>
@@ -31,6 +31,116 @@
   </header>
   <p>This document describes the changes made to the Observer
     application.</p>
+
+<section><title>Observer 2.11.1</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+          <p>
+	    Fixed node information lookup for remote process
+	    identifiers in <c>crashdump_viewer</c>.</p>
+          <p>
+	    Own Id: OTP-17995 Aux Id: PR-5804 </p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>Observer 2.11</title>
+
+    <section><title>Improvements and New Features</title>
+      <list>
+        <item>
+          <p>
+	    Calculate the display width in <c>etop</c>, instead of
+	    hard-coding it to 89 characters.</p>
+          <p>
+	    Own Id: OTP-17880 Aux Id: PR-5557 </p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>Observer 2.10.1</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+          <p>
+	    Fix bug in crash dumps where the stackframe of a process
+	    would be printed using an incorrect format.</p>
+          <p>
+	    Crash dump viewer has also been fixed to be able read the
+	    broken stack format.</p>
+          <p>
+	    The bug has existed since Erlang/OTP 23.0.</p>
+          <p>
+	    Own Id: OTP-17814 Aux Id: PR-5462 </p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>Observer 2.10</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+	    <p>Atoms with Unicode code points greater than 255 (for
+	    example Greek or Cyrillic characters) would not be
+	    displayed correctly by <c>crashdump_viewer</c>.</p>
+          <p>
+	    Own Id: OTP-17377</p>
+        </item>
+        <item>
+          <p>
+	    Fix the crashdump_viewer to be able to parse <seemfa
+	    marker="erts:erlang#monitor_node/2"><c>monitor_node/2</c></seemfa>
+	    monitors correctly.</p>
+          <p>
+	    Own Id: OTP-17425 Aux Id: PR-4799 </p>
+        </item>
+      </list>
+    </section>
+
+
+    <section><title>Improvements and New Features</title>
+      <list>
+        <item>
+          <p>
+	    Observer now has a sectiion for new socket.</p>
+          <p>
+	    Own Id: OTP-17346</p>
+        </item>
+        <item>
+          <p>
+	    Added a trace all button to the trace window.</p>
+          <p>
+	    Own Id: OTP-17520 Aux Id: PR-4962 </p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>Observer 2.9.6</title>
+
+    <section><title>Improvements and New Features</title>
+      <list>
+        <item>
+          <p>
+	    Updated gui parts to work with the new wx version.</p>
+          <p>
+	    Own Id: OTP-17214</p>
+        </item>
+      </list>
+    </section>
+
+</section>
 
 <section><title>Observer 2.9.5</title>
 

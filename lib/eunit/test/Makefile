@@ -1,7 +1,7 @@
 #
 # %CopyrightBegin%
 #
-# Copyright Ericsson AB 2009-2020. All Rights Reserved.
+# Copyright Ericsson AB 2009-2021. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -24,7 +24,8 @@ MODULES =  \
 	eunit_SUITE \
 	tc0 \
 	tlatin \
-	tutf8
+	tutf8 \
+	ttimesout
 
 ERL_FILES= $(MODULES:%=%.erl)
 

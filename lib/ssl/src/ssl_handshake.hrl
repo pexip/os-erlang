@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2007-2020. All Rights Reserved.
+%% Copyright Ericsson AB 2007-2022. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -20,7 +20,7 @@
 
 %%
 %%----------------------------------------------------------------------
-%% Purpose: Record and constant defenitions for the SSL-handshake protocol
+%% Purpose: Record and constant definitions for the SSL-handshake protocol
 %% see RFC 5246. Also includes supported hello extensions.
 %%----------------------------------------------------------------------
 
@@ -38,19 +38,23 @@
 -define(ECDSA, 3).
 
 -record(session, {
-	  session_id,
-	  peer_certificate,
-	  own_certificates,
-	  compression_method,
-	  cipher_suite,
-	  master_secret,
-	  srp_username,
-	  is_resumable,
-	  time_stamp,
-	  ecc,                   %% TLS 1.3 Group
-	  sign_alg,              %% TLS 1.3 Signature Algorithm
-	  dh_public_value        %% TLS 1.3 DH Public Value from peer
-	  }).
+                  session_id,
+                  internal_id,
+                  peer_certificate,
+                  own_certificates,
+                  private_key,
+                  compression_method,
+                  cipher_suite,
+                  master_secret,
+                  srp_username,
+                  is_resumable,
+                  time_stamp,
+                  ecc,                   %% TLS 1.3 Group
+                  sign_alg,              %% TLS 1.3 Signature Algorithm
+                  dh_public_value        %% TLS 1.3 DH Public Value from peer
+                 }).
+
+-define(EMPTY_ID, <<>>).
 
 -define(NUM_OF_SESSION_ID_BYTES, 32).  % TSL 1.1 & SSL 3
 -define(NUM_OF_PREMASTERSECRET_BYTES, 48).
@@ -58,7 +62,7 @@
 -define(DEFAULT_DIFFIE_HELLMAN_PRIME, ssl_dh_groups:modp2048_prime()).
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-%%% Handsake protocol - RFC 4346 section 7.4
+%%% Handshake protocol - RFC 4346 section 7.4
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
 %% enum {

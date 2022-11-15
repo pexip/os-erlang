@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %% 
-%% Copyright Ericsson AB 1997-2020. All Rights Reserved.
+%% Copyright Ericsson AB 1997-2021. All Rights Reserved.
 %% 
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -78,6 +78,7 @@
          otp_9302/1,
          thr_free_drv/1,
          async_blast/1,
+         thr_msg_blast/0,
          thr_msg_blast/1,
          consume_timeslice/1,
          env/1,
@@ -576,12 +577,6 @@ try_change_timer(Port, Timeout) ->
 %% 1) Queue up data in a driver that uses the full driver_queue API to do this.
 %% 2) Get the data back, a random amount at a time.
 queue_echo(Config) when is_list(Config) ->
-    case test_server:is_native(?MODULE) of
-        true -> exit(crashes_native_code);
-        false -> queue_echo_1(Config)
-    end.
-
-queue_echo_1(Config) ->
     ct:timetrap({minutes, 10}),
     Name = 'queue_drv',
     P = start_driver(Config, Name, true),
@@ -2162,6 +2157,9 @@ thr_msg_blast_receiver_proc(Port, Max, Parent, Done) ->
         "done" ->
             Parent ! Done
     end.
+
+thr_msg_blast() ->
+    [{timetrap, {minutes, 10}}].
 
 thr_msg_blast(Config) when is_list(Config) ->
     Path = proplists:get_value(data_dir, Config),

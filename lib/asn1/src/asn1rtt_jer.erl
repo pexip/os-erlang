@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2012-2017. All Rights Reserved.
+%% Copyright Ericsson AB 2012-2022. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -50,10 +50,12 @@ encode_jer({sequence_tab,Simple,Sname,Arity,CompInfos},Value)
 %%    Arity::integer() % number of components
 %%    CompInfos::[CompInfo()] % list of components with name, type etc
 %%    Value::record matching name and arity
+encode_jer({sequence_map,_Sname,_Arity,CompInfos},Value) when is_map(Value) ->
+    encode_jer_component_map(CompInfos,Value,[]);
 encode_jer({sequence,Sname,Arity,CompInfos},Value) 
   when tuple_size(Value) == Arity+1 ->
     [Sname|Clist] = tuple_to_list(Value),
-    encode_jer_component(CompInfos,Clist,#{});
+    encode_jer_component(CompInfos,Clist,[]);
 encode_jer(string,Str) when is_list(Str) ->
     list_to_binary(Str);
 encode_jer({string,_Prop},Str) when is_list(Str) ->
@@ -167,16 +169,34 @@ encode_jer_component_tab([{Name, Type, _OptOrDefault} | CompInfos], [Value | Res
     encode_jer_component_tab(CompInfos, Rest, Simple, MapAcc#{Name => Enc});
 encode_jer_component_tab([], _, _Simple, MapAcc) ->
     MapAcc.
-
-encode_jer_component([{_Name, _Type, 'OPTIONAL'} | CompInfos], [asn1_NOVALUE | Rest], MapAcc) ->
-    encode_jer_component(CompInfos, Rest, MapAcc);
-encode_jer_component([{_Name, _Type, {'DEFAULT',_}} | CompInfos], [asn1_DEFAULT | Rest], MapAcc) ->
-    encode_jer_component(CompInfos, Rest, MapAcc);
-encode_jer_component([{Name, Type, _OptOrDefault} | CompInfos], [Value | Rest], MapAcc) ->
+encode_jer_component_map([{Name, AName, Type, _OptOrDefault} | CompInfos], MapVal, Acc) when is_map_key(AName,MapVal)->
+    Value = maps:get(AName, MapVal),
     Enc = encode_jer(Type, Value),
-    encode_jer_component(CompInfos, Rest, MapAcc#{Name => Enc});
-encode_jer_component([], _, MapAcc) ->
-    MapAcc.
+    encode_jer_component_map(CompInfos, MapVal, [{Name,Enc}|Acc]);
+encode_jer_component_map([{_Name, _AName, _Type, 'OPTIONAL'} | CompInfos], MapVal, Acc) ->
+    encode_jer_component_map(CompInfos, MapVal, Acc);
+encode_jer_component_map([{_Name, _AName, _Type, {'DEFAULT',_}} | CompInfos], MapVal, Acc) ->
+    encode_jer_component_map(CompInfos, MapVal, Acc);
+encode_jer_component_map([], MapVal, []) when map_size(MapVal) == 0->
+    #{}; % ensure that it is encoded as an empty object in JSON
+encode_jer_component_map([], MapVal, Acc) when map_size(MapVal) == length(Acc) ->
+    lists:reverse(Acc);
+encode_jer_component_map(_, MapVal, Acc) ->
+    ErroneousKeys = maps:keys(MapVal) -- [K || {K,_V} <- Acc],
+    exit({error,{asn1,{{encode,'SEQUENCE'},{erroneous_keys,ErroneousKeys}}}}).
+
+
+encode_jer_component([{_Name, _Type, 'OPTIONAL'} | CompInfos], [asn1_NOVALUE | Rest], Acc) ->
+    encode_jer_component(CompInfos, Rest, Acc);
+encode_jer_component([{_Name, _Type, {'DEFAULT',_}} | CompInfos], [asn1_DEFAULT | Rest], Acc) ->
+    encode_jer_component(CompInfos, Rest, Acc);
+encode_jer_component([{Name, Type, _OptOrDefault} | CompInfos], [Value | Rest], Acc) ->
+    Enc = encode_jer(Type, Value),
+    encode_jer_component(CompInfos, Rest, [{Name,Enc}|Acc]);
+encode_jer_component([], _, []) ->
+    #{}; % ensure that it is encoded as an empty object in JSON
+encode_jer_component([], _, Acc) ->
+    lists:reverse(Acc).
 
 decode_jer(Module,InfoFunc,Val) ->
     Info = Module:InfoFunc(),
@@ -208,6 +228,9 @@ decode_jer({sequence,Sname,_Arity,CompInfos},Value)
   when is_map(Value) ->    
     DecodedComps = decode_jer_component(CompInfos,Value,[]),
     list_to_tuple([Sname|DecodedComps]);
+decode_jer({sequence_map,_Sname,_Arity,CompInfos},Value) 
+  when is_map(Value) ->    
+    decode_jer_component_map(CompInfos,Value,[]);
 
 %% Unfortunately we have to represent strings as lists to be compatible 
 %% with the other backends. Should add an option to the compiler in the future
@@ -218,6 +241,8 @@ decode_jer({string,_Prop},Str) when is_binary(Str) ->
     binary_to_list(Str);
 decode_jer('INTEGER',Int) when is_integer(Int) ->
     Int;
+decode_jer({'INTEGER',{Min,Max}},Int) when is_integer(Int),Max >=Int, Int >= Min ->
+    Int;
 decode_jer({Type = {'INTEGER_NNL',_NNList},_},Int) ->
     decode_jer(Type,Int);
 decode_jer({'INTEGER_NNL',NNList},Int) ->
@@ -227,8 +252,6 @@ decode_jer({'INTEGER_NNL',NNList},Int) ->
         _ ->
             Int
     end;
-decode_jer({'INTEGER',_Prop},Int) when is_integer(Int) ->
-    Int;
 decode_jer('BOOLEAN',Bool) when is_boolean(Bool) ->
     Bool;
 decode_jer({'BOOLEAN',_Prop},Bool) when is_boolean(Bool) ->
@@ -278,7 +301,9 @@ decode_jer('RELATIVE-OID',OidBin) when is_binary(OidBin) ->
 decode_jer({'ObjClassFieldType',_,_},Bin) when is_binary(Bin) ->
     Bin;
 decode_jer('ASN1_OPEN_TYPE',Bin) when is_binary(Bin) ->
-    Bin.
+    Bin;
+decode_jer(Type,Val) ->
+    exit({error,{asn1,{{decode,Type},Val}}}).
 
 decode_jer_component([{Name, Type, _OptOrDefault} | CompInfos], VMap, Acc)
     when is_map_key(Name, VMap) ->
@@ -293,6 +318,21 @@ decode_jer_component([{Name, _Type, _OptOrDefault} | _CompInfos], VMap, _Acc) ->
     exit({error,{asn1,{{decode,{mandatory_component_missing,Name}},VMap}}});
 decode_jer_component([], _, Acc) ->
     lists:reverse(Acc).
+
+decode_jer_component_map([{Name, AtomName, Type, _OptOrDefault} | CompInfos], VMap, Acc)
+    when is_map_key(Name, VMap) ->
+    Value = maps:get(Name, VMap),
+    Dec = decode_jer(Type, Value),
+    decode_jer_component_map(CompInfos, VMap, [{AtomName,Dec} | Acc]);
+decode_jer_component_map([{_Name, _AtomName, _Type, 'OPTIONAL'} | CompInfos], VMap, Acc) ->
+    decode_jer_component_map(CompInfos, VMap, Acc);
+decode_jer_component_map([{_Name, AtomName, _Type, {'DEFAULT',Dvalue}} | CompInfos], VMap, Acc) ->
+    decode_jer_component_map(CompInfos, VMap, [{AtomName, Dvalue} | Acc]);
+decode_jer_component_map([{Name, _AtomName, _Type, _OptOrDefault} | _CompInfos], VMap, _Acc) ->
+    exit({error,{asn1,{{decode,{mandatory_component_missing,Name}},VMap}}});
+decode_jer_component_map([], _, Acc) ->
+    %% not reusing the map from JSON decoder since it can contain non expected extra K,V pairs
+    maps:from_list(Acc).
 
 %% This is the default representation of octet string i.e binary
 json2octetstring2binary(Value) ->

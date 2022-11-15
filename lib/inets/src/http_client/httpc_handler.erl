@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %% 
-%% Copyright Ericsson AB 2002-2018. All Rights Reserved.
+%% Copyright Ericsson AB 2002-2021. All Rights Reserved.
 %% 
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -212,7 +212,7 @@ stream(BodyPart, Request,_) -> % only 200 and 206 responses can be streamed
 %% Description: Initiates the httpc_handler process 
 %%
 %% Note: The init function may not fail, that will kill the
-%% httpc_manager process. We could make the httpc_manager more comlex
+%% httpc_manager process. We could make the httpc_manager more complex
 %% but we do not want that so errors will be handled by the process
 %% sending an init_error message to itself.
 %%--------------------------------------------------------------------
@@ -497,7 +497,7 @@ do_handle_cast({cancel, _},
 
 do_handle_cast(stream_next, #state{session = Session} = State) ->
     activate_once(Session), 
-    %% Inactivate the #state.once here because we don't want
+    %% Deactivate the #state.once here because we don't want
     %% next_body_chunk/1 to activate the socket twice.
     {noreply, State#state{once = inactive}}.
 
@@ -602,8 +602,8 @@ do_handle_info({Proto, Socket, Data},
     {noreply, State};
 
 %% The Server may close the connection to indicate that the
-%% whole body is now sent instead of sending a lengh
-%% indicator. In this case the lengh indicator will be
+%% whole body is now sent instead of sending a length
+%% indicator. In this case the length indicator will be
 %% -1.
 do_handle_info({Info, _}, State = #state{mfa = {_, whole_body, Args}})
   when Info =:= tcp_closed orelse
@@ -833,7 +833,7 @@ connect_and_send_first_request(Address, Request, #state{options = Options0} = St
                     TmpState = State#state{request = Request,
                                            session = Session,
                                            mfa = init_mfa(Request, State),
-                                           status_line = init_status_line(Request),
+                                           status_line = undefined,
                                            headers = undefined,
                                            body = undefined,
                                            status = new},
@@ -1467,21 +1467,8 @@ is_no_proxy_dest_address(Dest, AddressPart) ->
     lists:prefix(AddressPart, Dest).
 
 init_mfa(#request{settings = Settings}, State) ->
-    case Settings#http_options.version of
-	"HTTP/0.9" ->
-	    {httpc_response, whole_body, [<<>>, -1]};
-	_ ->
-	    Relaxed = Settings#http_options.relaxed,
-	    {httpc_response, parse, [State#state.max_header_size, Relaxed]}
-    end.
-
-init_status_line(#request{settings = Settings}) ->
-    case Settings#http_options.version of
-	"HTTP/0.9" ->
-	    {"HTTP/0.9", 200, "OK"};
-	_ ->
-	    undefined
-    end.
+	Relaxed = Settings#http_options.relaxed,
+	{httpc_response, parse, [State#state.max_header_size, Relaxed]}.
 
 socket_type(#request{scheme = http}) ->
     ip_comm;
@@ -1599,8 +1586,7 @@ tls_tunnel(Address, Request, #state{session = #session{} = Session} = State,
 	    TmpState = State#state{request = UpgradeRequest,
 				   %%  session = Session,
 				   mfa = init_mfa(UpgradeRequest, State),
-				   status_line =
-				       init_status_line(UpgradeRequest),
+				   status_line = undefined,
 				   headers = undefined,
 				   body = undefined},
 	    activate_once(Session),
@@ -1673,8 +1659,7 @@ tls_upgrade(#state{status =
 	    NewState = State#state{session = Session,
 				   request = Request,
 				   mfa = init_mfa(Request, State),
-				   status_line =
-				       init_status_line(Request),
+				   status_line = undefined,
 				   headers = undefined,
 				   body = undefined,
 				   status = new

@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %% 
-%% Copyright Ericsson AB 2018-2019. All Rights Reserved.
+%% Copyright Ericsson AB 2018-2022. All Rights Reserved.
 %% 
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -281,16 +281,16 @@ await_evs_termination([], _Timeout) ->
 await_evs_termination(Evs, Timeout) ->
     T = t(),
     receive
-        {'DOWN', _MRef, process, Pid, _Reason} ->
-            %% ?SEV_IPRINT("await_evs_termination -> DOWN: "
-            %%             "~n   Pid:    ~p"
-            %%             "~n   Reason: ~p", [Pid, Reason]),
+        {'DOWN', _MRef, process, Pid, Reason} ->
+            ?SEV_IPRINT("await_evs_termination -> DOWN: "
+                        "~n   Pid:    ~p"
+                        "~n   Reason: ~p", [Pid, Reason]),
             Evs2 = lists:keydelete(Pid, #ev.pid, Evs),
             await_evs_termination(Evs2, tdiff(T, t()));
-        {'EXIT', Pid, _Reason} ->
-            %% ?SEV_IPRINT("await_evs_termination -> EXIT: "
-            %%             "~n   Pid:    ~p"
-            %%             "~n   Reason: ~p", [Pid, Reason]),
+        {'EXIT', Pid, Reason} ->
+            ?SEV_IPRINT("await_evs_termination -> EXIT: "
+                        "~n   Pid:    ~p"
+                        "~n   Reason: ~p", [Pid, Reason]),
             Evs2 = lists:keydelete(Pid, #ev.pid, Evs),
             await_evs_termination(Evs2, tdiff(T, t()))
 
@@ -611,8 +611,8 @@ pi(Pid, Item) ->
     Info.
 
 check_down(Pid, DownReason, Pids) ->
-    case lists:keymember(Pid, 1, Pids) of
-        {value, {_, Name}} ->
+    case lists:keysearch(Pid, 2, Pids) of
+        {value, {Name, _}} ->
             eprint("Unexpected DOWN from ~w (~p): "
                    "~n   ~p", [Name, Pid, DownReason]),
             {error, {unexpected_exit, Name, DownReason}};

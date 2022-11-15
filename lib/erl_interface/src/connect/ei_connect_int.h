@@ -1,7 +1,7 @@
 /*
  * %CopyrightBegin%
  *
- * Copyright Ericsson AB 2001-2020. All Rights Reserved.
+ * Copyright Ericsson AB 2001-2021. All Rights Reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -89,8 +89,15 @@ typedef EI_ULONGLONG DistFlags;
 #define DFLAG_MAP_TAG               0x20000
 #define DFLAG_BIG_CREATION          0x40000
 #define DFLAG_HANDSHAKE_23        0x1000000
-#define DFLAG_RESERVED           0xfe000000
+#define DFLAG_UNLINK_ID           0x2000000
+#define DFLAG_RESERVED           0xfc000000
 #define DFLAG_NAME_ME            ((DistFlags)0x2 << 32)
+#define DFLAG_V4_NC              (((DistFlags)0x4) << 32)
+
+/* Control message tags not exposed to user... */
+#define ERL_UNLINK_ID                   35
+#define ERL_UNLINK_ID_ACK               36
+
 
 ei_cnode   *ei_fd_to_cnode(int fd);
 int         ei_distversion(int fd);

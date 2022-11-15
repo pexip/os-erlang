@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2005-2016. All Rights Reserved.
+%% Copyright Ericsson AB 2005-2021. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -117,8 +117,6 @@ init_per_suite(Config) when is_list(Config) ->
 		     case check_dir(filename:join([BinDir, Target])) of
 			 not_found -> ok;
 			 TDir ->
-			     check_emem(TDir, purecov),
-			     check_emem(TDir, purify),
 			     check_emem(TDir, debug),
 			     check_emem(TDir, opt)
 		     end,

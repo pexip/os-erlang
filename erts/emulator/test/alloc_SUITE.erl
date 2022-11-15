@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %% 
-%% Copyright Ericsson AB 2003-2018. All Rights Reserved.
+%% Copyright Ericsson AB 2003-2021. All Rights Reserved.
 %% 
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -19,8 +19,8 @@
 
 -module(alloc_SUITE).
 -author('rickard.green@uab.ericsson.se').
--export([all/0, suite/0, init_per_testcase/2, end_per_testcase/2]).
-
+-export([all/0, suite/0, init_per_testcase/2, end_per_testcase/2,
+	 init_per_suite/1, end_per_suite/1]).
 -export([basic/1,
 	 coalesce/1,
 	 threads/1,
@@ -46,6 +46,18 @@ all() ->
      set_dyn_param,
      bucket_mask, rbtree, mseg_clear_cache, erts_mmap, cpool, migration,
      cpool_opt].
+
+init_per_suite(Config) ->
+    case test_server:memory_checker() of
+	MC when MC =:= valgrind; MC =:= asan ->
+	    %% No point testing own allocators under valgrind or asan.
+	    {skip, "Memory checker " ++ atom_to_list(MC)};
+	none ->
+	    Config
+    end.
+
+end_per_suite(_Config) ->
+    ok.
 
 init_per_testcase(Case, Config) when is_list(Config) ->
     [{testcase, Case},{debug,false}|Config].

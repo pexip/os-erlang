@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2007-2020. All Rights Reserved.
+%% Copyright Ericsson AB 2007-2022. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -31,7 +31,7 @@
 -include("ssl_cipher.hrl").
 
 %% API
--export([start_link/4,
+-export([start_link/6,
          new/3,
          use/4
         ]).
@@ -46,18 +46,20 @@
                 stateless,
                 stateful,
                 nonce,
-                lifetime
+                lifetime,
+                max_early_data_size,
+                listen_monitor
                }).
 
 %%%===================================================================
 %%% API
 %%%===================================================================
--spec start_link(atom(), integer(), integer(), tuple()) -> {ok, Pid :: pid()} |
+-spec start_link(term(), atom(), integer(), integer(), integer(), tuple()) -> {ok, Pid :: pid()} |
                       {error, Error :: {already_started, pid()}} |
                       {error, Error :: term()} |
                       ignore.
-start_link(Mode, Lifetime, TicketStoreSize, AntiReplay) ->
-    gen_server:start_link(?MODULE, [Mode, Lifetime, TicketStoreSize, AntiReplay], []).
+start_link(Listener, Mode, Lifetime, TicketStoreSize, MaxEarlyDataSize, AntiReplay) ->
+    gen_server:start_link(?MODULE, [Listener, Mode, Lifetime, TicketStoreSize, MaxEarlyDataSize, AntiReplay], []).
 
 new(Pid, Prf, MasterSecret) ->
     gen_server:call(Pid, {new_session_ticket, Prf, MasterSecret}, infinity).
@@ -71,20 +73,22 @@ use(Pid, Identifiers, Prf, HandshakeHist) ->
 %%%===================================================================
 
 -spec init(Args :: term()) -> {ok, State :: term()}.                             
-init(Args) ->
+init([Listener | Args]) ->
     process_flag(trap_exit, true),
+    Monitor = inet:monitor(Listener),
     State = inital_state(Args),
-    {ok, State}.
+    {ok, State#state{listen_monitor = Monitor}}.
 
 -spec handle_call(Request :: term(), From :: {pid(), term()}, State :: term()) ->
                          {reply, Reply :: term(), NewState :: term()} .
 handle_call({new_session_ticket, Prf, MasterSecret}, _From, 
             #state{nonce = Nonce, 
                    lifetime = LifeTime,
+                   max_early_data_size = MaxEarlyDataSize,
                    stateful = #{id_generator := IdGen}} = State0) -> 
     Id = stateful_psk_ticket_id(IdGen),
     PSK = tls_v1:pre_shared_key(MasterSecret, ticket_nonce(Nonce), Prf),
-    SessionTicket = new_session_ticket(Id, Nonce, LifeTime),
+    SessionTicket = new_session_ticket(Id, Nonce, LifeTime, MaxEarlyDataSize),
     State = stateful_ticket_store(Id, SessionTicket, Prf, PSK, State0),
     {reply, SessionTicket, State};
 handle_call({new_session_ticket, Prf, MasterSecret}, _From, 
@@ -118,6 +122,8 @@ handle_info(rotate_bloom_filters,
     BloomFilter = tls_bloom_filter:rotate(BloomFilter0),
     erlang:send_after(Window * 1000, self(), rotate_bloom_filters),
     {noreply, State#state{stateless = Stateless#{bloom_filter => BloomFilter}}};
+handle_info({'DOWN', Monitor, _, _, _}, #state{listen_monitor = Monitor} = State) ->
+    {stop, normal, State};
 handle_info(_Info, State) ->
     {noreply, State}.
 
@@ -142,27 +148,30 @@ format_status(_Opt, Status) ->
 %%% Internal functions
 %%%===================================================================
 
-inital_state([stateless, Lifetime, _, undefined]) ->
+inital_state([stateless, Lifetime, _, MaxEarlyDataSize, undefined]) ->
     #state{nonce = 0,
            stateless = #{seed => {crypto:strong_rand_bytes(16), 
                                   crypto:strong_rand_bytes(32)},
                          window => undefined},
-           lifetime = Lifetime
+           lifetime = Lifetime,
+           max_early_data_size = MaxEarlyDataSize
           };
-inital_state([stateless, Lifetime, _, {Window, K, M}]) ->
+inital_state([stateless, Lifetime, _, MaxEarlyDataSize, {Window, K, M}]) ->
     erlang:send_after(Window * 1000, self(), rotate_bloom_filters),
     #state{nonce = 0,
            stateless = #{bloom_filter => tls_bloom_filter:new(K, M),
                          seed => {crypto:strong_rand_bytes(16),
                                   crypto:strong_rand_bytes(32)},
                          window => Window},
-           lifetime = Lifetime
+           lifetime = Lifetime,
+           max_early_data_size = MaxEarlyDataSize
           };
-inital_state([stateful, Lifetime, TicketStoreSize|_]) ->
+inital_state([stateful, Lifetime, TicketStoreSize, MaxEarlyDataSize|_]) ->
     %% statfeful servers replay
     %% protection is that it saves
     %% all valid tickets
     #state{lifetime = Lifetime,
+           max_early_data_size = MaxEarlyDataSize,
            nonce = 0,
            stateful = #{db => stateful_store(),                    
                         max => TicketStoreSize,
@@ -172,7 +181,7 @@ inital_state([stateful, Lifetime, TicketStoreSize|_]) ->
           }.
 
 ticket_age_add() ->
-    MaxTicketAge = 7 * 24 * 3600,
+    MaxTicketAge = 7 * 24 * 3600 * 1000,
     IntMax = round(math:pow(2,32)) - 1,
     MaxAgeAdd = IntMax - MaxTicketAge,
     <<?UINT32(I)>> = crypto:strong_rand_bytes(4),
@@ -187,17 +196,21 @@ ticket_nonce(I) ->
     <<?UINT64(I)>>.
 
 new_session_ticket_base(#state{nonce = Nonce,
-                               lifetime = Lifetime}) ->
-    new_session_ticket(undefined, Nonce, Lifetime).
+                               lifetime = Lifetime,
+                               max_early_data_size = MaxEarlyDataSize}) ->
+    new_session_ticket(undefined, Nonce, Lifetime, MaxEarlyDataSize).
 
-new_session_ticket(Id, Nonce, Lifetime) ->
+new_session_ticket(Id, Nonce, Lifetime, MaxEarlyDataSize) ->
     TicketAgeAdd = ticket_age_add(),
+    Extensions = #{early_data =>
+                       #early_data_indication_nst{
+                          indication = MaxEarlyDataSize}},
     #new_session_ticket{
        ticket = Id,
        ticket_lifetime = Lifetime,
        ticket_age_add = TicketAgeAdd,
        ticket_nonce = ticket_nonce(Nonce),
-       extensions = #{}
+       extensions = Extensions
       }.
 
 
@@ -226,7 +239,7 @@ stateful_ticket_store(Ref, NewSessionTicket, Hash, Psk,
     StatefulTicket = {NewSessionTicket, Hash, Psk},
     case gb_trees:size(Tree0) of
         Max ->
-            %% Trow away oldes ticket
+            %% Trow away oldest ticket
             {_, {#new_session_ticket{ticket = OldRef},_,_}, Tree1} 
                 = gb_trees:take_smallest(Tree0),
             Tree = gb_trees:insert(Id, StatefulTicket, Tree1),
@@ -298,7 +311,7 @@ stateful_living_ticket({TimeStamp,_},
 
 stateful_psk_ticket_id(Key) ->
     Unique = erlang:unique_integer(),
-    %% Obfuscate to avoid DoS attack possiblities
+    %% Obfuscate to avoid DoS attack possibilities
     %% that could invalidate tickets and render them
     %% unusable. This id should be unpredictable
     %% and unique but have no other cryptographic requirements.
@@ -322,7 +335,7 @@ generate_stateless_ticket(#new_session_ticket{ticket_nonce = Nonce,
                                              timestamp = Timestamp
                                             }, Shard, IV),
     Ticket#new_session_ticket{ticket = Encrypted}.
-    
+
 stateless_use(#offered_psks{
                  identities = Identities,
                  binders = Binders
@@ -372,10 +385,10 @@ stateless_living_ticket(0, _, _, _, _) ->
 stateless_living_ticket(ObfAge, TicketAgeAdd, Lifetime, Timestamp, Window) ->
     ReportedAge = ObfAge - TicketAgeAdd,
     RealAge = erlang:system_time(second) - Timestamp,
-    (ReportedAge =< Lifetime)
+    (ReportedAge =< Lifetime * 1000)
         andalso (RealAge =< Lifetime)
         andalso (in_window(RealAge, Window)).
-        
+
 in_window(_, undefined) ->
     true;
 in_window(Age, Window) when is_integer(Window) ->

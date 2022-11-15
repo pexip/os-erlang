@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %% 
-%% Copyright Ericsson AB 1996-2019. All Rights Reserved.
+%% Copyright Ericsson AB 1996-2021. All Rights Reserved.
 %% 
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -64,8 +64,11 @@ start_link(Mod, StartArgs) ->
     gen_server:start_link(supervisor_bridge, [Mod, StartArgs, self], []).
 
 -spec start_link(SupBridgeName, Module, Args) -> Result when
-      SupBridgeName :: {local, Name} | {global, Name},
+      SupBridgeName :: {local, Name} | {global, GlobalName} |
+		       {via, Module, ViaName},
       Name :: atom(),
+      GlobalName :: term(),
+      ViaName :: term(),
       Module :: module(),
       Args :: term(),
       Result :: {ok, Pid} | ignore | {error, Error},
