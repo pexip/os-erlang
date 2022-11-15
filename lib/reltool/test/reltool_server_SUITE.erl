@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2009-2018. All Rights Reserved.
+%% Copyright Ericsson AB 2009-2021. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -401,7 +401,8 @@ create_release_sort(Config) ->
     RelVsn = "1.0",
     %% Application z (.app file):
     %%     includes [tools, mnesia]
-    %%     uses [kernel, stdlib, sasl, inets]
+    %%     uses [kernel, stdlib, sasl, inets, unknown]
+    %% where unknown is optional dependency
     Sys =
         {sys,
          [
@@ -623,7 +624,8 @@ create_script_sort(Config) ->
     LibDir = filename:join(DataDir,"sort_apps"),
     %% Application z (.app file):
     %%     includes [tools, mnesia]
-    %%     uses [kernel, stdlib, sasl, inets]
+    %%     uses [kernel, stdlib, sasl, inets, unknown]
+    %% where unknown is optional dependency
     Sys =
         {sys,
          [
@@ -2772,7 +2774,7 @@ stop_node(Node) ->
     wait_for_node_down(Node,50).
 
 wait_for_node_down(Node,0) ->
-    test_server:fail({cant_terminate_node,Node});
+    ct:fail({cant_terminate_node,Node});
 wait_for_node_down(Node,N) ->
     case net_adm:ping(Node) of
 	pong ->
@@ -2834,7 +2836,7 @@ wait_for_app(_Node, Name, 0) ->
 wait_for_app(Node, Name, N) when is_integer(N), N > 0 ->
     case rpc:call(Node,application,which_applications,[]) of
 	{badrpc,Reason} ->
-	    test_server:fail({failed_to_get_applications,Reason});
+	    ct:fail({failed_to_get_applications,Reason});
 	Apps ->
 	    case lists:member(Name,Apps) of
 		false ->

@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2010-2020. All Rights Reserved.
+%% Copyright Ericsson AB 2010-2021. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -28,7 +28,10 @@
 	 call_with_huge_message_queue/1,receive_in_between/1,
          receive_opt_exception/1,receive_opt_recursion/1,
          receive_opt_deferred_save/1,
-         erl_1199/1]).
+         erl_1199/1, multi_recv_opt/1,
+	 multi_recv_opt_clear/1,
+         gh_5235_missing_save_reset/1,
+         gh_5235_recv_mark/1]).
 
 suite() ->
     [{ct_hooks,[ts_install_cth]},
@@ -40,13 +43,17 @@ all() ->
      receive_opt_exception,
      receive_opt_recursion,
      receive_opt_deferred_save,
-     erl_1199].
+     erl_1199, multi_recv_opt,
+     multi_recv_opt_clear,
+     gh_5235_missing_save_reset,
+     gh_5235_recv_mark].
 
 init_per_testcase(receive_opt_deferred_save, Config) ->
     case erlang:system_info(schedulers_online) of
         1 ->
             {skip, "Needs more schedulers to run"};
         _ ->
+	    erts_debug:set_internal_state(available_internal_state, true),
             Config
     end;
 init_per_testcase(erl_1199, Config) ->
@@ -66,27 +73,32 @@ end_per_testcase(erl_1199, Config) ->
             SO = erlang:system_info(schedulers_online)
     end,
     Config;
+end_per_testcase(receive_opt_deferred_save, Config) ->
+    erts_debug:set_internal_state(available_internal_state, false),
+    Config;
 end_per_testcase(_Name, Config) ->
     Config.
 
 call_with_huge_message_queue(Config) when is_list(Config) ->
     Pid = spawn_link(fun echo_loop/0),
+    process_flag(message_queue_data, off_heap),
     _WarmUpTime = time_calls(Pid),
-    Time = time_calls(Pid),
-    _ = [self() ! {msg,N} || N <- lists:seq(1, 500000)],
-    io:format("Time for empty message queue: ~p", [Time]),
     erlang:garbage_collect(),
+    Time = time_calls(Pid),
+    io:format("Time for empty message queue: ~p", [Time]),
+    _ = [self() ! {msg,N} || N <- lists:seq(1, 500000)],
     call_with_huge_message_queue_1(Pid, Time, 5).
 
 call_with_huge_message_queue_1(_Pid, _Time, 0) ->
     ct:fail(bad_ratio);
 call_with_huge_message_queue_1(Pid, Time, NumTries) ->
+    erlang:garbage_collect(),
     HugeTime = time_calls(Pid),
     io:format("Time for huge message queue: ~p", [HugeTime]),
 
     case (HugeTime+1) / (Time+1) of
         Q when Q < 10 ->
-            ok;
+	    {comment, "Ratio: "++erlang:float_to_list(Q)};
         Q ->
             io:format("Too high ratio: ~p\n", [Q]),
             call_with_huge_message_queue_1(Pid, Time, NumTries-1)
@@ -107,7 +119,7 @@ time_calls(Pid, NumTries) ->
     end.
 
 calls(Pid) ->
-    calls(100, Pid).
+    calls(10000, Pid).
 
 calls(0, _) -> ok;
 calls(N, Pid) ->
@@ -207,8 +219,6 @@ do_receive_opt_recursion(Recipient, Disturber, IsInner) ->
 %% the messages are in the middle queue. It only triggers
 %% a very special scenario that OTP-16241 solves.
 receive_opt_deferred_save(_Config) ->
-
-    erts_debug:set_internal_state(available_internal_state, true),
 
     %% This testcase is very very white-boxy, but I'm not
     %% sure what to do about that.
@@ -396,9 +406,201 @@ erl_1199_flush_blipp() ->
 	    ok
     end.
 
+multi_recv_opt(Config) when is_list(Config) ->
+    HugeMsgQ = 500000,
+    Srv = spawn_link(fun multi_echoer/0),
+    process_flag(message_queue_data, off_heap),
+    _WarmUpTime = time_multi_call(Srv, fun multi_call/1),
+    EmptyTime = time_multi_call(Srv, fun multi_call/1),
+    io:format("Time with empty message queue: ~p microsecond~n",
+	      [erlang:convert_time_unit(EmptyTime, native, microsecond)]),
+    _ = [self() ! {msg,N} || N <- lists:seq(1, HugeMsgQ)],
+    HugeTime = time_multi_call(Srv, fun multi_call/1),
+    io:format("Time with huge message queue: ~p microsecond~n",
+	      [erlang:convert_time_unit(HugeTime, native, microsecond)]),
+    Q = HugeTime / EmptyTime,
+    HugeMsgQ = flush_msgq(),
+    case Q > 10 of
+	true ->
+	    ct:fail({ratio, Q});
+	false ->
+	    {comment, "Ratio: "++erlang:float_to_list(Q)}
+    end.
+    
+multi_echoer() ->
+    receive
+	{Mref, From, Msg, Responses} ->
+	    multi_response(Mref, From, Msg, Responses);
+	_Garbage ->
+	    ok
+    end,
+    multi_echoer().
+
+multi_response(_Mref, _From, _Msg, 0) ->
+    ok;
+multi_response(Mref, From, Msg, N) ->
+    From ! {Mref, Msg},
+    multi_response(Mref, From, Msg, N-1).
+
+time_multi_call(Srv, Fun) ->
+    garbage_collect(),
+    Start = erlang:monotonic_time(),
+    ok = Fun(Srv),
+    erlang:monotonic_time() - Start.
+    
+multi_call(Srv) ->
+    Resp = 100,
+    NoOp = fun () -> ok end,
+    Fun3 = fun () ->
+		   multi_call(Srv, 1, three, Resp, false, NoOp)
+	   end,
+    Fun2 = fun () ->
+		   multi_call(Srv, 1, two, Resp, false, Fun3)
+	   end,
+    multi_call(Srv, 1000, one, Resp, false, Fun2).
+
+multi_call(_Srv, 0, _Msg, _Responses, _Clear, _Fun) ->
+    ok;
+multi_call(Srv, N, Msg, Responses, Clear, Fun) ->
+
+    Mref = erlang:monitor(process, Srv),
+
+    Srv ! {Mref, self(), Msg, Responses},
+    Fun(),
+    multi_receive(Mref, Msg, Responses),
+    erlang:demonitor(Mref, [flush]),
+    multi_call(Srv, N-1, Msg, Responses, Clear, Fun).
+    
+multi_receive(_Mref, _Msg, 0) ->
+    ok;
+multi_receive(Mref, Msg, N) ->
+
+    receive
+	{Mref, RMsg} ->
+	    Msg = RMsg;
+	{'DOWN', Mref, process, _, Reason} ->
+	    exit({server_error, Reason})
+    end,
+    multi_receive(Mref, Msg, N-1).
+
+multi_recv_opt_clear(Config) when is_list(Config) ->
+    %% Whitebox: we know that we have at most 8 active
+    %% receive markers...
+    %%
+    %% We here test a scenario where we need clear instructions
+    %% to be issued when the a receive marker is no longer
+    %% needed. If no clear instructions are issued, we will
+    %% reuse the marker for the outer call which will cause
+    %% scans of the whole message queue when receiving outer
+    %% results...
+    %%
+    HugeMsgQ = 500000,
+    Srv = spawn_link(fun multi_echoer/0),
+    process_flag(message_queue_data, off_heap),
+    _WarmUpTime = time_multi_call(Srv, fun multi_call_clear/1),
+    EmptyTime = time_multi_call(Srv, fun multi_call_clear/1),
+    io:format("Time with empty message queue: ~p microsecond~n",
+	      [erlang:convert_time_unit(EmptyTime, native, microsecond)]),
+    _ = [self() ! {msg,N} || N <- lists:seq(1, HugeMsgQ)],
+    HugeTime = time_multi_call(Srv, fun multi_call_clear/1),
+    io:format("Time with huge message queue: ~p microsecond~n",
+	      [erlang:convert_time_unit(HugeTime, native, microsecond)]),
+    Q = HugeTime / EmptyTime,
+    HugeMsgQ = flush_msgq(),
+    case Q > 10 of
+	true ->
+	    ct:fail({ratio, Q});
+	false ->
+	    {comment, "Ratio: "++erlang:float_to_list(Q)}
+    end.
+
+multi_call_clear(Srv) ->
+    NoOp = fun () -> ok end,
+    Fun2 = fun () ->
+		   multi_call(Srv, 1, two0, 2, true, NoOp),
+		   multi_call(Srv, 1, two1, 2, true, NoOp),
+		   multi_call(Srv, 1, two2, 2, true, NoOp),
+		   multi_call(Srv, 1, two3, 2, true, NoOp),
+		   multi_call(Srv, 1, two4, 2, true, NoOp),
+		   multi_call(Srv, 1, two5, 2, true, NoOp),
+		   multi_call(Srv, 1, two6, 2, true, NoOp),
+		   multi_call(Srv, 1, two7, 2, true, NoOp),
+		   multi_call(Srv, 1, two8, 2, true, NoOp),
+		   multi_call(Srv, 1, two9, 2, true, NoOp)
+	   end,
+    multi_call(Srv, 1000, one, 100, true, Fun2).
+  
+gh_5235_missing_save_reset(Config) when is_list(Config) ->
+    %%
+    %% Used to hang in the second receive due to save
+    %% pointer not being reset on bad timeout value...
+    %%
+    ct:timetrap({seconds, 10}),
+    id(self()) ! init,
+    try
+        receive blipp -> ok after blupp -> ok end
+    catch _:_ ->
+            ok
+    end,
+    receive init -> ok end,
+
+    %% Try with a timeout value not known in compile
+    %% time as well...
+    id(self()) ! init2,
+    try
+        receive blapp -> ok after id(blepp) -> ok end
+    catch _:_ ->
+            ok
+    end,
+    receive init2 -> ok end.
+
+gh_5235_recv_mark(Config) when is_list(Config) ->
+    %%
+    %% Used to leak a recv marker into the receive
+    %% via erts_msgq_peek_msg() due to save pointer
+    %% not being reset on bad timeout value...
+    %%
+    ct:timetrap({seconds, 10}),
+    id(self()) ! init,
+    try
+        receive blipp -> ok after blupp -> ok end
+    catch _:_ ->
+            ok
+    end,
+    Ref = make_ref(),
+    id(self()) ! Ref,
+    receive init -> ok end,
+    receive Ref -> ok end,
+    
+    %% Try with a timeout value not known in compile
+    %% time as well...
+    id(self()) ! init2,
+    try
+        receive blapp -> ok after id(blepp) -> ok end
+    catch _:_ ->
+            ok
+    end,
+    Ref2 = make_ref(),
+    id(self()) ! Ref2,
+    receive init2 -> ok end,
+    receive Ref2 -> ok end.
+
+
 %%%
 %%% Common helpers.
 %%%
+
+id(X) -> X.
+
+flush_msgq() ->
+    flush_msgq(0).
+flush_msgq(N) ->
+    receive
+	_ ->
+	    flush_msgq(N+1)
+    after 0 ->
+	    N
+    end.
 
 echo_loop() ->
     receive

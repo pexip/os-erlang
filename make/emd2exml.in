@@ -5,7 +5,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2010-2013. All Rights Reserved.
+%% Copyright Ericsson AB 2010-2021. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -477,9 +477,9 @@ link_or_image(Str, Type) ->
                         {yes, SeeAlsoKey} ->
                             {delayed, link, SeeAlsoKey, text(Text), Cont2}
                     end;
- 		{image, Image, Title, Cont2} ->
+		{image, Image, _Title, Cont2} ->
  		    {["<image file=\"", text(Image), "\"><icaption>",
-		      text(Title), "</icaption></image>"],
+		      text(Text), "</icaption></image>"],
 		     Cont2};
 		{delayed, text, Cont2} ->
  		    {delayed, Type, Text, Text, Cont2};

@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2008-2018. All Rights Reserved.
+%% Copyright Ericsson AB 2008-2021. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -41,20 +41,21 @@ start_link() ->
 
 start_child(Sup, LSock, ListenAddr, ConnectToAddr, ChanType, ChanCB, ConnPid) ->
     Args = [LSock, ListenAddr, ConnectToAddr, ChanType, ChanCB, ConnPid],
-    supervisor:start_child(Sup, Args).
+    supervisor:start_child(Sup, 
+                           #{id     => {ListenAddr,ConnectToAddr},
+                             start  => {ssh_tcpip_forward_acceptor, start_link, Args}
+                            }).
+    
 
 %%%=========================================================================
 %%%  Supervisor callback
 %%%=========================================================================
 init([]) ->
-    SupFlags = #{strategy  => simple_one_for_one, 
+    SupFlags = #{strategy  => one_for_one, 
                  intensity =>   10,
                  period    => 3600
                 },
-    ChildSpecs = [#{id     => undefined, % As simple_one_for_one is used.
-                    start  => {ssh_tcpip_forward_acceptor, start_link, []}
-                   }
-                 ],
+    ChildSpecs = [],
     {ok, {SupFlags,ChildSpecs}}.
 
 %%%=========================================================================

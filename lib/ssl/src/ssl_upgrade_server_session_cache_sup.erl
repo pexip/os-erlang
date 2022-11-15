@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2020-2020. All Rights Reserved.
+%% Copyright Ericsson AB 2020-2021. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -55,7 +55,7 @@ start_child(Type) ->
              %% only one will be able to grab the local name and we will use
              %% that process for handling pre TLS-1.3 sessions for
              %% servers with to us unknown listeners. 
-             case supervisor:start_child(SupName, [ssl_unknown_listener | ssl_config:pre_1_3_session_opts()]) of
+             case supervisor:start_child(SupName, [ssl_unknown_listener, ssl_config:pre_1_3_session_opts(server)]) of
                  {error, {already_started, Child}} ->
                      {ok, Child};
                  {ok, _} = Return ->
@@ -69,20 +69,19 @@ start_child(Type) ->
 %%%=========================================================================
 %%%  Supervisor callback
 %%%=========================================================================
-init(_O) ->
-    RestartStrategy = simple_one_for_one,
-    MaxR = 3,
-    MaxT = 3600,
-
-    Name = undefined, % As simple_one_for_one is used.
-    StartFunc = {ssl_server_session_cache, start_link, []},
-    Restart = transient, % Should be restarted only on abnormal termination
-    Shutdown = 4000,
-    Modules = [ssl_server_session_cache],
-    Type = worker,
-
-    ChildSpec = {Name, StartFunc, Restart, Shutdown, Type, Modules},
-    {ok, {{RestartStrategy, MaxR, MaxT}, [ChildSpec]}}.
+init(_) ->
+    SupFlags = #{strategy  => simple_one_for_one, 
+                 intensity =>   3,
+                 period    => 3600
+                },
+    ChildSpecs = [#{id       => undefined,
+                    start    =>  {ssl_server_session_cache, start_link, []},
+                    restart  => transient, 
+                    shutdown => 4000,
+                    modules  => [ssl_server_session_cache],
+                    type     => worker
+                   }],     
+    {ok, {SupFlags, ChildSpecs}}.
 
 sup_name(normal) ->
     ?MODULE;

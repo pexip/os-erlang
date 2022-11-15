@@ -4,7 +4,7 @@
 <chapter>
   <header>
     <copyright>
-      <year>2003</year><year>2020</year>
+      <year>2003</year><year>2022</year>
       <holder>Ericsson AB. All Rights Reserved.</holder>
     </copyright>
     <legalnotice>
@@ -36,8 +36,13 @@
   <seemfa marker="ssl:ssl#versions/0"><c>ssl:versions/0</c></seemfa>
   .</p>
     
-  <p>To see all supported cipher suites, call  <seemfa marker="ssl:ssl#cipher_suites/1"><c>ssl:cipher_suites(all)</c> </seemfa>. 
-  The available cipher suites for a connection depend on your certificate. 
+  <p>To see all supported cipher suites, call
+  <seemfa marker="ssl:ssl#cipher_suites/2"><c>ssl:cipher_suites(all, 'tlsv1.3')</c> </seemfa>. 
+  The available cipher suites for a connection depend on the TLS version and pre TLS-1.3 also
+  on the certificate. To see the default cipher suite list change <c>all</c> to <c>default</c>. 
+  Note that TLS 1.3 and previous versions does not have any cipher suites in common,
+  for listing cipher suites for a specific version use
+  <seemfa marker="ssl:ssl#cipher_suites/2"><c>ssl:cipher_suites(exclusive, 'tlsv1.3')</c> </seemfa>. 
   Specific cipher suites that you want your connection to use can also be 
   specified. Default is to use the strongest available.</p>
   
@@ -69,6 +74,12 @@ ssl:listen(9999, [{certfile, "cert.pem"}, {keyfile, "key.pem"},{reuseaddr, true}
       <code type="erl">3 server> {ok, TLSTransportSocket} = ssl:transport_accept(ListenSocket).
 {ok,{sslsocket, [...]}}</code>
 
+
+<note><p> ssl:transport_accept/1 and ssl:handshake/2 are separate functions so that
+the handshake part can be called in a new erlang process dedicated to handling the
+connection</p>
+</note>
+
       <p><em>Step 4:</em> Start the client side: </p>
       <code type="erl">1 client> ssl:start().
 ok</code>
@@ -79,7 +90,11 @@ ok</code>
       <p><em>Step 5:</em> Do the TLS handshake:</p>
       <code type="erl">4 server> {ok, Socket} = ssl:handshake(TLSTransportSocket).
 {ok,{sslsocket, [...]}}</code>
-      
+
+<note><p> A real server should use ssl:handshake/2 that has a timeout
+to avoid DoS attacks. In the example the timeout defaults to infinty.</p>
+</note>
+
       <p><em>Step 6:</em> Send a message over TLS:</p>
       <code type="erl">5 server> ssl:send(Socket, "foo").
 ok</code>
@@ -164,7 +179,7 @@ ok</code>
 </code>
 
     <p>In OTP 20 it is desirable to remove all cipher suites
-    that uses rsa kexchange (removed from default in 21) </p>
+    that uses rsa key exchange (removed from default in 21) </p>
     <code type="erl">2> NoRSA =
     ssl:filter_cipher_suites(Default,
                             [{key_exchange, fun(rsa) -> false;
@@ -252,7 +267,7 @@ ssl:connect("localhost", 9999,
     handshake. To minimize memory consumption only unique sessions
     will be saved unless the special <c>save</c> value is specified
     for the following option <c> {reuse_sessions, boolean() |
-    save}</c> in which case a full handhake will be performed and that
+    save}</c> in which case a full handshake will be performed and that
     specific session will have been saved before the handshake
     returns. The session id and even an opaque binary containing the
     session data can be retrieved using
@@ -349,7 +364,7 @@ ok
 <p>Step 3 - Explicit Session Reuse </p>
 
 <code type="erl">
-%% Preform a full handshake and the session will not be saved for reuse
+%% Perform a full handshake and the session will not be saved for reuse
 12&gt; {ok, C9} = ssl:connect("localhost", 9999, [{verify, verify_peer},
 				               {versions, ['tlsv1.2']},
 		                               {cacertfile, "cacerts.pem"},
@@ -428,7 +443,7 @@ ok
     <seeguide marker="ssl:using_ssl#anti-replay-protection-in-tls-1.3">
     Anti-Replay Protection in TLS 1.3</seeguide>
     </p>
-    <p>Session tickets are sent by servers on newly estalished TLS connections.
+    <p>Session tickets are sent by servers on newly established TLS connections.
     The number of tickets sent and their lifetime are configurable by application variables. See also
     <seeapp marker="ssl:ssl_app#configuration"> SSL's configuration</seeapp>.</p>
     <p>Session tickets are protected by application traffic keys, and in stateless
@@ -555,6 +570,120 @@ ok
     <p><em>Step 13 (server):</em> Start the handshake:</p>
     <code type="erl">
       ssl:handshake(CSock3).
+    </code>
+  </section>
+
+  <section>
+    <title>Early Data in TLS 1.3</title>
+    <p>TLS 1.3 allows clients to send data on the first flight if the endpoints have
+    a shared crypographic secret (pre-shared key). This means that clients can send
+    early data if they have a valid session ticket received in a previous
+    successful handshake. For more information about session resumption see
+    <seeguide marker="ssl:using_ssl#session-tickets-and-session-resumption-in-tls-1.3">
+    Session Tickets and Session Resumption in TLS 1.3</seeguide>.
+    </p>
+    <p>The security properties of Early Data are weaker than other kinds of TLS data.
+    This data is not forward secret, and it is vulnerable to replay attacks. For available
+    mitigation strategies see
+    <seeguide marker="ssl:using_ssl#anti-replay-protection-in-tls-1.3">
+    Anti-Replay Protection in TLS 1.3</seeguide>.</p>
+    <p>In normal operation, clients will not know which, if any, of the available mitigation
+    strategies servers actually implement, and hence must only send early data which
+    they deem safe to be replayed. For example, idempotent HTTP operations, such as HEAD and
+    GET, can usually be regarded as safe but even they can be exploited by a large number of
+    replays causing resource limit exhaustion and other similar problems.</p>
+    <p>An example of sending early data with automatic and manual session ticket handling:</p>
+    <warning>
+    <p>The Early Data feature is experimental in this version of OTP.
+    </p>
+    </warning>
+
+    <p><em>Server (with NSS key logging)</em></p>
+    <code type="none">
+    early_data_server() ->
+        application:load(ssl),
+        {ok, _} = application:ensure_all_started(ssl),
+        Port = 11029,
+        LOpts = [{certfile, ?SERVER_CERT},
+             {keyfile, ?SERVER_KEY},
+             {reuseaddr, true},
+             {versions, ['tlsv1.2','tlsv1.3']},
+             {session_tickets, stateless},
+             {early_data, enabled},
+             {keep_secrets, true} %% Enable NSS key log (debug option)
+            ],
+        {ok, LSock} = ssl:listen(Port, LOpts),
+        %% Accept first connection
+        {ok, CSock0} = ssl:transport_accept(LSock),
+        {ok, _} = ssl:handshake(CSock0),
+        %% Accept second connection
+        {ok, CSock1} = ssl:transport_accept(LSock),
+        {ok, Sock} = ssl:handshake(CSock1),
+        Sock.
+    </code>
+    <p><em>Exporting the secrets (optional)</em></p>
+    <code type="none">
+    {ok, [{keylog, KeylogItems}]} = ssl:connection_information(Sock, [keylog]).
+    file:write_file("key.log", [[KeylogItem,$\n] || KeylogItem &lt;- KeylogItems]).
+    </code>
+    <p><em>Client (automatic ticket handling):</em></p>
+    <code type="erl">
+    early_data_auto() -&gt;
+        %% First handshake 1-RTT - get session tickets
+	application:load(ssl),
+	{ok, _} = application:ensure_all_started(ssl),
+	Port = 11029,
+	Data = &lt;&lt;"HEAD / HTTP/1.1\r\nHost: \r\nConnection: close\r\n"&gt;&gt;,
+	COpts0 = [{cacertfile, ?CA_CERT},
+	          {versions, ['tlsv1.2', 'tlsv1.3']},
+	          {session_tickets, auto}],
+        {ok, Sock0} = ssl:connect("localhost", Port, COpts0),
+
+        %% Wait for session tickets
+	timer:sleep(500),
+	%% Close socket if server cannot handle multiple connections e.g. openssl s_server
+	ssl:close(Sock0),
+
+        %% Second handshake 0-RTT
+	COpts1 = [{cacertfile, ?CA_CERT},
+	          {versions, ['tlsv1.2', 'tlsv1.3']},
+		  {session_tickets, auto},
+		  {early_data, Data}],
+        {ok, Sock} = ssl:connect("localhost", Port, COpts1),
+	Sock.
+    </code>
+    <p><em>Client (manual ticket handling):</em></p>
+    <code type="erl">
+    early_data_manual() -&gt;
+        %% First handshake 1-RTT - get session tickets
+	application:load(ssl),
+	{ok, _} = application:ensure_all_started(ssl),
+	Port = 11029,
+	Data = &lt;&lt;"HEAD / HTTP/1.1\r\nHost: \r\nConnection: close\r\n"&gt;&gt;,
+	COpts0 = [{cacertfile, ?CA_CERT},
+	          {versions, ['tlsv1.2', 'tlsv1.3']},
+	          {session_tickets, manual}],
+        {ok, Sock0} = ssl:connect("localhost", Port, COpts0),
+
+        %% Wait for session tickets
+	Ticket =
+	    receive
+	        {ssl, session_ticket, Ticket0} ->
+		    Ticket0
+            end,
+
+       %% Close socket if server cannot handle multiple connections
+       %% e.g. openssl s_server
+       ssl:close(Sock0),
+
+       %% Second handshake 0-RTT
+       COpts1 = [{cacertfile, ?CA_CERT},
+                 {versions, ['tlsv1.2', 'tlsv1.3']},
+		 {session_tickets, manual},
+		 {use_ticket, [Ticket]},
+		 {early_data, Data}],
+       {ok, Sock} = ssl:connect("localhost", Port, COpts1),
+       Sock.
     </code>
   </section>
 

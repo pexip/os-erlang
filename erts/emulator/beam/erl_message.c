@@ -1,7 +1,7 @@
 /*
  * %CopyrightBegin%
  *
- * Copyright Ericsson AB 1997-2020. All Rights Reserved.
+ * Copyright Ericsson AB 1997-2022. All Rights Reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -205,7 +205,13 @@ static void
 erts_cleanup_message(ErtsMessage *mp)
 {
     ErlHeapFragment *bp;
-    if (ERTS_SIG_IS_EXTERNAL_MSG(mp) || ERTS_SIG_IS_NON_MSG(mp)) {
+
+    if (ERTS_SIG_IS_NON_MSG(mp)) {
+        erts_proc_sig_cleanup_non_msg_signal(mp);
+        return;
+    }
+
+    if (ERTS_SIG_IS_EXTERNAL_MSG(mp)) {
         ErtsDistExternal *edep = erts_proc_sig_get_external(mp);
         if (edep) {
             erts_free_dist_ext_copy(edep);
@@ -216,18 +222,12 @@ erts_cleanup_message(ErtsMessage *mp)
         }
     }
 
-    if (ERTS_SIG_IS_MSG(mp) && mp->data.attached != ERTS_MSG_COMBINED_HFRAG) {
+    if (mp->data.attached != ERTS_MSG_COMBINED_HFRAG)
         bp = mp->data.heap_frag;
-    } else {
-        /* All non msg signals are combined HFRAG messages,
-           but we overwrite the mp->data field with the
-           nm_signal queue ptr so have to fix that here
-           before freeing it. */
-        mp->data.attached = ERTS_MSG_COMBINED_HFRAG;
+    else {
         bp = mp->hfrag.next;
         erts_cleanup_offheap(&mp->hfrag.off_heap);
     }
-
     if (bp)
         free_message_buffer(bp);
 }
@@ -938,118 +938,6 @@ void erts_save_message_in_proc(Process *p, ErtsMessage *msgp)
     p->msg_frag = msgp;
 }
 
-Sint
-erts_move_messages_off_heap(Process *c_p)
-{
-    int reds = 1;
-    int i;
-    ErtsMessage *msgq[] = {c_p->sig_qs.first, c_p->sig_qs.cont};
-    /*
-     * Move all messages off heap. This *only* occurs when the
-     * process had off heap message disabled and just enabled
-     * it...
-     */
-
-    reds += erts_proc_sig_privqs_len(c_p) / 10;
-
-    ASSERT(erts_atomic32_read_nob(&c_p->state)
-	   & ERTS_PSFLG_OFF_HEAP_MSGQ);
-    ASSERT(c_p->sig_qs.flags & FS_OFF_HEAP_MSGQ_CHNG);
-
-    for (i = 0; i < sizeof(msgq)/sizeof(msgq[0]); i++) {
-        ErtsMessage *mp;
-        for (mp = msgq[i]; mp; mp = mp->next) {
-            Uint msg_sz, token_sz;
-#ifdef USE_VM_PROBES
-            Uint utag_sz;
-#endif
-            Eterm *hp;
-            ErlHeapFragment *hfrag;
-
-            if (!ERTS_SIG_IS_INTERNAL_MSG(mp))
-                continue;
-
-            if (mp->data.attached)
-                continue;
-
-            if (is_immed(ERL_MESSAGE_TERM(mp))
-#ifdef USE_VM_PROBES
-                && is_immed(ERL_MESSAGE_DT_UTAG(mp))
-#endif
-                && is_not_immed(ERL_MESSAGE_TOKEN(mp)))
-                continue;
-
-            /*
-             * The message refers into the heap. Copy the message
-             * from the heap into a heap fragment and attach
-             * it to the message...
-             */
-            msg_sz = size_object(ERL_MESSAGE_TERM(mp));
-#ifdef USE_VM_PROBES
-            utag_sz = size_object(ERL_MESSAGE_DT_UTAG(mp));
-#endif
-            token_sz = size_object(ERL_MESSAGE_TOKEN(mp));
-
-            hfrag = new_message_buffer(msg_sz
-#ifdef USE_VM_PROBES
-                                       + utag_sz
-#endif
-                                       + token_sz);
-            hp = hfrag->mem;
-            if (is_not_immed(ERL_MESSAGE_TERM(mp)))
-                ERL_MESSAGE_TERM(mp) = copy_struct(ERL_MESSAGE_TERM(mp),
-                                                   msg_sz, &hp,
-                                                   &hfrag->off_heap);
-            if (is_not_immed(ERL_MESSAGE_TOKEN(mp)))
-                ERL_MESSAGE_TOKEN(mp) = copy_struct(ERL_MESSAGE_TOKEN(mp),
-                                                    token_sz, &hp,
-                                                    &hfrag->off_heap);
-#ifdef USE_VM_PROBES
-            if (is_not_immed(ERL_MESSAGE_DT_UTAG(mp)))
-                ERL_MESSAGE_DT_UTAG(mp) = copy_struct(ERL_MESSAGE_DT_UTAG(mp),
-                                                      utag_sz, &hp,
-                                                      &hfrag->off_heap);
-#endif
-            mp->data.heap_frag = hfrag;
-            reds += 1;
-        }
-    }
-
-    return reds;
-}
-
-Sint
-erts_complete_off_heap_message_queue_change(Process *c_p)
-{
-    int reds = 1;
-
-    ERTS_LC_ASSERT(ERTS_PROC_LOCK_MAIN == erts_proc_lc_my_proc_locks(c_p));
-    ASSERT(c_p->sig_qs.flags & FS_OFF_HEAP_MSGQ_CHNG);
-    ASSERT(erts_atomic32_read_nob(&c_p->state) & ERTS_PSFLG_OFF_HEAP_MSGQ);
-
-    /*
-     * This job was first initiated when the process changed to off heap
-     * message queue management. Since then ERTS_PSFLG_OFF_HEAP_MSGQ
-     * has been set. However, the management state might have been changed
-     * again (multiple times) since then. Check users last requested state
-     * (the flags F_OFF_HEAP_MSGQ, and F_ON_HEAP_MSGQ), and make the state
-     * consistent with that.
-     */
-
-    if (!(c_p->sig_qs.flags & FS_OFF_HEAP_MSGQ))
-	erts_atomic32_read_band_nob(&c_p->state,
-					~ERTS_PSFLG_OFF_HEAP_MSGQ);
-    else {
-	reds += 2;
-	erts_proc_lock(c_p, ERTS_PROC_LOCK_MSGQ);
-        erts_proc_sig_fetch(c_p);
-	erts_proc_unlock(c_p, ERTS_PROC_LOCK_MSGQ);
-	reds += erts_move_messages_off_heap(c_p);
-    }
-    c_p->sig_qs.flags &= ~FS_OFF_HEAP_MSGQ_CHNG;
-    return reds;
-}
-
 typedef struct {
     Eterm pid;
     ErtsThrPrgrLaterOp lop;
@@ -1061,15 +949,11 @@ change_off_heap_msgq(void *vcohmq)
     ErtsChangeOffHeapMessageQueue *cohmq;
     /*
      * Now we've waited thread progress which ensures that all
-     * messages to the process are enqueued off heap. Schedule
-     * completion of this change as a system task on the process
-     * itself. This in order to avoid lock contention on its
-     * main lock. We will be called in
-     * erts_complete_off_heap_message_queue_change() (above) when
-     * the system task has been selected for execution.
+     * messages to the process are enqueued off heap. Signal the
+     * process to complete this change itself.
      */
     cohmq = (ErtsChangeOffHeapMessageQueue *) vcohmq;
-    erts_schedule_complete_off_heap_message_queue_change(cohmq->pid);
+    erts_proc_sig_send_move_msgq_off_heap(NULL, cohmq->pid);
     erts_free(ERTS_ALC_T_MSGQ_CHNG, vcohmq);
 }
 
@@ -1114,7 +998,7 @@ erts_change_message_queue_management(Process *c_p, Eterm new_state)
 	    if (!(c_p->sig_qs.flags & FS_OFF_HEAP_MSGQ_CHNG)) {
 		/* Safe to clear ERTS_PSFLG_OFF_HEAP_MSGQ... */
 		erts_atomic32_read_band_nob(&c_p->state,
-						~ERTS_PSFLG_OFF_HEAP_MSGQ);
+					    ~ERTS_PSFLG_OFF_HEAP_MSGQ);
 	    }
 	    break;
 	default:
@@ -1165,7 +1049,7 @@ change_to_off_heap:
 	 * the message queue at all.
 	 */
 	erts_atomic32_read_bor_nob(&c_p->state,
-				       ERTS_PSFLG_OFF_HEAP_MSGQ);
+				   ERTS_PSFLG_OFF_HEAP_MSGQ);
 	c_p->sig_qs.flags |= FS_OFF_HEAP_MSGQ_CHNG;
 	cohmq = erts_alloc(ERTS_ALC_T_MSGQ_CHNG,
 			   sizeof(ErtsChangeOffHeapMessageQueue));
@@ -1185,21 +1069,28 @@ void erts_factory_proc_init(ErtsHeapFactory* factory, Process* p)
        heap as that completely destroys the DEBUG emulators
        performance. */
     ErlHeapFragment *bp = p->mbuf;
+
+    factory->heap_frags_saved = bp;
+    factory->heap_frags_saved_used = bp ? bp->used_size : 0;
+
     factory->mode     = FACTORY_HALLOC;
     factory->p        = p;
     factory->hp_start = HEAP_TOP(p);
+    factory->original_htop = factory->hp_start;
     factory->hp       = factory->hp_start;
-    factory->hp_end   = HEAP_LIMIT(p);
+    if (factory->hp)
+        factory->hp_end   = HEAP_LIMIT(p);
+    else
+        factory->hp_end = NULL;
     factory->off_heap = &p->off_heap;
     factory->message  = NULL;
     factory->off_heap_saved.first    = p->off_heap.first;
     factory->off_heap_saved.overhead = p->off_heap.overhead;
-    factory->heap_frags_saved = bp;
-    factory->heap_frags_saved_used = bp ? bp->used_size : 0;
     factory->heap_frags = NULL; /* not used */
     factory->alloc_type = 0; /* not used */
 
-    HEAP_TOP(p) = HEAP_LIMIT(p);
+    if (HEAP_TOP(p))
+        HEAP_TOP(p) = HEAP_LIMIT(p);
 }
 
 void erts_factory_proc_prealloc_init(ErtsHeapFactory* factory,
@@ -1207,8 +1098,20 @@ void erts_factory_proc_prealloc_init(ErtsHeapFactory* factory,
 				     Sint size)
 {
     ErlHeapFragment *bp = p->mbuf;
+
+    /* `bp->used_size` must be set _BEFORE_ we call `HAlloc`, as that will
+     * update the used size and prevent us from undoing the changes later
+     * on. */
+    factory->heap_frags_saved = bp;
+    factory->heap_frags_saved_used = bp ? bp->used_size : 0;
+
     factory->mode     = FACTORY_HALLOC;
     factory->p        = p;
+    factory->original_htop = HEAP_TOP(p);
+    /*
+       factory->hp_start is a pointer to somewhere in the data area of
+       a heap fragment or to the main heap.
+    */
     factory->hp_start = HAlloc(p, size);
     factory->hp       = factory->hp_start;
     factory->hp_end   = factory->hp_start + size;
@@ -1216,8 +1119,6 @@ void erts_factory_proc_prealloc_init(ErtsHeapFactory* factory,
     factory->message  = NULL;
     factory->off_heap_saved.first    = p->off_heap.first;
     factory->off_heap_saved.overhead = p->off_heap.overhead;
-    factory->heap_frags_saved = bp;
-    factory->heap_frags_saved_used = bp ? bp->used_size : 0;
     factory->heap_frags = NULL; /* not used */
     factory->alloc_type = 0; /* not used */
 }
@@ -1275,6 +1176,12 @@ erts_factory_message_create(ErtsHeapFactory* factory,
 	ASSERT(ohp == &proc->off_heap);
 	factory->mode = FACTORY_HALLOC;
 	factory->p = proc;
+        /*
+          If on_heap is set then hp must be on the process main heap.
+         */
+        factory->original_htop = hp;
+        ASSERT(HEAP_START(proc) <= factory->original_htop);
+        ASSERT(factory->original_htop <= HEAP_LIMIT(proc));
 	factory->heap_frags_saved = proc->mbuf;
 	factory->heap_frags_saved_used = proc->mbuf ? proc->mbuf->used_size : 0;
     }
@@ -1607,21 +1514,24 @@ void erts_factory_undo(ErtsHeapFactory* factory)
             /* Rollback heap top
 	     */
 
-	    if (HEAP_START(factory->p) <= factory->hp_start
-		&& factory->hp_start <= HEAP_LIMIT(factory->p)) {
-		HEAP_TOP(factory->p) = factory->hp_start;
-	    }
+            ASSERT(HEAP_START(factory->p) <= factory->original_htop);
+            ASSERT(factory->original_htop <= HEAP_LIMIT(factory->p));
+            HEAP_TOP(factory->p) = factory->original_htop;
+
 
 	    /* Fix last heap frag */
             if (factory->heap_frags_saved) {
                 ASSERT(factory->heap_frags_saved == factory->p->mbuf);
-                if (factory->hp_start != factory->heap_frags_saved->mem)
-                    factory->heap_frags_saved->used_size = factory->heap_frags_saved_used;
-		else {
-                    factory->p->mbuf = factory->p->mbuf->next;
-                    ERTS_HEAP_FREE(ERTS_ALC_T_HEAP_FRAG, factory->heap_frags_saved,
-                                   ERTS_HEAP_FRAG_SIZE(factory->heap_frags_saved->alloc_size));
-                }
+                factory->heap_frags_saved->used_size = factory->heap_frags_saved_used;
+            }
+            if (factory->message) {
+                ASSERT(factory->message->data.attached != ERTS_MSG_COMBINED_HFRAG);
+                ASSERT(!factory->message->data.heap_frag);
+
+                /* Set the message to NIL in order for it not to be treated as
+                   a distributed message by erts_cleanup_messages */
+                factory->message->m[0] = NIL;
+                erts_cleanup_messages(factory->message);
             }
         }
         break;

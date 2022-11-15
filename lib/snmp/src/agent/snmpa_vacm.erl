@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %% 
-%% Copyright Ericsson AB 1999-2015. All Rights Reserved.
+%% Copyright Ericsson AB 1999-2021. All Rights Reserved.
 %% 
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -418,7 +418,7 @@ chop_off_group(_, _) -> throw(false).
 
 chop_off_context([H|T], [H|T2], Cnt, Len, Match) when Cnt < Len ->
     chop_off_context(T, T2, Cnt+1, Len, Match);
-chop_off_context([], Rest, _Len, _Len, _Match) ->
+chop_off_context([], Rest, Len, Len, _Match) ->
     %% We have exact match; don't care about Match
     {99, Rest};
 chop_off_context(_, Rest, Len, Len, ?vacmAccessContextMatch_prefix) ->

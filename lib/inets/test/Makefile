@@ -1,7 +1,7 @@
 #
 # %CopyrightBegin%
 #
-# Copyright Ericsson AB 1997-2020. All Rights Reserved.
+# Copyright Ericsson AB 1997-2022. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -120,7 +120,6 @@ INETS_ROOT = ../../inets
 
 MODULES =                 		\
 	inets_test_lib    		\
-	erl_make_certs                  \
 	make_certs                      \
 	http_format_SUITE 		\
 	httpc_SUITE	  		\

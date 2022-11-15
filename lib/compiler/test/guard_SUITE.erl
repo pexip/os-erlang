@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2001-2020. All Rights Reserved.
+%% Copyright Ericsson AB 2001-2021. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -216,6 +216,10 @@ basic_not(Config) when is_list(Config) ->
     check(fun() -> if not (True xor True) -> ok end end, ok),
     check(fun() -> if not (True xor False) -> ok;
 		      true -> error end end, error),
+
+    check(fun() -> if not (True =:= true) -> ok; true -> error end end, error),
+    check(fun() -> if not (False =:= true) -> ok; true -> error end end, ok),
+    check(fun() -> if not (Glurf =:= true) -> ok; true -> error end end, ok),
 
     ok.
 
@@ -1084,15 +1088,50 @@ on(V) when number(V) -> number;
 on(_) -> not_number.
 
 complex_guard(_Config) ->
-    _ = [true = do_complex_guard(X, Y, Z) ||
+    _ = [true = do_complex_guard_1(X, Y, Z) ||
 	    X <- [4,5], Y <- [4,5], Z <- [4,5]],
-    _ = [true = do_complex_guard(X, Y, Z) ||
+    _ = [true = do_complex_guard_1(X, Y, Z) ||
 	    X <- [1,2,3], Y <- [1,2,3], Z <- [1,2,3]],
-    _ = [catch do_complex_guard(X, Y, Z) ||
+    _ = [catch do_complex_guard_1(X, Y, Z) ||
 	    X <- [1,2,3,4,5], Y <- [0,6], Z <- [1,2,3,4,5]],
+
+    b = do_complex_guard_2(false, false, true),
+    c = do_complex_guard_2(false, false, false),
+    c = do_complex_guard_2(false, true,  true),
+    a = do_complex_guard_2(false, true,  false),
+
+    c = do_complex_guard_2(true,  false, true),
+    a = do_complex_guard_2(true,  false, false),
+    c = do_complex_guard_2(true,  true,  true),
+    a = do_complex_guard_2(true,  true,  false),
+
+    c = do_complex_guard_2(other, false, true),
+    c = do_complex_guard_2(other, false, false),
+    c = do_complex_guard_2(other, true,  true),
+    c = do_complex_guard_2(other, true,  false),
+
+    c = do_complex_guard_2(false, other, true),
+    c = do_complex_guard_2(false, other, false),
+    c = do_complex_guard_2(true,  other, true),
+    a = do_complex_guard_2(true,  other, false),
+
+    c = do_complex_guard_2(false, false, other),
+    c = do_complex_guard_2(false, true,  other),
+    c = do_complex_guard_2(true,  false, other),
+    c = do_complex_guard_2(true,  true,  other),
+
+    c = do_complex_guard_2(false, other, other),
+    c = do_complex_guard_2(true,  other, other),
+    c = do_complex_guard_2(other, other, true),
+    c = do_complex_guard_2(other, other, false),
+    c = do_complex_guard_2(other, false, other),
+    c = do_complex_guard_2(other, true,  other),
+
+    c = do_complex_guard_2(other, other, other),
+
     ok.
 
-do_complex_guard(X1, Y1, Z1) ->
+do_complex_guard_1(X1, Y1, Z1) ->
     if
 	((X1 =:= 4) or (X1 =:= 5)) and
 	((Y1 =:= 4) or (Y1 =:= 5)) and
@@ -1102,6 +1141,13 @@ do_complex_guard(X1, Y1, Z1) ->
 	((Z1 =:= 1) or (Z1 =:= 2) or (Z1 =:= 3)) ->
 	    true
     end.
+
+do_complex_guard_2(X, Y, Z) ->
+  if
+      (X orelse Y) andalso (not Z) -> a;
+      Z andalso (not (X orelse Y)) -> b;
+      true                         -> c
+  end.
 
 gbif(Config) when is_list(Config) ->
     error = gbif_1(1, {false,true}),
@@ -2205,6 +2251,8 @@ bad_guards(Config) when is_list(Config) ->
 
     fc(catch bad_guards_4()),
 
+    {0,undefined} = bad_guards_5(id(<<>>), id(undefined)),
+
     ok.
 
 %% beam_bool used to produce GC BIF instructions whose
@@ -2227,6 +2275,15 @@ bad_guards_3(M, [_]) when is_map(M) andalso M#{a := 0, b => 0}, length(M) ->
 %% x(0) to be initialized.
 
 bad_guards_4() when not (error#{}); {not 0.0} -> freedom.
+
+%% The JIT used to segfault when a guard rem instruction failed
+%% with badarith AND a bif had been called just before it.
+bad_guards_5(A, B) ->
+    {byte_size(A), undefined = bad_guards_5_1(B)}.
+bad_guards_5_1(A) when is_integer(A rem 255) ->
+    A rem 255;
+bad_guards_5_1(_) ->
+    undefined.
 
 %% Building maps in a guard in a 'catch' would crash v3_codegen.
 
@@ -2303,6 +2360,8 @@ beam_bool_SUITE(_Config) ->
     erl1246(),
     erl1253(),
     erl1384(),
+    gh4788(),
+    beam_ssa_bool_coverage(),
     ok.
 
 before_and_inside_if() ->
@@ -2560,6 +2619,10 @@ fail_in_guard() ->
     error = fun() when (0 #fail_in_guard.f)#fail_in_guard.f -> ok;
                () -> error
             end(),
+    error = fun() when 42; <<0.5,0:(element(true, false))>> ->
+                    a = b;
+               () -> error
+            end(),
 
     ok.
 
@@ -2775,6 +2838,40 @@ erl1384_1(V) ->
         {_, false} -> gurka;
         _ -> gaffel
     end.
+
+gh4788() ->
+    ok = do_gh4788(id(0)),
+    ok = do_gh4788(id(1)),
+    ok = do_gh4788(id(undefined)),
+    lt_0_or_undefined = catch do_gh4788(id(-1)),
+    ok.
+
+do_gh4788(N) ->
+    %% beam_ssa_bool would do an unsafe optimization when run after
+    %% the beam_ssa_share pass.
+    case {N >= 0, N == undefined} of
+        {true, _} -> ok;
+        {_, true} -> ok;
+        _ -> throw(lt_0_or_undefined)
+    end,
+    ok.
+
+beam_ssa_bool_coverage() ->
+    {"*","abc"} = collect_modifiers("abc*", []),
+    error = beam_ssa_bool_coverage_1(true),
+    ok.
+
+collect_modifiers([H | T], Buffer)
+    when (H >= $a andalso H =< $z) or
+         (H >= $A andalso H =< $Z) ->
+    collect_modifiers(T, [H | Buffer]);
+collect_modifiers(Rest, Buffer) ->
+    {Rest, lists:reverse(Buffer)}.
+
+beam_ssa_bool_coverage_1(V) when V andalso 0, tuple_size(0) ->
+    ok;
+beam_ssa_bool_coverage_1(_) ->
+    error.
 
 %%%
 %%% End of beam_bool_SUITE tests.

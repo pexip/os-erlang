@@ -27,7 +27,10 @@
 	 add/3, add/4,
 	 delete/2, delete/3,
 	 modify_dn/5,parse_dn/1,
-	 parse_ldap_url/1]).
+	 parse_ldap_url/1,
+	 paged_result_control/1,
+	 paged_result_control/2,
+	 paged_result_cookie/1]).
 
 -export([neverDerefAliases/0, derefInSearching/0,
          derefFindingBaseObj/0, derefAlways/0]).
@@ -326,6 +329,8 @@ parse_search_args([{base, Base}|T],A) ->
     parse_search_args(T,A#eldap_search{base = Base});
 parse_search_args([{filter, Filter}|T],A) ->
     parse_search_args(T,A#eldap_search{filter = Filter});
+parse_search_args([{size_limit, SizeLimit}|T],A) when is_integer(SizeLimit) ->
+    parse_search_args(T,A#eldap_search{size_limit = SizeLimit});
 parse_search_args([{scope, Scope}|T],A) ->
     parse_search_args(T,A#eldap_search{scope = Scope});
 parse_search_args([{deref, Deref}|T],A) ->
@@ -416,9 +421,9 @@ mra([{matchingRule,Val}|T], Ack) when is_list(Val) ->
 mra([{type,Val}|T], Ack) when is_list(Val) ->
     mra(T, Ack#'MatchingRuleAssertion'{type=Val});
 mra([{dnAttributes,true}|T], Ack) ->
-    mra(T, Ack#'MatchingRuleAssertion'{dnAttributes="TRUE"});
+    mra(T, Ack#'MatchingRuleAssertion'{dnAttributes=true});
 mra([{dnAttributes,false}|T], Ack) ->
-    mra(T, Ack#'MatchingRuleAssertion'{dnAttributes="FALSE"});
+    mra(T, Ack#'MatchingRuleAssertion'{dnAttributes=false});
 mra([H|_], _) ->
     throw({error,{extensibleMatch_arg,H}});
 mra([], Ack) -> 
@@ -720,7 +725,7 @@ do_search(Data, A, Controls) ->
 	{error,Emsg}         -> {ldap_closed_p(Data, Emsg),Data};
 	{'EXIT',Error}       -> {ldap_closed_p(Data, Error),Data};
 	{{ok,Val},NewData}   -> {{ok,Val},NewData};
-	{ok,Res,Ref,NewData} -> {{ok,polish(Res, Ref)},NewData};
+	{ok,Res,Ref,ResultControls,NewData} -> {{ok,polish(Res, Ref, ResultControls)},NewData};
 	{{error,Reason},NewData} -> {{error,Reason},NewData};
 	Else                 -> {ldap_closed_p(Data, Else),Data}
     end.
@@ -729,11 +734,11 @@ do_search(Data, A, Controls) ->
 %%% Polish the returned search result
 %%%
 
-polish(Res, Ref) ->
+polish(Res, Ref, Controls) ->
     R = polish_result(Res),
     %%% No special treatment of referrals at the moment.
     #eldap_search_result{entries = R,
-			 referrals = Ref}.
+			 referrals = Ref, controls = Controls}.
 
 polish_result([H|T]) when is_record(H, 'SearchResultEntry') ->
     ObjectName = H#'SearchResultEntry'.objectName,
@@ -749,7 +754,7 @@ do_search_0(Data, A, Controls) ->
     Req = #'SearchRequest'{baseObject = A#eldap_search.base,
 			   scope = v_scope(A#eldap_search.scope),
 			   derefAliases = v_deref(A#eldap_search.deref),
-			   sizeLimit = 0, % no size limit
+			   sizeLimit = v_size_limit(A#eldap_search.size_limit),
 			   timeLimit = v_timeout(A#eldap_search.timeout),
 			   typesOnly = v_bool(A#eldap_search.types_only),
 			   filter = v_filter(A#eldap_search.filter),
@@ -776,7 +781,10 @@ collect_search_responses(Data, S, ID, {ok,Msg}, Acc, Ref)
             case R#'LDAPResult'.resultCode of
                 success ->
                     log2(Data, "search reply = searchResDone ~n", []),
-                    {ok,Acc,Ref,Data};
+                    {ok,Acc,Ref,Msg#'LDAPMessage'.controls,Data};
+                sizeLimitExceeded ->
+                     log2(Data, "[TRUNCATED] search reply = searchResDone ~n", []),
+                     {ok,Acc,Ref,Msg#'LDAPMessage'.controls,Data};
 		referral -> 
 		    {{ok, {referral,R#'LDAPResult'.referral}}, Data};
                 Reason ->
@@ -787,7 +795,7 @@ collect_search_responses(Data, S, ID, {ok,Msg}, Acc, Ref)
 	    log2(Data, "search reply = ~p~n", [Resp]),
 	    collect_search_responses(Data, S, ID, Resp, [R|Acc], Ref);
 	{'searchResRef',R} ->
-	    %% At the moment we don't do anyting sensible here since
+	    %% At the moment we don't do anything sensible here since
 	    %% I haven't been able to trigger the server to generate
 	    %% a response like this.
 	    Resp = recv_response(S, Data),
@@ -1087,6 +1095,9 @@ v_deref(DR = derefAlways )        -> DR.
 v_bool(true)  -> true;
 v_bool(false) -> false;
 v_bool(_Bool) -> throw({error,concat(["not Boolean: ",_Bool])}).
+
+v_size_limit(I) when is_integer(I), I>=0 -> I;
+v_size_limit(_I) -> throw({error,concat(["size_limit not positive integer: ",_I])}).
 
 v_timeout(I) when is_integer(I), I>=0 -> I;
 v_timeout(_I) -> throw({error,concat(["timeout not positive integer: ",_I])}).
@@ -1424,3 +1435,42 @@ get_head(Str,Tail) ->
 %%% Should always succeed !
 get_head([H|Tail],Tail,Rhead) -> lists:reverse([H|Rhead]);
 get_head([H|Rest],Tail,Rhead) -> get_head(Rest,Tail,[H|Rhead]).
+
+%%% --------------------------------------------------------------------
+%%% Return a paged result control as described by RFC2696
+%%% https://www.rfc-editor.org/rfc/rfc2696.txt
+%%% --------------------------------------------------------------------
+
+paged_result_control(PageSize) when is_integer(PageSize) ->
+    paged_result_control(PageSize, "").
+
+paged_result_control(PageSize, Cookie) when is_integer(PageSize) ->
+    RSCV = #'RealSearchControlValue'{size=PageSize, cookie=Cookie},
+    {ok, ControlValue} = 'ELDAPv3':encode('RealSearchControlValue', RSCV),
+
+    {control, "1.2.840.113556.1.4.319", true, ControlValue}.
+
+
+%%% --------------------------------------------------------------------
+%%% Extract the returned cookie from search results in order to
+%%% retrieve the next set of results from the server according to
+%%% RFC2696
+%%%
+%%% https://www.rfc-editor.org/rfc/rfc2696.txt
+%%% --------------------------------------------------------------------
+
+paged_result_cookie(#eldap_search_result{controls=Controls}) ->
+    find_paged_result_cookie(Controls).
+
+find_paged_result_cookie([]) ->
+    {error, no_cookie};
+
+find_paged_result_cookie([C|Controls]) ->
+    case C of
+        #'Control'{controlType="1.2.840.113556.1.4.319",controlValue=ControlValue} ->
+            {ok, #'RealSearchControlValue'{cookie=Cookie}} =
+                'ELDAPv3':decode('RealSearchControlValue', ControlValue),
+            {ok, Cookie};
+        _ ->
+            find_paged_result_cookie(Controls)
+    end.

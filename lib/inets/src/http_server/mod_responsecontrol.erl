@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %% 
-%% Copyright Ericsson AB 2001-2016. All Rights Reserved.
+%% Copyright Ericsson AB 2001-2021. All Rights Reserved.
 %% 
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -48,8 +48,8 @@ do(Info) ->
     end.
 
 %%----------------------------------------------------------------------
-%%Control that the request header did not contians any limitations 
-%%wheather a response shall be createed or not
+%%Control that the request header did not contains any limitations 
+%%whether a response shall be createed or not
 %%----------------------------------------------------------------------
 do_responsecontrol(Info) ->
     Path = mod_alias:path(Info#mod.data, Info#mod.config_db, 
@@ -59,7 +59,7 @@ do_responsecontrol(Info) ->
 	    control(Path, Info, FileInfo);
 	_ ->
 	    %% The requested asset is not a plain file and then it must 
-	    %% be generated everytime its requested
+	    %% be generated every time its requested
 	    continue
     end.
 
@@ -180,7 +180,7 @@ control_match(Info, _FileInfo, HeaderField, FileEtag)->
  	undefined->
 	    undefined;
         Etags->
-	    %%Control that the match any star not is availible 
+	    %%Control that the match any star not is available 
 	    case lists:member("*",Etags) of
 		true-> 
 		    match;
@@ -290,7 +290,7 @@ send_return_value({400,_, {bad_date, BadDate}}, _FileInfo)->
     {status, {400, none, "Bad date: " ++ BadDate}};
 
 send_return_value({304,Info,Path}, FileInfo)->
-    Suffix = httpd_util:suffix(Path),
+    Suffix = httpd_util:strip_extension_dot(Path),
     MimeType = httpd_util:lookup_mime_default(Info#mod.config_db,Suffix,
 					      "text/plain"),
     LastModified =

@@ -4,7 +4,7 @@
 <chapter>
   <header>
     <copyright>
-      <year>1997</year><year>2018</year>
+      <year>1997</year><year>2021</year>
       <holder>Ericsson AB. All Rights Reserved.</holder>
     </copyright>
     <legalnotice>
@@ -219,7 +219,7 @@ snmp:c("MY-MIB", [{il, ["snmp/priv/mibs"]}]).</code>
       code-only, while others need a server. One way, used by the
       code-only MIB implementations, is for the user to call a
       function such as
-      <c>snmpa:unload_mibs(Agent, [Mib])</c>
+      <c>snmpa:load_mibs(Agent, [Mib])</c>
       to load the MIB, and
       <c>snmpa:unload_mibs(Agent, [Mib])</c>
       to unload the MIB. See the manual page for each application for

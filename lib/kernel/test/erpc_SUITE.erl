@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2020. All Rights Reserved.
+%% Copyright Ericsson AB 2020-2022. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -28,6 +28,9 @@
          send_request_check_reqtmo/1,
          send_request_against_old_node/1,
          multicall/1, multicall_reqtmo/1,
+         multicall_recv_opt/1,
+         multicall_recv_opt2/1,
+         multicall_recv_opt3/1,
          multicast/1,
          timeout_limit/1]).
 -export([init_per_testcase/2, end_per_testcase/2]).
@@ -55,6 +58,9 @@ all() ->
      send_request_against_old_node,
      multicall,
      multicall_reqtmo,
+     multicall_recv_opt,
+     multicall_recv_opt2,
+     multicall_recv_opt3,
      multicast,
      timeout_limit].
 
@@ -756,20 +762,22 @@ send_request_against_old_node(Config) when is_list(Config) ->
     end.
 
 multicall(Config) ->
-    {ok, Node1} = start_node(Config),
-    {ok, Node2} = start_node(Config),
+    {ok, Node1} = start_peer_node(Config),
+    {ok, Node2} = start_peer_node(Config),
     {Node3, Node3Res} = case start_22_node(Config) of
                             {ok, N3} ->
                                 {N3, {error, {erpc, notsup}}};
                             _ ->
-                                {ok, N3} = start_node(Config),
+                                {ok, N3} = start_peer_node(Config),
                                 stop_node(N3),
                                 {N3, {error, {erpc, noconnection}}}
                         end,
-    {ok, Node4} = start_node(Config),
-    {ok, Node5} = start_node(Config),
+    {ok, Node4} = start_peer_node(Config),
+    {ok, Node5} = start_peer_node(Config),
     stop_node(Node2),
-    
+    io:format("Node1=~p~nNode2=~p~nNode3=~p~nNode4=~p~nNode5=~p~n",
+              [Node1, Node2, Node3, Node4, Node5]),
+
     ThisNode = node(),
     Nodes = [ThisNode, Node1, Node2, Node3, Node4, Node5],
     
@@ -1088,6 +1096,102 @@ multicall_reqtmo(Config) when is_list(Config) ->
     stop_node(QuickNode2),
     Res.
 
+multicall_recv_opt(Config) when is_list(Config) ->
+    Loops = 1000,
+    HugeMsgQ = 500000,
+    process_flag(message_queue_data, off_heap),
+    {ok, Node1} = start_node(Config),
+    {ok, Node2} = start_node(Config),
+    ExpRes = [{ok, node()}, {ok, Node1}, {ok, Node2}],
+    Nodes = [node(), Node1, Node2],
+    Fun = fun () -> erlang:node() end,
+    _Warmup = time_multicall(ExpRes, Nodes, Fun, infinity, Loops div 10),
+    Empty = time_multicall(ExpRes, Nodes, Fun, infinity, Loops),
+    io:format("Time with empty message queue: ~p microsecond~n",
+	      [erlang:convert_time_unit(Empty, native, microsecond)]),
+    _ = [self() ! {msg,N} || N <- lists:seq(1, HugeMsgQ)],
+    Huge = time_multicall(ExpRes, Nodes, Fun, infinity, Loops),
+    io:format("Time with huge message queue: ~p microsecond~n",
+	      [erlang:convert_time_unit(Huge, native, microsecond)]),
+    stop_node(Node1),
+    stop_node(Node2),
+    Q = Huge / Empty,
+    HugeMsgQ = flush_msgq(),
+    case Q > 10 of
+	true ->
+	    ct:fail({ratio, Q});
+	false ->
+	    {comment, "Ratio: "++erlang:float_to_list(Q)}
+    end.
+
+multicall_recv_opt2(Config) when is_list(Config) ->
+    Loops = 1000,
+    HugeMsgQ = 500000,
+    process_flag(message_queue_data, off_heap),
+    {ok, Node1} = start_node(Config),
+    stop_node(Node1),
+    {ok, Node2} = start_node(Config),
+    ExpRes = [{ok, node()}, {error, {erpc, noconnection}}, {ok, Node2}],
+    Nodes = [node(), Node1, Node2],
+    Fun = fun () -> erlang:node() end,
+    _Warmup = time_multicall(ExpRes, Nodes, Fun, infinity, Loops div 10),
+    Empty = time_multicall(ExpRes, Nodes, Fun, infinity, Loops),
+    io:format("Time with empty message queue: ~p microsecond~n",
+	      [erlang:convert_time_unit(Empty, native, microsecond)]),
+    _ = [self() ! {msg,N} || N <- lists:seq(1, HugeMsgQ)],
+    Huge = time_multicall(ExpRes, Nodes, Fun, infinity, Loops),
+    io:format("Time with huge message queue: ~p microsecond~n",
+	      [erlang:convert_time_unit(Huge, native, microsecond)]),
+    stop_node(Node2),
+    Q = Huge / Empty,
+    HugeMsgQ = flush_msgq(),
+    case Q > 10 of
+	true ->
+	    ct:fail({ratio, Q});
+	false ->
+	    {comment, "Ratio: "++erlang:float_to_list(Q)}
+    end.
+
+multicall_recv_opt3(Config) when is_list(Config) ->
+    Loops = 1000,
+    HugeMsgQ = 500000,
+    process_flag(message_queue_data, off_heap),
+    {ok, Node1} = start_node(Config),
+    stop_node(Node1),
+    {ok, Node2} = start_node(Config),
+    Nodes = [node(), Node1, Node2],
+    Fun = fun () -> erlang:node() end,
+    _Warmup = time_multicall(undefined, Nodes, Fun, infinity, Loops div 10),
+    Empty = time_multicall(undefined, Nodes, Fun, infinity, Loops),
+    io:format("Time with empty message queue: ~p microsecond~n",
+	      [erlang:convert_time_unit(Empty, native, microsecond)]),
+    _ = [self() ! {msg,N} || N <- lists:seq(1, HugeMsgQ)],
+    Huge = time_multicall(undefined, Nodes, Fun, 0, Loops),
+    io:format("Time with huge message queue: ~p microsecond~n",
+	      [erlang:convert_time_unit(Huge, native, microsecond)]),
+    stop_node(Node2),
+    Q = Huge / Empty,
+    HugeMsgQ = flush_msgq(),
+    case Q > 10 of
+	true ->
+	    ct:fail({ratio, Q});
+	false ->
+	    {comment, "Ratio: "++erlang:float_to_list(Q)}
+    end.
+
+time_multicall(Expect, Nodes, Fun, Tmo, Times) ->
+    Start = erlang:monotonic_time(),
+    ok = do_time_multicall(Expect, Nodes, Fun, Tmo, Times),
+    erlang:monotonic_time() - Start.
+
+do_time_multicall(_Expect, _Nodes, _Fun, _Tmo, 0) ->
+    ok;
+do_time_multicall(undefined, Nodes, Fun, Tmo, N) ->
+    _ = erpc:multicall(Nodes, Fun, Tmo),
+    do_time_multicall(undefined, Nodes, Fun, Tmo, N-1);
+do_time_multicall(Expect, Nodes, Fun, Tmo, N) ->
+    Expect = erpc:multicall(Nodes, Fun, Tmo),
+    do_time_multicall(Expect, Nodes, Fun, Tmo, N-1).
 
 multicast(Config) when is_list(Config) ->
     {ok, Node} = start_node(Config),
@@ -1239,6 +1343,14 @@ start_node(Config) ->
     Pa = filename:dirname(code:which(?MODULE)),
     test_server:start_node(Name, slave, [{args,  "-pa " ++ Pa}]).
 
+start_peer_node(Config) ->
+    Name = list_to_atom(atom_to_list(?MODULE)
+			++ "-" ++ atom_to_list(proplists:get_value(testcase, Config))
+			++ "-" ++ integer_to_list(erlang:system_time(second))
+			++ "-" ++ integer_to_list(erlang:unique_integer([positive]))),
+    Pa = filename:dirname(code:which(?MODULE)),
+    test_server:start_node(Name, peer, [{args,  "-pa " ++ Pa}]).
+
 start_22_node(Config) ->
     Rel = "22_latest",
     case test_server:is_release_available(Rel) of
@@ -1280,3 +1392,13 @@ f() ->
 f2() ->
     timer:sleep(500),
     halt().
+
+flush_msgq() ->
+    flush_msgq(0).
+flush_msgq(N) ->
+    receive
+	_ ->
+	    flush_msgq(N+1)
+    after 0 ->
+	    N
+    end.

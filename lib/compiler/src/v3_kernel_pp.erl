@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 1999-2018. All Rights Reserved.
+%% Copyright Ericsson AB 1999-2021. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -56,6 +56,8 @@ format(Node, Ctxt) ->
 	[] ->
 	    format_1(Node, Ctxt);
 	[L,{file,_}] when is_integer(L) ->
+	    format_1(Node, Ctxt);
+	[{L,C},{file,_}] when is_integer(L), is_integer(C) ->
 	    format_1(Node, Ctxt);
 	List ->
 	    format_anno(List, Ctxt, fun (Ctxt1) ->

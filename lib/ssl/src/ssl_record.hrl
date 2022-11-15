@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2007-2020. All Rights Reserved.
+%% Copyright Ericsson AB 2007-2022. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -20,7 +20,7 @@
 
 %%
 %%----------------------------------------------------------------------
-%% Purpose: Record and constant defenitions for the SSL-record protocol
+%% Purpose: Record and constant definitions for the SSL-record protocol
 % see RFC 2246
 %%----------------------------------------------------------------------
 
@@ -68,6 +68,7 @@
           master_secret,			% opaque 48
           resumption_master_secret,
           application_traffic_secret,
+          client_early_data_secret,
           client_random,			% opaque 32
           server_random,			% opaque 32
           exportable				% boolean
@@ -99,8 +100,8 @@
 -define(AES_GCM, 8).
 -define(CHACHA20_POLY1305, 9).
 %% Following two are not defined in any RFC but we want to have the
-%% same type of handling internaly, all of these "bulk_cipher_algorithm"
-%% enums are only used internaly anyway.
+%% same type of handling internally, all of these "bulk_cipher_algorithm"
+%% enums are only used internally anyway.
 -define(AES_CCM, 10). 
 -define(AES_CCM_8, 11). 
 

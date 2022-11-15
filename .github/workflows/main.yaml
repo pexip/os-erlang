@@ -7,9 +7,6 @@
 ## not possible so we need to rebuild all of Erlang/OTP multiple
 ## times.
 ##
-## Also once the windows runner supports WSL we should implement
-## support for building Erlang/OTP here.
-##
 ## When ghcr.io support using the GITHUB_TOKEN we should migrate
 ## over to use it instead as that should allow us to use the
 ## built-in caching mechanisms of docker/build-push-action@v2.
@@ -30,27 +27,106 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v2
-      - name: Commit autoconf files
-        ## We first commit the autoconf generate so that they
-        ## are kept in the pre-built achive
-        run: |
-          ./otp_build autoconf
-          find . -name aclocal.m4 | xargs git add -f
-          find . -name configure | xargs git add -f
-          find . -name config.h.in | xargs git add -f
-          find . -name config.guess | xargs git add -f
-          find . -name config.sub | xargs git add -f
-          find . -name install-sh | xargs git add -f
-          git config --global user.email "you@example.com"
-          git config --global user.name "Your Name"
-          git commit --no-verify -m 'Add generated configure files'
-      - name: Archive git repository
-        run: git archive --prefix otp/ -o otp_src.tar.gz HEAD
+      - name: Create initial pre-release tar 
+        run: .github/scripts/init-pre-release.sh
       - name: Upload source tar archive
         uses: actions/upload-artifact@v2
         with:
           name: otp_git_archive
           path: otp_src.tar.gz
+
+
+  build-windows:
+    defaults:
+      run:
+        shell: wsl-bash {0}
+    env:
+      WXWIDGETS_VERSION: 3.1.4
+    name: Build Erlang/OTP on Windows
+    runs-on: windows-2022
+    needs: pack
+    steps:
+      - uses: Vampire/setup-wsl@v1
+        with:
+          distribution: Ubuntu-18.04
+
+      - name: Install WSL dependencies
+        run: apt update && apt install -y g++-mingw-w64 gcc-mingw-w64 make autoconf unzip
+
+      - name: Install openssl
+        shell: cmd
+        run: |
+          choco install openssl
+          move "c:\\Program Files\\OpenSSL-Win64" "c:\\OpenSSL-Win64"
+
+      - name: Cache wxWidgets
+        uses: actions/cache@v2
+        with:
+          path: wxWidgets
+          key: wxWidgets-${{ env.WXWIDGETS_VERSION }}-${{ runner.os }}
+
+      # actions/cache on Windows sometimes does not set cache-hit even though there was one. Setting it manually.
+      - name: Set wxWidgets cache
+        id: wxwidgets-cache
+        run: |
+          if [ -d wxWidgets ]; then
+            echo "::set-output name=cache-hit::true"
+          else
+            echo "::set-output name=cache-hit::false"
+          fi
+
+      - name: Download wxWidgets
+        if: steps.wxwidgets-cache.outputs.cache-hit != 'true'
+        run: |
+          wget https://github.com/wxWidgets/wxWidgets/releases/download/v${{ env.WXWIDGETS_VERSION }}/wxWidgets-${{ env.WXWIDGETS_VERSION }}.zip
+          unzip wxWidgets-${{ env.WXWIDGETS_VERSION }}.zip -d wxWidgets
+          sed -i -r -e 's/wxUSE_POSTSCRIPT +0/wxUSE_POSTSCRIPT 1/' wxWidgets/include/wx/msw/setup.h
+          sed -i -r -e 's/wxUSE_WEBVIEW_EDGE +0/wxUSE_WEBVIEW_EDGE 1/' wxWidgets/include/wx/msw/setup.h
+
+      - name: Install WebView2
+        if: steps.wxwidgets-cache.outputs.cache-hit != 'true'
+        shell: cmd
+        run: |
+          cd wxWidgets\\3rdparty
+          nuget install Microsoft.Web.WebView2 -Version 1.0.705.50 -Source https://api.nuget.org/v3/index.json
+          rename Microsoft.Web.WebView2.1.0.705.50 webview2
+
+      - name: Build wxWidgets
+        if: steps.wxwidgets-cache.outputs.cache-hit != 'true'
+        shell: cmd
+        run: |
+          cd wxWidgets\\build\\msw
+          call "C:\\Program Files\\Microsoft Visual Studio\\2022\\Enterprise\\VC\Auxiliary\\Build\\vcvars64.bat"
+          nmake TARGET_CPU=amd64 BUILD=release SHARED=0 DIR_SUFFIX_CPU= -f makefile.vc
+
+      - name: Download source archive
+        uses: actions/download-artifact@v2
+        with:
+          name: otp_git_archive
+
+      - name: Compile Erlang
+        run: |
+          mkdir -p /mnt/c/opt/local64/pgm/
+          cp -R wxWidgets /mnt/c/opt/local64/pgm/wxWidgets-${{ env.WXWIDGETS_VERSION }}
+          tar -xzf ./otp_src.tar.gz
+          cd otp
+          export ERL_TOP=`pwd`
+          export MAKEFLAGS=-j4
+          export ERLC_USE_SERVER=true
+          export ERTS_SKIP_DEPEND=true
+          eval `./otp_build env_win32 x64`
+          ./otp_build configure
+          if cat erts/CONF_INFO || cat lib/*/CONF_INFO || cat lib/*/SKIP || cat lib/SKIP-APPLICATIONS; then exit 1; fi
+          ./otp_build boot -a
+          ./otp_build release -a
+          cp /mnt/c/opt/local64/pgm/wxWidgets-${{ env.WXWIDGETS_VERSION }}/3rdparty/webview2/runtimes/win-x64/native/WebView2Loader.dll $ERL_TOP/release/win32/erts-*/bin/
+          ./otp_build installer_win32
+
+      - name: Upload installer
+        uses: actions/upload-artifact@v2
+        with:
+          name: otp_prebuilt_win32
+          path: otp/release/win32/otp*.exe
 
   build:
     name: Build Erlang/OTP
@@ -107,13 +183,7 @@ jobs:
         run: docker run -v $PWD/scripts:/scripts otp "/scripts/otp_html_check /otp doc/index.html"
       - if: matrix.type == 'documentation'
         name: Release docs to publish
-        run: |
-          docker run -v $PWD/:/github otp "make release_docs DOC_TARGETS='man html pdf' RELEASE_ROOT=/github/docs"
-          sudo chown -R `whoami` docs
-          cd docs
-          tar czf ../otp_doc_man.tar.gz man
-          rm -rf man
-          tar czf ../otp_doc_html.tar.gz *
+        run: .github/scripts/release-docs.sh
       - if: matrix.type == 'documentation'
         name: Upload html documentation archive
         uses: actions/upload-artifact@v2
@@ -127,6 +197,10 @@ jobs:
           name: otp_doc_man
           path: otp_doc_man.tar.gz
 
+        ## Check formatting of cpp code
+      - if: matrix.type == '64-bit'
+        name: Check format
+        run: docker run -v $PWD/scripts:/scripts otp "make format-check"
         ## Run dialyzer
       - if: matrix.type == '64-bit'
         name: Run dialyzer
@@ -159,12 +233,12 @@ jobs:
         id: tag
         run: |
           TAG=${GITHUB_REF#refs/tags/}
-          VSN=${TAG#OTP-}
           IS_RELEASE=`$(echo $TAG | grep -E '^OTP-[0-9]+\.[0-9]+$' > /dev/null) \
             && echo "true" || echo "false"`
+          VSN=${TAG#OTP-}
           echo "::set-output name=tag::${TAG}"
-          echo "::set-output name=vsn::${VSN}"
           echo "::set-output name=release::${IS_RELEASE}"
+          echo "::set-output name=vsn::${VSN}"
       
       - uses: actions/checkout@v2
 
@@ -185,13 +259,7 @@ jobs:
       ## We add the correct version name into the file names
       ## and create the hash files for all assets
       - name: Create pre-build and doc archives
-        run: |
-          mkdir artifacts
-          tar -xzf otp_src.tar.gz
-          mv otp otp_src_${{ steps.tag.outputs.vsn }}
-          tar -czf artifacts/otp_src_${{ steps.tag.outputs.vsn }}.tar.gz otp_src_${{ steps.tag.outputs.vsn }}
-          mv otp_doc_man.tar.gz artifacts/otp_doc_man_${{ steps.tag.outputs.vsn }}.tar.gz
-          mv otp_doc_html.tar.gz artifacts/otp_doc_html_${{ steps.tag.outputs.vsn }}.tar.gz
+        run: .github/scripts/create-artifacts.sh artifacts ${{ steps.tag.outputs.tag }}
 
       - name: Build OTP Bundle
         if: steps.tag.outputs.release == 'true'
@@ -215,3 +283,8 @@ jobs:
             artifacts/*.txt
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Deploy on erlang.org
+        env:
+          GITHUB_TOKEN: ${{ secrets.TRIGGER_ERLANG_ORG_BUILD }}
+        run: |
+          curl -H "Authorization: token ${GITHUB_TOKEN}" -X POST -H "Accept: application/vnd.github.v3+json" "https://api.github.com/repos/erlang/erlang-org/actions/workflows/update-gh-cache.yaml/dispatches" -d '{"ref":"master"}'

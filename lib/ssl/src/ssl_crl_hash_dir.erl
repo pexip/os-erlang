@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2016-2020. All Rights Reserved.
+%% Copyright Ericsson AB 2016-2022. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -53,7 +53,7 @@ select([{directoryName, Issuer} | _], {_DbHandle, [{dir, Dir}]}) ->
         {#{reason := [_|_]} = Report, DERs} ->
             {logger, {notice, Report, ?LOCATION}, DERs};
         {error, Error} ->
-            {logger, {error, #{description => "CRL retrival",
+            {logger, {error, #{description => "CRL retrieval",
                                reason => [{cannot_find_crl, Error},
                                           {dir, Dir}]}, ?LOCATION}, []}
     end;

@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2015-2019. All Rights Reserved.
+%% Copyright Ericsson AB 2015-2021. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -192,10 +192,10 @@ check_file(File, Encoding, Min, Max) ->
     if
 	Sz < Min ->
 	    %% Truncated? Other problem?
-	    ?t:fail({too_short,Base});
+	    ct:fail({too_short,Base});
 	Sz > Max ->
 	    %% Truncation doesn't work?
-	    ?t:fail({too_big,Base});
+	    ct:fail({too_big,Base});
 	true ->
 	    ok
     end.

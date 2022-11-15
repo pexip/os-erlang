@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2007-2020. All Rights Reserved.
+%% Copyright Ericsson AB 2007-2022. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -115,6 +115,8 @@
 %% 2^24.5 * 2^14 = 2^38.5
 -define(KEY_USAGE_LIMIT_AES_GCM, 388736063997).
 
+-define(DEFAULT_MAX_EARLY_DATA_SIZE, 16384).
+
 %% This map stores all supported options with default values and
 %% list of dependencies:
 %%   #{<option> => {<default_value>, [<option>]},
@@ -131,6 +133,7 @@
           cacerts                    => {undefined, [versions]},
           cert                       => {undefined, [versions]},
           certfile                   => {<<>>,      [versions]},
+          certificate_authorities    => {false,     [versions]},
           ciphers                    => {[],        [versions]},
           client_renegotiation       => {undefined, [versions]},
           cookie                     => {true,      [versions]},
@@ -140,6 +143,9 @@
           depth                      => {10,         [versions]},
           dh                         => {undefined, [versions]},
           dhfile                     => {undefined, [versions]},
+          early_data                 => {undefined, [versions,
+                                                     session_tickets,
+                                                     use_ticket]},
           eccs                       => {undefined, [versions]},
           erl_dist                   => {false,     [versions]},
           fail_if_no_peer_cert       => {false,     [versions]},
@@ -211,6 +217,11 @@
           versions                   => {[], [protocol]}
          }).
 
+-define('TLS-1_3_ONLY_OPTIONS', [anti_replay, cookie, early_data, key_update_at, middlebox_comp_mode, session_tickets, supported_groups, use_ticket]).
+-define('FROM_TLS-1_2_ONLY_OPTIONS', [signature_algs, signature_algs_cert]).
+-define('PRE_TLS-1_3_ONLY_OPTIONS', [client_renegotiation, secure_renegotiate]).
+-define('TLS-1_0_ONLY_OPTIONS', [padding_check, beast_mitigation]).
+
 -record(socket_options,
 	{
 	  mode   = list, 
@@ -235,6 +246,18 @@
 				{next_state, state_name(), any(), timeout()} |
 				{stop, any(), any()}.
 -type ssl_options()          :: map().
+
+%% Internal ticket data record holding pre-processed ticket data.
+-record(ticket_data,
+        {key,                  %% key in client ticket store
+         pos,                  %% ticket position in binders list
+         identity,             %% opaque ticket binary
+         psk,                  %% pre-shared key
+         nonce,                %% ticket nonce
+         cipher_suite,         %% cipher suite - hash, bulk cipher algorithm
+         max_size              %% max early data size allowed by this ticket
+        }).
+
 
 -endif. % -ifdef(ssl_internal).
 

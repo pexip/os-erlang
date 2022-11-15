@@ -30,6 +30,7 @@ MODULES= \
 	erl_lint_SUITE \
 	erl_pp_SUITE \
 	erl_scan_SUITE \
+	error_info_lib \
 	error_logger_h_SUITE \
 	escript_SUITE \
 	ets_SUITE \
@@ -71,6 +72,7 @@ MODULES= \
 	supervisor_1 \
 	supervisor_2 \
 	supervisor_3 \
+	supervisor_4 \
 	supervisor_deadlock \
 	naughty_child \
 	shell_SUITE \
@@ -146,7 +148,7 @@ release_spec: opt
 
 release_tests_spec: make_emakefile
 	$(INSTALL_DIR) "$(RELSYSDIR)"
-	$(INSTALL_DATA) stdlib.spec stdlib_bench.spec $(EMAKEFILE) \
+	$(INSTALL_DATA) stdlib.spec stdlib_bench.spec error_info.spec $(EMAKEFILE) \
 		$(ERL_FILES) $(COVERFILE) "$(RELSYSDIR)"
 	chmod -R u+w "$(RELSYSDIR)"
 	@tar cf - *_SUITE_data property_test | (cd "$(RELSYSDIR)"; tar xf -)

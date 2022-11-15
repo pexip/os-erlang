@@ -1,7 +1,7 @@
 /*
  * %CopyrightBegin%
  *
- * Copyright Ericsson AB 2010-2020. All Rights Reserved.
+ * Copyright Ericsson AB 2010-2022. All Rights Reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -28,10 +28,10 @@
  *
  ****************************************************************/
 
-#if !defined(HAS_EVP_PKEY_CTX) || DISABLE_EVP_HMAC
-
 #include "hmac.h"
 #include "digest.h"
+
+#if !defined(HAS_EVP_PKEY_CTX) || DISABLE_EVP_HMAC
 
 struct hmac_context
 {

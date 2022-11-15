@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %% 
-%% Copyright Ericsson AB 1996-2020. All Rights Reserved.
+%% Copyright Ericsson AB 1996-2021. All Rights Reserved.
 %% 
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -24,6 +24,8 @@
 -export([start/0,start/1,start/2,start/3,server/2,server/3]).
 
 -export([interfaces/1]).
+
+-include_lib("kernel/include/logger.hrl").
 
 -define(OP_PUTC,0).
 -define(OP_MOVE,1).
@@ -128,8 +130,12 @@ server1(Iport, Oport, Shell) ->
                             %% are running using "-sname undefined".
                             _ = net_kernel:start([undefined, shortnames]),
                             NodeName = append_hostname(Node, net_kernel:nodename()),
-                            true = net_kernel:connect_node(NodeName),
-                            NodeName;
+                            case net_kernel:connect_node(NodeName) of
+                                true ->
+                                    NodeName;
+                                _Else ->
+                                    ?LOG_ERROR("Could not connect to ~p",[Node])
+                            end;
                         true ->
                             append_hostname(Node, node())
                     end,

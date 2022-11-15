@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 1996-2020. All Rights Reserved.
+%% Copyright Ericsson AB 1996-2022. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -59,12 +59,13 @@
 	 monitor_nodes/2,
 	 setopts/2,
 	 getopts/2,
+	 start/2,
 	 start/1,
 	 stop/0]).
 
 %% Exports for internal use.
 
--export([start_link/3,
+-export([start_link/1,
 	 kernel_apply/3,
 	 longnames/0,
          nodename/0,
@@ -113,7 +114,8 @@
 	  verbose = 0,   %% level of verboseness
 	  publish_on_nodes = undefined,
           dyn_name_pool = #{},  %% Reusable remote node names: #{Host => [{Name,Creation}]}
-          supervisor    %% Our supervisor (net_sup | net_sup_dynamic | {restart,Restarter})
+          supervisor,   %% Our supervisor (net_sup | net_sup_dynamic | {restart,Restarter})
+          req_map = #{} %% Map for outstanding async requests
 	 }).
 
 -record(listen, {
@@ -151,14 +153,18 @@
 	  node %% remote node name
 	 }).
 
--record(tick, {ticker,        %% ticker                     : pid()
-	       time           %% Ticktime in milli seconds  : integer()
-	      }).
+-record(tick,
+        {ticker     :: pid(),                 %% ticker
+         time       :: pos_integer(),         %% net tick time (ms)
+         intensity  :: 4..1000                %% ticks until timout
+        }).
 
--record(tick_change, {ticker, %% Ticker                     : pid()
-		      time,   %% Ticktime in milli seconds  : integer()
-		      how     %% What type of change        : atom()
-		     }).
+-record(tick_change,
+        {ticker     :: pid(),                 %% ticker
+         time       :: pos_integer(),         %% net tick time (ms)
+         intensity  :: 4..1000,               %% ticks until timout
+         how        :: 'longer' | 'shorter'   %% What type of change
+        }).
 
 %% Default connection setup timeout in milliseconds.
 %% This timeout is set for every distributed action during
@@ -193,10 +199,6 @@ nodename() ->                  request(nodename).
 -spec stop() -> ok | {error, Reason} when
       Reason :: not_allowed | not_found.
 stop() ->
-    case persistent_term:get(net_kernel, undefined) of
-        undefined -> ok;
-        _ -> persistent_term:erase(net_kernel)
-    end,
     erl_distribution:stop().
 
 -type node_info() ::
@@ -238,7 +240,7 @@ verbose(Level) when is_integer(Level) ->
            | {ongoing_change_to, NewNetTicktime},
       NewNetTicktime :: pos_integer().
 set_net_ticktime(T, TP) when is_integer(T), T > 0, is_integer(TP), TP >= 0 ->
-    ticktime_res(request({new_ticktime, T*250, TP*1000})).
+    ticktime_res(request({new_ticktime, T*1000, TP*1000})).
 
 -spec set_net_ticktime(NetTicktime) -> Res when
       NetTicktime :: pos_integer(),
@@ -283,8 +285,8 @@ monitor_nodes(Flag, Opts) ->
     end.
 
 %% ...
-ticktime_res({A, I}) when is_atom(A), is_integer(I) -> {A, I div 250};
-ticktime_res(I)      when is_integer(I)          -> I div 250;
+ticktime_res({A, I}) when is_atom(A), is_integer(I) -> {A, I div 1000};
+ticktime_res(I)      when is_integer(I)          -> I div 1000;
 ticktime_res(A)      when is_atom(A)             -> A.
 
 %% Called though BIF's
@@ -366,21 +368,69 @@ retry_request_maybe(Req) ->
 %% This function is used to dynamically start the
 %% distribution.
 
-start(Args) ->
-    erl_distribution:start(Args).
+-spec start(Name, Options) -> {ok, pid()} | {error, Reason} when
+      Options :: #{name_domain => NameDomain,
+                   net_ticktime => NetTickTime,
+                   net_tickintensity => NetTickIntensity},
+      Name :: atom(),
+      NameDomain :: shortnames | longnames,
+      NetTickTime :: pos_integer(),
+      NetTickIntensity :: 4..1000,
+      Reason :: {already_started, pid()} | term().
+
+start(Name, Options) when is_atom(Name), is_map(Options) ->
+    try
+        maps:foreach(fun (name_domain, Val) when Val == shortnames;
+                                                 Val == longnames ->
+                             ok;
+                         (net_ticktime, Val) when is_integer(Val),
+                                                  Val > 0 ->
+                             ok;
+                         (net_tickintensity, Val) when is_integer(Val),
+                                                       4 =< Val,
+                                                       Val =< 1000 ->
+                             ok;
+                         (Opt, Val) ->
+                             error({invalid_option, Opt, Val})
+                     end, Options)
+    catch error:Reason ->
+            error(Reason, [Name, Options])
+    end,
+    erl_distribution:start(Options#{name => Name});
+start(Name, Options) when is_map(Options) ->
+    error(invalid_name, [Name, Options]);
+start(Name, Options) ->
+    error(invalid_options, [Name, Options]).
+
+-spec start(Options) -> {ok, pid()} | {error, Reason} when
+      Options :: nonempty_list(Name | NameDomain | TickTime),
+      Name :: atom(),
+      NameDomain :: shortnames | longnames,
+      TickTime :: pos_integer(),
+      Reason :: {already_started, pid()} | term().
+
+start([Name]) when is_atom(Name) ->
+    start([Name, longnames, 15000]);
+start([Name, NameDomain]) when is_atom(Name),
+                               is_atom(NameDomain) ->
+    start([Name, NameDomain, 15000]);
+start([Name, NameDomain, TickTime]) when is_atom(Name),
+                                         is_atom(NameDomain),
+                                         is_integer(TickTime),
+                                         TickTime > 0 ->
+    %% NetTickTime is in seconds. TickTime is time in milliseconds
+    %% between ticks when net tick intensity is 4. We round upwards...
+    NetTickTime = ((TickTime*4-1) div 1000)+1,
+    start(Name, #{name_domain => NameDomain,
+                  net_ticktime => NetTickTime,
+                  net_tickintensity => 4}).
 
 %% This is the main startup routine for net_kernel (only for internal
-%% use by the Kernel application.
+%% use) by the Kernel application.
 
-start_link([Name], CleanHalt, NetSup) ->
-    start_link([Name, longnames], CleanHalt, NetSup);
-start_link([Name, LongOrShortNames], CleanHalt, NetSup) ->
-    start_link([Name, LongOrShortNames, 15000], CleanHalt, NetSup);
-
-start_link([Name, LongOrShortNames, Ticktime], CleanHalt, NetSup) ->
-    Args = {Name, LongOrShortNames, Ticktime, CleanHalt, NetSup},
+start_link(StartOpts) ->
     case gen_server:start_link({local, net_kernel}, ?MODULE,
-			       Args, []) of
+			       make_init_opts(StartOpts), []) of
 	{ok, Pid} ->
 	    {ok, Pid};
 	{error, {already_started, Pid}} ->
@@ -389,16 +439,70 @@ start_link([Name, LongOrShortNames, Ticktime], CleanHalt, NetSup) ->
 	    exit(nodistribution)
     end.
 
-init({Name, LongOrShortNames, TickT, CleanHalt, NetSup}) ->
+make_init_opts(Opts) ->
+    %% Net tick time given in seconds, but kept in milliseconds...
+    NTT1 = case maps:find(net_ticktime, Opts) of
+               {ok, NTT0} ->
+                   NTT0*1000;
+               error ->
+                   case application:get_env(kernel, net_ticktime) of
+                       {ok, NTT0} when is_integer(NTT0), NTT0 < 1 ->
+                           1000;
+                       {ok, NTT0} when is_integer(NTT0) ->
+                           NTT0*1000;
+                       _ ->
+                           60000
+                   end
+           end,
+
+    NTI = case maps:find(net_tickintensity, Opts) of
+              {ok, NTI0} ->
+                  NTI0;
+              error ->
+                  case application:get_env(kernel, net_tickintensity) of
+                      {ok, NTI0} when is_integer(NTI0), NTI0 < 4 ->
+                          4;
+                      {ok, NTI0} when is_integer(NTI0), NTI0 > 1000 ->
+                          1000;
+                      {ok, NTI0} when is_integer(NTI0) ->
+                          NTI0;
+                      _ ->
+                          4
+                  end
+          end,
+
+    %% Net tick time needs to be a multiple of net tick intensity;
+    %% round net tick time upwards if not...
+    NTT = if NTT1 rem NTI =:= 0 -> NTT1;
+             true -> ((NTT1 div NTI) + 1) * NTI
+          end,
+    
+    ND = case maps:find(name_domain, Opts) of
+             {ok, ND0} ->
+                 ND0;
+             error ->
+                 longnames
+         end,
+
+    Opts#{net_ticktime => NTT, net_tickintensity => NTI, name_domain => ND}.
+
+init(#{name := Name,
+       name_domain := NameDomain,
+       net_ticktime := NetTicktime,
+       net_tickintensity := NetTickIntensity,
+       clean_halt := CleanHalt,
+       supervisor := Supervisor}) ->
     process_flag(trap_exit,true),
-    case init_node(Name, LongOrShortNames, CleanHalt) of
+    case init_node(Name, NameDomain, CleanHalt) of
 	{ok, Node, Listeners} ->
 	    process_flag(priority, max),
-	    Ticktime = to_integer(TickT),
-	    Ticker = spawn_link(net_kernel, ticker, [self(), Ticktime]),
+            TickInterval = NetTicktime div NetTickIntensity,
+	    Ticker = spawn_link(net_kernel, ticker, [self(), TickInterval]),
 	    {ok, #state{node = Node,
-			type = LongOrShortNames,
-			tick = #tick{ticker = Ticker, time = Ticktime},
+			type = NameDomain,
+			tick = #tick{ticker = Ticker,
+                                     time = NetTicktime,
+                                     intensity = NetTickIntensity},
 			connecttime = connecttime(),
 			connections =
 			ets:new(sys_dist,[named_table,
@@ -407,7 +511,7 @@ init({Name, LongOrShortNames, TickT, CleanHalt, NetSup}) ->
 			listen = Listeners,
 			allowed = [],
 			verbose = 0,
-                        supervisor = NetSup
+                        supervisor = Supervisor
 		       }};
 	Error ->
 	    {stop, Error}
@@ -640,8 +744,7 @@ handle_call({verbose, Level}, From, State) ->
 %%
 
 %% The tick field of the state contains either a #tick{} or a
-%% #tick_change{} record if the ticker process has been upgraded;
-%% otherwise, an integer or an atom.
+%% #tick_change{} record.
 
 handle_call(ticktime, From, #state{tick = #tick{time = T}} = State) ->
     async_reply({reply, T, State}, From);
@@ -653,22 +756,46 @@ handle_call({new_ticktime,T,_TP}, From, #state{tick = #tick{time = T}} = State) 
     async_reply({reply, unchanged, State}, From);
 
 handle_call({new_ticktime,T,TP}, From, #state{tick = #tick{ticker = Tckr,
-							time = OT}} = State) ->
+                                                           time = OT,
+                                                           intensity = I}} = State) ->
     ?tckr_dbg(initiating_tick_change),
-    start_aux_ticker(T, OT, TP),
-    How = case T > OT of
-	      true ->
-		  ?tckr_dbg(longer_ticktime),
-		  Tckr ! {new_ticktime,T},
-		  longer;
-	      false ->
-		  ?tckr_dbg(shorter_ticktime),
-		  shorter
-	  end,
-    async_reply({reply, change_initiated,
-                 State#state{tick = #tick_change{ticker = Tckr,
-                                                 time = T,
-                                                 how = How}}}, From);
+    %% We need to preserve tick intensity and net tick time needs to be a
+    %% multiple of tick intensity...
+    {NT, NIntrvl} = case T < I of
+                        true ->
+                            %% Max 1 tick per millisecond implies that
+                            %% minimum net tick time equals intensity...
+                            {I, 1};
+                        _ ->
+                            NIntrvl0 = T div I,
+                            case T rem I of
+                                0 ->
+                                    {T, NIntrvl0};
+                                _ ->
+                                    %% Round net tick time upwards...
+                                    {(NIntrvl0+1)*I, NIntrvl0+1}
+                            end
+                    end,
+    case NT == OT of
+        true ->
+                async_reply({reply, unchanged, State}, From);
+        false ->
+            start_aux_ticker(NIntrvl, OT div I, TP),
+            How = case NT > OT of
+                      true ->
+                          ?tckr_dbg(longer_ticktime),
+                          Tckr ! {new_ticktime, NIntrvl},
+                          longer;
+                      false ->
+                          ?tckr_dbg(shorter_ticktime),
+                          shorter
+                  end,
+            async_reply({reply, change_initiated,
+                         State#state{tick = #tick_change{ticker = Tckr,
+                                                         time = NT,
+                                                         intensity = I,
+                                                         how = How}}}, From)
+    end;
 
 handle_call({new_ticktime,_T,_TP},
 	    From,
@@ -676,36 +803,13 @@ handle_call({new_ticktime,_T,_TP},
     async_reply({reply, {ongoing_change_to, T}, State}, From);
 
 handle_call({setopts, new, Opts}, From, State) ->
-    Ret = setopts_new(Opts, State),
-    async_reply({reply, Ret, State}, From);
+    setopts_new(Opts, From, State);
 
 handle_call({setopts, Node, Opts}, From, State) ->
-    Return =
-	case ets:lookup(sys_dist, Node) of
-	    [Conn] when Conn#connection.state =:= up ->
-		case call_owner(Conn#connection.owner, {setopts, Opts}) of
-		    {ok, Ret} -> Ret;
-		    _ -> {error, noconnection}
-		end;
-
-	    _ ->
-		{error, noconnection}
-    end,
-    async_reply({reply, Return, State}, From);
+    opts_node(setopts, Node, Opts, From, State);
 
 handle_call({getopts, Node, Opts}, From, State) ->
-    Return =
-	case ets:lookup(sys_dist, Node) of
-	    [Conn] when Conn#connection.state =:= up ->
-		case call_owner(Conn#connection.owner, {getopts, Opts}) of
-		    {ok, Ret} -> Ret;
-		    _ -> {error, noconnection}
-		end;
-
-	    _ ->
-		{error, noconnection}
-    end,
-    async_reply({reply, Return, State}, From);
+    opts_node(getopts, Node, Opts, From, State);
 
 handle_call(_Msg, _From, State) ->
     {noreply, State}.
@@ -729,6 +833,16 @@ code_change(_OldVsn, State, _Extra) ->
 %% ------------------------------------------------------------
 
 terminate(Reason, State) ->
+    case State of
+        #state{supervisor = {restart, _}} ->
+            ok;
+        _ ->
+            case persistent_term:get(net_kernel, undefined) of
+                undefined -> ok;
+                _ -> persistent_term:erase(net_kernel)
+            end
+    end,
+
     case Reason of
         no_network ->
             ok;
@@ -807,7 +921,8 @@ handle_info({dist_ctrlr, Ctrlr, Node, SetupPid} = Msg,
 %%
 %% A node has successfully been connected.
 %%
-handle_info({SetupPid, {nodeup,Node,Address,Type,NamedMe}}, State) ->
+handle_info({SetupPid, {nodeup,Node,Address,Type,NamedMe}},
+            #state{tick = Tick} = State) ->
     case ets:lookup(sys_dist, Node) of
 	[Conn] when (Conn#connection.state =:= pending)
                     andalso (Conn#connection.owner =:= SetupPid)
@@ -817,7 +932,11 @@ handle_info({SetupPid, {nodeup,Node,Address,Type,NamedMe}}, State) ->
                                                  waiting = [],
                                                  type = Type,
                                                  named_me = NamedMe}),
-            SetupPid ! {self(), inserted},
+            TickIntensity = case Tick of
+                              #tick{intensity = TI} -> TI;
+                              #tick_change{intensity = TI} ->  TI
+                         end,
+            SetupPid ! {self(), inserted, TickIntensity},
             reply_waiting(Node,Conn#connection.waiting, true),
             State1 = case NamedMe of
                          true -> State#state{node = node()};
@@ -847,12 +966,17 @@ handle_info({AcceptPid, {accept_pending,MyNode,NodeOrHost,Type}}, State0) ->
 		    %% change pending process.
 		    %%
 		    OldOwner = Conn#connection.owner,
-		    ?debug({net_kernel, remark, old, OldOwner, new, AcceptPid}),
-		    exit(OldOwner, remarked),
-		    receive
-			{'EXIT', OldOwner, _} ->
-			    true
-		    end,
+                    case maps:is_key(OldOwner, State#state.conn_owners) of
+                        true ->
+                            ?debug({net_kernel, remark, old, OldOwner, new, AcceptPid}),
+                            exit(OldOwner, remarked),
+                            receive
+                                {'EXIT', OldOwner, _} ->
+                                    true
+                            end;
+                        false ->
+                            ok % Owner already exited
+                    end,
 		    ets:insert(sys_dist, Conn#connection{owner = AcceptPid}),
 		    AcceptPid ! {self(),{accept_pending,ok_pending}},
                     Owners = maps:remove(OldOwner, State#state.conn_owners),
@@ -901,6 +1025,33 @@ handle_info({SetupPid, {is_pending, Node}}, State) ->
     SetupPid ! {self(), {is_pending, Reply}},
     {noreply, State};
 
+handle_info({AcceptPid, {wait_pending, Node}}, State) ->
+    case get_conn(Node) of
+        {ok, #connection{state = up_pending,
+                         ctrlr = OldCtrlr,
+                         pending_owner = AcceptPid}} ->
+            %% Kill old controller to make sure new connection setup
+            %% does not get stuck.
+            ?debug({net_kernel, wait_pending, kill, OldCtrlr, new, AcceptPid}),
+            exit(OldCtrlr, wait_pending);
+        _ ->
+            %% Old connnection maybe already gone
+            ignore
+    end,
+    %% Exiting controller will trigger {Kernel,pending} reply
+    %% in up_pending_nodedown()
+    {noreply, State};
+
+%%
+%% Responses to asynchronous requests we've made...
+%%
+handle_info({ReqId, Reply},
+            #state{req_map = ReqMap} = S) when is_map_key(ReqId, ReqMap) ->
+    handle_async_response(reply, ReqId, Reply, S);
+handle_info({'DOWN', ReqId, process, _Pid, Reason},
+            #state{req_map = ReqMap} = S) when is_map_key(ReqId, ReqMap) ->
+    handle_async_response(down, ReqId, Reason, S);
+
 %%
 %% Handle different types of process terminations.
 %%
@@ -928,34 +1079,37 @@ handle_info({From,badcookie,_To,_Mess}, State) ->
 %%
 handle_info(tick, State) ->
     ?tckr_dbg(tick),
-    ok = maps:fold(fun (Pid, _Node, ok) ->
-                          Pid ! {self(), tick},
-                          ok
-                   end,
-                   ok,
-                   State#state.conn_owners),
+    maps:foreach(fun (Pid, _Node) ->
+                     Pid ! {self(), tick}
+              end,
+              State#state.conn_owners),
     {noreply,State};
 
 handle_info(aux_tick, State) ->
     ?tckr_dbg(aux_tick),
-    ok = maps:fold(fun (Pid, _Node, ok) ->
-                          Pid ! {self(), aux_tick},
-                          ok
-                   end,
-                   ok,
-                   State#state.conn_owners),
+    maps:foreach(fun (Pid, _Node) ->
+                     Pid ! {self(), aux_tick}
+              end,
+              State#state.conn_owners),
     {noreply,State};
 
 handle_info(transition_period_end,
 	    #state{tick = #tick_change{ticker = Tckr,
 				       time = T,
+                                       intensity = I,
 				       how = How}} = State) ->
     ?tckr_dbg(transition_period_ended),
     case How of
-	shorter -> Tckr ! {new_ticktime, T}, done;
-	_       -> done
+	shorter ->
+            Interval = T div I,
+            Tckr ! {new_ticktime, Interval},
+            ok;
+	_ ->
+            ok
     end,
-    {noreply,State#state{tick = #tick{ticker = Tckr, time = T}}};
+    {noreply,State#state{tick = #tick{ticker = Tckr,
+                                      time = T,
+                                      intensity = I}}};
 
 handle_info(X, State) ->
     error_msg("Net kernel got ~tw~n",[X]),
@@ -1380,12 +1534,6 @@ ticker(Kernel, Tick) when is_integer(Tick) ->
     ?tckr_dbg(ticker_started),
     ticker_loop(Kernel, Tick).
 
-to_integer(T) when is_integer(T) -> T;
-to_integer(T) when is_atom(T) ->
-    list_to_integer(atom_to_list(T));
-to_integer(T) when is_list(T) ->
-    list_to_integer(T).
-
 ticker_loop(Kernel, Tick) ->
     receive
 	{new_ticktime, NewTick} ->
@@ -1809,7 +1957,7 @@ start_protos_listen(Name, Host, Node, [Proto | Ps], Ls, CleanHalt) ->
     catch error:undef ->
             proto_error(CleanHalt, Proto, "not supported"),
             start_protos_listen(Name, Host, Node, Ps, Ls, CleanHalt);
-          error:Reason ->
+          _:Reason ->
             register_error(CleanHalt, Proto, Reason),
             start_protos_listen(Name, Host, Node, Ps, Ls, CleanHalt)
     end;
@@ -2070,16 +2218,39 @@ async_gen_server_reply(From, Msg) ->
         _:_ -> ok
     end.
 
-call_owner(Owner, Msg) ->
-    Mref = monitor(process, Owner),
-    Owner ! {self(), Mref, Msg},
-    receive
-	{Mref, Reply} ->
-	    erlang:demonitor(Mref, [flush]),
-	    {ok, Reply};
-	{'DOWN', Mref, _, _, _} ->
-	    error
+handle_async_response(ResponseType, ReqId, Result, #state{req_map = ReqMap0} = S0) ->
+    if ResponseType == down -> ok;
+       true -> _ = erlang:demonitor(ReqId, [flush]), ok
+    end,
+    case maps:take(ReqId, ReqMap0) of
+
+        {{SetGetOpts, From}, ReqMap1} when SetGetOpts == setopts;
+                                           SetGetOpts == getopts ->
+            Reply = case ResponseType of
+                        reply -> Result;
+                        down -> {error, noconnection}
+                    end,
+            S1 = S0#state{req_map = ReqMap1},
+            async_reply({reply, Reply, S1}, From);
+
+        {{setopts_new, Op}, ReqMap1} ->
+            case maps:get(Op, ReqMap1) of
+                {setopts_new, From, 1} ->
+                    %% Last response for this operation...
+                    ReqMap2 = maps:remove(Op, ReqMap1),
+                    S1 = S0#state{req_map = ReqMap2},
+                    async_reply({reply, ok, S1}, From);
+                {setopts_new, From, N} ->
+                    ReqMap2 = ReqMap1#{Op => {setopts_new, From, N-1}},
+                    S1 = S0#state{req_map = ReqMap2},
+                    {noreply, S1}
+            end
     end.
+
+send_owner_request(ReqOpMap, Label, Owner, Msg) ->
+    ReqId = monitor(process, Owner),
+    Owner ! {self(), ReqId, Msg},
+    ReqOpMap#{ReqId => Label}.
 
 -spec setopts(Node, Options) -> ok | {error, Reason} | ignored when
       Node :: node() | new,
@@ -2089,15 +2260,16 @@ call_owner(Owner, Msg) ->
 setopts(Node, Opts) when is_atom(Node), is_list(Opts) ->
     request({setopts, Node, Opts}).
 
-setopts_new(Opts, State) ->
+setopts_new(Opts, From, State) ->
     %% First try setopts on listening socket(s)
     %% Bail out on failure.
     %% If successful, we are pretty sure Opts are ok
     %% and we continue with config params and pending connections.
     case setopts_on_listen(Opts, State#state.listen) of
 	ok ->
-	    setopts_new_1(Opts);
-	Fail -> Fail
+	    setopts_new_1(Opts, From, State);
+	Fail ->
+            async_reply({reply, Fail, State}, From)
     end.
 
 setopts_on_listen(_, []) -> ok;
@@ -2110,7 +2282,7 @@ setopts_on_listen(Opts, [#listen {listen = LSocket, module = Mod} | T]) ->
 	error:undef -> {error, enotsup}
     end.
 
-setopts_new_1(Opts) ->
+setopts_new_1(Opts, From, #state{req_map = ReqMap0} = State) ->
     ConnectOpts = case application:get_env(kernel, inet_dist_connect_options) of
 		      {ok, CO} -> CO;
 		      _ -> []
@@ -2133,13 +2305,36 @@ setopts_new_1(Opts) ->
     PendingConns = ets:select(sys_dist, [{'_',
 					  [{'=/=',{element,#connection.state,'$_'},up}],
 					  ['$_']}]),
-    lists:foreach(fun(#connection{state = pending, owner = Owner}) ->
-			  call_owner(Owner, {setopts, Opts});
-		     (#connection{state = up_pending, pending_owner = Owner}) ->
-			  call_owner(Owner, {setopts, Opts});
-		     (_) -> ignore
-		  end, PendingConns),
-    ok.
+
+    Op = make_ref(),
+    SendReq = fun (ReqMap, N, Owner) ->
+                      {send_owner_request(ReqMap, {setopts_new, Op},
+                                          Owner,
+                                          {setopts, Opts}),
+                       N+1}
+              end,
+    {ReqMap1, NoReqs} = lists:foldl(fun(#connection{state = pending,
+                                                    owner = Owner},
+                                        {ReqMap, N}) ->
+                                            SendReq(ReqMap, N, Owner);
+                                       (#connection{state = up_pending,
+                                                    pending_owner = Owner},
+                                        {ReqMap, N}) ->
+                                            SendReq(ReqMap, N, Owner);
+                                       (_, Acc) ->
+                                            Acc
+                                    end,
+                                    {ReqMap0, 0},
+                                    PendingConns),
+    if NoReqs == 0 ->
+            async_reply({reply, ok, State}, From);
+       true ->
+            %% Reply made later from handle_async_response() when
+            %% we've got responses from all owners that we've
+            %% made requests to...
+            ReqMap2 = ReqMap1#{Op => {setopts_new, From, NoReqs}},
+            {noreply, State#state{req_map = ReqMap2}}
+    end.
 
 merge_opts([], B) ->
     B;
@@ -2157,4 +2352,20 @@ merge_opts([H|T], B0) ->
 
 getopts(Node, Opts) when is_atom(Node), is_list(Opts) ->
     request({getopts, Node, Opts}).
+
+opts_node(Op, Node, Opts, From, #state{req_map = ReqMap0} = S0) ->
+    case ets:lookup(sys_dist, Node) of
+        [Conn] when Conn#connection.state =:= up ->
+            ReqMap1 = send_owner_request(ReqMap0,
+                                         {Op, From},
+                                         Conn#connection.owner,
+                                         {Op, Opts}),
+            %% Reply made later from handle_async_response() when
+            %% we get a response from the owner that we made the
+            %% request to...
+            S1 = S0#state{req_map = ReqMap1},
+            {noreply, S1};
+        _ ->
+            async_reply({reply, {error, noconnection}, S0}, From)
+    end.
 

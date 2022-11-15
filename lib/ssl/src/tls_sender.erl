@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2018-2020. All Rights Reserved.
+%% Copyright Ericsson AB 2018-2022. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -30,28 +30,43 @@
 -include("tls_handshake_1_3.hrl").
 
 %% API
--export([start/0, start/1, initialize/2, send_data/2,
-         send_post_handshake/2, send_alert/2,
-         send_and_ack_alert/2, setopts/2, renegotiate/1, peer_renegotiate/1, downgrade/2,
+-export([start_link/0,
+         start_link/1,
+         initialize/2,
+         send_data/2,
+         send_post_handshake/2,
+         send_alert/2,
+         send_and_ack_alert/2,
+         setopts/2,
+         renegotiate/1,
+         peer_renegotiate/1,
+         downgrade/2,
          update_connection_state/3,
-         dist_tls_socket/1, dist_handshake_complete/3]).
+         dist_tls_socket/1,
+         dist_handshake_complete/3]).
 
 %% gen_statem callbacks
--export([callback_mode/0, init/1, terminate/3, code_change/4]).
--export([init/3, connection/3, handshake/3, death_row/3]).
+-export([callback_mode/0,
+         init/1,
+         terminate/3,
+         code_change/4]).
+-export([init/3,
+         connection/3,
+         handshake/3,
+         death_row/3]).
 
 -record(static,
         {connection_pid,
          role,
          socket,
          socket_options,
+         erl_dist,
          trackers,
          transport_cb,
          negotiated_version,
          renegotiate_at,
          key_update_at,  %% TLS 1.3
          bytes_sent,     %% TLS 1.3
-         connection_monitor,
          dist_handle,
          log_level
         }).
@@ -65,10 +80,10 @@
 %%% API
 %%%===================================================================
 %%--------------------------------------------------------------------
--spec start() -> {ok, Pid :: pid()} |
+-spec start_link() -> {ok, Pid :: pid()} |
                  ignore |
                  {error, Error :: term()}.
--spec start(list()) -> {ok, Pid :: pid()} |
+-spec start_link(list()) -> {ok, Pid :: pid()} |
                        ignore |
                        {error, Error :: term()}.
 
@@ -76,10 +91,10 @@
 %%  may happen when a socket is busy (busy port) and the
 %%  same process is sending and receiving 
 %%--------------------------------------------------------------------
-start() ->
-    gen_statem:start(?MODULE, [], []).
-start(SpawnOpts) ->
-    gen_statem:start(?MODULE, [], SpawnOpts).
+start_link() ->
+    gen_statem:start_link(?MODULE, [], []).
+start_link(SpawnOpts) ->
+    gen_statem:start_link(?MODULE, [], SpawnOpts).
 
 %%--------------------------------------------------------------------
 -spec initialize(pid(), map()) -> ok. 
@@ -115,7 +130,7 @@ send_alert(Pid, Alert) ->
 %%--------------------------------------------------------------------
 -spec send_and_ack_alert(pid(), #alert{}) -> _.
 %% Description: TLS connection process wants to send an Alert
-%% in the connection state and recive an ack.
+%% in the connection state and receive an ack.
 %%--------------------------------------------------------------------
 send_and_ack_alert(Pid, Alert) ->
     gen_statem:call(Pid, {ack_alert, Alert}, ?DEFAULT_TIMEOUT).
@@ -187,18 +202,16 @@ dist_tls_socket(Pid) ->
 callback_mode() -> 
     state_functions.
 
-
--define(HANDLE_COMMON,
-        ?FUNCTION_NAME(Type, Msg, StateData) ->
-               handle_common(Type, Msg, StateData)).
 %%--------------------------------------------------------------------
 -spec init(Args :: term()) ->
                   gen_statem:init_result(atom()).
 %%--------------------------------------------------------------------
 init(_) ->
-    %% Note: Should not trap exits so that this process
-    %% will be terminated if tls_connection process is
-    %% killed brutally
+    %% As this process is now correctly supervised
+    %% together with the connection process and the significant
+    %% child mechanism we want to handle supervisor shutdown
+    %% to achieve a normal shutdown avoiding SASL reports.
+    process_flag(trap_exit, true),
     {ok, init, #data{}}.
 
 %%--------------------------------------------------------------------
@@ -211,6 +224,7 @@ init({call, From}, {Pid, #{current_write := WriteState,
                            role := Role,
                            socket := Socket,
                            socket_options := SockOpts,
+                           erl_dist := IsErlDist,
                            trackers := Trackers,
                            transport_cb := Transport,
                            negotiated_version := Version,
@@ -218,14 +232,13 @@ init({call, From}, {Pid, #{current_write := WriteState,
                            key_update_at := KeyUpdateAt,
                            log_level := LogLevel}},
      #data{connection_states = ConnectionStates, static = Static0} = StateData0) ->
-    Monitor = erlang:monitor(process, Pid),
     StateData = 
         StateData0#data{connection_states = ConnectionStates#{current_write => WriteState},
                         static = Static0#static{connection_pid = Pid,
-                                                connection_monitor = Monitor,
                                                 role = Role,
                                                 socket = Socket,
                                                 socket_options = SockOpts,
+                                                erl_dist = IsErlDist,
                                                 trackers = Trackers,
                                                 transport_cb = Transport,
                                                 negotiated_version = Version,
@@ -234,8 +247,10 @@ init({call, From}, {Pid, #{current_write := WriteState,
                                                 bytes_sent = 0,
                                                 log_level = LogLevel}},
     {next_state, handshake, StateData, [{reply, From, ok}]};
+init(info = Type, Msg, StateData) ->
+    handle_common(Type, Msg, StateData);
 init(_, _, _) ->
-    %% Just in case anything else sneeks through
+    %% Just in case anything else sneaks through
     {keep_state_and_data, [postpone]}.
 
 %%--------------------------------------------------------------------
@@ -327,7 +342,8 @@ connection(info, {send, From, Ref, Data}, _StateData) ->
     {keep_state_and_data,
      [{next_event, {call, {self(), undefined}},
        {application_data, erlang:iolist_to_iovec(Data)}}]};
-?HANDLE_COMMON.
+connection(Type, Msg, StateData) ->
+    handle_common(Type, Msg, StateData).
 
 %%--------------------------------------------------------------------
 -spec handshake(gen_statem:event_type(),
@@ -359,7 +375,8 @@ handshake(info, tick, _) ->
 handshake(info, {send, _, _, _}, _) ->
     %% Testing only, OTP distribution test suites...
     {keep_state_and_data, [postpone]};
-?HANDLE_COMMON.
+handshake(Type, Msg, StateData) ->
+    handle_common(Type, Msg, StateData).
 
 %%--------------------------------------------------------------------
 -spec death_row(gen_statem:event_type(),
@@ -369,6 +386,8 @@ handshake(info, {send, _, _, _}, _) ->
 %%--------------------------------------------------------------------
 death_row(state_timeout, Reason, _State) ->
     {stop, {shutdown, Reason}};
+death_row(info = Type, Msg, State) ->
+    handle_common(Type, Msg, State);
 death_row(_Type, _Msg, _State) ->
     %% Waste all other events
     keep_state_and_data.
@@ -395,32 +414,33 @@ code_change(_OldVsn, State, Data, _Extra) ->
 %%% Internal functions
 %%%===================================================================
 
-handle_set_opts(
-  From, Opts, #data{static = #static{socket_options = SockOpts} = Static} = StateData) ->
+handle_set_opts(From, Opts, #data{static = #static{socket_options = SockOpts} = Static} = StateData) ->
     {keep_state, StateData#data{static = Static#static{socket_options = set_opts(SockOpts, Opts)}},
      [{reply, From, ok}]}.
 
-handle_common(
-  {call, From}, {set_opts, Opts},
+handle_common({call, From}, {set_opts, Opts},
   #data{static = #static{socket_options = SockOpts} = Static} = StateData) ->
     {keep_state, StateData#data{static = Static#static{socket_options = set_opts(SockOpts, Opts)}},
      [{reply, From, ok}]};
-handle_common(
-  info, {'DOWN', Monitor, _, _, Reason},
-  #data{static = #static{connection_monitor = Monitor,
-                         dist_handle = Handle}} = StateData) when Handle =/= undefined ->
-    {next_state, death_row, StateData,
-     [{state_timeout, 5000, Reason}]};
-handle_common(
-  info, {'DOWN', Monitor, _, _, _},
-  #data{static = #static{connection_monitor = Monitor}} = StateData) ->
-    {stop, normal, StateData};
+handle_common(info, {'EXIT', _Sup, shutdown},
+              #data{static = #static{erl_dist = true}} = StateData) ->
+    %% When the connection is on its way down operations
+    %% begin to fail. We wait for 5 seconds to receive
+    %% possible exit signals for one of our links to the other
+    %% involved distribution parties, in which case we want to use
+    %% their exit reason for the connection teardown.
+    {next_state, death_row, StateData, [{state_timeout, 5000, shutdown}]};
+handle_common(info, {'EXIT', _Dist, Reason},
+              #data{static = #static{erl_dist = true}} = StateData) ->
+    {stop, {shutdown, Reason}, StateData};
+handle_common(info, {'EXIT', _Sup, shutdown}, StateData) ->
+    {stop, shutdown, StateData};
 handle_common(info, Msg, #data{static = #static{log_level = Level}}) ->
-    ssl_logger:log(info, Level, #{event => "TLS sender recived unexpected info", 
+    ssl_logger:log(info, Level, #{event => "TLS sender received unexpected info", 
                                   reason => [{message, Msg}]}, ?LOCATION),
     keep_state_and_data;
 handle_common(Type, Msg, #data{static = #static{log_level = Level}}) ->
-    ssl_logger:log(error, Level, #{event => "TLS sender recived unexpected event", 
+    ssl_logger:log(error, Level, #{event => "TLS sender received unexpected event", 
                                    reason => [{type, Type}, {message, Msg}]}, ?LOCATION),
     keep_state_and_data.
 
@@ -613,7 +633,9 @@ call(FsmPid, Event) ->
  	    {error, closed};
 	exit:{normal, _} ->
 	    {error, closed};
-	exit:{{shutdown, _},_} ->
+	exit:{shutdown,_} ->
+	    {error, closed};
+        exit:{{shutdown, _},_} ->
 	    {error, closed}
     end.
 

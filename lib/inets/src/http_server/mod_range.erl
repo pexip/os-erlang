@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %% 
-%% Copyright Ericsson AB 2001-2016. All Rights Reserved.
+%% Copyright Ericsson AB 2001-2021. All Rights Reserved.
 %% 
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -82,7 +82,7 @@ send_range_response(Path, Info, Ranges, FileInfo, LastModified)->
 				LastModified)
     end.
 %%More than one range specified
-%%Send a multipart reponse to the user
+%%Send a multipart response to the user
 %
 %%An example of an multipart range response
 
@@ -107,7 +107,7 @@ send_multi_range_response(Path,Info,RangeList)->
     case file:open(Path, [raw,binary]) of
 	{ok, FileDescriptor} ->
 	    file:close(FileDescriptor),
-	    Suffix = httpd_util:suffix(Path),
+	    Suffix = httpd_util:strip_extension_dot(Path),
 	    PartMimeType = httpd_util:lookup_mime_default(Info#mod.config_db,
 							  Suffix,"text/plain"),
 	    {FileInfo,  LastModified} = get_modification_date(Path),
@@ -185,7 +185,7 @@ send_range_response(Path, Info, Start, Stop, FileInfo, LastModified)->
     case file:open(Path, [raw,binary]) of
 	{ok, FileDescriptor} ->
 	    file:close(FileDescriptor),
-	    Suffix = httpd_util:suffix(Path),
+	    Suffix = httpd_util:strip_extension_dot(Path),
 	    MimeType = httpd_util:lookup_mime_default(Info#mod.config_db,
 						      Suffix,"text/plain"),
 	    Size = get_range_size(Start,Stop,FileInfo),
@@ -342,7 +342,7 @@ get_file_chunk_size(Position, End, _DefaultChunkSize) ->
 
 %Get the size of the range to send. Remember that
 %A range is from startbyte up to endbyte which means that
-%the nuber of byte in a range is (StartByte-EndByte)+1
+%the number of byte in a range is (StartByte-EndByte)+1
 
 get_range_size(from_end, Stop, _FileInfo)->
     integer_to_list(-1*Stop);
@@ -377,7 +377,7 @@ format_range({StartByte,[]})->
     {from_start,list_to_integer(StartByte)};
 format_range({StartByte,EndByte})->        
     {list_to_integer(StartByte),list_to_integer(EndByte)}.
-%Last case return the splitted range
+%Last case return the split range
 split_range([],Current,Other)->
     {lists:reverse(Other),lists:reverse(Current)};
 

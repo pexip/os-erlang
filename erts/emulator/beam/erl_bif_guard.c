@@ -1,7 +1,7 @@
 /*
  * %CopyrightBegin%
  *
- * Copyright Ericsson AB 2006-2020. All Rights Reserved.
+ * Copyright Ericsson AB 2006-2021. All Rights Reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -239,7 +239,7 @@ static BIF_RETTYPE erlang_length_trap(BIF_ALIST_3)
              * Signal an error. The original argument was tucked away in BIF_ARG_3.
              */
             ERTS_BIF_ERROR_TRAPPED1(BIF_P, BIF_P->freason,
-                                    &bif_trap_export[BIF_length_1], BIF_ARG_3);
+                                    BIF_TRAP_EXPORT(BIF_length_1), BIF_ARG_3);
         }
     }
 }
@@ -430,9 +430,6 @@ double_to_integer(Process* p, double x)
 	d = x;            /* trunc */
 	xp[i] = d;        /* store digit */
 	x -= d;           /* remove integer part */
-    }
-    while ((ds & (BIG_DIGITS_PER_WORD-1)) != 0) {
-	xp[ds++] = 0;
     }
 
     if (is_negative) {

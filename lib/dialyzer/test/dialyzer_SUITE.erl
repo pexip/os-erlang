@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2015-2016. All Rights Reserved.
+%% Copyright Ericsson AB 2015-2021. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -22,7 +22,7 @@
 -include_lib("common_test/include/ct.hrl").
 
 %% Default timetrap timeout (set in init_per_testcase).
--define(default_timeout, ?t:minutes(1)).
+-define(default_timeout, test_server:minutes(1)).
 -define(application, dialyzer).
 
 %% Test server specific exports
@@ -71,8 +71,8 @@ app_test(doc) ->
 app_test(suite) ->
     [];
 app_test(Config) when is_list(Config) ->
-    ?line ?t:app_test(dialyzer).
+    ?line test_server:app_test(dialyzer).
 
 %% Test that the .appup file does not contain any `basic' errors
 appup_test(Config) when is_list(Config) ->
-    ok = ?t:appup_test(dialyzer).
+    ok = test_server:appup_test(dialyzer).

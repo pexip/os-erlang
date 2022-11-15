@@ -1,7 +1,7 @@
 %% 
 %% %CopyrightBegin%
 %% 
-%% Copyright Ericsson AB 2005-2016. All Rights Reserved.
+%% Copyright Ericsson AB 2005-2021. All Rights Reserved.
 %% 
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -223,12 +223,12 @@ end_per_group(_GroupName, Config) ->
 
 
 init_per_testcase(_Case, Config) when list(Config) ->
-    Dog = ?t:timetrap(?t:minutes(6)),
+    Dog = test_server:timetrap(test_server:minutes(6)),
     [{watchdog, Dog}|Config].
 
 end_per_testcase(_Case, Config) when list(Config) ->
     Dog = ?config(watchdog, Config),
-    ?t:timetrap_cancel(Dog),
+    test_server:timetrap_cancel(Dog),
     Config.
 
 cases() -> 

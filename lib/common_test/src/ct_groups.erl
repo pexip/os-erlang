@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2004-2020. All Rights Reserved.
+%% Copyright Ericsson AB 2004-2021. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -550,11 +550,11 @@ search_and_override([Conf = {conf,Props,Init,Tests,End}], ORSpec, Mod) ->
     Suite = ?val(suite, Props),
     case lists:keysearch(Name, 1, ORSpec) of
 	{value,{Name,default}} ->
-	    [Conf];
+	    [{conf, Props, Init,  search_and_override(Tests, ORSpec, Mod),End}];
 	{value,{Name,ORProps}} ->
-	    [{conf,InsProps(Name,Suite,ORProps),Init,Tests,End}];
+	    [{conf,InsProps(Name,Suite,ORProps),Init, search_and_override(Tests, ORSpec, Mod),End}];
 	{value,{Name,default,[]}} ->
-	    [Conf];
+	    [{conf, Props, Init,  search_and_override(Tests, ORSpec, Mod),End}];
 	{value,{Name,default,SubORSpec}} ->
 	    override_props([Conf], SubORSpec, Name,Mod);
 	{value,{Name,ORProps,SubORSpec}} ->
@@ -562,7 +562,8 @@ search_and_override([Conf = {conf,Props,Init,Tests,End}], ORSpec, Mod) ->
 			    Init,Tests,End}], SubORSpec, Name,Mod);
 	_ ->
 	    [{conf,Props,Init,search_and_override(Tests,ORSpec,Mod),End}]
-    end.
+    end;
+search_and_override(Tests, _, _) -> Tests.
 
 %% Modify the Tests element according to the override specification
 override_props([{conf,Props,Init,Tests,End} | Confs], SubORSpec, Name,Mod) ->

@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %% 
-%% Copyright Ericsson AB 1999-2020. All Rights Reserved.
+%% Copyright Ericsson AB 1999-2021. All Rights Reserved.
 %% 
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -35,7 +35,8 @@
          flat_size/1, get_internal_state/1, instructions/0,
          interpreter_size/0,
          map_info/1, same/2, set_internal_state/2,
-         size_shared/1, copy_shared/1, dirty_cpu/2, dirty_io/2, dirty/3,
+         size_shared/1, copy_shared/1, copy_shared/2,
+         dirty_cpu/2, dirty_io/2, dirty/3,
          lcnt_control/1, lcnt_control/2, lcnt_collect/0, lcnt_clear/0,
          lc_graph/0, lc_graph_to_dot/2, lc_graph_merge/2,
          alloc_blocks_size/1]).
@@ -96,7 +97,14 @@ size_shared(_) ->
 -spec copy_shared(Term) -> term() when
       Term :: term().
 
-copy_shared(_) ->
+copy_shared(Term) ->
+    copy_shared(Term, false).
+
+-spec copy_shared(Term, CopyLiterals) -> term() when
+      Term :: term(),
+      CopyLiterals :: true | false.
+
+copy_shared(_, _) ->
     erlang:nif_error(undef).
 
 -spec get_internal_state(W) -> term() when
@@ -196,8 +204,6 @@ same(_, _) ->
                            (re_loop_limit, non_neg_integer()) -> non_neg_integer();
                            (unicode_loop_limit, default) -> -1;
                            (unicode_loop_limit, non_neg_integer()) -> non_neg_integer();
-                           (hipe_test_reschedule_suspend, term()) -> nil();
-                           (hipe_test_reschedule_resume, pid() | port()) -> boolean();
                            (test_long_gc_sleep, non_neg_integer()) -> true;
                            (kill_dist_connection, port()) -> boolean();
                            (not_running_optimization, boolean()) -> boolean();

@@ -1,7 +1,7 @@
 %
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2007-2019. All Rights Reserved.
+%% Copyright Ericsson AB 2007-2022. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -44,18 +44,11 @@
          aead_encrypt/6, 
          aead_decrypt/6,
 	 suites/1, 
-         all_suites/1, 
+         all_suites/1,
          crypto_support_filters/0,
-	 anonymous_suites/1, 
-         psk_suites/1, 
-         psk_suites_anon/1, 
-         srp_suites/1, 
-         srp_suites_anon/1,
-	 rc4_suites/1, 
-         des_suites/1, 
-         rsa_suites/1, 
-         filter/3, 
-         filter_suites/1, 
+	 anonymous_suites/1,
+         filter/3,
+         filter_suites/1,
          filter_suites/2,
 	 hash_algorithm/1, 
          sign_algorithm/1, 
@@ -65,12 +58,15 @@
          calc_mac_hash/4, 
          calc_mac_hash/6,
          is_stream_ciphersuite/1, 
+         is_supported_sign/2,
          signature_scheme/1,
+         signature_schemes_1_2/1,
          scheme_to_components/1, 
          hash_size/1, 
          effective_key_bits/1,
          key_material/1, 
-         signature_algorithm_to_scheme/1]).
+         signature_algorithm_to_scheme/1,
+         bulk_cipher_algorithm/1]).
 
 %% RFC 8446 TLS 1.3
 -export([generate_client_shares/1,
@@ -327,15 +323,20 @@ suites({3, Minor}) ->
     tls_v1:suites(Minor);
 suites({_, Minor}) ->
     dtls_v1:suites(Minor).
-
+all_suites({3, 4} = Version) ->
+    suites(Version)
+	++ tls_v1:psk_suites({3,3})
+	++ tls_v1:srp_suites({3,3})
+        ++ tls_v1:rsa_suites({3,3})
+        ++ tls_v1:des_suites({3,3})
+        ++ tls_v1:rc4_suites({3,3});
 all_suites({3, _} = Version) ->
     suites(Version)
-	++ psk_suites(Version)
-	++ srp_suites(Version)
-        ++ rsa_suites(Version)
-        ++ des_suites(Version)
-        ++ rc4_suites(Version);
-
+	++ tls_v1:psk_suites(Version)
+	++ tls_v1:srp_suites(Version)
+        ++ tls_v1:rsa_suites(Version)
+        ++ tls_v1:des_suites(Version)
+        ++ tls_v1:rc4_suites(Version);
 all_suites(Version) ->
     dtls_v1:all_suites(Version).
 
@@ -346,202 +347,20 @@ all_suites(Version) ->
 %% Description: Returns a list of the anonymous cipher suites, only supported
 %% if explicitly set by user. Intended only for testing.
 %%--------------------------------------------------------------------
-anonymous_suites({3, N} = Version) ->
-    srp_suites_anon(Version) ++ anonymous_suites(N);
+anonymous_suites({3, N}) ->
+    anonymous_suites(N);
 anonymous_suites({254, _} = Version) ->
     dtls_v1:anonymous_suites(Version);
-anonymous_suites(4) ->
-    []; %% Raw public key negotiation may be used instead
-anonymous_suites( 3 = N) ->
-    psk_suites_anon(N) ++
-    [?TLS_DH_anon_WITH_AES_128_GCM_SHA256,
-     ?TLS_DH_anon_WITH_AES_256_GCM_SHA384,
-     ?TLS_DH_anon_WITH_AES_128_CBC_SHA256,
-     ?TLS_DH_anon_WITH_AES_256_CBC_SHA256,
-     ?TLS_ECDH_anon_WITH_AES_128_CBC_SHA,
-     ?TLS_ECDH_anon_WITH_AES_256_CBC_SHA,
-     ?TLS_ECDH_anon_WITH_3DES_EDE_CBC_SHA,
-     ?TLS_DH_anon_WITH_RC4_128_MD5];
-anonymous_suites(2 = N) ->
-    psk_suites_anon(N) ++
-    [?TLS_ECDH_anon_WITH_AES_128_CBC_SHA,
-     ?TLS_ECDH_anon_WITH_AES_256_CBC_SHA,
-     ?TLS_ECDH_anon_WITH_3DES_EDE_CBC_SHA,
-     ?TLS_DH_anon_WITH_DES_CBC_SHA,
-     ?TLS_DH_anon_WITH_RC4_128_MD5];
-anonymous_suites(N)  when N == 0;
-			  N == 1 ->
-    psk_suites_anon(N) ++
-        [?TLS_DH_anon_WITH_RC4_128_MD5,
-         ?TLS_DH_anon_WITH_3DES_EDE_CBC_SHA,
-         ?TLS_DH_anon_WITH_DES_CBC_SHA
-        ].
+
+anonymous_suites(1 = N) ->
+    tls_v1:exclusive_anonymous_suites(N);
+anonymous_suites(4 = N) ->
+    tls_v1:exclusive_anonymous_suites(N);
+anonymous_suites(N) when N > 1->
+    tls_v1:exclusive_anonymous_suites(N) ++ anonymous_suites(N-1).
 
 %%--------------------------------------------------------------------
--spec psk_suites(ssl_record:ssl_version() | integer()) -> [ssl_cipher_format:cipher_suite()].
-%%
-%% Description: Returns a list of the PSK cipher suites, only supported
-%% if explicitly set by user.
-%%--------------------------------------------------------------------
-psk_suites({3, N}) ->
-    psk_suites(N);
-psk_suites(4) ->
-    []; %% TODO Add new PSK, PSK_(EC)DHE suites
-psk_suites(3) ->
-    [
-     ?TLS_RSA_PSK_WITH_AES_256_GCM_SHA384,
-     ?TLS_RSA_PSK_WITH_AES_256_CBC_SHA384,
-     ?TLS_RSA_PSK_WITH_AES_128_GCM_SHA256,
-     ?TLS_RSA_PSK_WITH_AES_128_CBC_SHA256
-    ] ++ psk_suites(0);
-psk_suites(_) ->
-    [?TLS_RSA_PSK_WITH_AES_256_CBC_SHA,
-     ?TLS_RSA_PSK_WITH_AES_128_CBC_SHA,
-     ?TLS_RSA_PSK_WITH_3DES_EDE_CBC_SHA,
-     ?TLS_RSA_PSK_WITH_RC4_128_SHA].
-
-%%--------------------------------------------------------------------
--spec psk_suites_anon(ssl_record:ssl_version() | integer()) -> [ssl_cipher_format:cipher_suite()].
-%%
-%% Description: Returns a list of the anonymous PSK cipher suites, only supported
-%% if explicitly set by user.
-%%--------------------------------------------------------------------
-psk_suites_anon({3, N}) ->
-    psk_suites_anon(N);
-psk_suites_anon(3 = N) ->
-    [
-     ?TLS_DHE_PSK_WITH_AES_256_GCM_SHA384,
-     ?TLS_PSK_WITH_AES_256_GCM_SHA384,
-     ?TLS_ECDHE_PSK_WITH_AES_256_CBC_SHA384,
-     ?TLS_DHE_PSK_WITH_AES_256_CBC_SHA384,
-     ?TLS_PSK_WITH_AES_256_CBC_SHA384,
-     ?TLS_DHE_PSK_WITH_AES_256_CCM,
-     ?TLS_PSK_DHE_WITH_AES_256_CCM_8,
-     ?TLS_PSK_WITH_AES_256_CCM,
-     ?TLS_PSK_WITH_AES_256_CCM_8,
-     ?TLS_ECDHE_PSK_WITH_AES_128_GCM_SHA256,
-     ?TLS_ECDHE_PSK_WITH_AES_128_CCM_SHA256,
-     ?TLS_ECDHE_PSK_WITH_AES_128_CCM_8_SHA256,
-     ?TLS_DHE_PSK_WITH_AES_128_GCM_SHA256,
-     ?TLS_PSK_WITH_AES_128_GCM_SHA256,
-     ?TLS_ECDHE_PSK_WITH_AES_128_GCM_SHA256,
-     ?TLS_ECDHE_PSK_WITH_AES_128_CCM_8_SHA256,
-     ?TLS_ECDHE_PSK_WITH_AES_128_CBC_SHA256,
-     ?TLS_DHE_PSK_WITH_AES_128_CBC_SHA256,
-     ?TLS_PSK_WITH_AES_128_CBC_SHA256,
-     ?TLS_DHE_PSK_WITH_AES_128_CCM,
-     ?TLS_PSK_DHE_WITH_AES_128_CCM_8,
-     ?TLS_PSK_WITH_AES_128_CCM,
-     ?TLS_PSK_WITH_AES_128_CCM_8,
-     ?TLS_ECDHE_PSK_WITH_RC4_128_SHA
-    ] ++ psk_suites_anon(N-1);
-psk_suites_anon(N) when  N > 0 ->
-	[?TLS_DHE_PSK_WITH_AES_256_CBC_SHA,
-	 ?TLS_PSK_WITH_AES_256_CBC_SHA,
-	 ?TLS_ECDHE_PSK_WITH_AES_128_CBC_SHA,
-	 ?TLS_DHE_PSK_WITH_AES_128_CBC_SHA,
-	 ?TLS_PSK_WITH_AES_128_CBC_SHA,
-	 ?TLS_ECDHE_PSK_WITH_3DES_EDE_CBC_SHA,
-	 ?TLS_DHE_PSK_WITH_3DES_EDE_CBC_SHA,
-	 ?TLS_PSK_WITH_3DES_EDE_CBC_SHA,
-	 ?TLS_ECDHE_PSK_WITH_RC4_128_SHA,
-	 ?TLS_DHE_PSK_WITH_RC4_128_SHA,
-	 ?TLS_PSK_WITH_RC4_128_SHA];
-psk_suites_anon(0) ->
-    [].
-%%--------------------------------------------------------------------
--spec srp_suites(tls_record:tls_version()) -> [ssl_cipher_format:cipher_suite()].
-%%
-%% Description: Returns a list of the SRP cipher suites, only supported
-%% if explicitly set by user.
-%%--------------------------------------------------------------------
-srp_suites(_) ->
-    [?TLS_SRP_SHA_RSA_WITH_3DES_EDE_CBC_SHA,
-     ?TLS_SRP_SHA_DSS_WITH_3DES_EDE_CBC_SHA,
-     ?TLS_SRP_SHA_RSA_WITH_AES_128_CBC_SHA,
-     ?TLS_SRP_SHA_DSS_WITH_AES_128_CBC_SHA,
-     ?TLS_SRP_SHA_RSA_WITH_AES_256_CBC_SHA,
-     ?TLS_SRP_SHA_DSS_WITH_AES_256_CBC_SHA].
-
-%%--------------------------------------------------------------------
--spec srp_suites_anon(tls_record:tls_version()) -> [ssl_cipher_format:cipher_suite()].
-%%
-%% Description: Returns a list of the SRP anonymous cipher suites, only supported
-%% if explicitly set by user.
-%%--------------------------------------------------------------------
-srp_suites_anon(_) ->
-    [?TLS_SRP_SHA_WITH_3DES_EDE_CBC_SHA,
-     ?TLS_SRP_SHA_WITH_AES_128_CBC_SHA,
-     ?TLS_SRP_SHA_WITH_AES_256_CBC_SHA].
-
-%%--------------------------------------------------------------------
--spec rc4_suites(Version::ssl_record:ssl_version() | integer()) -> 
-                        [ssl_cipher_format:cipher_suite()].
-%%
-%% Description: Returns a list of the RSA|(ECDH/RSA)| (ECDH/ECDSA) 
-%% with RC4 cipher suites, only supported if explicitly set by user. 
-%% Are not considered secure any more. Other RC4 suites already
-%% belonged to the user configured only category.
-%%--------------------------------------------------------------------
-rc4_suites({3, 0}) ->
-    rc4_suites(0);
-rc4_suites({3, Minor}) ->
-    rc4_suites(Minor) ++ rc4_suites(0);
-rc4_suites(0) ->
-    [?TLS_RSA_WITH_RC4_128_SHA,
-     ?TLS_RSA_WITH_RC4_128_MD5];
-rc4_suites(N) when N =< 4 ->
-    [?TLS_ECDHE_ECDSA_WITH_RC4_128_SHA,
-     ?TLS_ECDHE_RSA_WITH_RC4_128_SHA,
-     ?TLS_ECDH_ECDSA_WITH_RC4_128_SHA,
-     ?TLS_ECDH_RSA_WITH_RC4_128_SHA].
-
-%%--------------------------------------------------------------------
--spec des_suites(Version::ssl_record:ssl_version()) -> [ssl_cipher_format:cipher_suite()].
-%%
-%% Description: Returns a list of the cipher suites
-%% with DES cipher, only supported if explicitly set by user. 
-%% Are not considered secure any more. 
-%%--------------------------------------------------------------------
-des_suites(_)->
-    [?TLS_DHE_RSA_WITH_DES_CBC_SHA,
-     ?TLS_RSA_WITH_DES_CBC_SHA,
-     ?TLS_ECDHE_ECDSA_WITH_3DES_EDE_CBC_SHA,
-     ?TLS_ECDHE_RSA_WITH_3DES_EDE_CBC_SHA,
-     ?TLS_DHE_RSA_WITH_3DES_EDE_CBC_SHA,
-     ?TLS_DHE_DSS_WITH_3DES_EDE_CBC_SHA,
-     ?TLS_ECDH_ECDSA_WITH_3DES_EDE_CBC_SHA,
-     ?TLS_ECDH_RSA_WITH_3DES_EDE_CBC_SHA
-    ].
-
-%%--------------------------------------------------------------------
--spec rsa_suites(Version::ssl_record:ssl_version() | integer()) -> [ssl_cipher_format:cipher_suite()].
-%%
-%% Description: Returns a list of the RSA key exchange 
-%% cipher suites, only supported if explicitly set by user. 
-%% Are not considered secure any more. 
-%%--------------------------------------------------------------------
-rsa_suites({3, 0}) ->
-    rsa_suites(0);
-rsa_suites({3, Minor}) ->
-    rsa_suites(Minor) ++ rsa_suites(0);
-rsa_suites(0) ->
-    [?TLS_RSA_WITH_AES_256_CBC_SHA,
-     ?TLS_RSA_WITH_AES_128_CBC_SHA,
-     ?TLS_RSA_WITH_3DES_EDE_CBC_SHA
-    ];  
-rsa_suites(N) when N >= 3 ->
-    [
-     ?TLS_RSA_WITH_AES_256_GCM_SHA384,
-     ?TLS_RSA_WITH_AES_256_CBC_SHA256,
-     ?TLS_RSA_WITH_AES_128_GCM_SHA256,
-     ?TLS_RSA_WITH_AES_128_CBC_SHA256
-    ];
-rsa_suites(_) ->
-    [].
-
-%%--------------------------------------------------------------------
--spec filter(undefined | binary(), [ssl_cipher_format:cipher_suite()], 
+-spec filter(undefined | binary(), [ssl_cipher_format:cipher_suite()],
              ssl_record:ssl_version()) -> [ssl_cipher_format:cipher_suite()].
 %%
 %% Description: Select the cipher suites that can be used together with the 
@@ -554,11 +373,15 @@ filter(DerCert, Ciphers0, Version) ->
     SigAlg = OtpCert#'OTPCertificate'.signatureAlgorithm,
     PubKeyInfo = OtpCert#'OTPCertificate'.tbsCertificate#'OTPTBSCertificate'.subjectPublicKeyInfo,
     PubKeyAlg = PubKeyInfo#'OTPSubjectPublicKeyInfo'.algorithm,
-
-    Ciphers = filter_suites_pubkey(
-                ssl_certificate:public_key_type(PubKeyAlg#'PublicKeyAlgorithm'.algorithm),
-                Ciphers0, Version, OtpCert),
-    {_, Sign} = public_key:pkix_sign_types(SigAlg#'SignatureAlgorithm'.algorithm),
+    Type =  case ssl_certificate:public_key_type(PubKeyAlg#'PublicKeyAlgorithm'.algorithm) of
+                rsa_pss_pss ->
+                    rsa;
+                Other ->
+                    Other
+            end,
+    Ciphers = filter_suites_pubkey(Type, Ciphers0, Version, OtpCert),
+    SigAlgo = SigAlg#'SignatureAlgorithm'.algorithm,
+    Sign = ssl_certificate:public_key_type(SigAlgo),
     filter_suites_signature(Sign, Ciphers, Version).
 
 %%--------------------------------------------------------------------
@@ -742,6 +565,119 @@ hash_size(sha384) ->
     48;
 hash_size(sha512) ->
     64.
+
+is_supported_sign({Hash, rsa} = SignAlgo, HashSigns) -> %% PRE TLS-1.3
+    lists:member(SignAlgo, HashSigns) orelse
+        lists:member({Hash, rsa_pss_rsae}, HashSigns);
+is_supported_sign(rsa_pkcs1_sha256 = SignAlgo, HashSigns) -> %% TLS-1.3 legacy
+    lists:member(SignAlgo, HashSigns) orelse
+        lists:member(rsa_pss_rsae_sha256, HashSigns);
+is_supported_sign(rsa_pkcs1_sha384 = SignAlgo, HashSigns) -> %% TLS-1.3 legacy
+    lists:member(SignAlgo, HashSigns) orelse
+        lists:member(rsa_pss_rsae_sha384, HashSigns);
+is_supported_sign(rsa_pkcs1_sha512 = SignAlgo, HashSigns) -> %% TLS-1.3 legacy
+    lists:member(SignAlgo, HashSigns) orelse
+        lists:member(rsa_pss_rsae_sha512, HashSigns);
+is_supported_sign(SignAlgo, HashSigns) -> %% PRE TLS-1.3 SignAlgo::tuple() TLS-1.3 SignAlgo::atom()
+    lists:member(SignAlgo, HashSigns).
+
+signature_scheme(rsa_pkcs1_sha256) -> ?RSA_PKCS1_SHA256;
+signature_scheme(rsa_pkcs1_sha384) -> ?RSA_PKCS1_SHA384;
+signature_scheme(rsa_pkcs1_sha512) -> ?RSA_PKCS1_SHA512;
+signature_scheme(ecdsa_secp256r1_sha256) -> ?ECDSA_SECP256R1_SHA256;
+signature_scheme(ecdsa_secp384r1_sha384) -> ?ECDSA_SECP384R1_SHA384;
+signature_scheme(ecdsa_secp521r1_sha512) -> ?ECDSA_SECP521R1_SHA512;
+signature_scheme(rsa_pss_rsae_sha256) -> ?RSA_PSS_RSAE_SHA256;
+signature_scheme(rsa_pss_rsae_sha384) -> ?RSA_PSS_RSAE_SHA384;
+signature_scheme(rsa_pss_rsae_sha512) -> ?RSA_PSS_RSAE_SHA512;
+signature_scheme(eddsa_ed25519) -> ?ED25519;
+signature_scheme(eddsa_ed448) -> ?ED448;
+signature_scheme(rsa_pss_pss_sha256) -> ?RSA_PSS_PSS_SHA256;
+signature_scheme(rsa_pss_pss_sha384) -> ?RSA_PSS_PSS_SHA384;
+signature_scheme(rsa_pss_pss_sha512) -> ?RSA_PSS_PSS_SHA512;
+signature_scheme(rsa_pkcs1_sha1) -> ?RSA_PKCS1_SHA1;
+signature_scheme(ecdsa_sha1) -> ?ECDSA_SHA1;
+%% New algorithms on legacy format
+signature_scheme({sha512, rsa_pss_pss}) ->
+    ?RSA_PSS_PSS_SHA512;
+signature_scheme({sha384, rsa_pss_pss}) ->
+    ?RSA_PSS_PSS_SHA384;
+signature_scheme({sha256, rsa_pss_pss}) ->
+    ?RSA_PSS_PSS_SHA256;
+signature_scheme({sha512, rsa_pss_rsae}) ->
+    ?RSA_PSS_RSAE_SHA512;
+signature_scheme({sha384, rsa_pss_rsae}) ->
+    ?RSA_PSS_RSAE_SHA384;
+signature_scheme({sha256, rsa_pss_rsae}) ->
+    ?RSA_PSS_RSAE_SHA256;
+%% Handling legacy signature algorithms
+signature_scheme({Hash0, Sign0}) ->
+    Hash = hash_algorithm(Hash0),
+    Sign = sign_algorithm(Sign0),
+    <<?UINT16(SigAlg)>> = <<?BYTE(Hash),?BYTE(Sign)>>,
+    SigAlg;
+signature_scheme(?RSA_PKCS1_SHA256) -> rsa_pkcs1_sha256;
+signature_scheme(?RSA_PKCS1_SHA384) -> rsa_pkcs1_sha384;
+signature_scheme(?RSA_PKCS1_SHA512) -> rsa_pkcs1_sha512;
+signature_scheme(?ECDSA_SECP256R1_SHA256) -> ecdsa_secp256r1_sha256;
+signature_scheme(?ECDSA_SECP384R1_SHA384) -> ecdsa_secp384r1_sha384;
+signature_scheme(?ECDSA_SECP521R1_SHA512) -> ecdsa_secp521r1_sha512;
+signature_scheme(?RSA_PSS_RSAE_SHA256) -> rsa_pss_rsae_sha256;
+signature_scheme(?RSA_PSS_RSAE_SHA384) -> rsa_pss_rsae_sha384;
+signature_scheme(?RSA_PSS_RSAE_SHA512) -> rsa_pss_rsae_sha512;
+signature_scheme(?ED25519) -> eddsa_ed25519;
+signature_scheme(?ED448) -> eddsa_ed448;
+signature_scheme(?RSA_PSS_PSS_SHA256) -> rsa_pss_pss_sha256;
+signature_scheme(?RSA_PSS_PSS_SHA384) -> rsa_pss_pss_sha384;
+signature_scheme(?RSA_PSS_PSS_SHA512) -> rsa_pss_pss_sha512;
+signature_scheme(?RSA_PKCS1_SHA1) -> rsa_pkcs1_sha1;
+signature_scheme(?ECDSA_SHA1) -> ecdsa_sha1;
+%% Handling legacy signature algorithms for logging purposes. These algorithms
+%% cannot be used in TLS 1.3 handshakes.
+signature_scheme(SignAlgo) when is_integer(SignAlgo) ->
+    <<?BYTE(Hash),?BYTE(Sign)>> = <<?UINT16(SignAlgo)>>,
+    try
+        {ssl_cipher:hash_algorithm(Hash), ssl_cipher:sign_algorithm(Sign)}
+    catch
+        _:_ ->
+            unassigned
+    end;
+signature_scheme(_) -> unassigned.
+
+signature_schemes_1_2(SigAlgs) ->
+    lists:foldl(fun(Alg, Acc) when is_atom(Alg) ->
+                        case scheme_to_components(Alg) of
+                            {Hash, Sign = rsa_pss_pss,_} ->
+                                [{Hash, Sign} | Acc];
+                            {Hash, Sign = rsa_pss_rsae,_} ->
+                                [{Hash, Sign} | Acc];
+                            {_, _, _} ->
+                                Acc
+                        end;
+                   (Alg, Acc) ->
+                        [Alg| Acc]
+                end, [], SigAlgs).
+
+%% TODO: reserved code points?
+
+scheme_to_components(rsa_pkcs1_sha256) -> {sha256, rsa_pkcs1, undefined};
+scheme_to_components(rsa_pkcs1_sha384) -> {sha384, rsa_pkcs1, undefined};
+scheme_to_components(rsa_pkcs1_sha512) -> {sha512, rsa_pkcs1, undefined};
+scheme_to_components(ecdsa_secp256r1_sha256) -> {sha256, ecdsa, secp256r1};
+scheme_to_components(ecdsa_secp384r1_sha384) -> {sha384, ecdsa, secp384r1};
+scheme_to_components(ecdsa_secp521r1_sha512) -> {sha512, ecdsa, secp521r1};
+scheme_to_components(rsa_pss_rsae_sha256) -> {sha256, rsa_pss_rsae, undefined};
+scheme_to_components(rsa_pss_rsae_sha384) -> {sha384, rsa_pss_rsae, undefined};
+scheme_to_components(rsa_pss_rsae_sha512) -> {sha512, rsa_pss_rsae, undefined};
+scheme_to_components(eddsa_ed25519) -> {none, eddsa, ed25519};
+scheme_to_components(eddsa_ed448) -> {none, eddsa, ed448};
+scheme_to_components(rsa_pss_pss_sha256) -> {sha256, rsa_pss_pss, undefined};
+scheme_to_components(rsa_pss_pss_sha384) -> {sha384, rsa_pss_pss, undefined};
+scheme_to_components(rsa_pss_pss_sha512) -> {sha512, rsa_pss_pss, undefined};
+scheme_to_components(rsa_pkcs1_sha1) -> {sha1, rsa_pkcs1, undefined};
+scheme_to_components(ecdsa_sha1) -> {sha1, ecdsa, undefined};
+%% Handling legacy signature algorithms
+scheme_to_components({Hash,Sign}) -> {Hash, Sign, undefined}.
 
 %%--------------------------------------------------------------------
 %%% Internal functions
@@ -931,71 +867,6 @@ sign_algorithm(Other) when is_integer(Other) andalso ((Other >= 4) and (Other =<
 sign_algorithm(Other) when is_integer(Other) andalso ((Other >= 224) and (Other =< 255)) -> Other.
 
 
-signature_scheme(rsa_pkcs1_sha256) -> ?RSA_PKCS1_SHA256;
-signature_scheme(rsa_pkcs1_sha384) -> ?RSA_PKCS1_SHA384;
-signature_scheme(rsa_pkcs1_sha512) -> ?RSA_PKCS1_SHA512;
-signature_scheme(ecdsa_secp256r1_sha256) -> ?ECDSA_SECP256R1_SHA256;
-signature_scheme(ecdsa_secp384r1_sha384) -> ?ECDSA_SECP384R1_SHA384;
-signature_scheme(ecdsa_secp521r1_sha512) -> ?ECDSA_SECP521R1_SHA512;
-signature_scheme(rsa_pss_rsae_sha256) -> ?RSA_PSS_RSAE_SHA256;
-signature_scheme(rsa_pss_rsae_sha384) -> ?RSA_PSS_RSAE_SHA384;
-signature_scheme(rsa_pss_rsae_sha512) -> ?RSA_PSS_RSAE_SHA512;
-signature_scheme(ed25519) -> ?ED25519;
-signature_scheme(ed448) -> ?ED448;
-signature_scheme(rsa_pss_pss_sha256) -> ?RSA_PSS_PSS_SHA256;
-signature_scheme(rsa_pss_pss_sha384) -> ?RSA_PSS_PSS_SHA384;
-signature_scheme(rsa_pss_pss_sha512) -> ?RSA_PSS_PSS_SHA512;
-signature_scheme(rsa_pkcs1_sha1) -> ?RSA_PKCS1_SHA1;
-signature_scheme(ecdsa_sha1) -> ?ECDSA_SHA1;
-%% Handling legacy signature algorithms
-signature_scheme({Hash0, Sign0}) ->
-    Hash = hash_algorithm(Hash0),
-    Sign = sign_algorithm(Sign0),
-    <<?UINT16(SigAlg)>> = <<?BYTE(Hash),?BYTE(Sign)>>,
-    SigAlg;
-signature_scheme(?RSA_PKCS1_SHA256) -> rsa_pkcs1_sha256;
-signature_scheme(?RSA_PKCS1_SHA384) -> rsa_pkcs1_sha384;
-signature_scheme(?RSA_PKCS1_SHA512) -> rsa_pkcs1_sha512;
-signature_scheme(?ECDSA_SECP256R1_SHA256) -> ecdsa_secp256r1_sha256;
-signature_scheme(?ECDSA_SECP384R1_SHA384) -> ecdsa_secp384r1_sha384;
-signature_scheme(?ECDSA_SECP521R1_SHA512) -> ecdsa_secp521r1_sha512;
-signature_scheme(?RSA_PSS_RSAE_SHA256) -> rsa_pss_rsae_sha256;
-signature_scheme(?RSA_PSS_RSAE_SHA384) -> rsa_pss_rsae_sha384;
-signature_scheme(?RSA_PSS_RSAE_SHA512) -> rsa_pss_rsae_sha512;
-signature_scheme(?ED25519) -> ed25519;
-signature_scheme(?ED448) -> ed448;
-signature_scheme(?RSA_PSS_PSS_SHA256) -> rsa_pss_pss_sha256;
-signature_scheme(?RSA_PSS_PSS_SHA384) -> rsa_pss_pss_sha384;
-signature_scheme(?RSA_PSS_PSS_SHA512) -> rsa_pss_pss_sha512;
-signature_scheme(?RSA_PKCS1_SHA1) -> rsa_pkcs1_sha1;
-signature_scheme(?ECDSA_SHA1) -> ecdsa_sha1;
-%% Handling legacy signature algorithms for logging purposes. These algorithms
-%% cannot be used in TLS 1.3 handshakes.
-signature_scheme(SignAlgo) when is_integer(SignAlgo) ->
-    <<?BYTE(Hash),?BYTE(Sign)>> = <<?UINT16(SignAlgo)>>,
-    {ssl_cipher:hash_algorithm(Hash), ssl_cipher:sign_algorithm(Sign)};
-signature_scheme(_) -> unassigned.
-%% TODO: reserved code points?
-
-scheme_to_components(rsa_pkcs1_sha256) -> {sha256, rsa_pkcs1, undefined};
-scheme_to_components(rsa_pkcs1_sha384) -> {sha384, rsa_pkcs1, undefined};
-scheme_to_components(rsa_pkcs1_sha512) -> {sha512, rsa_pkcs1, undefined};
-scheme_to_components(ecdsa_secp256r1_sha256) -> {sha256, ecdsa, secp256r1};
-scheme_to_components(ecdsa_secp384r1_sha384) -> {sha384, ecdsa, secp384r1};
-scheme_to_components(ecdsa_secp521r1_sha512) -> {sha512, ecdsa, secp521r1};
-scheme_to_components(rsa_pss_rsae_sha256) -> {sha256, rsa_pss_rsae, undefined};
-scheme_to_components(rsa_pss_rsae_sha384) -> {sha384, rsa_pss_rsae, undefined};
-scheme_to_components(rsa_pss_rsae_sha512) -> {sha512, rsa_pss_rsae, undefined};
-scheme_to_components(ed25519) -> {undefined, undefined, undefined};
-scheme_to_components(ed448) -> {undefined, undefined, undefined};
-scheme_to_components(rsa_pss_pss_sha256) -> {sha256, rsa_pss_pss, undefined};
-scheme_to_components(rsa_pss_pss_sha384) -> {sha384, rsa_pss_pss, undefined};
-scheme_to_components(rsa_pss_pss_sha512) -> {sha512, rsa_pss_pss, undefined};
-scheme_to_components(rsa_pkcs1_sha1) -> {sha1, rsa_pkcs1, undefined};
-scheme_to_components(ecdsa_sha1) -> {sha1, ecdsa, undefined};
-%% Handling legacy signature algorithms
-scheme_to_components({Hash,Sign}) -> {Hash, Sign, undefined}.
-
 signature_algorithm_to_scheme(#'SignatureAlgorithm'{algorithm = ?'id-RSASSA-PSS',
                                                     parameters =  #'RSASSA-PSS-params'{
                                                                      maskGenAlgorithm = 
@@ -1021,7 +892,7 @@ signature_algorithm_to_scheme(#'SignatureAlgorithm'{algorithm = ?'ecdsa-with-SHA
 signature_algorithm_to_scheme(#'SignatureAlgorithm'{algorithm = ?'ecdsa-with-SHA384'}) ->
     ecdsa_secp384r1_sha384;
 signature_algorithm_to_scheme(#'SignatureAlgorithm'{algorithm = ?'ecdsa-with-SHA512'}) ->
-    ecdsa_secp512r1_sha512;
+    ecdsa_secp521r1_sha512;
 signature_algorithm_to_scheme(#'SignatureAlgorithm'{algorithm = ?'sha-1WithRSAEncryption'}) ->
     rsa_pkcs1_sha1;
 signature_algorithm_to_scheme(#'SignatureAlgorithm'{algorithm = ?sha1WithRSAEncryption}) ->
@@ -1099,7 +970,7 @@ is_correct_padding(#generic_block_cipher{padding_length = Len,
     Len == byte_size(Padding); %% Only length check is done in SSL 3.0 spec
 %% For interoperability reasons it is possible to disable
 %% the padding check when using TLS 1.0, as it is not strictly required 
-%% in the spec (only recommended), howerver this makes TLS 1.0 vunrable to the Poodle attack 
+%% in the spec (only recommended), however this makes TLS 1.0 vunrable to the Poodle attack 
 %% so by default this clause will not match
 is_correct_padding(GenBlockCipher, {3, 1}, false) ->
     is_correct_padding(GenBlockCipher, {3, 0}, false);
@@ -1173,7 +1044,7 @@ filter_suites_pubkey(dsa, Ciphers, _, OtpCert) ->
     NotECRSAKeyed =  (Ciphers -- rsa_keyed_suites(Ciphers)) -- ec_keyed_suites(Ciphers),
     filter_keyuse_suites(digitalSignature, KeyUses, NotECRSAKeyed,
                          dss_dhe_suites(Ciphers));
-filter_suites_pubkey(ec, Ciphers, _, OtpCert) ->
+filter_suites_pubkey(ecdsa, Ciphers, _, OtpCert) ->
     Uses = key_uses(OtpCert),
     NotRSADSAKeyed = (Ciphers -- rsa_keyed_suites(Ciphers)) -- dss_keyed_suites(Ciphers),
     CiphersSuites = filter_keyuse_suites(digitalSignature, Uses, NotRSADSAKeyed,

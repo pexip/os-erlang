@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %% 
-%% Copyright Ericsson AB 2005-2018. All Rights Reserved.
+%% Copyright Ericsson AB 2005-2022. All Rights Reserved.
 %% 
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -550,7 +550,7 @@ htaccess(Type, Port, Host, Node) ->
     auth_request(Type, Host, Port, Node, "/ht/open/","Aladdin", 
 		 "AladdinPassword", [{statuscode, 200}]),
     
-    %% Contro that bad passwords and userids get a good denial
+    %% Control that bad passwords and userids get a good denial
     %% User correct but wrong password! ["one:one" user first in user list]
     auth_request(Type, Host, Port, Node, "/ht/open/", "one", "one", 
 		 [{statuscode, 401}]),
@@ -558,7 +558,7 @@ htaccess(Type, Port, Host, Node) ->
     auth_request(Type, Host, Port, Node, "/ht/open/", "dummy", "dummy", 
 		 [{statuscode, 401}]),
     
-    %% Control that authetication still works, even if its a member in a group
+    %% Control that authentication still works, even if its a member in a group
     %% Authentication OK! ["two:TwoPassword" user in first group]
     auth_request(Type, Host, Port, Node, "/ht/secret/dummy.html", "two", 
 		 "TwoPassword", [{statuscode, 200}]),

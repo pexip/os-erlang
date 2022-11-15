@@ -1,3 +1,4 @@
+autoconfversion.patch
 clean.patch
 gnu.patch
 man.patch
@@ -5,8 +6,6 @@ emacs.patch
 docs.patch
 java.patch
 javascript.patch
-wx3.0-constants.patch
-beamload.patch
 x32.patch
 atomsfontlock.patch
 init.patch

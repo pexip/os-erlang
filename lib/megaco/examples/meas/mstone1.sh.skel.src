@@ -3,7 +3,7 @@
 #
 # %CopyrightBegin%
 # 
-# Copyright Ericsson AB 2007-2019. All Rights Reserved.
+# Copyright Ericsson AB 2007-2022. All Rights Reserved.
 # 
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -46,8 +46,8 @@ Options:
                            h: hours
                         If no unit is provided, minutes is assumed.
                         defaults to 10 minutes
- -f <factor>            normally the test is run with 16 processes 
-                        (factor 1), one for each codec config. The test 
+ -f <factor>            normally the test is run with one process per codec
+                        (= 12) (factor 1), one for each codec config. The test 
                         can however be run with other factors, e.g. 
                         factor 10 means that 10 processes will be started 
                         for each megaco codec config.

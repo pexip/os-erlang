@@ -1,7 +1,7 @@
 #
 # %CopyrightBegin%
 #
-# Copyright Ericsson AB 1997-2019. All Rights Reserved.
+# Copyright Ericsson AB 1997-2021. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -64,7 +64,6 @@ XML_REF3_FILES = application.xml \
 	net_kernel.xml \
 	os.xml \
 	pg.xml \
-	pg2.xml \
 	rpc.xml \
 	seq_trace.xml \
 	socket.xml \

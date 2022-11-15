@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2010-2016. All Rights Reserved.
+%% Copyright Ericsson AB 2010-2021. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -25,7 +25,9 @@
 -include_lib("common_test/include/ct.hrl").
 
 %-compile(export_all).
--export([all/0, suite/0, init_per_testcase/2, end_per_testcase/2]).
+-export([all/0, suite/0,
+         init_per_suite/1, end_per_suite/1,
+         init_per_testcase/2, end_per_testcase/2]).
 
 %% Testcases
 -export([basic/1]).
@@ -39,6 +41,18 @@ suite() ->
 
 all() -> 
     [basic].
+
+init_per_suite(Config) ->
+    case test_server:is_asan() of
+	true ->
+	    %% No point testing own allocators under address sanitizer.
+	    {skip, "Address sanitizer"};
+	false ->
+	    Config
+    end.
+
+end_per_suite(_Config) ->
+    ok.
 
 init_per_testcase(Case, Config) when is_list(Config) ->
     [{testcase, Case},
@@ -147,7 +161,7 @@ display_file(FileName) ->
     ok.
 
 mk_name(Config) when is_list(Config) ->
-    {A, B, C} = now(),
+    {A, B, C} = erlang:timestamp(),
     list_to_atom(atom_to_list(?MODULE)
                  ++ "-" ++ atom_to_list(proplists:get_value(testcase, Config))
                  ++ "-" ++ integer_to_list(A)

@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2007-2020. All Rights Reserved.
+%% Copyright Ericsson AB 2007-2022. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -19,7 +19,7 @@
 %%
 
 %%----------------------------------------------------------------------
-%% Purpose: Help funtions for handling the TLS 1.3 (specific parts of)
+%% Purpose: Help functions for handling the TLS 1.3 (specific parts of)
 %%% TLS handshake protocol
 %%----------------------------------------------------------------------
 
@@ -51,12 +51,19 @@
          do_wait_sh/2,
          do_wait_ee/2,
          do_wait_cert_cr/2,
+         do_wait_eoed/2,
+         early_data_size/1,
          get_ticket_data/3,
          maybe_add_binders/3,
          maybe_add_binders/4,
-         maybe_automatic_session_resumption/1]).
+         maybe_add_early_data_indication/3,
+         maybe_automatic_session_resumption/1,
+         maybe_send_early_data/1]).
 
--export([is_valid_binder/4]).
+-export([get_max_early_data/1,
+         is_valid_binder/4,
+         maybe/0,
+         path_validation/10]).
 
 %% crypto:hash(sha256, "HelloRetryRequest").
 -define(HELLO_RETRY_REQUEST_RANDOM, <<207,33,173,116,229,154,97,17,
@@ -162,7 +169,9 @@ validate_cookie(Cookie0, #state{ssl_options = #{cookie := true},
             ok;
         false ->
             {error, ?ALERT_REC(?FATAL, ?ILLEGAL_PARAMETER)}
-    end.
+    end;
+validate_cookie(_,_) ->
+    {error, ?ALERT_REC(?FATAL, ?ILLEGAL_PARAMETER)}.
 
 encrypted_extensions(#state{handshake_env = HandshakeEnv}) ->
     E0 = #{},
@@ -178,18 +187,24 @@ encrypted_extensions(#state{handshake_env = HandshakeEnv}) ->
              MaxFragEnum ->
                  E1#{max_frag_enum => MaxFragEnum}
          end,
-    E = case HandshakeEnv#handshake_env.sni_guided_cert_selection of
+    E3 = case HandshakeEnv#handshake_env.sni_guided_cert_selection of
              false ->
                  E2;
              true ->
                  E2#{sni => #sni{hostname = ""}}
+        end,
+    E = case HandshakeEnv#handshake_env.early_data_accepted of
+            false ->
+                E3;
+            true ->
+                E3#{early_data => #early_data_indication{}}
         end,
     #encrypted_extensions{
        extensions = E
       }.
 
 
-certificate_request(SignAlgs0, SignAlgsCert0) ->
+certificate_request(SignAlgs0, SignAlgsCert0, CertDbHandle, CertDbRef) ->
     %% Input arguments contain TLS 1.2 algorithms due to backward compatibility
     %% reasons. These {Hash, Algo} tuples must be filtered before creating the
     %% the extensions.
@@ -197,9 +212,10 @@ certificate_request(SignAlgs0, SignAlgsCert0) ->
     SignAlgsCert = filter_tls13_algs(SignAlgsCert0),
     Extensions0 = add_signature_algorithms(#{}, SignAlgs),
     Extensions = add_signature_algorithms_cert(Extensions0, SignAlgsCert),
+    Auths = ssl_handshake:certificate_authorities(CertDbHandle, CertDbRef),
     #certificate_request_1_3{
       certificate_request_context = <<>>,
-      extensions = Extensions}.
+      extensions = Extensions#{certificate_authorities => #certificate_authorities{authorities = Auths}}}.
 
 
 add_signature_algorithms(Extensions, SignAlgs) ->
@@ -216,9 +232,21 @@ add_signature_algorithms_cert(Extensions, SignAlgsCert) ->
 
 filter_tls13_algs(undefined) -> undefined;
 filter_tls13_algs(Algo) ->
-    lists:filter(fun is_atom/1, Algo).
-
-
+    lists:foldl(fun(Atom, Acc) when is_atom(Atom) -> 
+                        [Atom | Acc];
+                   ({sha512, rsa}, Acc) ->
+                        [rsa_pkcs1_sha512 | Acc];
+                   ({sha384, rsa}, Acc) ->
+                        [rsa_pkcs1_sha384 | Acc];
+                   ({sha256, rsa}, Acc) ->
+                        [rsa_pkcs1_sha256 | Acc];                   
+                   ({sha, rsa}, Acc) ->
+                        [rsa_pkcs1_sha1 | Acc];
+                   ({sha, ecdsa}, Acc) ->
+                        [ecdsa_sha1| Acc];
+                   (_, Acc) ->
+                        Acc
+                end, [], Algo).
 %% enum {
 %%     X509(0),
 %%     RawPublicKey(2),
@@ -520,8 +548,8 @@ encode_extensions(Exts)->
 decode_extensions(Exts, MessageType) ->
     ssl_handshake:decode_extensions(Exts, {3,4}, MessageType).
 
-extensions_list(HelloExtensions) ->
-    [Ext || {_, Ext} <- maps:to_list(HelloExtensions)].
+extensions_list(Extensions) ->
+    [Ext || {_, Ext} <- maps:to_list(Extensions)].
 
 
 %% TODO: add extensions!
@@ -595,11 +623,13 @@ do_start(#client_hello{cipher_suites = ClientCiphers,
                                 supported_groups := ServerGroups0,
                                 alpn_preferred_protocols := ALPNPreferredProtocols,
                                 keep_secrets := KeepSecrets,
-                                honor_cipher_order := HonorCipherOrder}} = State0) ->
+                                honor_cipher_order := HonorCipherOrder,
+                                early_data := EarlyDataEnabled}} = State0) ->
     SNI = maps:get(sni, Extensions, undefined),
-    ClientGroups0 = maps:get(elliptic_curves, Extensions, undefined),
+    EarlyDataIndication = maps:get(early_data, Extensions, undefined),
     {Ref,Maybe} = maybe(),
     try
+        ClientGroups0 = Maybe(supported_groups_from_extensions(Extensions)),
         ClientGroups = Maybe(get_supported_groups(ClientGroups0)),
         ServerGroups = Maybe(get_supported_groups(ServerGroups0)),
         
@@ -615,12 +645,13 @@ do_start(#client_hello{cipher_suites = ClientCiphers,
                            maps:get(signature_algs, Extensions, undefined)),
         ClientSignAlgsCert = get_signature_scheme_list(
                                maps:get(signature_algs_cert, Extensions, undefined)),
-        
+        CertAuths = get_certificate_authorites(maps:get(certificate_authorities, Extensions, undefined)),
         CookieExt = maps:get(cookie, Extensions, undefined),
         Cookie = get_cookie(CookieExt),
-        
+
         #state{connection_states = ConnectionStates0,
-               session = #session{own_certificates = [Cert | _]}} = State1 =
+               session = Session0,
+               connection_env = #connection_env{cert_key_pairs = CertKeyPairs}} = State1 =
             Maybe(ssl_gen_statem:handle_sni_extension(SNI, State0)),
 
         Maybe(validate_cookie(Cookie, State1)),
@@ -635,13 +666,14 @@ do_start(#client_hello{cipher_suites = ClientCiphers,
         Cipher = Maybe(select_cipher_suite(HonorCipherOrder, ClientCiphers, ServerCiphers)),
         Groups = Maybe(select_common_groups(ServerGroups, ClientGroups)),
         Maybe(validate_client_key_share(ClientGroups, ClientShares)),
-        {PublicKeyAlgo, SignAlgo, SignHash, RSAKeySize} = get_certificate_params(Cert),
-
-        %% Check if client supports signature algorithm of server certificate
-        Maybe(check_cert_sign_algo(SignAlgo, SignHash, ClientSignAlgs, ClientSignAlgsCert)),
+        #session{own_certificates = [Cert|_]} = Session =
+            Maybe(select_server_cert_key_pair(Session0, CertKeyPairs, ClientSignAlgs,
+                                              ClientSignAlgsCert, CertAuths, State0,
+                                              undefined)),
+        {PublicKeyAlgo, _, _, RSAKeySize, Curve} = get_certificate_params(Cert),
 
         %% Select signature algorithm (used in CertificateVerify message).
-        SelectedSignAlg = Maybe(select_sign_algo(PublicKeyAlgo, RSAKeySize, ClientSignAlgs, ServerSignAlgs)),
+        SelectedSignAlg = Maybe(select_sign_algo(PublicKeyAlgo, RSAKeySize, ClientSignAlgs, ServerSignAlgs, Curve)),
 
         %% Select client public key. If no public key found in ClientShares or
         %% ClientShares is empty, trigger HelloRetryRequest as we were able
@@ -657,9 +689,10 @@ do_start(#client_hello{cipher_suites = ClientCiphers,
                          ConnectionStates1 = ssl_record:set_max_fragment_length(MaxFragEnum, ConnectionStates0),
                          HsEnv1 = (State1#state.handshake_env)#handshake_env{max_frag_enum = MaxFragEnum},
                          State1#state{handshake_env = HsEnv1,
+                                      session = Session,
                                       connection_states = ConnectionStates1};
                      _ ->
-                         State1
+                         State1#state{session = Session}
                  end,
 
         State3 = if KeepSecrets =:= true ->
@@ -668,14 +701,14 @@ do_start(#client_hello{cipher_suites = ClientCiphers,
                          State2
                  end,
 
-        State = update_start_state(State3,
-                                   #{cipher => Cipher,
-                                     key_share => KeyShare,
-                                     session_id => SessionId,
-                                     group => Group,
-                                     sign_alg => SelectedSignAlg,
-                                     peer_public_key => ClientPubKey,
-                                     alpn => ALPNProtocol}),
+        State4 = update_start_state(State3,
+                                    #{cipher => Cipher,
+                                      key_share => KeyShare,
+                                      session_id => SessionId,
+                                      group => Group,
+                                      sign_alg => SelectedSignAlg,
+                                      peer_public_key => ClientPubKey,
+                                      alpn => ALPNProtocol}),
 
         %% 4.1.4.  Hello Retry Request
         %%
@@ -683,13 +716,15 @@ do_start(#client_hello{cipher_suites = ClientCiphers,
         %% message if it is able to find an acceptable set of parameters but the
         %% ClientHello does not contain sufficient information to proceed with
         %% the handshake.
-        case Maybe(send_hello_retry_request(State, ClientPubKey, KeyShare, SessionId)) of
+        case Maybe(send_hello_retry_request(State4, ClientPubKey, KeyShare, SessionId)) of
             {_, start} = NextStateTuple ->
                 NextStateTuple;
-            {_, negotiated} = NextStateTuple ->
+            {State5, negotiated} ->
+                %% Determine if early data is accepted
+                State = handle_early_data(State5, EarlyDataEnabled, EarlyDataIndication),
                 %% Exclude any incompatible PSKs.
                 PSK = Maybe(handle_pre_shared_key(State, OfferedPSKs, Cipher)),
-                Maybe(session_resumption(NextStateTuple, PSK))
+                Maybe(session_resumption({State, negotiated}, PSK))
         end
     catch
         {Ref, #alert{} = Alert} ->
@@ -702,6 +737,8 @@ do_start(#server_hello{cipher_suite = SelectedCipherSuite,
          #state{static_env = #static_env{role = client,
                                          host = Host,
                                          port = Port,
+                                         cert_db = CertDbHandle,
+                                         cert_db_ref = CertDbRef,
                                          protocol_cb = Connection,
                                          transport_cb = Transport,
                                          socket = Socket},
@@ -713,7 +750,7 @@ do_start(#server_hello{cipher_suite = SelectedCipherSuite,
                                 use_ticket := UseTicket,
                                 session_tickets := SessionTickets,
                                 log_level := LogLevel} = SslOpts,
-                session = #session{own_certificates = OwnCerts} = Session0,
+                session = Session0,
                 connection_states = ConnectionStates0
                } = State0) ->
     {Ref,Maybe} = maybe(),
@@ -745,8 +782,8 @@ do_start(#server_hello{cipher_suite = SelectedCipherSuite,
         TicketData = get_ticket_data(self(), SessionTickets, UseTicket),
         OcspNonce = maps:get(ocsp_nonce, OcspState, undefined),
         Hello0 = tls_handshake:client_hello(Host, Port, ConnectionStates0, SslOpts,
-                                           SessionId, Renegotiation, OwnCerts, ClientKeyShare,
-                                           TicketData, OcspNonce),
+                                           SessionId, Renegotiation, ClientKeyShare,
+                                           TicketData, OcspNonce, CertDbHandle, CertDbRef),
         %% Echo cookie received in HelloRetryrequest
         Hello1 = maybe_add_cookie_extension(Cookie, Hello0),
 
@@ -790,6 +827,9 @@ do_start(#server_hello{cipher_suite = SelectedCipherSuite,
 
 do_negotiated({start_handshake, PSK0},
               #state{connection_states = ConnectionStates0,
+                     handshake_env =
+                         #handshake_env{
+                            early_data_accepted = EarlyDataAccepted},
                      static_env = #static_env{protocol_cb = Connection},
                      session = #session{session_id = SessionId,
                                         ecc = SelectedGroup,
@@ -802,7 +842,6 @@ do_negotiated({start_handshake, PSK0},
         ssl_record:pending_connection_state(ConnectionStates0, read),
     #security_parameters{prf_algorithm = HKDF} = SecParamsR,
 
-
     {Ref,Maybe} = maybe(),
     try
         %% Create server_hello
@@ -810,45 +849,60 @@ do_negotiated({start_handshake, PSK0},
         State1 = Connection:queue_handshake(ServerHello, State0),
         %% D.4.  Middlebox Compatibility Mode
         State2 = maybe_queue_change_cipher_spec(State1, last),
-        {State3, _} = Connection:send_handshake_flight(State2),
 
         PSK = get_pre_shared_key(PSK0, HKDF),
 
-        State4 =
+        State3 =
             calculate_handshake_secrets(ClientPublicKey, ServerPrivateKey, SelectedGroup,
-                                        PSK, State3),
+                                        PSK, State2),
 
-        State5 = ssl_record:step_encryption_state(State4),
+        %% Step only write state if early_data is accepted
+        State4 =
+            case EarlyDataAccepted of
+                true ->
+                    ssl_record:step_encryption_state_write(State3);
+                false ->
+                    %% Read state is overwritten when handshake secrets are set.
+                    %% Trial_decryption and early_data_accepted must be set here!
+                    update_current_read(
+                      ssl_record:step_encryption_state(State3),
+                      true,   %% trial_decryption
+                      false   %% early_data_accepted
+                    )
+
+            end,
 
         %% Create EncryptedExtensions
-        EncryptedExtensions = encrypted_extensions(State5),
+        EncryptedExtensions = encrypted_extensions(State4),
 
         %% Encode EncryptedExtensions
-        State6 = Connection:queue_handshake(EncryptedExtensions, State5),
+        State5 = Connection:queue_handshake(EncryptedExtensions, State4),
 
         %% Create and send CertificateRequest ({verify, verify_peer})
-        {State7, NextState} = maybe_send_certificate_request(State6, SslOpts, PSK0),
+        {State6, NextState} = maybe_send_certificate_request(State5, SslOpts, PSK0),
 
         %% Create and send Certificate (if PSK is undefined)
-        State8 = Maybe(maybe_send_certificate(State7, PSK0)),
+        State7 = Maybe(maybe_send_certificate(State6, PSK0)),
 
         %% Create and send CertificateVerify (if PSK is undefined)
-        State9 = Maybe(maybe_send_certificate_verify(State8, PSK0)),
+        State8 = Maybe(maybe_send_certificate_verify(State7, PSK0)),
 
         %% Create Finished
-        Finished = finished(State9),
+        Finished = finished(State8),
 
         %% Encode Finished
-        State10= Connection:queue_handshake(Finished, State9),
+        State9 = Connection:queue_handshake(Finished, State8),
 
         %% Send first flight
-        {State, _} = Connection:send_handshake_flight(State10),
+        {State, _} = Connection:send_handshake_flight(State9),
 
         {State, NextState}
 
     catch
         {Ref, #alert{} = Alert} ->
-            Alert
+            Alert;
+        error:badarg ->
+            ?ALERT_REC(?ILLEGAL_PARAMETER, illegal_parameter_to_compute_key)
     end.
 
 
@@ -864,10 +918,15 @@ do_wait_cert(#certificate_1_3{} = Certificate, State0) ->
     end.
 
 
-do_wait_cv(#certificate_verify_1_3{} = CertificateVerify, State0) ->
+do_wait_cv(#certificate_verify_1_3{} = CertificateVerify, #state{static_env = #static_env{role = Role}} = State0) ->
     {Ref,Maybe} = maybe(),
     try
-        State1 = Maybe(verify_signature_algorithm(State0, CertificateVerify)),
+        State1 = case Role of
+                     server ->
+                         Maybe(verify_signature_algorithm(State0, CertificateVerify));
+                     client ->
+                         State0
+                 end,
         Maybe(verify_certificate_verify(State1, CertificateVerify))
     catch
         {Ref, {#alert{} = Alert, State}} ->
@@ -907,18 +966,20 @@ do_wait_finished(#finished{verify_data = VerifyData},
         Maybe(validate_finished(State0, VerifyData)),
         %% D.4.  Middlebox Compatibility Mode
         State1 = maybe_queue_change_cipher_spec(State0, first),
+        %% Signal change of cipher
+        State2 = maybe_send_end_of_early_data(State1),
         %% Maybe send Certificate + CertificateVerify
-        State2 = Maybe(maybe_queue_cert_cert_cv(State1)),
-        Finished = finished(State2),
+        State3 = Maybe(maybe_queue_cert_cert_cv(State2)),
+        Finished = finished(State3),
         %% Encode Finished
-        State3 = Connection:queue_handshake(Finished, State2),
+        State4 = Connection:queue_handshake(Finished, State3),
         %% Send first flight
-        {State4, _} = Connection:send_handshake_flight(State3),
-        State5 = calculate_traffic_secrets(State4),
-        State6 = maybe_calculate_resumption_master_secret(State5),
-        State7 = forget_master_secret(State6),
+        {State5, _} = Connection:send_handshake_flight(State4),
+        State6 = calculate_traffic_secrets(State5),
+        State7 = maybe_calculate_resumption_master_secret(State6),
+        State8 = forget_master_secret(State7),
         %% Configure traffic keys
-        ssl_record:step_encryption_state(State7)
+        ssl_record:step_encryption_state(State8)
     catch
         {Ref, #alert{} = Alert} ->
             Alert
@@ -973,8 +1034,8 @@ do_wait_sh(#server_hello{cipher_suite = SelectedCipherSuite,
         PSK = Maybe(get_pre_shared_key(SessionTickets, UseTicket, HKDFAlgo, SelectedIdentity)),
         State3 = calculate_handshake_secrets(ServerPublicKey, ClientPrivateKey, SelectedGroup,
                                              PSK, State2),
-        State4 = ssl_record:step_encryption_state(State3),
-
+        %% State4 = ssl_record:step_encryption_state(State3),
+        State4 = ssl_record:step_encryption_state_read(State3),
         {State4, wait_ee}
 
     catch
@@ -989,6 +1050,7 @@ do_wait_ee(#encrypted_extensions{extensions = Extensions}, State0) ->
 
     ALPNProtocol0 = maps:get(alpn, Extensions, undefined),
     ALPNProtocol = get_alpn(ALPNProtocol0),
+    EarlyDataIndication = maps:get(early_data, Extensions, undefined),
 
     {Ref, Maybe} = maybe(),
 
@@ -996,14 +1058,17 @@ do_wait_ee(#encrypted_extensions{extensions = Extensions}, State0) ->
         %% RFC 6066: handle received/expected maximum fragment length
         Maybe(maybe_max_fragment_length(Extensions, State0)),
 
+        %% Check if early_data is accepted/rejected
+        State1 = maybe_check_early_data_indication(EarlyDataIndication, State0),
+
         %% Go to state 'wait_finished' if using PSK.
-        Maybe(maybe_resumption(State0)),
+        Maybe(maybe_resumption(State1)),
 
         %% Update state
-        #state{handshake_env = HsEnv} = State0,
-        State1 = State0#state{handshake_env = HsEnv#handshake_env{alpn = ALPNProtocol}},
+        #state{handshake_env = HsEnv} = State1,
+        State2 = State1#state{handshake_env = HsEnv#handshake_env{alpn = ALPNProtocol}},
 
-        {State1, wait_cert_cr}
+        {State2, wait_cert_cr}
     catch
         {Ref, {State, StateName}} ->
             {State, StateName};
@@ -1032,6 +1097,25 @@ do_wait_cert_cr(#certificate_request_1_3{} = CertificateRequest, State0) ->
     end.
 
 
+do_wait_eoed(#end_of_early_data{}, State0) ->
+    {Ref,_Maybe} = maybe(),
+    try
+        %% Step read state to enable reading handshake messages from the client.
+        %% Write state is already stepped in state 'negotiated'.
+        State1 = ssl_record:step_encryption_state_read(State0),
+
+        %% Early data has been received, no more early data is expected.
+        HsEnv = (State1#state.handshake_env)#handshake_env{early_data_accepted = false},
+        State2 = State1#state{handshake_env = HsEnv},
+        {State2, wait_finished}
+    catch
+        {Ref, #alert{} = Alert} ->
+            {Alert, State0};
+        {Ref, {#alert{} = Alert, State}} ->
+            {Alert, State}
+    end.
+
+
 %% For reasons of backward compatibility with middleboxes (see
 %% Appendix D.4), the HelloRetryRequest message uses the same structure
 %% as the ServerHello, but with Random set to the special value of the
@@ -1043,8 +1127,9 @@ do_wait_cert_cr(#certificate_request_1_3{} = CertificateRequest, State0) ->
 %% Upon receiving a message with type server_hello, implementations MUST
 %% first examine the Random value and, if it matches this value, process
 %% it as described in Section 4.1.4).
-maybe_hello_retry_request(#server_hello{random = ?HELLO_RETRY_REQUEST_RANDOM} = ServerHello, State0) ->
-    {error, {State0, start, ServerHello}};
+maybe_hello_retry_request(#server_hello{random = ?HELLO_RETRY_REQUEST_RANDOM} = ServerHello, 
+                          #state{protocol_specific = PS} = State0) ->
+    {error, {State0#state{protocol_specific = PS#{hello_retry => true}}, start, ServerHello}};
 maybe_hello_retry_request(_, _) ->
     ok.
 
@@ -1095,11 +1180,10 @@ maybe_queue_change_cipher_spec(#state{flight_buffer = FlightBuffer0} = State0, l
 %%      first ClientHello.
 %% @end
 maybe_prepend_change_cipher_spec(#state{
-                                    ssl_options =
-                                        #{middlebox_comp_mode := true},
+                                    session = #session{session_id = Id},
                                     handshake_env =
                                         #handshake_env{
-                                           change_cipher_spec_sent = false} = HSEnv} = State, Bin) ->
+                                           change_cipher_spec_sent = false} = HSEnv} = State, Bin) when Id =/= ?EMPTY_ID ->
     CCSBin = create_change_cipher_spec(State),
     {State#state{handshake_env =
                      HSEnv#handshake_env{change_cipher_spec_sent = true}},
@@ -1110,11 +1194,10 @@ maybe_prepend_change_cipher_spec(State, Bin) ->
 %% @doc Appends a change_cipher_spec record to the input binary
 %% @end
 maybe_append_change_cipher_spec(#state{
-                                    ssl_options =
-                                        #{middlebox_comp_mode := true},
+                                   session = #session{session_id = Id},
                                     handshake_env =
                                         #handshake_env{
-                                           change_cipher_spec_sent = false} = HSEnv} = State, Bin) ->
+                                           change_cipher_spec_sent = false} = HSEnv} = State, Bin) when Id =/= ?EMPTY_ID  ->
     CCSBin = create_change_cipher_spec(State),
     {State#state{handshake_env =
                      HSEnv#handshake_env{change_cipher_spec_sent = true}},
@@ -1122,7 +1205,7 @@ maybe_append_change_cipher_spec(#state{
 maybe_append_change_cipher_spec(State, Bin) ->
     {State, Bin}.
 
-maybe_queue_cert_cert_cv(#state{client_certificate_requested = false} = State) ->
+maybe_queue_cert_cert_cv(#state{client_certificate_status = not_requested} = State) ->
     {ok, State};
 maybe_queue_cert_cert_cv(#state{connection_states = _ConnectionStates0,
                                 session = #session{session_id = _SessionId,
@@ -1160,8 +1243,8 @@ maybe_queue_cert_verify(#certificate_1_3{certificate_list = []}, State) ->
     {ok, State};
 maybe_queue_cert_verify(_Certificate,
                         #state{connection_states = _ConnectionStates0,
-                               session = #session{sign_alg = SignatureScheme},
-                               connection_env = #connection_env{private_key = CertPrivateKey},
+                               session = #session{sign_alg = SignatureScheme,
+                                                  private_key = CertPrivateKey},
                                static_env = #static_env{role = client,
                                                         protocol_cb = Connection}
                               } = State) ->
@@ -1225,22 +1308,45 @@ session_resumption({#state{ssl_options = #{session_tickets := disabled}} = State
 session_resumption({#state{ssl_options = #{session_tickets := Tickets}} = State, negotiated}, undefined)
   when Tickets =/= disabled ->
     {ok, {State, negotiated}};
-session_resumption({#state{ssl_options = #{session_tickets := Tickets}} = State0, negotiated}, PSK)
+session_resumption({#state{ssl_options = #{session_tickets := Tickets},
+                           handshake_env = #handshake_env{
+                                              early_data_accepted = false}} = State0, negotiated}, PSK)
   when Tickets =/= disabled ->
     State = handle_resumption(State0, ok),
-    {ok, {State, negotiated, PSK}}.
+    {ok, {State, negotiated, PSK}};
+session_resumption({#state{ssl_options = #{session_tickets := Tickets},
+                           handshake_env = #handshake_env{
+                                              early_data_accepted = true}} = State0, negotiated}, PSK0)
+  when Tickets =/= disabled ->
+    State1 = handle_resumption(State0, ok),
+    %% TODO Refactor PSK-tuple {Index, PSK}, index might not be needed.
+    {_ , PSK} = PSK0,
+    State2 = calculate_client_early_traffic_secret(State1, PSK),
+    %% Set 0-RTT traffic keys for reading early_data
+    State3 = ssl_record:step_encryption_state_read(State2),
+    State = update_current_read(State3, true, true),
+    {ok, {State, negotiated, PSK0}}.
 
-
+%% Session resumption with early_data
+maybe_send_certificate_request(#state{
+                                  handshake_env =
+                                      #handshake_env{
+                                         early_data_accepted = true}} = State,
+                               _, PSK) when PSK =/= undefined ->
+    %% Go wait for End of Early Data
+    {State, wait_eoed};
 %% Do not send CR during session resumption
 maybe_send_certificate_request(State, _, PSK) when PSK =/= undefined ->
     {State, wait_finished};
 maybe_send_certificate_request(State, #{verify := verify_none}, _) ->
     {State, wait_finished};
-maybe_send_certificate_request(#state{static_env = #static_env{protocol_cb = Connection}} = State, 
+maybe_send_certificate_request(#state{static_env = #static_env{protocol_cb = Connection,
+                                                               cert_db = CertDbHandle,
+                                                               cert_db_ref = CertDbRef}} = State, 
                                #{verify := verify_peer,
                                  signature_algs := SignAlgs,
                                  signature_algs_cert := SignAlgsCert}, _) ->
-    CertificateRequest = certificate_request(SignAlgs, SignAlgsCert),
+    CertificateRequest = certificate_request(SignAlgs, SignAlgsCert, CertDbHandle, CertDbRef),
     {Connection:queue_handshake(CertificateRequest, State), wait_cert}.
 
 maybe_send_certificate(State, PSK) when  PSK =/= undefined ->
@@ -1260,10 +1366,10 @@ maybe_send_certificate(#state{session = #session{own_certificates = OwnCerts},
 
 maybe_send_certificate_verify(State, PSK) when  PSK =/= undefined ->
     {ok, State};
-maybe_send_certificate_verify(#state{session = #session{sign_alg = SignatureScheme},
-                                     static_env = #static_env{protocol_cb = Connection},
-                                     connection_env = #connection_env{
-                                                         private_key = CertPrivateKey}} = State, _) ->
+maybe_send_certificate_verify(#state{session = #session{sign_alg = SignatureScheme,
+                                                        private_key = CertPrivateKey},
+                                     static_env = #static_env{protocol_cb = Connection}
+                                    } = State, _) ->
     case certificate_verify(CertPrivateKey, SignatureScheme, State, server) of
         {ok, CertificateVerify} ->
             {ok, Connection:queue_handshake(CertificateVerify, State)};
@@ -1320,31 +1426,23 @@ create_change_cipher_spec(#state{ssl_options = #{log_level := LogLevel}}) ->
     ssl_logger:debug(LogLevel, outbound, 'record', BinChangeCipher),
     [BinChangeCipher].
 
-process_certificate_request(#certificate_request_1_3{},
-                            #state{session = #session{own_certificates = undefined}} = State) ->
-    {ok, {State#state{client_certificate_requested = true}, wait_cert}};
-
 process_certificate_request(#certificate_request_1_3{
-                              extensions = Extensions},
-                            #state{session = #session{own_certificates = [Cert|_]} = Session} = 
+                               extensions = Extensions},
+                            #state{ssl_options = #{signature_algs := ClientSignAlgs},
+                                   connection_env = #connection_env{cert_key_pairs = CertKeyPairs},
+                                   static_env = #static_env{cert_db = CertDbHandle, cert_db_ref = CertDbRef},
+                                   session = Session0} =
                                 State) ->
     ServerSignAlgs = get_signature_scheme_list(
                        maps:get(signature_algs, Extensions, undefined)),
     ServerSignAlgsCert = get_signature_scheme_list(
                            maps:get(signature_algs_cert, Extensions, undefined)),
+    CertAuths = get_certificate_authorites(maps:get(certificate_authorities, Extensions, undefined)),
 
-    {_PublicKeyAlgo, SignAlgo, SignHash, _} = get_certificate_params(Cert),
-
-    %% Check if server supports signature algorithm of client certificate
-    case check_cert_sign_algo(SignAlgo, SignHash, ServerSignAlgs, ServerSignAlgsCert) of
-        ok ->
-            {ok, {State#state{client_certificate_requested = true}, wait_cert}};
-        {error, _} ->
-            %% Certificate not supported: send empty certificate in state 'wait_finished'
-            {ok, {State#state{client_certificate_requested = true,
-                              session = Session#session{own_certificates = undefined}}, wait_cert}}
-    end.
-
+    Session = select_client_cert_key_pair(Session0, CertKeyPairs,
+                                          ServerSignAlgs, ServerSignAlgsCert, ClientSignAlgs,
+                                          CertDbHandle, CertDbRef, CertAuths),
+    {ok, {State#state{client_certificate_status = requested, session = Session}, wait_cert}}.
 
 process_certificate(#certificate_1_3{
                        certificate_request_context = <<>>,
@@ -1377,15 +1475,12 @@ process_certificate(#certificate_1_3{certificate_list = CertEntries},
                                               ocsp_stapling_state = OcspState}} = State0) ->
     case validate_certificate_chain(CertEntries, CertDbHandle, CertDbRef,
                                     SslOptions, CRLDbHandle, Role, Host, OcspState) of
-        {ok, {PeerCert, PublicKeyInfo}} ->
+        #alert{} = Alert ->
+            State = update_encryption_state(Role, State0),
+            {error, {Alert, State}};
+        {PeerCert, PublicKeyInfo} ->
             State = store_peer_cert(State0, PeerCert, PublicKeyInfo),
-            {ok, {State, wait_cv}};
-        {error, Reason} ->
-            State = update_encryption_state(Role, State0),
-            {error, {Reason, State}};
-        {ok, #alert{} = Alert} ->
-            State = update_encryption_state(Role, State0),
-            {error, {Alert, State}}
+            {ok, {State, wait_cv}}
     end.
 
 %% Sets correct encryption state when sending Alerts in shared states that use different secrets.
@@ -1400,33 +1495,16 @@ update_encryption_state(client, State) ->
 
 
 validate_certificate_chain(CertEntries, CertDbHandle, CertDbRef,
-                           #{server_name_indication := ServerNameIndication,
-                             partial_chain := PartialChain,
-                             ocsp_responder_certs := OcspResponderCerts
+                           #{ocsp_responder_certs := OcspResponderCerts
                             } = SslOptions, CRLDbHandle, Role, Host, OcspState0) ->
     {Certs, CertExt, OcspState} = split_cert_entries(CertEntries, OcspState0),
-    ServerName = ssl_handshake:server_name(ServerNameIndication, Host, Role),
-    [PeerCert | _ChainCerts ] = Certs,
-     try
-         PathsAndAnchors =
-            ssl_certificate:trusted_cert_and_paths(Certs, CertDbHandle, CertDbRef,
-                                                  PartialChain),
-         case path_validate(PathsAndAnchors, ServerName, Role, CertDbHandle, CertDbRef, CRLDbHandle,
-                            {3, 4}, SslOptions, #{cert_ext => CertExt,
-                                                  ocsp_state => OcspState,
-                                                  ocsp_responder_certs => OcspResponderCerts}) of
-             {ok, {PublicKeyInfo,_}} ->
-                 {ok, {PeerCert, PublicKeyInfo}};
-             {error, Reason} ->
-                 {ok, ssl_handshake:path_validation_alert(Reason)}
-         end
-     catch
-         error:{badmatch,{error, {asn1, Asn1Reason}}} ->
-             %% ASN-1 decode of certificate somehow failed
-             {error, ?ALERT_REC(?FATAL, ?CERTIFICATE_UNKNOWN, {failed_to_decode_certificate, Asn1Reason})};
-         error:OtherReason ->
-             {error, ?ALERT_REC(?FATAL, ?INTERNAL_ERROR, {unexpected_error, OtherReason})}
-     end.
+
+    ssl_handshake:certify(#certificate{asn1_certificates = Certs}, CertDbHandle, CertDbRef,
+                          SslOptions, CRLDbHandle, Role, Host, {3,4},
+                          #{cert_ext => CertExt,
+                            ocsp_state => OcspState,
+                            ocsp_responder_certs => OcspResponderCerts}).
+
 
 store_peer_cert(#state{session = Session,
                        handshake_env = HsEnv} = State, PeerCert, PublicKeyInfo) ->
@@ -1508,16 +1586,15 @@ calculate_handshake_secrets(PublicKey, PrivateKey, SelectedGroup, PSK,
 
     %% Calculate [sender]_handshake_traffic_secret
     {Messages, _} =  HHistory,
-
     ClientHSTrafficSecret =
         tls_v1:client_handshake_traffic_secret(HKDFAlgo, HandshakeSecret, lists:reverse(Messages)),
     ServerHSTrafficSecret =
         tls_v1:server_handshake_traffic_secret(HKDFAlgo, HandshakeSecret, lists:reverse(Messages)),
 
     %% Calculate traffic keys
-    #{cipher := Cipher} = ssl_cipher_format:suite_bin_to_map(CipherSuite),
-    {ReadKey, ReadIV} = tls_v1:calculate_traffic_keys(HKDFAlgo, Cipher, ClientHSTrafficSecret),
-    {WriteKey, WriteIV} = tls_v1:calculate_traffic_keys(HKDFAlgo, Cipher, ServerHSTrafficSecret),
+    KeyLength = tls_v1:key_length(CipherSuite),
+    {ReadKey, ReadIV} = tls_v1:calculate_traffic_keys(HKDFAlgo, KeyLength, ClientHSTrafficSecret),
+    {WriteKey, WriteIV} = tls_v1:calculate_traffic_keys(HKDFAlgo, KeyLength, ServerHSTrafficSecret),
 
     %% Calculate Finished Keys
     ReadFinishedKey = tls_v1:finished_key(ClientHSTrafficSecret, HKDFAlgo),
@@ -1530,6 +1607,64 @@ calculate_handshake_secrets(PublicKey, PrivateKey, SelectedGroup, PSK,
                                      ReadKey, ReadIV, ReadFinishedKey,
                                      WriteKey, WriteIV, WriteFinishedKey).
 
+%% Server
+calculate_client_early_traffic_secret(#state{connection_states = ConnectionStates,
+                                             handshake_env =
+                                                 #handshake_env{
+                                                    tls_handshake_history = {Hist, _}}} = State, PSK) ->
+
+    #{security_parameters := SecParamsR} =
+        ssl_record:pending_connection_state(ConnectionStates, read),
+    #security_parameters{cipher_suite = CipherSuite} = SecParamsR,
+    #{cipher := Cipher,
+      prf := HKDF} = ssl_cipher_format:suite_bin_to_map(CipherSuite),
+    calculate_client_early_traffic_secret(Hist, PSK, Cipher, HKDF, State).
+
+%% Client
+calculate_client_early_traffic_secret(
+  ClientHello, PSK, Cipher, HKDFAlgo,
+  #state{connection_states = ConnectionStates,
+         ssl_options = #{keep_secrets := KeepSecrets},
+         static_env = #static_env{role = Role}} = State0) ->
+    EarlySecret = tls_v1:key_schedule(early_secret, HKDFAlgo , {psk, PSK}),
+    ClientEarlyTrafficSecret =
+        tls_v1:client_early_traffic_secret(HKDFAlgo, EarlySecret, ClientHello),
+    %% Calculate traffic key
+    KeyLength = ssl_cipher:key_material(Cipher),
+    {Key, IV} =
+        tls_v1:calculate_traffic_keys(HKDFAlgo, KeyLength, ClientEarlyTrafficSecret),
+    %% Update pending connection states
+    case Role of
+        client ->
+            PendingWrite0 = ssl_record:pending_connection_state(ConnectionStates, write),
+            PendingWrite1 = maybe_store_early_data_secret(KeepSecrets, ClientEarlyTrafficSecret,
+                                                          PendingWrite0),
+            PendingWrite = update_connection_state(PendingWrite1, undefined, undefined,
+                                                   undefined,
+                                                   Key, IV, undefined),
+            State0#state{connection_states = ConnectionStates#{pending_write => PendingWrite}};
+        server ->
+            PendingRead0 = ssl_record:pending_connection_state(ConnectionStates, read),
+            PendingRead1 = maybe_store_early_data_secret(KeepSecrets, ClientEarlyTrafficSecret,
+                                                         PendingRead0),
+            PendingRead = update_connection_state(PendingRead1, undefined, undefined,
+                                                   undefined,
+                                                   Key, IV, undefined),
+            State0#state{connection_states = ConnectionStates#{pending_read => PendingRead}}
+    end.
+
+update_current_read(#state{connection_states = CS} = State, TrialDecryption, EarlyDataExpected) ->
+    Read0 = ssl_record:current_connection_state(CS, read),
+    Read = Read0#{trial_decryption => TrialDecryption,
+                  early_data_accepted => EarlyDataExpected},
+    State#state{connection_states = CS#{current_read => Read}}.
+
+maybe_store_early_data_secret(true, EarlySecret, State) ->
+    #{security_parameters := SecParams0} = State,
+    SecParams = SecParams0#security_parameters{client_early_data_secret = EarlySecret},
+    State#{security_parameters := SecParams};
+maybe_store_early_data_secret(false, _, State) ->
+    State.
 
 %% Server
 get_pre_shared_key(undefined, HKDFAlgo) ->
@@ -1554,7 +1689,7 @@ get_pre_shared_key(manual = SessionTickets, UseTicket, HKDFAlgo, SelectedIdentit
             {ok, binary:copy(<<0>>, ssl_cipher:hash_size(HKDFAlgo))};
         illegal_parameter ->
             {error, ?ALERT_REC(?FATAL, ?ILLEGAL_PARAMETER)};
-        {_, PSK} ->
+        {_, PSK, _, _, _} ->
             {ok, PSK}
     end;
 get_pre_shared_key(auto = SessionTickets, UseTicket, HKDFAlgo, SelectedIdentity) ->
@@ -1566,19 +1701,35 @@ get_pre_shared_key(auto = SessionTickets, UseTicket, HKDFAlgo, SelectedIdentity)
         illegal_parameter ->
             tls_client_ticket_store:unlock_tickets(self(), UseTicket),
             {error, ?ALERT_REC(?FATAL, ?ILLEGAL_PARAMETER)};
-        {Key, PSK} ->
+        {Key, PSK, _, _, _} ->
             tls_client_ticket_store:remove_tickets([Key]),  %% Remove single-use ticket
             tls_client_ticket_store:unlock_tickets(self(), UseTicket -- [Key]),
             {ok, PSK}
     end.
-
+%%
+%% Early Data
+get_pre_shared_key_early_data(SessionTickets, UseTicket) ->
+    TicketData = get_ticket_data(self(), SessionTickets, UseTicket),
+    case choose_psk(TicketData, 0) of
+        undefined -> %% Should not happen
+            {error, ?ALERT_REC(?FATAL, ?ILLEGAL_PARAMETER)};
+        illegal_parameter ->
+            {error, ?ALERT_REC(?FATAL, ?ILLEGAL_PARAMETER)};
+        {_Key, PSK, Cipher, HKDF, MaxSize} ->
+            {ok, {PSK, Cipher, HKDF, MaxSize}}
+    end.
 
 choose_psk(undefined, _) ->
     undefined;
 choose_psk([], _) ->
     illegal_parameter;
-choose_psk([{Key, SelectedIdentity, _, PSK, _, _}|_], SelectedIdentity) ->
-    {Key, PSK};
+choose_psk([#ticket_data{
+               key = Key,
+               pos = SelectedIdentity,
+               psk = PSK,
+               cipher_suite = {Cipher, HKDF},
+               max_size = MaxSize}|_], SelectedIdentity) ->
+    {Key, PSK, Cipher, HKDF, MaxSize};
 choose_psk([_|T], SelectedIdentity) ->
     choose_psk(T, SelectedIdentity).
 
@@ -1608,9 +1759,9 @@ calculate_traffic_secrets(#state{
         tls_v1:server_application_traffic_secret_0(HKDFAlgo, MasterSecret, lists:reverse(Messages)),
 
     %% Calculate traffic keys
-    #{cipher := Cipher} = ssl_cipher_format:suite_bin_to_map(CipherSuite),
-    {ReadKey, ReadIV} = tls_v1:calculate_traffic_keys(HKDFAlgo, Cipher, ClientAppTrafficSecret0),
-    {WriteKey, WriteIV} = tls_v1:calculate_traffic_keys(HKDFAlgo, Cipher, ServerAppTrafficSecret0),
+    KeyLength = tls_v1:key_length(CipherSuite),
+    {ReadKey, ReadIV} = tls_v1:calculate_traffic_keys(HKDFAlgo, KeyLength, ClientAppTrafficSecret0),
+    {WriteKey, WriteIV} = tls_v1:calculate_traffic_keys(HKDFAlgo, KeyLength, ServerAppTrafficSecret0),
 
     update_pending_connection_states(State0, MasterSecret, undefined,
                                      ClientAppTrafficSecret0, ServerAppTrafficSecret0,
@@ -1925,13 +2076,12 @@ maybe_update_selected_sign_alg(State, _, _) ->
     State.
 
 
-verify_certificate_verify(#state{
-                             static_env = #static_env{role = Role},
-                             connection_states = ConnectionStates,
-                             handshake_env =
-                                 #handshake_env{
-                                    public_key_info = PublicKeyInfo,
-                                    tls_handshake_history = HHistory}} = State0,
+verify_certificate_verify(#state{static_env = #static_env{role = Role},
+                                 connection_states = ConnectionStates,
+                                 handshake_env =
+                                     #handshake_env{
+                                        public_key_info = PublicKeyInfo,
+                                        tls_handshake_history = HHistory}} = State0,
                           #certificate_verify_1_3{
                              algorithm = SignatureScheme,
                              signature = Signature}) ->
@@ -1974,7 +2124,7 @@ context_string(client) ->
     <<"TLS 1.3, client CertificateVerify">>.
 
 
-%% Return context string for verifing peer signature
+%% Return context string for verifying peer signature
 peer_context_string(server) ->
     <<"TLS 1.3, client CertificateVerify">>;
 peer_context_string(client) ->
@@ -1991,7 +2141,7 @@ select_common_groups(ServerGroups, ClientGroups) ->
     Fun = fun(E) -> lists:member(E, ClientGroups) end,
     case lists:filter(Fun, ServerGroups) of
         [] ->
-            {error, {insufficient_security, no_suitable_groups}};
+            select_common_groups(ServerGroups, []);
         L ->
             {ok, L}
     end.
@@ -2157,12 +2307,14 @@ check_cert_sign_algo(SignAlgo, SignHash, _, ClientSignAlgsCert) ->
 
 
 %% DSA keys are not supported by TLS 1.3
-select_sign_algo(dsa, _RSAKeySize, _ClientSignAlgs, _ServerSignAlgs) ->
+select_sign_algo(dsa, _RSAKeySize, _PeerSignAlgs, _OwnSignAlgs, _Curve) ->
     {error, ?ALERT_REC(?FATAL, ?INSUFFICIENT_SECURITY, no_suitable_public_key)};
-select_sign_algo(_, _RSAKeySize, [], _) ->
+select_sign_algo(_, _RSAKeySize, [], _, _) ->
     {error, ?ALERT_REC(?FATAL, ?INSUFFICIENT_SECURITY, no_suitable_signature_algorithm)};
-select_sign_algo(PublicKeyAlgo, RSAKeySize, [C|ClientSignAlgs], ServerSignAlgs) ->
-    {_, S, _} = ssl_cipher:scheme_to_components(C),
+select_sign_algo(_, _RSAKeySize, undefined, _OwnSignAlgs, _) ->
+    {error, ?ALERT_REC(?FATAL, ?INSUFFICIENT_SECURITY, no_suitable_public_key)};
+select_sign_algo(PublicKeyAlgo, RSAKeySize, [PeerSignAlg|PeerSignAlgs], OwnSignAlgs, Curve) ->
+    {_, S, _} = ssl_cipher:scheme_to_components(PeerSignAlg),
     %% RSASSA-PKCS1-v1_5 and Legacy algorithms are not defined for use in signed
     %% TLS handshake messages: filter sha-1 and rsa_pkcs1.
     %%
@@ -2172,30 +2324,42 @@ select_sign_algo(PublicKeyAlgo, RSAKeySize, [C|ClientSignAlgs], ServerSignAlgs) 
     %% it MUST use the RSASSA-PSS OID.
     case ((PublicKeyAlgo =:= rsa andalso S =:= rsa_pss_rsae)
           orelse (PublicKeyAlgo =:= rsa_pss_pss andalso S =:= rsa_pss_pss)
-          orelse (PublicKeyAlgo =:= ecdsa andalso S =:= ecdsa))
+          orelse (PublicKeyAlgo =:= ecdsa andalso S =:= ecdsa)
+          orelse (PublicKeyAlgo =:= eddsa andalso S =:= eddsa)
+         )
         andalso
-        lists:member(C, ServerSignAlgs) of
+        lists:member(PeerSignAlg, OwnSignAlgs) of
         true ->
             validate_key_compatibility(PublicKeyAlgo, RSAKeySize,
-                                       [C|ClientSignAlgs], ServerSignAlgs);
+                                       [PeerSignAlg|PeerSignAlgs], OwnSignAlgs, Curve);
         false ->
-            select_sign_algo(PublicKeyAlgo, RSAKeySize, ClientSignAlgs, ServerSignAlgs)
+            select_sign_algo(PublicKeyAlgo, RSAKeySize, PeerSignAlgs, OwnSignAlgs, Curve)
     end.
 
-validate_key_compatibility(PublicKeyAlgo, RSAKeySize, [C|ClientSignAlgs], ServerSignAlgs)
+validate_key_compatibility(PublicKeyAlgo, RSAKeySize, [PeerSignAlg|PeerSignAlgs], OwnSignAlgs, Curve)
   when PublicKeyAlgo =:= rsa orelse
        PublicKeyAlgo =:= rsa_pss_pss ->
-    case is_rsa_key_compatible(RSAKeySize, C) of
+    {Hash, Sign, _} = ssl_cipher:scheme_to_components(PeerSignAlg),
+    case (Sign =:= rsa_pss_rsae orelse Sign =:= rsa_pss_pss) andalso
+        is_rsa_key_compatible(RSAKeySize, Hash) of
         true ->
-            {ok, C};
+            {ok, PeerSignAlg};
         false ->
-            select_sign_algo(PublicKeyAlgo, RSAKeySize, ClientSignAlgs, ServerSignAlgs)
+            select_sign_algo(PublicKeyAlgo, RSAKeySize, PeerSignAlgs, OwnSignAlgs, Curve)
     end;
-validate_key_compatibility(_, _, [C|_], _) ->
-    {ok, C}.
+validate_key_compatibility(PublicKeyAlgo, RSAKeySize, [PeerSignAlg|PeerSignAlgs], OwnSignAlgs, Curve)
+  when PublicKeyAlgo =:= ecdsa ->
+    {_ , Sign, PeerCurve} = ssl_cipher:scheme_to_components(PeerSignAlg),
+    case Sign =:= ecdsa andalso Curve =:= PeerCurve of
+        true ->
+            {ok, PeerSignAlg};
+        false ->
+            select_sign_algo(PublicKeyAlgo, RSAKeySize, PeerSignAlgs, OwnSignAlgs, Curve)
+    end;
+validate_key_compatibility(_, _, [PeerSignAlg|_], _, _) ->
+    {ok, PeerSignAlg}.
 
-is_rsa_key_compatible(KeySize, SigAlg) ->
-    {Hash, _, _} = ssl_cipher:scheme_to_components(SigAlg),
+is_rsa_key_compatible(KeySize, Hash) ->
     HashSize = ssl_cipher:hash_size(Hash),
 
     %% OpenSSL crypto lib defines a limit on the size of the random salt
@@ -2214,9 +2378,12 @@ is_rsa_key_compatible(KeySize, SigAlg) ->
             true
     end.
 
+do_check_cert_sign_algo(_, _, undefined) ->
+    {error, ?ALERT_REC(?FATAL, ?INSUFFICIENT_SECURITY, no_suitable_signature_algorithm)};
 do_check_cert_sign_algo(_, _, []) ->
     {error, ?ALERT_REC(?FATAL, ?INSUFFICIENT_SECURITY, no_suitable_signature_algorithm)};
 do_check_cert_sign_algo(SignAlgo, SignHash, [Scheme|T]) ->
+    %% ECDSA: curve is tied to the hash algorithm e.g. ecdsa_secp256r1_sha256
     {Hash, Sign, _Curve} = ssl_cipher:scheme_to_components(Scheme),
     case compare_sign_algos(SignAlgo, SignHash, Sign, Hash) of
         true ->
@@ -2241,11 +2408,11 @@ compare_sign_algos(_, _, _, _) ->
     false.
 
 get_certificate_params(Cert) ->
-    {SignAlgo0, Param, SubjectPublicKeyAlgo0, RSAKeySize} =
+    {SignAlgo0, Param, SubjectPublicKeyAlgo0, RSAKeySize, Curve} =
         ssl_handshake:get_cert_params(Cert),
     {SignHash, SignAlgo} = oids_to_atoms(SignAlgo0, Param),
     SubjectPublicKeyAlgo = public_key_algo(SubjectPublicKeyAlgo0),
-    {SubjectPublicKeyAlgo, SignAlgo, SignHash, RSAKeySize}.
+    {SubjectPublicKeyAlgo, SignAlgo, SignHash, RSAKeySize, Curve}.
 
 oids_to_atoms(?'id-RSASSA-PSS', #'RSASSA-PSS-params'{maskGenAlgorithm = 
                                                         #'MaskGenAlgorithm'{algorithm = ?'id-mgf1',
@@ -2266,11 +2433,17 @@ public_key_algo(?rsaEncryption) ->
     rsa;
 public_key_algo(?'id-ecPublicKey') ->
     ecdsa;
+public_key_algo(?'id-Ed25519') ->
+    eddsa;
+public_key_algo(?'id-Ed448') ->
+    eddsa;
 public_key_algo(?'id-dsa') ->
     dsa.
 
 get_signature_scheme_list(undefined) ->
     undefined;
+get_signature_scheme_list(#hash_sign_algos{}) ->
+    [];
 get_signature_scheme_list(#signature_algorithms_cert{
                         signature_scheme_list = ClientSignatureSchemes}) ->
     ClientSignatureSchemes;
@@ -2280,11 +2453,18 @@ get_signature_scheme_list(#signature_algorithms{
     lists:filter(fun (E) -> is_atom(E) andalso E =/= unassigned end,
                  ClientSignatureSchemes).
 
+get_certificate_authorites(#certificate_authorities{authorities = Auths}) ->
+    Auths;
+get_certificate_authorites(undefined) ->
+    [].
+
 get_supported_groups(undefined = Groups) ->
     {error, ?ALERT_REC(?FATAL, ?ILLEGAL_PARAMETER, {supported_groups, Groups})}; 
 get_supported_groups(#supported_groups{supported_groups = Groups}) ->
     {ok, Groups}.
 
+get_key_shares(undefined) ->
+    [];
 get_key_shares(#key_share_client_hello{client_shares = ClientShares}) ->
     ClientShares;
 get_key_shares(#key_share_server_hello{server_share = ServerShare}) ->
@@ -2396,17 +2576,17 @@ maybe_add_binders(Hello0, {[HRR,MessageHash|_], _}, TicketData, Version) when Ve
 maybe_add_binders(Hello, _, _, Version) when Version =< {3,3} ->
     Hello.
 
-
 create_binders(Context, TicketData) ->
     create_binders(Context, TicketData, []).
 %%
 create_binders(_, [], Acc) ->
     lists:reverse(Acc);
-create_binders(Context, [{_, _, _, PSK, _, HKDF}|T], Acc) ->
+create_binders(Context, [#ticket_data{
+                            psk = PSK,
+                            cipher_suite = {_, HKDF}}|T], Acc) ->
     FinishedKey = calculate_finished_key(PSK, HKDF),
     Binder = calculate_binder(FinishedKey, HKDF, Context),
     create_binders(Context, T, [Binder|Acc]).
-
 
 %% Removes the binders list from the ClientHello.
 %% opaque PskBinderEntry<32..255>;
@@ -2431,16 +2611,28 @@ truncate_client_hello(HelloBin0) ->
     %% the input can result in a different handshake binary.
     %% The original length of the binders can still be determined by
     %% re-encoding the original ClientHello and using its size as reference
-    %% when we substract the size of the truncated binary.
+    %% when we subtract the size of the truncated binary.
     TruncatedSize = iolist_size(tls_handshake:encode_handshake(CH, {3,4})),
     RefSize = iolist_size(tls_handshake:encode_handshake(CH0, {3,4})),
     BindersSize = RefSize - TruncatedSize,
 
     %% Return the truncated ClientHello by cutting of the binders from the original
     %% ClientHello binary.
-    {Truncated, _} = split_binary(HelloBin0, size(HelloBin0) - BindersSize - 2),
+    {Truncated, _} = split_binary(HelloBin0, byte_size(HelloBin0) - BindersSize - 2),
     Truncated.
 
+maybe_add_early_data_indication(#client_hello{
+                                   extensions = Extensions0} = ClientHello,
+                                EarlyData,
+                                Version)
+  when Version =:= {3,4} andalso
+       is_binary(EarlyData) andalso
+       byte_size(EarlyData) > 0 ->
+    Extensions = Extensions0#{early_data =>
+                                  #early_data_indication{}},
+    ClientHello#client_hello{extensions = Extensions};
+maybe_add_early_data_indication(ClientHello, _, _) ->
+    ClientHello.
 
 %% The PskBinderEntry is computed in the same way as the Finished
 %% message (Section 4.4.4) but with the BaseKey being the binder_key
@@ -2453,11 +2645,11 @@ calculate_finished_key(PSK, HKDFAlgo) ->
 
 
 calculate_binder(BinderKey, HKDF, Truncated) ->
-  tls_v1:finished_verify_data(BinderKey, HKDF, [Truncated]).
+    tls_v1:finished_verify_data(BinderKey, HKDF, [Truncated]).
 
 
 update_binders(#client_hello{extensions =
-                                #{pre_shared_key := PreSharedKey0} = Extensions0} = Hello, Binders) ->
+                                 #{pre_shared_key := PreSharedKey0} = Extensions0} = Hello, Binders) ->
     #pre_shared_key_client_hello{
        offered_psks =
            #offered_psks{identities = Identities}} = PreSharedKey0,
@@ -2475,6 +2667,7 @@ update_binders(#client_hello{extensions =
 maybe_automatic_session_resumption(#state{
                                       ssl_options = #{versions := [Version|_],
                                                       ciphers := UserSuites,
+                                                      early_data := EarlyData,
                                                       session_tickets := SessionTickets,
                                                       server_name_indication := SNI} = SslOpts0
                                      } = State0)
@@ -2482,7 +2675,13 @@ maybe_automatic_session_resumption(#state{
        SessionTickets =:= auto ->
     AvailableCipherSuites = ssl_handshake:available_suites(UserSuites, Version),
     HashAlgos = cipher_hash_algos(AvailableCipherSuites),
-    UseTicket = tls_client_ticket_store:find_ticket(self(), HashAlgos, SNI),
+    Ciphers = ciphers_for_early_data(AvailableCipherSuites),
+    %% Find a pair of tickets KeyPair = {Ticket0, Ticket2} where Ticket0 satisfies
+    %% requirements for early_data and session resumption while Ticket2 can only
+    %% be used for session resumption.
+    EarlyDataSize = early_data_size(EarlyData),
+    KeyPair = tls_client_ticket_store:find_ticket(self(), Ciphers, HashAlgos, SNI, EarlyDataSize),
+    UseTicket = choose_ticket(KeyPair, EarlyData),
     tls_client_ticket_store:lock_tickets(self(), [UseTicket]),
     State = State0#state{ssl_options = SslOpts0#{use_ticket => [UseTicket]}},
     {[UseTicket], State};
@@ -2491,6 +2690,144 @@ maybe_automatic_session_resumption(#state{
                                      } = State) ->
     {UseTicket, State}.
 
+early_data_size(undefined) ->
+    undefined;
+early_data_size(EarlyData) when is_binary(EarlyData) ->
+    byte_size(EarlyData).
+
+%% Choose a ticket based on the intention of the user. The first argument is
+%% a 2-tuple of ticket keys where the first element refers to a ticket that
+%% fulfills all criteria for sending early_data (hash, cipher, early data size).
+%% Second argument refers to a ticket that can only be used for session
+%% resumption.
+choose_ticket({Key, _}, _) when Key =/= undefined ->
+    Key;
+choose_ticket({_, Key}, EarlyData) when EarlyData =:= undefined ->
+    Key;
+choose_ticket(_, _) ->
+    %% No tickets found that fulfills the original intention of the user
+    %% (sending early_data). It is possible to do session resumption but
+    %% in that case the configured early data would have to be removed
+    %% and that would contradict the will of the user. Returning undefined
+    %% here prevents session resumption instead.
+    undefined.
+
+maybe_send_early_data(#state{
+                         handshake_env = #handshake_env{tls_handshake_history = {Hist, _}},
+                         protocol_specific = #{sender := _Sender},
+                         ssl_options = #{versions := [Version|_],
+                                         use_ticket := UseTicket,
+                                         session_tickets := SessionTickets,
+                                         early_data := EarlyData} = _SslOpts0
+                        } = State0) when Version =:= {3,4} andalso
+                                         UseTicket =/= [undefined] andalso
+                                         EarlyData =/= undefined ->
+    %% D.4.  Middlebox Compatibility Mode
+    State1 = maybe_queue_change_cipher_spec(State0, last),
+    %% Early traffic secret
+    EarlyDataSize = early_data_size(EarlyData),
+    case get_pre_shared_key_early_data(SessionTickets, UseTicket) of
+        {ok, {PSK, Cipher, HKDF, MaxSize}} when EarlyDataSize =< MaxSize ->
+            State2 = calculate_client_early_traffic_secret(Hist, PSK, Cipher, HKDF, State1),
+            %% Set 0-RTT traffic keys for sending early_data and EndOfEarlyData
+            State3 = ssl_record:step_encryption_state_write(State2),
+            {ok, encode_early_data(Cipher, State3)};
+        {ok, {_, _, _, MaxSize}} ->
+            {error, ?ALERT_REC(?FATAL, ?ILLEGAL_PARAMETER, {too_much_early_data, {max, MaxSize}})};
+        {error, Alert} ->
+            {error, Alert}
+    end;
+maybe_send_early_data(State) ->
+    {ok, State}.
+
+encode_early_data(Cipher,
+                  #state{
+                     flight_buffer = Flight0,
+                     protocol_specific = #{sender := _Sender},
+                     ssl_options = #{versions := [Version|_],
+                                     early_data := EarlyData} = _SslOpts0
+                    } = State0) ->
+    #state{connection_states =
+               #{current_write :=
+                     #{security_parameters := SecurityParameters0} = Write0} = ConnectionStates0} = State0,
+    BulkCipherAlgo = ssl_cipher:bulk_cipher_algorithm(Cipher),
+    SecurityParameters = SecurityParameters0#security_parameters{
+                           cipher_type = ?AEAD,
+                           bulk_cipher_algorithm = BulkCipherAlgo},
+    Write = Write0#{security_parameters => SecurityParameters},
+    ConnectionStates1 = ConnectionStates0#{current_write => Write},
+    {BinEarlyData, ConnectionStates} = tls_record:encode_data([EarlyData], Version, ConnectionStates1),
+    State0#state{connection_states = ConnectionStates,
+		 flight_buffer = Flight0 ++ [BinEarlyData]}.
+
+maybe_send_end_of_early_data(
+  #state{
+     handshake_env = #handshake_env{early_data_accepted = true},
+     protocol_specific = #{sender := _Sender},
+     ssl_options = #{versions := [Version|_],
+                     use_ticket := UseTicket,
+                     early_data := EarlyData},
+     static_env = #static_env{protocol_cb = Connection}
+    } = State0) when Version =:= {3,4} andalso
+                     UseTicket =/= [undefined] andalso
+                     EarlyData =/= undefined ->
+    %% EndOfEarlydata is encrypted with the 0-RTT traffic keys
+    State1 = Connection:queue_handshake(#end_of_early_data{}, State0),
+    %% Use handshake keys after EndOfEarlyData is sent
+    ssl_record:step_encryption_state_write(State1);
+maybe_send_end_of_early_data(State) ->
+    State.
+
+maybe_check_early_data_indication(EarlyDataIndication,
+                                  #state{
+                                     handshake_env = HsEnv,
+                                     ssl_options = #{versions := [Version|_],
+                                                     use_ticket := UseTicket,
+                                                     early_data := EarlyData}
+                                    } = State) when Version =:= {3,4} andalso
+                                                    UseTicket =/= [undefined] andalso
+                                                    EarlyData =/= undefined andalso
+                                                    EarlyDataIndication =/= undefined ->
+    signal_user_early_data(State, accepted),
+    State#state{handshake_env = HsEnv#handshake_env{early_data_accepted = true}};
+maybe_check_early_data_indication(EarlyDataIndication,
+                                  #state{
+                                     protocol_specific = #{sender := _Sender},
+                                     ssl_options = #{versions := [Version|_],
+                                                     use_ticket := UseTicket,
+                                                     early_data := EarlyData} = _SslOpts0
+                                    } = State) when Version =:= {3,4} andalso
+                                                    UseTicket =/= [undefined] andalso
+                                                    EarlyData =/= undefined andalso
+                                                    EarlyDataIndication =:= undefined ->
+    signal_user_early_data(State, rejected),
+    %% Use handshake keys if early_data is rejected.
+    ssl_record:step_encryption_state_write(State);
+maybe_check_early_data_indication(_, State) ->
+    %% Use handshake keys if there is no early_data.
+    ssl_record:step_encryption_state_write(State).
+
+signal_user_early_data(#state{
+                          connection_env =
+                              #connection_env{
+                                 user_application = {_, User}},
+                          static_env =
+                              #static_env{
+                                 socket = Socket,
+                                 protocol_cb = Connection,
+                                 transport_cb = Transport,
+                                 trackers = Trackers}} = State,
+                       Result) ->
+    CPids = Connection:pids(State),
+    SslSocket = Connection:socket(CPids, Transport, Socket, Trackers),
+    User ! {ssl, SslSocket, {early_data, Result}}.
+
+handle_early_data(State, enabled, #early_data_indication{}) ->
+    %% Accept early data
+    HsEnv = (State#state.handshake_env)#handshake_env{early_data_accepted = true},
+    State#state{handshake_env = HsEnv};
+handle_early_data(State, _, _) ->
+    State.
 
 cipher_hash_algos(Ciphers) ->
     Fun = fun(Cipher) ->
@@ -2499,6 +2836,14 @@ cipher_hash_algos(Ciphers) ->
           end,
     lists:map(Fun, Ciphers).
 
+ciphers_for_early_data(CipherSuites0) ->
+    %% Use only supported TLS 1.3 cipher suites
+    Supported = lists:filter(fun(CipherSuite) ->
+                                     lists:member(CipherSuite, tls_v1:exclusive_suites(4)) end,
+                             CipherSuites0),
+    %% Return supported block cipher algorithms
+    lists:map(fun(#{cipher := Cipher}) -> Cipher end,
+              lists:map(fun ssl_cipher_format:suite_bin_to_map/1, Supported)).
 
 get_ticket_data(_, undefined, _) ->
     undefined;
@@ -2523,30 +2868,43 @@ process_user_tickets([H|T], Acc, N) ->
             process_user_tickets(T, [TicketData|Acc], N + 1)
     end.
 
-process_ticket(Bin, N) when is_binary(Bin) ->
-    try erlang:binary_to_term(Bin, [safe]) of
-        #{hkdf := HKDF,
-          sni := _SNI,  %% TODO: Handle SNI?
-          psk := PSK,
-          timestamp := Timestamp,
-          ticket := NewSessionTicket} ->
-            #new_session_ticket{
-               ticket_lifetime = _LifeTime,
-               ticket_age_add = AgeAdd,
-               ticket_nonce = Nonce,
-               ticket = Ticket,
-               extensions = _Extensions
-              } = NewSessionTicket,
-            TicketAge =  erlang:system_time(seconds) - Timestamp,
-            ObfuscatedTicketAge = obfuscate_ticket_age(TicketAge, AgeAdd),
-            Identity = #psk_identity{
-                          identity = Ticket,
-                          obfuscated_ticket_age = ObfuscatedTicketAge},
-            {undefined, N, Identity, PSK, Nonce, HKDF};
-        _Else ->
-            error
-    catch error:badarg ->
-            error
+%% Used when session_tickets = manual
+process_ticket(#{cipher_suite := CipherSuite,
+                 sni := _SNI,  %% TODO user's responsibility to handle SNI?
+                 psk := PSK,
+                 timestamp := Timestamp,
+                 ticket := NewSessionTicket}, N) ->
+    #new_session_ticket{
+       ticket_lifetime = _LifeTime,
+       ticket_age_add = AgeAdd,
+       ticket_nonce = Nonce,
+       ticket = Ticket,
+       extensions = Extensions
+      } = NewSessionTicket,
+    TicketAge = erlang:system_time(millisecond) - Timestamp,
+    ObfuscatedTicketAge = obfuscate_ticket_age(TicketAge, AgeAdd),
+    Identity = #psk_identity{
+                  identity = Ticket,
+                  obfuscated_ticket_age = ObfuscatedTicketAge},
+    MaxEarlyData = get_max_early_data(Extensions),
+    #ticket_data{
+       key = undefined,
+       pos = N,
+       identity = Identity,
+       psk = PSK,
+       nonce = Nonce,
+       cipher_suite = CipherSuite,
+       max_size = MaxEarlyData};
+process_ticket(_, _) ->
+    error.
+
+get_max_early_data(Extensions) ->
+    EarlyDataIndication = maps:get(early_data, Extensions, undefined),
+    case EarlyDataIndication of
+        undefined ->
+            undefined;
+        #early_data_indication_nst{indication = MaxSize} ->
+            MaxSize
     end.
 
 %% The "obfuscated_ticket_age"
@@ -2557,22 +2915,7 @@ process_ticket(Bin, N) when is_binary(Bin) ->
 obfuscate_ticket_age(TicketAge, AgeAdd) ->
     (TicketAge + AgeAdd) rem round(math:pow(2,32)).
 
-path_validate([{TrustedCert, Path}], ServerName, Role, CertDbHandle, CertDbRef, CRLDbHandle,
-              Version, SslOptions, CertExt) ->
-    path_validation(TrustedCert, Path, ServerName, Role, CertDbHandle, CertDbRef, 
-                    CRLDbHandle, Version, SslOptions, CertExt);
-path_validate([{TrustedCert, Path} | Rest], ServerName, Role, CertDbHandle, CertDbRef, CRLDbHandle,
-              Version, SslOptions, CertExt) ->
-    case path_validation(TrustedCert, Path, ServerName, 
-                         Role, CertDbHandle, CertDbRef, CRLDbHandle, 
-                         Version, SslOptions, CertExt) of
-        {ok, _} = Result ->
-            Result;
-        {error, _} ->
-            path_validate(Rest, ServerName, Role, CertDbHandle, CertDbRef, CRLDbHandle,
-                          Version, SslOptions, CertExt)
-    end.
-
+%% Call basic path validation algorithm in public_key for TLS-1.3
 path_validation(TrustedCert, Path, ServerName, Role, CertDbHandle, CertDbRef, CRLDbHandle, Version,
                 #{verify_fun := VerifyFun,
                   customize_hostname_check := CustomizeHostnameCheck,
@@ -2606,3 +2949,98 @@ path_validation(TrustedCert, Path, ServerName, Role, CertDbHandle, CertDbRef, CR
     Options = [{max_path_length, Depth},
                {verify_fun, ValidationFunAndState}],
     public_key:pkix_path_validation(TrustedCert, Path, Options).
+
+supported_groups_from_extensions(Extensions) ->
+    case maps:get(elliptic_curves, Extensions, undefined) of
+        #supported_groups{} = Groups->
+            {ok, Groups};
+        %% We do not support legacy for TLS-1.2 in TLS-1.3
+        #elliptic_curves{} ->
+           {error, ?ALERT_REC(?FATAL, ?ILLEGAL_PARAMETER)};
+        undefined ->
+            {ok, undefined}
+    end.
+
+select_server_cert_key_pair(_,[], _,_,_,_, {error, _} = Return) ->
+    Return;
+select_server_cert_key_pair(_,[], _,_,_,_, #session{}=Session) ->
+    {ok, Session};
+select_server_cert_key_pair(_,[], _,_,_,_, undefined) ->
+    {error, ?ALERT_REC(?FATAL, ?HANDSHAKE_FAILURE, unable_to_send_certificate_verifiable_by_client)};
+select_server_cert_key_pair(Session, [#{private_key := Key, certs := [Cert| _] = Certs} | Rest],
+                            ClientSignAlgs, ClientSignAlgsCert, CertAuths,
+                             #state{static_env = #static_env{cert_db = CertDbHandle,
+                                                             cert_db_ref = CertDbRef} = State},
+                            Default) ->
+    {_, SignAlgo, SignHash, _, _} = get_certificate_params(Cert),
+    %% TODO: We do validate the signature algorithm and signature hash but we could also check
+    %% if the signing cert has a key on a curve supported by the client for ECDSA/EDDSA certs
+    case check_cert_sign_algo(SignAlgo, SignHash, ClientSignAlgs, ClientSignAlgsCert) of
+        ok ->
+            case ssl_certificate:handle_cert_auths(Certs, CertAuths, CertDbHandle, CertDbRef) of
+                {ok, EncodeChain} ->
+                    {ok, Session#session{own_certificates = EncodeChain, private_key = Key}};
+                {error, EncodeChain, not_in_auth_domain} ->
+                    Default = Session#session{own_certificates = EncodeChain, private_key = Key},
+                    select_server_cert_key_pair(Session, Rest, ClientSignAlgs, ClientSignAlgsCert, CertAuths, State, Default)
+            end;
+        Error ->
+            select_server_cert_key_pair(Session, Rest, ClientSignAlgs, ClientSignAlgsCert, CertAuths, State,
+                                        default_cert_key_pair_return(Default, Error))
+    end.
+
+select_client_cert_key_pair(Session0,
+                            [#{private_key := NoKey, certs := [[]] = NoCerts}],
+                            _,_,_,_,_,_) ->
+    %% No certificate supplied : send empty certificate
+    Session0#session{own_certificates = NoCerts,
+                     private_key = NoKey};
+select_client_cert_key_pair(Session0, CertKeyPairs, ServerSignAlgs, ServerSignAlgsCert, 
+                            ClientSignAlgs, CertDbHandle, CertDbRef, CertAuths) ->
+    select_client_cert_key_pair(Session0, CertKeyPairs, ServerSignAlgs, ServerSignAlgsCert, 
+                                ClientSignAlgs, CertDbHandle, CertDbRef, CertAuths, undefined).
+
+select_client_cert_key_pair(Session, [],_,_,_,_,_,_, undefined = Default) ->
+    %% No certificate compliant with supported algorithms : send empty certificate in state 'wait_finished'
+    Session#session{own_certificates = Default,
+                    private_key = Default};
+select_client_cert_key_pair(_,[],_,_,_,_,_,_,#session{}=Session) ->
+    %% No certificate compliant with guide lines send default
+    Session;
+
+select_client_cert_key_pair(Session0, [#{private_key := Key, certs := [Cert| _] = Certs} | Rest],
+                              ServerSignAlgs, ServerSignAlgsCert, ClientSignAlgs, CertDbHandle, CertDbRef, CertAuths, Default) ->
+    {PublicKeyAlgo, SignAlgo, SignHash, MaybeRSAKeySize, Curve} = get_certificate_params(Cert),
+    case select_sign_algo(PublicKeyAlgo, MaybeRSAKeySize, ServerSignAlgs, ClientSignAlgs, Curve) of
+        {ok, SelectedSignAlg} ->
+            %% Check if server supports signature algorithm of client certificate
+            case check_cert_sign_algo(SignAlgo, SignHash, ServerSignAlgs, ServerSignAlgsCert) of
+                ok ->
+                    case ssl_certificate:handle_cert_auths(Certs, CertAuths, CertDbHandle, CertDbRef) of
+                        {ok, EncodedChain} ->
+                            Session0#session{sign_alg = SelectedSignAlg,
+                                             own_certificates = EncodedChain,
+                                             private_key = Key
+                                            };
+                        {error, EncodedChain, not_in_auth_domain} ->
+                            Session = Session0#session{sign_alg = SelectedSignAlg,
+                                                       own_certificates = EncodedChain,
+                                                       private_key = Key
+                                                      },
+                            select_client_cert_key_pair(Session, Rest, ServerSignAlgs, ServerSignAlgsCert,
+                                                        ClientSignAlgs, CertDbHandle, CertDbRef, CertAuths, 
+                                                        default_cert_key_pair_return(Default, Session))
+                    end;
+                _ ->
+                    select_client_cert_key_pair(Session0, Rest, ServerSignAlgs, ServerSignAlgsCert, ClientSignAlgs,
+                                                CertDbHandle, CertDbRef, CertAuths, Default)
+            end;
+        {error, _} ->
+            select_client_cert_key_pair(Session0, Rest, ServerSignAlgsCert, ServerSignAlgsCert, ClientSignAlgs,
+                                        CertDbHandle, CertDbRef, CertAuths, Default)
+    end.
+
+default_cert_key_pair_return(undefined, Session) ->
+    Session;
+default_cert_key_pair_return(Default, _) ->
+    Default.

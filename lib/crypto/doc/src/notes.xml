@@ -4,7 +4,7 @@
 <chapter>
   <header>
     <copyright>
-      <year>1999</year><year>2020</year>
+      <year>1999</year><year>2021</year>
       <holder>Ericsson AB. All Rights Reserved.</holder>
     </copyright>
     <legalnotice>
@@ -30,6 +30,539 @@
     <file>notes.xml</file>
   </header>
   <p>This document describes the changes made to the Crypto application.</p>
+
+<section><title>Crypto 5.0.6.3</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+	    <p>Changed the behaviour of the engine load/unload
+	    functions</p> <p> The engine load/unload functions have
+	    got changed semantics to get a more consistent behaviour
+	    and work correct when variables are garbage collected.
+	    </p> <p> The load functions now don't register the
+	    methods for the engine to replace. That will now be
+	    handled with the new functions
+	    engine_register/engine_unregister if needed. </p> <p>
+	    Some functions functions are removed from the
+	    documentation and therefor the API, but they are left in
+	    the code for compatibility. </p> <list>
+	    <item>engine_load/4: is now the same as
+	    engine_load/3</item> <item>engine_unload/2: is now the
+	    same as engine_unload/1</item>
+	    <item>ensure_engine_loaded/3: is now the same as
+	    ensure_engine_loaded/2</item>
+	    <item>ensure_engine_unloaded/1, ensure_engine_unloaded/2:
+	    is now the same as engine_unload/1</item> </list>
+          <p>
+	    *** POTENTIAL INCOMPATIBILITY ***</p>
+          <p>
+	    Own Id: OTP-18172 Aux Id: ERIERL-826 </p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>Crypto 5.0.6.2</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+	    <p>Fix configure with <c>--with-ssl</c> and
+	    <c>--disable-dynamic-ssl-lib</c> on Windows.</p>
+          <p>
+	    Own Id: OTP-18147 Aux Id: GH-6024, PR-6056 </p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>Crypto 5.0.6.1</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+	    <p>Fix timing bug in ensure_engine_loaded</p> <p>When two
+	    ensure_engine_loaded() calls were done in parallel there
+	    was a possibility that a crypto lib function was called
+	    by both instead of just one of them which resulted in an
+	    error. This is solved by moving the implementation from
+	    erlang down into a NIF function that uses a mutex to
+	    protect the sensitive part.</p>
+          <p>
+	    Own Id: OTP-17858 Aux Id: ERIERL-728 </p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>Crypto 5.0.6</title>
+
+    <section><title>Improvements and New Features</title>
+      <list>
+        <item>
+          <p>
+	    The crypto app in OTP can since OTP-24.2 be compiled,
+	    linked and used with the new OpenSSL 3.0 cryptolib.</p>
+          <p>
+	    The crypto app has 3.0 support has been improved, but is
+	    still <em>*not recommended*</em> for other usages than
+	    experiments and alpha testing. There are not yet any
+	    guaranties that it works, not even together with other
+	    OTP applications like for example SSL and SSH, although
+	    there are no known errors.</p>
+          <p>
+	    Since the previous release, OTP-24.2, the following
+	    improvements have been done:</p>
+          <p>
+	    - It has been tested during nearly every nightly test on
+	    the OTP lab</p>
+          <p>
+	    - The hash algorithms <c>md4</c> and <c>ripemd160</c>
+	    have been enabled with OpenSSL 3.0.</p>
+          <p>
+	    - The ciphers <c>blowfish_cbc</c>, <c>blowfish_ecb</c>,
+	    <c>des_cbc</c>, <c>des_cfb</c>, <c>des_ecb</c>,
+	    <c>rc2_cbc</c> and <c>rc4</c> have been enabled with
+	    OpenSSL 3.0.</p>
+          <p>
+	    Disabled or unsupported with OpenSSL 3.0 are still:</p>
+          <p>
+	    - ENGINE support</p>
+          <p>
+	    - FIPS mode</p>
+          <p>
+	    - Other providers than the built-in ones</p>
+          <p>
+	    - Compiling and linking with OpenSSL 3.0 cryptolib in
+	    compatibility modes (for example to behave as 1.1.1) </p>
+          <p>
+	    and, the ciphers <c>blowfish_cfb64</c> and
+	    <c>blowfish_ofb64</c> are not supported and will not be
+	    either.</p>
+          <p>
+	    Deprecated functions in the OpenSSL 3.0 cryptolib must
+	    not be disabled as OTP/crypto still uses some of the
+	    deprecated API functions. The gcc flag
+	    <c>-Wno-deprecated-declarations</c> is set to prevent
+	    deprecation warnings to be printed when compiling.</p>
+          <p>
+	    Own Id: OTP-17812 Aux Id: OTP-16646, OTP-16282 </p>
+        </item>
+        <item>
+          <p>
+	    Crypto is adapted to LibreSSL 3.5.0 on OpenBSD.</p>
+          <p>
+	    Own Id: OTP-17941 Aux Id: OTP-17942 </p>
+        </item>
+        <item>
+          <p>
+	    New configure option ( <c>--disable-otp-test-engine</c>)
+	    to prohibit the build of the OTP test engine used in some
+	    test suites.</p>
+          <p>
+	    The reason is that the test engine could be hard to
+	    compile on for instance LibreSSL 3.5.0. For that
+	    particular cryptolib version (or higher), this configure
+	    option is set automatically.</p>
+          <p>
+	    Own Id: OTP-17942 Aux Id: OTP-17941 </p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>Crypto 5.0.5</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+          <p>
+	    Fixed the C-warning "implicit declaration of function
+	    'OpenSSL_version_num'" if compiling with an early
+	    LibreSSL version.</p>
+          <p>
+	    Own Id: OTP-17637</p>
+        </item>
+        <item>
+          <p>
+	    FIPS availability was not checked correctly for AEAD
+	    ciphers.</p>
+          <p>
+	    Own Id: OTP-17740</p>
+        </item>
+        <item>
+          <p>
+	    Fixed that cipher aliases (like aes_cbc etc) could be
+	    present even if the aliased cipher(s) (like aes_128_cbc,
+	    aes_256_cbc,... etc) was missing.</p>
+          <p>
+	    Own Id: OTP-17741</p>
+        </item>
+      </list>
+    </section>
+
+
+    <section><title>Improvements and New Features</title>
+      <list>
+        <item>
+          <p>
+	    The crypto app in OTP can now be compiled, linked and
+	    used with the new OpenSSL 3.0 cryptolib.</p>
+          <p>
+	    It has not yet been extensively tested and is in this
+	    release <em>*not recommended*</em> for other usages than
+	    experiments and alpha testing. There are not yet any
+	    guaranties that it works, not even together with other
+	    OTP applications like for example SSL and SSH, although
+	    there are no known errors.</p>
+          <p>
+	    Compiling and linking with OpenSSL 3.0 cryptolib in
+	    compatibility modes (for example to behave as 1.1.1) are
+	    not tested. It is not tested with external providers.</p>
+          <p>
+	    The support for FIPS mode does not yet work, and is
+	    disabled when compiled with OpenSSL 3.0.</p>
+          <p>
+	    Deprecated functions in the OpenSSL 3.0 cryptolib must
+	    not be disabled as OTP/crypto still uses some of the
+	    deprecated API functions. The gcc flag
+	    <c>-Wno-deprecated-declarations</c> is set to prevent
+	    deprecation warnings to be printed when compiling.</p>
+          <p>
+	    The hash algorithms <c>md4</c> and <c>ripemd160</c> are
+	    disabled temporarily when compiled with OpenSSL 3.0.</p>
+          <p>
+	    The ciphers <c>blowfish_cbc</c>, <c>blowfish_cfb64</c>,
+	    <c>blowfish_ecb</c>, <c>blowfish_ofb64</c>,
+	    <c>des_cbc</c>, <c>des_cfb</c>, <c>des_ecb</c>,
+	    <c>rc2_cbc</c> and <c>rc4</c> are disabled temporarily
+	    when compiled with OpenSSL 3.0.</p>
+          <p>
+	    Own Id: OTP-16646 Aux Id: OTP-16282 </p>
+        </item>
+        <item>
+          <p>
+	    The error handling in crypto is partly refactored using
+	    the new error reporting support. Errors earlier
+	    propagated like exceptions are still so, but when the
+	    failing function is called from the terminal - for
+	    example during failure hunting - a more descriptive text
+	    is produced.</p>
+          <p>
+	    Own Id: OTP-17241</p>
+        </item>
+        <item>
+          <p>
+	    A new function <c>crypto:info/0</c> which presents some
+	    data about the compilation and linkage of the crypto nif
+	    is added.</p>
+          <p>
+	    Own Id: OTP-17603</p>
+        </item>
+        <item>
+          <p>
+	    Added the <c>pbkdf2_hmac/5</c> function to the crypto
+	    module.</p>
+          <p>
+	    It calls the <c>PKCS5_PBKDF2_HMAC</c> function which
+	    implements PBKD2 with HMAC in an efficient way.</p>
+          <p>
+	    Own Id: OTP-17808 Aux Id: PR-5421 </p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>Crypto 5.0.4</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+          <p>
+	    Fixed minor memory leak at <c>crypto</c> module purge.</p>
+          <p>
+	    Own Id: OTP-17668 Aux Id: PR-5245 </p>
+        </item>
+        <item>
+          <p>
+	    Fix possible inconsistency in fips mode when linking with
+	    some cryptolibs.</p>
+          <p>
+	    Own Id: OTP-17672</p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>Crypto 5.0.3</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+          <p>
+	    Fix bug in <c>crypto:ensure_engine_unloaded</c>. Also
+	    fixed minor memory leak related to engine unloading.</p>
+          <p>
+	    Own Id: OTP-17593 Aux Id: ERIERL-679 </p>
+        </item>
+        <item>
+          <p>
+	    Fixes that FIPS enable and disable (or vice versa) on
+	    Windows sometimes leads to core dump at the time of
+	    process exit.</p>
+          <p>
+	    Own Id: OTP-17618 Aux Id: PR-5126, GH-4920 </p>
+        </item>
+      </list>
+    </section>
+
+
+    <section><title>Improvements and New Features</title>
+      <list>
+        <item>
+          <p>
+	    Disable fips if cryptolib &lt; 1.0.1 and OTP/crypto is
+	    configured with --enable-fips</p>
+          <p>
+	    If not, there could be compiling or loading problems with
+	    antique OpenSSL versions.</p>
+          <p>
+	    Own Id: OTP-17389</p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>Crypto 5.0.2</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+          <p>
+	    EC keys are now zero-padded to the expected length if
+	    needed.</p>
+          <p>
+	    Own Id: OTP-17442 Aux Id: GH-4861 </p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>Crypto 5.0.1</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+          <p>
+	    Removed a risk for coredump.</p>
+          <p>
+	    Own Id: OTP-17391 Aux Id: GH-4810 </p>
+        </item>
+        <item>
+          <p>
+	    Fixed and documented the <c>DED_LDFLAGS_CONFTEST</c>
+	    configuration variable in
+	    <c>$ERL_TOP/HOWTO/INSTALL.md</c>.</p>
+          <p>
+	    Own Id: OTP-17419 Aux Id: GH-4821 </p>
+        </item>
+        <item>
+          <p>
+	    Commit of generated <c>configure</c> script.</p>
+          <p>
+	    Own Id: OTP-17420 Aux Id: OTP-17398, GH-4821 </p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>Crypto 5.0</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+          <p>
+	    Add <c>/usr/local/opt/openssl</c> to the openssl
+	    configure search path. This path is where some tools on
+	    OS X place openssl.</p>
+          <p>
+	    Own Id: OTP-16882</p>
+        </item>
+        <item>
+          <p>
+	    Fix compiler warnings produced by the clang compiler.</p>
+          <p>
+	    Own Id: OTP-17105 Aux Id: PR-2872 </p>
+        </item>
+        <item>
+	    <p> The <c>configure</c> scripts in <c>crypto</c> and
+	    <c>erts</c> now fail if a requested feature cannot be
+	    enabled. </p> <p> Large parts of the <c>configure</c>
+	    script of <c>crypto</c> have been rewritten with various
+	    improvements and bug fixes. It is now better at finding
+	    usable OpenSSL libraries, but will in the following cases
+	    fail to detect OpenSSL libraries where it previously
+	    sometimes detected the libraries by chance: </p> <list>
+	    <item> OpenSSL installations with <c>include</c>
+	    directory and <c>lib</c> directory parts installed in
+	    different base directories. In order to detect such
+	    installations after this change, the user must explicitly
+	    specify the locations using the <seeguide
+	    marker="system/installation_guide:INSTALL#Advanced-configuration-and-build-of-ErlangOTP_Configuring"><c>--with-ssl=&lt;path&gt;</c></seeguide>
+	    and the <seeguide
+	    marker="system/installation_guide:INSTALL#Advanced-configuration-and-build-of-ErlangOTP_Configuring"><c>--with-ssl-incl=&lt;path&gt;</c></seeguide>
+	    <c>configure</c> command line arguments. </item> <item>
+	    When building with old <c>gcc</c> compilers or other
+	    compilers on Debian derivatives with multiarch
+	    directories under the <c>lib</c> directory. In order to
+	    detect such installations after this change, the user
+	    must explicitly specify the multiarch directory name
+	    using the <seeguide
+	    marker="system/installation_guide:INSTALL#Advanced-configuration-and-build-of-ErlangOTP_Configuring"><c>--with-ssl-lib-subdir=lib/&lt;multiarch-dir&gt;</c></seeguide>
+	    <c>configure</c> command line argument. </item> </list>
+          <p>
+	    Own Id: OTP-17254 Aux Id: ERIERL-618, GH-4230 </p>
+        </item>
+        <item>
+          <p>
+	    The value 'none' was missing in the specs of
+	    crypto:sign/4 and crypto:verify/6.</p>
+          <p>
+	    Own Id: OTP-17312 Aux Id: PR-4723 </p>
+        </item>
+      </list>
+    </section>
+
+
+    <section><title>Improvements and New Features</title>
+      <list>
+        <item>
+          <p>
+	    The functions and cipher names that were deprecated in
+	    OTP-23.0 are now removed.</p>
+          <p>
+	    *** POTENTIAL INCOMPATIBILITY ***</p>
+          <p>
+	    Own Id: OTP-16656</p>
+        </item>
+        <item>
+          <p>
+	    Removed installed directory priv/obj/ containing
+	    superfluous object files.</p>
+          <p>
+	    Own Id: OTP-17001 Aux Id: PR-2852 </p>
+        </item>
+        <item>
+          <p>
+	    TLS connections now support EdDSA certificates.</p>
+          <p>
+	    Own Id: OTP-17142 Aux Id: PR-4756, GH-4637, GH-4650 </p>
+        </item>
+        <item>
+          <p>
+	    Add prop_aead attribute to map from crypto:cipher_info/1.</p>
+          <p>
+	    Own Id: OTP-17313 Aux Id: PR-4686 </p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>Crypto 4.9.0.2</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+          <p>
+	    EC keys are now zero-padded to the expected length if
+	    needed.</p>
+          <p>
+	    Own Id: OTP-17442 Aux Id: GH-4861 </p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>Crypto 4.9.0.1</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+          <p>
+	    Removed a risk for coredump.</p>
+          <p>
+	    Own Id: OTP-17391 Aux Id: GH-4810 </p>
+        </item>
+        <item>
+          <p>
+	    Commit of generated <c>configure</c> script.</p>
+          <p>
+	    Own Id: OTP-17420 Aux Id: OTP-17398, GH-4821 </p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>Crypto 4.9</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+          <p>
+	    Fix minor memory leaks in crypto ENGINE and robustify the
+	    code.</p>
+          <p>
+	    Own Id: OTP-17212</p>
+        </item>
+        <item>
+          <p>
+	    The otp_test_engine no longer fails if NO_EC* is set in
+	    the OpenSSL configuration.</p>
+          <p>
+	    Own Id: OTP-17256 Aux Id: PR-4580, GH-4573 </p>
+        </item>
+      </list>
+    </section>
+
+
+    <section><title>Improvements and New Features</title>
+      <list>
+        <item>
+          <p>
+	    Various address sanitizer support.</p>
+          <p>
+	    Own Id: OTP-16959 Aux Id: PR-2965 </p>
+        </item>
+        <item>
+          <p>
+	    EVP is now disabled for OpenSSL cryptolib versions up to
+	    and including 1.0.2</p>
+          <p>
+	    Own Id: OTP-17116 Aux Id: PR-2972 </p>
+        </item>
+        <item>
+          <p>
+	    Warning for unused C function removed</p>
+          <p>
+	    Own Id: OTP-17145 Aux Id: OTP-17105, PR-2872 </p>
+        </item>
+      </list>
+    </section>
+
+</section>
 
 <section><title>Crypto 4.8.3</title>
 
@@ -242,6 +775,58 @@
 
 </section>
 
+<section><title>Crypto 4.6.5.4</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+          <p>
+	    EC keys are now zero-padded to the expected length if
+	    needed.</p>
+          <p>
+	    Own Id: OTP-17442 Aux Id: GH-4861 </p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>Crypto 4.6.5.3</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+          <p>
+	    Removed a risk for coredump.</p>
+          <p>
+	    Own Id: OTP-17391 Aux Id: GH-4810 </p>
+        </item>
+        <item>
+          <p>
+	    Commit of generated <c>configure</c> script.</p>
+          <p>
+	    Own Id: OTP-17420 Aux Id: OTP-17398, GH-4821 </p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>Crypto 4.6.5.2</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+          <p>
+	    Adding missing flag in BN-calls in SRP.</p>
+          <p>
+	    Own Id: OTP-17107</p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
 <section><title>Crypto 4.6.5.1</title>
 
     <section><title>Improvements and New Features</title>
@@ -295,7 +880,7 @@
       <list>
         <item>
           <p>
-	    The chipers aes_cfb8 and aes_cfb128 are now using the EVP
+	    The ciphers aes_cfb8 and aes_cfb128 are now using the EVP
 	    interface. The supported key lengths are 128, 192 and 256
 	    bits.</p>
           <p>
@@ -303,7 +888,7 @@
         </item>
         <item>
           <p>
-	    The chipers aes_cfb8 and aes_cfb128 are now available in
+	    The ciphers aes_cfb8 and aes_cfb128 are now available in
 	    FIPS enabled mode.</p>
           <p>
 	    Own Id: OTP-16134 Aux Id: PR-2407 </p>
@@ -412,7 +997,7 @@
       <list>
         <item>
           <p>
-	    The cipher aes-ctr was disabled by misstake in
+	    The cipher aes-ctr was disabled by mistake in
 	    crypto:supports for cryptolibs before 1.0.1. It worked
 	    however in the encrypt and decrypt functions.</p>
           <p>
@@ -554,6 +1139,21 @@
 
 </section>
 
+<section><title>Crypto 4.4.2.3</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+          <p>
+	    Adding missing flag in BN-calls in SRP.</p>
+          <p>
+	    Own Id: OTP-17107</p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
 <section><title>Crypto 4.4.2.2</title>
 
     <section><title>Fixed Bugs and Malfunctions</title>
@@ -575,7 +1175,7 @@
       <list>
         <item>
           <p>
-	    The chipers aes_cfb8 and aes_cfb128 are now using the EVP
+	    The ciphers aes_cfb8 and aes_cfb128 are now using the EVP
 	    interface. The supported key lengths are 128, 192 and 256
 	    bits.</p>
           <p>
@@ -583,7 +1183,7 @@
         </item>
         <item>
           <p>
-	    The chipers aes_cfb8 and aes_cfb128 are now available in
+	    The ciphers aes_cfb8 and aes_cfb128 are now available in
 	    FIPS enabled mode.</p>
           <p>
 	    Own Id: OTP-16134 Aux Id: PR-2407 </p>
@@ -904,7 +1504,7 @@
       <list>
         <item>
           <p>
-	    The chipers aes_cfb8 and aes_cfb128 are now using the EVP
+	    The ciphers aes_cfb8 and aes_cfb128 are now using the EVP
 	    interface. The supported key lengths are 128, 192 and 256
 	    bits.</p>
           <p>
@@ -2039,7 +2639,7 @@
 	    Own Id: OTP-8551</p>
         </item>
         <item>
-	    <p>The undocumented, unsupport, and deprecated function
+	    <p>The undocumented, unsupported, and deprecated function
 	    <c>lists:flat_length/1</c> has been removed.</p>
           <p>
 	    Own Id: OTP-8584</p>
@@ -2322,7 +2922,7 @@
       <list>
         <item>
           <p>
-	    crypto and zlib drivers improved to allow concurent smp
+	    crypto and zlib drivers improved to allow concurrent smp
 	    access.</p>
           <p>
 	    Own Id: OTP-7262</p>

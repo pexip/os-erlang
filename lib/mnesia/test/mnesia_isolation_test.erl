@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %% 
-%% Copyright Ericsson AB 1997-2020. All Rights Reserved.
+%% Copyright Ericsson AB 1997-2022. All Rights Reserved.
 %% 
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -632,8 +632,8 @@ sticky_sync(Config) when is_list(Config) ->
     {Time, ok} = timer:tc(fun() -> lists:foreach(TestFun, lists:seq(1,200)) end),
     io:format("200 trans done in ~p ~n",[Time div (1000000)]),
     case (Time div (1000000)) < 20 of
-        false -> lists:foreach(TestFun, lists:seq(201,1000));
-        true -> ignore  %% Some virtual test machines are really slow..
+        true -> lists:foreach(TestFun, lists:seq(201,1000));
+        false -> ignore  %% Some virtual test machines are really slow..
     end,
     io:format("Written, check content~n",[]),
     All = fun() -> mnesia:select(dc, [ {{dc, '_', 0}, [] ,['$_']} ]) end,
@@ -1118,16 +1118,22 @@ add_table_copy(Config) when is_list(Config) ->
                      end),
     receive {New,ok} -> ok end,
 
-    Add = fun Add() ->
+    Add = fun Add(N) ->
                   case mnesia:add_table_copy(Tab, Node2, disc_copies) of
                       {atomic, ok} -> ok;
-                      _R -> io:format(user, "aborted with reason ~p~n", [_R]),
-                            timer:sleep(10),
-                            Add()
+                      _R ->
+                          case N > 0 of
+                              true ->
+                                  timer:sleep(25),
+                                  Add(N-1);
+                              false ->
+                                  io:format(user, "aborted with reason ~p~n", [_R]),
+                                  fail
+                          end
                   end
           end,
-
-    ?match(ok, Add()),
+    
+    ?match(ok, Add(200)),
     ?match_receive({New,ok}),
 
     sys:get_status(whereis(mnesia_locker)), % Explicit sync, release locks is async

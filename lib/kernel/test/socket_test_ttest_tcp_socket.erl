@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %% 
-%% Copyright Ericsson AB 2018-2019. All Rights Reserved.
+%% Copyright Ericsson AB 2018-2021. All Rights Reserved.
 %% 
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -176,7 +176,7 @@ do_connect(LocalSA, ServerSA, Cleanup, #{domain := Domain,
 			throw({error, {open, OReason}})
 		end,
 	    case socket:bind(Sock, LocalSA) of
-		{ok, _} ->
+		ok ->
 		    ok;
 		{error, BReason} ->
 		    (catch socket:close(Sock)),
@@ -273,7 +273,7 @@ do_listen(SA,
 			   throw({error, {open, OReason}})
 		   end,
 	    case socket:bind(Sock, SA) of
-		{ok, _} ->
+		ok ->
 		    ok;
 		{error, BReason} ->
 		    (catch socket:close(Sock)),

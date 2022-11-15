@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2013-2019. All Rights Reserved.
+%% Copyright Ericsson AB 2013-2022. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -55,7 +55,7 @@
 
 
 -record(handshake_env, {
-                        client_hello_version  :: ssl_record:ssl_version() | 'undefined',
+                        client_hello_version  :: ssl_record:ssl_version() | 'undefined', %% Legacy client hello
                         unprocessed_handshake_events = 0    :: integer(),
                         tls_handshake_history :: ssl_handshake:ssl_handshake_history() | secret_printout()
                                                | 'undefined',
@@ -64,9 +64,12 @@
                         resumption = false   :: boolean(),  %% TLS 1.3
                         change_cipher_spec_sent = false :: boolean(),  %% TLS 1.3
                         sni_guided_cert_selection = false :: boolean(), %% TLS 1.3
+                        early_data_accepted = false :: boolean(), %% TLS 1.3
                         allow_renegotiate = true                    ::boolean(),
                         %% Ext handling
-                        hello,                %%:: #client_hello{} | #server_hello{}            
+                        %% continue_status reflects handling of the option handshake that is either full or
+                        %% hello (will pause at hello message to allow user to act on hello extensions)
+                        continue_status,  %% full | pause | {pause, ClientVersionsExt} | continue
                         sni_hostname = undefined,
                         max_frag_enum :: undefined | {max_frag_enum, integer()},
                         expecting_next_protocol_negotiation = false ::boolean(),
@@ -91,11 +94,14 @@
 
 -record(connection_env, { 
                           user_application      :: {Monitor::reference(), User::pid()},
-                          downgrade,
-                          terminated = false                          ::boolean() | closed,  
+                          downgrade             :: {NewController::pid(), From::gen_statem:from()} | 'undefined',
+                          socket_terminated = false                          ::boolean(),
+                          socket_tls_closed = false                          ::boolean(),
                           negotiated_version    :: ssl_record:ssl_version() | 'undefined',
                           erl_dist_handle = undefined :: erlang:dist_handle() | 'undefined',
-                          private_key          :: public_key:private_key() | secret_printout() | 'undefined'
+                          cert_key_pairs  = undefined :: [#{private_key =>  public_key:private_key(),
+                                                            certs => [public_key:der_encoded()]}]
+                                                       | secret_printout() | 'undefined'
                         }).
 
 -record(state, {
@@ -104,17 +110,17 @@
                 ssl_options           :: ssl_options(),
                 socket_options        :: #socket_options{},
 
-                %% Hanshake %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+                %% Handshake %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
                 handshake_env         :: #handshake_env{} | secret_printout(),
                 %% Buffer of TLS/DTLS records, used during the TLS
                 %% handshake to when possible pack more than one TLS
-                %% record into the underlaying packet
+                %% record into the underlying packet
                 %% format. Introduced by DTLS - RFC 4347.  The
-                %% mecahnism is also usefull in TLS although we do not
+                %% mechanism is also useful in TLS although we do not
                 %% need to worry about packet loss in TLS. In DTLS we
                 %% need to track DTLS handshake seqnr
                 flight_buffer = []   :: list() | map(),  
-                client_certificate_requested = false :: boolean(),
+                client_certificate_status = not_requested :: not_requested | requested  | empty | needs_verifying | verified,
                 protocol_specific = #{}      :: map(),
                 session               :: #session{} | secret_printout(),
                 key_share,
@@ -146,8 +152,8 @@
 %%   session_cache_cb             - not implemented
 %%   crl_db                       - not implemented
 %%   client_hello_version         - Bleichenbacher mitigation in TLS 1.2
-%%   client_certificate_requested - Built into TLS 1.3 state machine
-%%   key_algorithm                - not used
+%%   client_certificate_status    - only uses non_requested| requested
+%%   key_algorithm                - only uses  not_requested and requested 
 %%   diffie_hellman_params        - used in TLS 1.2 ECDH key exchange
 %%   diffie_hellman_keys          - used in TLS 1.2 ECDH key exchange
 %%   psk_identity                 - not used
@@ -157,9 +163,9 @@
 %%   renegotiation                - TLS 1.3 forbids renegotiation
 %%   hello                        - used in user_hello, handshake continue
 %%   allow_renegotiate            - TLS 1.3 forbids renegotiation
-%%   expecting_next_protocol_negotiation - ALPN replaced NPN, depricated in TLS 1.3
+%%   expecting_next_protocol_negotiation - ALPN replaced NPN, deprecated in TLS 1.3
 %%   expecting_finished           - not implemented, used by abbreviated
-%%   next_protocol                - ALPN replaced NPN, depricated in TLS 1.3
+%%   next_protocol                - ALPN replaced NPN, deprecated in TLS 1.3
 %%
 %% connection_state :: map()
 %%

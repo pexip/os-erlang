@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2019-2019. All Rights Reserved.
+%% Copyright Ericsson AB 2019-2021. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -95,10 +95,13 @@
 %% Common Test interface functions -----------------------------------
 %%--------------------------------------------------------------------
 all() -> 
-    [
-     {group,  openssl_server},
-     {group,  openssl_client}
-    ].
+     case ssl_test_lib:working_openssl_client() of
+         true ->
+             [{group,  openssl_server},
+              {group,  openssl_client}];
+         false ->
+             [{group,  openssl_server}]
+     end.
 
 all_protocol_groups() ->
     [
@@ -398,8 +401,7 @@ init_per_testcase(TestCase, Config) when TestCase == psk_rc4_128;
                                          TestCase == ecdhe_rsa_rc4_128;
                                          TestCase == ecdhe_ecdsa_rc4_128;
                                          TestCase == dh_anon_rc4_128 ->
-    SupCiphers = proplists:get_value(ciphers, crypto:supports()),
-    case lists:member(rc4, SupCiphers) of
+    case supported_cipher(rc4, "RC4") of
         true ->
             ct:timetrap(?DEFAULT_TIMEOUT),
             Config;
@@ -410,8 +412,7 @@ init_per_testcase(TestCase, Config) when  TestCase == psk_aes_128_ccm_8;
                                           TestCase == psk_aes_128_ccm_8;
                                           TestCase == dhe_psk_aes_128_ccm_8;
                                           TestCase == ecdhe_psk_aes_128_ccm_8 ->
-    SupCiphers = proplists:get_value(ciphers, crypto:supports()),
-    case lists:member(aes_128_ccm, SupCiphers) of
+    case supported_cipher(aes_128_ccm, "AES128-CCM8") of
         true ->
             ct:timetrap(?DEFAULT_TIMEOUT),
             Config;
@@ -422,8 +423,8 @@ init_per_testcase(TestCase, Config) when TestCase == psk_aes_256_ccm_8;
                                          TestCase == psk_aes_256_ccm_8;
                                          TestCase == dhe_psk_aes_256_ccm_8;
                                          TestCase == ecdhe_psk_aes_256_ccm_8 ->
-    SupCiphers = proplists:get_value(ciphers, crypto:supports()),
-    case lists:member(aes_256_ccm, SupCiphers) of
+
+    case supported_cipher(aes_256_ccm, "AES128-CCM8")  of
         true ->
             ct:timetrap(?DEFAULT_TIMEOUT),
             Config;
@@ -431,10 +432,7 @@ init_per_testcase(TestCase, Config) when TestCase == psk_aes_256_ccm_8;
             {skip, "Missing AES_256_CCM crypto support"}
     end;
 init_per_testcase(aes_256_gcm_sha384, Config) ->
-    SupCiphers = proplists:get_value(ciphers, crypto:supports()),
-    SupHashs = proplists:get_value(hashs, crypto:supports()),
-    case (lists:member(aes_256_gcm, SupCiphers)) andalso
-        (lists:member(sha384, SupHashs)) of
+    case supported_cipher(aes_256_gcm, "AES_256_GCM", sha384) of
         true ->
             ct:timetrap(?DEFAULT_TIMEOUT),
             Config;
@@ -442,10 +440,7 @@ init_per_testcase(aes_256_gcm_sha384, Config) ->
             {skip, "Missing AES_256_GCM crypto support"}
     end;
 init_per_testcase(aes_128_gcm_sha256, Config) ->
-    SupCiphers = proplists:get_value(ciphers, crypto:supports()),
-    SupHashs = proplists:get_value(hashs, crypto:supports()),
-    case lists:member(aes_128_gcm, SupCiphers) andalso
-        (lists:member(sha256, SupHashs)) of
+    case  supported_cipher(aes_128_gcm, "AES_128_GCM", sha256) of
         true ->
             ct:timetrap(?DEFAULT_TIMEOUT),
             Config;
@@ -454,10 +449,7 @@ init_per_testcase(aes_128_gcm_sha256, Config) ->
     end;
 
 init_per_testcase(chacha20_poly1305_sha256, Config) ->
-    SupCiphers = proplists:get_value(ciphers, crypto:supports()),
-    SupHashs = proplists:get_value(hashs, crypto:supports()),
-    case (lists:member(chacha20_poly1305, SupCiphers)) andalso
-        (lists:member(sha256, SupHashs)) of
+    case supported_cipher(chacha20_poly1305_sha256, "CHACHA20", sha256) of
         true ->
             ct:timetrap(?DEFAULT_TIMEOUT),
             Config;
@@ -465,10 +457,7 @@ init_per_testcase(chacha20_poly1305_sha256, Config) ->
             {skip, "Missing CHACHA20_POLY1305 crypto support"}
     end;
 init_per_testcase(aes_128_ccm_sha256, Config) ->
-    SupCiphers = proplists:get_value(ciphers, crypto:supports()),
-    SupHashs = proplists:get_value(hashs, crypto:supports()),
-    case (lists:member(aes_128_ccm, SupCiphers)) andalso
-        (lists:member(sha256, SupHashs)) of
+    case supported_cipher(aes_128_ccm, "AES_128_CCM", sha256) of
         true ->
             ct:timetrap(?DEFAULT_TIMEOUT),
             Config;
@@ -477,10 +466,7 @@ init_per_testcase(aes_128_ccm_sha256, Config) ->
     end;
 
 init_per_testcase(aes_128_ccm_8_sha256, Config) ->
-    SupCiphers = proplists:get_value(ciphers, crypto:supports()),
-    SupHashs = proplists:get_value(hashs, crypto:supports()),
-    case (lists:member(aes_128_ccm, SupCiphers)) andalso
-        (lists:member(sha256, SupHashs)) of
+    case supported_cipher(aes_128_ccm, "AES_128_CCM8", sha256) of
         true ->
             ct:timetrap(?DEFAULT_TIMEOUT),
             Config;
@@ -490,8 +476,7 @@ init_per_testcase(aes_128_ccm_8_sha256, Config) ->
 
 init_per_testcase(TestCase, Config) when TestCase == ecdhe_ecdsa_with_aes_128_ccm;
                                          TestCase == ecdhe_ecdsa_with_aes_128_ccm_8->
-    SupCiphers = proplists:get_value(ciphers, crypto:supports()),
-    case lists:member(aes_128_ccm, SupCiphers) of
+    case supported_cipher(aes_128_ccm, "AES_128_CCM") of
         true ->
             ct:timetrap(?DEFAULT_TIMEOUT),
             Config;
@@ -501,8 +486,8 @@ init_per_testcase(TestCase, Config) when TestCase == ecdhe_ecdsa_with_aes_128_cc
 
 init_per_testcase(TestCase, Config) when TestCase == ecdhe_ecdsa_with_aes_256_ccm;
                                          TestCase == ecdhe_ecdsa_with_aes_256_ccm_8 ->
-    SupCiphers = proplists:get_value(ciphers, crypto:supports()),
-    case lists:member(aes_256_ccm, SupCiphers) of
+
+    case supported_cipher(aes_256_ccm, "AES256_CCM") of
         true ->
             ct:timetrap(?DEFAULT_TIMEOUT),
             Config;
@@ -955,7 +940,7 @@ cipher_suite_test(CipherSuite, Version, Config) ->
                                     [{ciphers, [CipherSuite]} | SOpts], Config);
         _ ->
             ssl_test_lib:basic_test([{versions, [Version]}, {ciphers, [CipherSuite]} | COpts], 
-                                    [{ciphers, ssl:cipher_suites(all, Version)} | SOpts], Config)
+                                    [{ciphers,  ssl_test_lib:openssl_ciphers()} | SOpts], Config)
     end.
 
 test_ciphers(Kex, Cipher, Version) ->
@@ -978,3 +963,15 @@ test_ciphers(Kex, Cipher, Version) ->
                  end, Ciphers).
 
 
+openssl_suitestr_to_map(OpenSSLSuiteStrs) ->
+    [ssl_cipher_format:suite_openssl_str_to_map(SuiteStr) || SuiteStr <- OpenSSLSuiteStrs].
+
+
+supported_cipher(Cipher, CipherStr) ->
+    SupCrypto = proplists:get_value(ciphers, crypto:supports()),
+    SupOpenssl = [OCipher || OCipher <- ssl_test_lib:openssl_ciphers(),  string:find(OCipher, CipherStr) =/= nomatch],
+    lists:member(Cipher, SupCrypto) andalso SupOpenssl =/= [].
+
+supported_cipher(Cipher, CipherStr, Hash) ->
+    Hashes = proplists:get_value(hashs, crypto:supports()),
+    supported_cipher(Cipher, CipherStr) andalso lists:member(Hash, Hashes).

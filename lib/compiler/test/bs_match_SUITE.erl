@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2005-2020. All Rights Reserved.
+%% Copyright Ericsson AB 2005-2022. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -48,7 +48,7 @@
          exceptions_after_match_failure/1,
          bad_phi_paths/1,many_clauses/1,
          combine_empty_segments/1,hangs_forever/1,
-         bs_saved_position_units/1,empty_get_binary/1]).
+         bs_saved_position_units/1,empty_matches/1]).
 
 -export([coverage_id/1,coverage_external_ignore/2]).
 
@@ -87,7 +87,7 @@ groups() ->
        matching_meets_apply,bs_start_match2_defs,
        exceptions_after_match_failure,bad_phi_paths,
        many_clauses,combine_empty_segments,hangs_forever,
-       bs_saved_position_units,empty_get_binary]}].
+       bs_saved_position_units,empty_matches]}].
 
 init_per_suite(Config) ->
     test_lib:recompile(?MODULE),
@@ -220,6 +220,16 @@ int_float(Config) when is_list(Config) ->
     %% OTP-5323
     <<103133.0:64/float>> = <<103133:64/float>>,
     <<103133:64/float>> = <<103133:64/float>>,
+
+    %% Must work with type and flags in either order.
+    NativeFortyTwo = id(<<42/native-float>>),
+    <<42/float-native>> = NativeFortyTwo,
+    <<42/native-float>> = NativeFortyTwo,
+
+    %% Must work with redundant flags.
+    SixtyFour = id(<<64/float>>),
+    <<64/unsigned-float>> = SixtyFour,
+    <<64/float-unsigned>> = SixtyFour,
 
     %% Coverage of error cases in sys_pre_expand:coerce_to_float/2.
     case id(default) of
@@ -603,6 +613,10 @@ sum(<<>>, Last, Sum) -> {Sum,Last}.
 
 bin_and_float(Config) when is_list(Config) ->
     14.0 = bin_and_float(<<1.0/float,2.0/float,3.0/float>>, 0.0),
+
+    Sz = id(1),
+    <<>> = << <<0>> || <<1:Sz/float-unit:63>> <= <<2:30>> >>,
+
     ok.
 
 bin_and_float(<<X/float,Y/float,Z/float,T/binary>>, Sum) when is_float(X),
@@ -835,6 +849,9 @@ coverage(Config) when is_list(Config) ->
 
     {<<"abc">>,<<"tag">>} = coverage_trim_3([<<"abc","tag">>], 3),
 
+    %% Cover code in beam_ssa_codegen.
+    ok = coverage_beam_ssa_codegen(<<2>>),
+
     ok.
 
 coverage_fold(Fun, Acc, <<H,T/binary>>) ->
@@ -965,6 +982,16 @@ coverage_trim_3(CipherTextFragment, TagLen) ->
 
 printable_char($a) -> true;
 printable_char(_) -> false.
+
+coverage_beam_ssa_codegen(Bin) ->
+    %% With +r21 there will be a copy instruction that copies
+    %% a map literal to an x register, thus covering a line
+    %% beam_ssa_codegen:opt_allocate_defs/2.
+    case #{1 => 42} of
+        #{1 := 42} ->
+            << <<0>> || <<2>> <= Bin >>
+    end,
+    ok.
 
 multiple_uses(Config) when is_list(Config) ->
     {344,62879,345,<<245,159,1,89>>} = multiple_uses_1(<<1,88,245,159,1,89>>),
@@ -1452,9 +1479,6 @@ fc({'EXIT',{function_clause,_}}) -> ok;
 fc({'EXIT',{{case_clause,_},_}}) when ?MODULE =:= bs_match_inline_SUITE -> ok.
 
 fc(Name, Args, {'EXIT',{function_clause,[{?MODULE,Name,Args,_}|_]}}) -> ok;
-fc(Name, Args, {'EXIT',{function_clause,[{?MODULE,Name,Arity,_}|_]}})
-  when length(Args) =:= Arity ->
-    true = test_server:is_native(?MODULE);
 fc(_, Args, {'EXIT',{{case_clause,ActualArgs},_}})
   when ?MODULE =:= bs_match_inline_SUITE ->
     Args = tuple_to_list(ActualArgs).
@@ -2396,17 +2420,23 @@ bspu_1(<<Bin/binary>> = Bin) ->
     [Chunk || <<Chunk:5/binary>> <= Bin].
 
 
-empty_get_binary(Config) when is_list(Config) ->
-    {<<>>, <<1,2,3,4:4>>} = egb_1(<<1,2,3,4:4>>),
-    {<<>>, <<1,2,3>>} = egb_1(<<1,2,3>>),
-    {<<>>, <<>>} = egb_1(<<>>),
+empty_matches(Config) when is_list(Config) ->
+    {<<>>, <<1,2,3,4:4>>} = em_1(<<1,2,3,4:4>>),
+    {<<>>, <<1,2,3>>} = em_1(<<1,2,3>>),
+    {<<>>, <<>>} = em_1(<<>>),
 
-    <<0,1,0,2,0,3>> = egb_2(id(<<1,2,3>>)),
-    <<>> = egb_2(id(<<>>)),
+    <<0,1,0,2,0,3>> = em_2(id(<<1,2,3>>)),
+    <<>> = em_2(id(<<>>)),
+
+    <<1,2,3>> = em_3(id(<<1,2,3>>)),
+    <<>> = em_3(id(<<>>)),
+
+    <<Zero:0/unit:1>> = id(<<>>),
+    0 = id(Zero),
 
     ok.
 
-egb_1(Bytes) ->
+em_1(Bytes) ->
     {Term, Bytes} = begin
                         <<V2@V0:0/binary-unit:8,V2@Buf1/bitstring>> = Bytes,
                         V2@Conv2 = binary:copy(V2@V0),
@@ -2414,10 +2444,18 @@ egb_1(Bytes) ->
                     end,
     {Term, Bytes}.
 
-egb_2(Bin) ->
+em_2(Bin) ->
     <<
       <<K,N>> || <<K:0,N>> <= Bin
     >>.
+
+%% The validator didn't agree with the type optimization pass on what the unit
+%% of empty binary segments should be.
+em_3(<<V:0/binary,Rest/bits>>) ->
+    em_3_1(V),
+    Rest.
+
+em_3_1(I) -> I.
 
 id(I) -> I.
 

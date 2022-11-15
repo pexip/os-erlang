@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2002-2020. All Rights Reserved.
+%% Copyright Ericsson AB 2002-2021. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -40,6 +40,9 @@
 -define(SZ(X),                    ?LIB:sz(X)).
 -define(OSTYPE(),                 ?LIB:os_type()).
 -define(DISPLAY_SUITE_INFO(),     ?LIB:display_suite_info(?MODULE)).
+
+-define(EXPLICIT_INET_BACKEND(),  ?LIB:explicit_inet_backend()).
+-define(TEST_INET_BACKENDS(),     ?LIB:test_inet_backends()).
 
 
 %% - Test case macros - 

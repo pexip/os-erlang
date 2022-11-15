@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2013-2018. All Rights Reserved.
+%% Copyright Ericsson AB 2013-2022. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -77,7 +77,7 @@ get_details(Id, _) ->
 	    Info = "The process you are searching for was residing on "
 		"a remote node. No process information is available. "
 		"Show information about the remote node?",
-	    Fun = fun() -> cdv_virtual_list_wx:start_detail_win(NodeId, port) end,
+	    Fun = fun() -> cdv_virtual_list_wx:start_detail_win(NodeId, node) end,
 	    {yes_no, Info, Fun};
 	{error,not_found} ->
 	    Info = "The process you are searching for could not be found.",

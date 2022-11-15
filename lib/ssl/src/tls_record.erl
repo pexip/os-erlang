@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2007-2020. All Rights Reserved.
+%% Copyright Ericsson AB 2007-2022. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -33,7 +33,9 @@
 -include_lib("kernel/include/logger.hrl").
 
 %% Handling of incoming data
--export([get_tls_records/5, init_connection_states/2]).
+-export([get_tls_records/5,
+         init_connection_states/3,
+         init_connection_states/4]).
 
 %% Encoding TLS records
 -export([encode_handshake/3, encode_alert_record/3,
@@ -64,16 +66,35 @@
 %% Handling of incoming data
 %%====================================================================
 %%--------------------------------------------------------------------
--spec init_connection_states(client | server, one_n_minus_one | zero_n | disabled) ->
- 				    ssl_record:connection_states().
-%% 
+-spec init_connection_states(Role, Version, BeastMitigation) ->
+          ssl_record:connection_states() when
+      Role :: client | server,
+      Version :: tls_version(),
+      BeastMitigation :: one_n_minus_one | zero_n | disabled.
+
+%%
 %% Description: Creates a connection_states record with appropriate
 %% values for the initial SSL connection setup.
 %%--------------------------------------------------------------------
-init_connection_states(Role, BeastMitigation) ->
+init_connection_states(Role, Version, BeastMitigation) ->
+    MaxEarlyDataSize = ssl_config:get_max_early_data_size(),
+    init_connection_states(Role, Version, BeastMitigation, MaxEarlyDataSize).
+%%
+-spec init_connection_states(Role, Version, BeastMitigation,
+                             MaxEarlyDataSize) ->
+          ssl_record:connection_states() when
+      Role :: client | server,
+      Version :: tls_version(),
+      BeastMitigation :: one_n_minus_one | zero_n | disabled,
+      MaxEarlyDataSize :: non_neg_integer().
+
+init_connection_states(Role, Version, BeastMitigation, MaxEarlyDataSize) ->
     ConnectionEnd = ssl_record:record_protocol_role(Role),
-    Current = initial_connection_state(ConnectionEnd, BeastMitigation),
-    Pending = ssl_record:empty_connection_state(ConnectionEnd, BeastMitigation),
+    Current = initial_connection_state(ConnectionEnd, BeastMitigation, MaxEarlyDataSize),
+    Pending = ssl_record:empty_connection_state(ConnectionEnd,
+                                                Version,
+                                                BeastMitigation,
+                                                MaxEarlyDataSize),
     #{current_read  => Current,
       pending_read  => Pending,
       current_write => Current,
@@ -181,7 +202,8 @@ encode_data(Data, Version,
 
 %%--------------------------------------------------------------------
 -spec decode_cipher_text(tls_version(), #ssl_tls{}, ssl_record:connection_states(), boolean()) ->
-				{#ssl_tls{}, ssl_record:connection_states()}| #alert{}.
+				{#ssl_tls{} | no_record,
+                                 ssl_record:connection_states()}| #alert{}.
 %%
 %% Description: Decode cipher text
 %%--------------------------------------------------------------------
@@ -465,7 +487,7 @@ split_iovec(Data, MaximumFragmentLength) ->
 %%--------------------------------------------------------------------
 %%% Internal functions
 %%--------------------------------------------------------------------
-initial_connection_state(ConnectionEnd, BeastMitigation) ->
+initial_connection_state(ConnectionEnd, BeastMitigation, MaxEarlyDataSize) ->
     #{security_parameters =>
 	  ssl_record:initial_security_params(ConnectionEnd),
       sequence_number => 0,
@@ -476,7 +498,10 @@ initial_connection_state(ConnectionEnd, BeastMitigation) ->
       secure_renegotiation => undefined,
       client_verify_data => undefined,
       server_verify_data => undefined,
-      max_fragment_length => undefined
+      pending_early_data_size => MaxEarlyDataSize,
+      max_fragment_length => undefined,
+      trial_decryption => false,
+      early_data_expected => false
      }.
 
 %% Used by logging to recreate the received bytes
@@ -564,7 +589,7 @@ validate_tls_record_length(_Versions, Q, _MaxFragLen, _SslOpts, Acc, Type, Versi
     {lists:reverse(Acc),
      {#ssl_tls{type = Type, version = Version, fragment = undefined}, Q}};
 validate_tls_record_length(Versions, {_,Size0,_} = Q0, MaxFragLen,
-                           #{log_level := LogLevel} = SslOpts,
+                           #{log_level := LogLevel, downgrade := Downgrade} = SslOpts,
                            Acc, Type, Version, Length) ->
     Max = if is_integer(MaxFragLen) ->
                         MaxFragLen + ?MAX_PADDING_LENGTH + ?MAX_MAC_LENGTH;
@@ -579,7 +604,13 @@ validate_tls_record_length(Versions, {_,Size0,_} = Q0, MaxFragLen,
                     {Fragment, Q} = binary_from_front(Length, Q0),
                     Record = #ssl_tls{type = Type, version = Version, fragment = Fragment},
                     ssl_logger:debug(LogLevel, inbound, 'record', Record),
-                    decode_tls_records(Versions, Q, MaxFragLen, SslOpts, [Record|Acc], undefined, undefined, undefined);
+                    case Downgrade of
+                        {_Pid, _From} ->
+                            %% parse only single record for downgrade scenario, buffer remaining data
+                            {[Record], {undefined, Q}};
+                        _ ->
+                            decode_tls_records(Versions, Q, MaxFragLen, SslOpts, [Record|Acc], undefined, undefined, undefined)
+                    end;
                 true ->
                     {lists:reverse(Acc),
                      {#ssl_tls{type = Type, version = Version, fragment = Length}, Q0}}
@@ -681,9 +712,7 @@ encode_fragments(Type, Version, [Text|Data],
     {MajVer, MinVer} = Version,
     CipherHeader = <<?BYTE(Type), ?BYTE(MajVer), ?BYTE(MinVer), ?UINT16(Length)>>,
     encode_fragments(Type, Version, Data, CS, CompS, CipherS, Seq + 1,
-                  [[CipherHeader, CipherFragment] | CipherFragments]);
-encode_fragments(_Type, _Version, _Data, CS, _CompS, _CipherS, _Seq, _CipherFragments) ->
-    exit({cs, CS}).
+                     [[CipherHeader, CipherFragment] | CipherFragments]).
 %%--------------------------------------------------------------------
 
 %% 1/n-1 splitting countermeasure Rizzo/Duong-Beast, RC4 ciphers are

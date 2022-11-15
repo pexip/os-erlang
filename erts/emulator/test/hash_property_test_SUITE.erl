@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2004-2019. All Rights Reserved.
+%% Copyright Ericsson AB 2004-2021. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -84,7 +84,18 @@ test_phash2_no_diff_between_versions(Config) when is_list(Config) ->
     case test_server:is_release_available(R) of
         true ->
             Rel = {release,R},
-            case test_server:start_node(rel21,peer,[{erl,[Rel]}]) of
+            %% We clear all ERL_FLAGS for the old node as all options may not
+            %% be supported.
+            ClearEnv = lists:foldl(
+                         fun({Key,_Value}, Acc) ->
+                                 case re:run(Key,"^ERL_.*FLAGS$") of
+                                     {match,_} ->
+                                         [{Key,""}|Acc];
+                                     nomatch ->
+                                         Acc
+                                 end
+                         end, [], os:env()),
+            case test_server:start_node(rel21,peer,[{erl,[Rel]},{env,ClearEnv}]) of
                 {error, Reason} -> {skip, io_lib:format("Could not start node: ~p~n", [Reason])};
                 {ok, Node} ->
                     try

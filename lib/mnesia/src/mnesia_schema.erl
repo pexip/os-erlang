@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 1996-2020. All Rights Reserved.
+%% Copyright Ericsson AB 1996-2022. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -1385,7 +1385,7 @@ do_add_backend_type(Name, Module) ->
     ModuleRegistered = lists:keymember(Module, 2, Types),
     do_write_table_property(schema, {mnesia_backend_types,
 				     [{Name, Module}|Types]}),
-    ModuleRegistered.
+    not ModuleRegistered.
 
 delete_backend_type(Name) ->
     schema_transaction(fun() -> do_delete_backend_type(Name) end).
@@ -2466,10 +2466,12 @@ prepare_op(Tid, {op, add_table_copy, Storage, Node, TabDef}, _WaitFor) ->
 		_  ->
 		    ok
 	    end,
-	    %% Tables are created by mnesia_loader get_network code
-	    insert_cstruct(Tid, Cs, true),
+            mnesia_lib:verbose("~w:~w Adding table~n",[?MODULE,?LINE]),
+
 	    case mnesia_controller:get_network_copy(Tid, Tab, Cs) of
 		{loaded, ok} ->
+                    %% Tables are created by mnesia_loader get_network code
+                    insert_cstruct(Tid, Cs, true),
 		    {true, optional};
 		{not_loaded, ErrReason} ->
 		    Reason = {system_limit, Tab, {Node, ErrReason}},

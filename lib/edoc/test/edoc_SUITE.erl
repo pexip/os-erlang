@@ -24,12 +24,13 @@
 
 %% Test cases
 -export([app/1,appup/1,build_std/1,build_map_module/1,otp_12008/1,
-         build_app/1, otp_14285/1]).
+         build_app/1, otp_14285/1, infer_module_app_test/1]).
 
 suite() -> [{ct_hooks,[ts_install_cth]}].
 
-all() -> 
-    [app,appup,build_std,build_map_module,otp_12008, build_app, otp_14285].
+all() ->
+    [app,appup,build_std,build_map_module,otp_12008, build_app, otp_14285,
+     infer_module_app_test].
 
 groups() -> 
     [].
@@ -48,11 +49,11 @@ end_per_group(_GroupName, Config) ->
 
 %% Test that the .app file does not contain any `basic' errors
 app(Config) when is_list(Config) ->
-    ok = ?t:app_test(edoc).
+    ok = test_server:app_test(edoc).
 
 %% Test that the .appup file does not contain any `basic' errors
 appup(Config) when is_list(Config) ->
-    ok = ?t:appup_test(edoc).
+    ok = test_server:appup_test(edoc).
 
 build_std(suite) -> [];
 build_std(doc) -> ["Build some documentation using standard EDoc layout"];
@@ -68,6 +69,11 @@ build_std(Config) when is_list(Config) ->
 
     ok = edoc:application(syntax_tools, [{overview, Overview2},
 	    {def, {vsn,"TEST"}},
+	    {dir, PrivDir}]),
+
+    MF = fun(_MacroArg="", _Line, _Env) -> "TEST" end,
+    ok = edoc:application(syntax_tools, [{overview, Overview2},
+	    {def, {vsn,MF}},
 	    {dir, PrivDir}]),
 
     ok = edoc:application(xmerl, [{preprocess,true},{dir, PrivDir}]),
@@ -129,3 +135,27 @@ otp_14285(Config) ->
     ok = edoc:files([Un1], Opts2),
     ok = edoc:files([Un2], Opts2),
     ok.
+
+infer_module_app_test(Config) ->
+    Modules = lists:map(fun ({M, _, _}) ->
+				{list_to_atom(M), M ++ ".beam"}
+			end, code:all_available()),
+    true = lists:all(fun infer_module_app_test_/1, Modules).
+
+infer_module_app_test_({M, Beam}) ->
+    case edoc_lib:infer_module_app(M) of
+	no_app ->
+	    true;
+	{app, App} when is_atom(App) ->
+	    %% When `App' is actually returned, the corresponding
+	    %% BEAM file is expected to be found on disk in the app's
+	    %% ebin dir.
+	    %% `preloaded' modules should be found under `erts/ebin'
+	    %% or under `erts/preloaded/ebin' in case of running tests
+	    %% from the source tree.
+	    BeamPath1 = filename:join([code:lib_dir(App), "ebin", Beam]),
+	    BeamPath2 = filename:join([code:lib_dir(App), "preloaded", "ebin", Beam]),
+	    R1 = filelib:is_regular(BeamPath1),
+	    R2 = filelib:is_regular(BeamPath2),
+	    R1 orelse R2
+    end.

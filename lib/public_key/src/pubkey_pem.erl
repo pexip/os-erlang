@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2008-2020. All Rights Reserved.
+%% Copyright Ericsson AB 2008-2021. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -211,6 +211,8 @@ pem_start('DSAPrivateKey') ->
 pem_start('DHParameter') ->
     <<"-----BEGIN DH PARAMETERS-----">>;
 pem_start('PrivateKeyInfo') ->
+    <<"-----BEGIN PRIVATE KEY-----">>;
+pem_start('OneAsymmetricKey') ->
     <<"-----BEGIN PRIVATE KEY-----">>;
 pem_start('EncryptedPrivateKeyInfo') ->
     <<"-----BEGIN ENCRYPTED PRIVATE KEY-----">>;

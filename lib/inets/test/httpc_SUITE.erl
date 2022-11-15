@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %% 
-%% Copyright Ericsson AB 2004-2018. All Rights Reserved.
+%% Copyright Ericsson AB 2004-2021. All Rights Reserved.
 %% 
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -37,7 +37,7 @@
 -define(TLS_URL_START, "https://").
 -define(NOT_IN_USE_PORT, 8997).
 
-%% Using hardcoded file path to keep it below 107 charaters
+%% Using hardcoded file path to keep it below 107 characters
 %% (maximum length supported by erlang)
 -define(UNIX_SOCKET, "/tmp/inets_httpc_SUITE.sock").
 
@@ -98,6 +98,30 @@ real_requests()->
      emulate_lower_versions,
      headers,
      headers_as_is,
+     header_type_0,
+     header_type_1,
+     header_type_2,
+     header_type_3,
+     header_type_4,
+     header_type_5,
+     header_type_6,
+     header_type_7,
+     header_type_8,
+     header_type_9,
+     header_type_10,
+     header_type_11,
+     header_type_12,
+     header_type_13,
+     header_type_14,
+     header_type_15,
+     header_type_16,
+     header_type_17,
+     header_type_18,
+     header_type_19,
+     header_type_20,
+     header_type_21,
+     header_type_22,
+     header_type_23,
      empty_body,
      stream,
      stream_to_pid,
@@ -105,8 +129,11 @@ real_requests()->
      stream_through_mfa,
      streaming_error,
      inet_opts,
-     invalid_headers,
+     invalid_headers_key,
+     invalid_headers_value,
      invalid_body,
+     invalid_body_fun,
+     invalid_method,
      no_scheme,
      invalid_uri,
      undefined_port,
@@ -510,7 +537,7 @@ pipeline(Config) when is_list(Config) ->
     Request  = {url(group_name(Config), "/dummy.html", Config), []},
     {ok, _} = httpc:request(get, Request, [], [], pipeline),
 
-    %% Make sure pipeline session is registerd
+    %% Make sure pipeline session is registered
     ct:sleep(4000),
     keep_alive_requests(Request, pipeline).
 
@@ -520,7 +547,7 @@ persistent_connection(Config) when is_list(Config) ->
     Request  = {url(group_name(Config), "/dummy.html", Config), []},
     {ok, _} = httpc:request(get, Request, [], [], persistent),
 
-    %% Make sure pipeline session is registerd
+    %% Make sure pipeline session is registered
     ct:sleep(4000),
     keep_alive_requests(Request, persistent).
 
@@ -939,7 +966,7 @@ no_content_204(Config) when is_list(Config) ->
 
 tolerate_missing_CR() ->
     [{doc, "Test the case that the HTTP server uses only LF instead of CRLF"
-     "as delimitor. Solves OTP-7304"}].
+     "as delimiter. Solves OTP-7304"}].
 tolerate_missing_CR(Config) when is_list(Config) ->
     URL = url(group_name(Config), "/missing_CR.html", Config),
     {ok, {{_,200,_}, _, [_ | _]}} = httpc:request(URL).
@@ -1057,14 +1084,11 @@ invalid_chunk_size(Config) when is_list(Config) ->
 %%-------------------------------------------------------------------------
 
 emulate_lower_versions(doc) ->
-    [{doc, "Perform request as 0.9 and 1.0 clients."}];
+    [{doc, "Perform request as 1.0 clients."}];
 emulate_lower_versions(Config) when is_list(Config) ->
 
     URL = url(group_name(Config), "/dummy.html", Config),
 
-    {ok, Body0} =
-	httpc:request(get, {URL, []}, [{version, "HTTP/0.9"}], []),
-    inets_test_lib:check_body(Body0),
     {ok, {{"HTTP/1.0", 200, _}, [_ | _], Body1 = [_ | _]}} =
 	httpc:request(get, {URL, []}, [{version, "HTTP/1.0"}], []),
     inets_test_lib:check_body(Body1),
@@ -1158,7 +1182,7 @@ headers_dummy(Config) when is_list(Config) ->
 
     %% The dummy server will ignore the headers, we only want to test
     %% that the client header-handling code. This would not
-    %% be a vaild http-request!
+    %% be a valid http-request!
     {ok, {{_,200,_}, [_ | _], [_|_]}} =
 	httpc:request(post,
 		     {URL,
@@ -1220,22 +1244,105 @@ headers_conflict_chunked_with_length(Config) when is_list(Config) ->
 
 %%-------------------------------------------------------------------------
 
-invalid_headers(Config) ->
-    Request  = {url(group_name(Config), "/dummy.html", Config), [{"cookie", undefined}]},
-    {error, _} = httpc:request(get, Request, [], []).
+
+invalid_headers_key(Config) ->
+    Request  = {url(group_name(Config), "/dummy.html", Config),
+                [{cookie, "valid cookie"}]},
+    {error, {headers_error, invalid_field}} =
+        httpc:request(get, Request, [], []).
+
+invalid_headers_value(Config) ->
+    Request  = {url(group_name(Config), "/dummy.html", Config),
+                [{"cookie", atom_value}]},
+    {error, {headers_error, invalid_value}} =
+        httpc:request(get, Request, [], []).
+
+%%-------------------------------------------------------------------------
+
+%% Doc not generated, but we can live without that.  It should be
+%%  [{doc, "Header type test"}].
+-define(HDR_TYPE_TEST(Name, Method, Value),
+        Name(Config) when is_list(Config) ->
+            test_header_type(Config, Method, Value)).
+
+?HDR_TYPE_TEST(header_type_0, get, "stringheader").
+?HDR_TYPE_TEST(header_type_1, get, <<"binary">>).
+?HDR_TYPE_TEST(header_type_2, get, ["an", <<"iolist">>]).
+?HDR_TYPE_TEST(header_type_3, head, "stringheader").
+?HDR_TYPE_TEST(header_type_4, head, <<"binary">>).
+?HDR_TYPE_TEST(header_type_5, head, ["an", <<"iolist">>]).
+?HDR_TYPE_TEST(header_type_6, post, "stringheader").
+?HDR_TYPE_TEST(header_type_7, post, <<"binary">>).
+?HDR_TYPE_TEST(header_type_8, post, ["an", <<"iolist">>]).
+?HDR_TYPE_TEST(header_type_9, put, "stringheader").
+?HDR_TYPE_TEST(header_type_10, put, <<"binary">>).
+?HDR_TYPE_TEST(header_type_11, put, ["an", <<"iolist">>]).
+?HDR_TYPE_TEST(header_type_12, delete, "stringheader").
+?HDR_TYPE_TEST(header_type_13, delete, <<"binary">>).
+?HDR_TYPE_TEST(header_type_14, delete, ["an", <<"iolist">>]).
+?HDR_TYPE_TEST(header_type_15, trace, "stringheader").
+?HDR_TYPE_TEST(header_type_16, trace, <<"binary">>).
+?HDR_TYPE_TEST(header_type_17, trace, ["an", <<"iolist">>]).
+?HDR_TYPE_TEST(header_type_18, patch, "stringheader").
+?HDR_TYPE_TEST(header_type_19, patch, <<"binary">>).
+?HDR_TYPE_TEST(header_type_20, patch, ["an", <<"iolist">>]).
+?HDR_TYPE_TEST(header_type_21, options, "stringheader").
+?HDR_TYPE_TEST(header_type_22, options, <<"binary">>).
+?HDR_TYPE_TEST(header_type_23, options, ["an", <<"iolist">>]).
+
+test_header_type(Config, Method, Value) ->
+    {Method, Value, {ok, _Data}} =
+        {Method, Value,
+         httpc:request(Method,
+                      make_request(Config, Method, Value),
+                      [],
+                      [])}.
+
+make_request(Config, Method, Value) ->
+    URL = url(group_name(Config), "/dummy.html", Config),
+    Headers = [{"other-header", Value},
+               {"user-agent", Value}],
+    %% Generate request with or without body, depending on method.
+    case method_type(Method) of
+        read ->
+            {URL, Headers};
+        write ->
+            {URL, Headers, "text/plain", ""}
+    end.
+
+method_type(Method) ->
+    case Method of
+        get -> read;
+        head -> read;
+        options -> read;
+        trace -> read;
+        post -> write;
+        put -> write;
+        delete -> write;
+        patch -> write
+    end.
 
 %%-------------------------------------------------------------------------
 
 invalid_body(Config) ->
     URL = url(group_name(Config), "/dummy.html", Config),
-    try 
-	httpc:request(post, {URL, [], <<"text/plain">>, "foobar"},
-		      [], []),
-	ct:fail(accepted_invalid_input)
-    catch 
-	error:function_clause ->
-	    ok
-    end.
+    {error, invalid_request} =
+        httpc:request(post, {URL, [], <<"text/plain">>, "foobar"},
+                      [], []).
+
+invalid_body_fun(Config) ->
+    URL = url(group_name(Config), "/dummy.html", Config),
+    BodyFun = fun() -> body_part end,
+    {error, {bad_body_generator, _}} =
+        httpc:request(post, {URL, [], "text/plain", {BodyFun, init}},
+                      [], []).
+
+
+invalid_method(Config) ->
+    URL = url(group_name(Config), "/dummy.html", Config),
+    {error, invalid_method} =
+        httpc:request(past, {URL, [], <<"text/plain">>, "foobar"},
+                      [], []).
 
 %%-------------------------------------------------------------------------
 
@@ -1455,7 +1562,7 @@ custom_receive() ->
             ct:log("Message received: ~p", [Msg])
     after
         1000 ->
-            ct:fail("Timeout: did not recive packet")
+            ct:fail("Timeout: did not receive packet")
     end.
 
 %% Custom server is used to test special cases when using chunked encoding
@@ -1574,7 +1681,7 @@ chunkify_receive() ->
             end
     after
         1000 ->
-            ct:fail("Timeout: did not recive packet")
+            ct:fail("Timeout: did not receive packet")
     end.
 %%--------------------------------------------------------------------
 stream_fun_server_close() ->
@@ -1951,7 +2058,7 @@ setup_server_dirs(ServerRoot, DocRoot, DataDir) ->
 		  "cgi_echo"
 	  end,
     
-    inets_test_lib:copy_file(Cgi, DataDir, CgiDir),
+    {ok, _} = inets_test_lib:copy_file(Cgi, DataDir, CgiDir),
     AbsCgi = filename:join([CgiDir, Cgi]),
     {ok, FileInfo} = file:read_file_info(AbsCgi),
     ok = file:write_file_info(AbsCgi, FileInfo#file_info{mode = 8#00755}).
@@ -2073,10 +2180,10 @@ dummy_ssl_server_loop(MFA, Handlers, ListenSocket) ->
 	    lists:foreach(Stopper, Handlers),
 	    From ! {stopped, self()}
     after 0 ->
-	    {ok, Socket} = ssl:transport_accept(ListenSocket),
-	    ok = ssl:ssl_accept(Socket, infinity),
-	    HandlerPid  = dummy_request_handler(MFA, Socket),
-	    ssl:controlling_process(Socket, HandlerPid),
+	    {ok, Tsocket} = ssl:transport_accept(ListenSocket),
+	    {ok, Ssocket} = ssl:handshake(Tsocket, infinity),
+	    HandlerPid  = dummy_request_handler(MFA, Ssocket),
+	    ssl:controlling_process(Ssocket, HandlerPid),
 	    HandlerPid ! ssl_controller,
 	    dummy_ssl_server_loop(MFA, [HandlerPid | Handlers],
 				  ListenSocket)
@@ -2216,7 +2323,7 @@ dummy_ssl_server_hang_init(Caller, Inet, SslOpt) ->
     dummy_ssl_server_hang_loop(AcceptSocket).
 
 dummy_ssl_server_hang_loop(_) ->
-    %% Do not do ssl:ssl_accept as we
+    %% Do not do ssl:handshake as we
     %% want to time out the underlying gen_tcp:connect
     receive
 	stop ->
@@ -2249,14 +2356,14 @@ content_type_header([{"content-type", Value}|_]) ->
 content_type_header([_|T]) ->
     content_type_header(T).
 
-handle_auth("Basic " ++ UserInfo, Challange, DefaultResponse) ->
+handle_auth("Basic " ++ UserInfo, Challenge, DefaultResponse) ->
     case string:tokens(base64:decode_to_string(UserInfo), ":") of
 	["alladin", "sesame"] = Auth ->
 	    ct:print("Auth: ~p~n", [Auth]),
 	    DefaultResponse;
 	Other ->
 	    ct:print("UnAuth: ~p~n", [Other]),
-	    Challange
+	    Challenge
     end.
 
 check_cookie([]) ->
@@ -2465,14 +2572,14 @@ handle_uri(_,"/redirectloop.html",Port,_,Socket,_) ->
 	++ "\r\n\r\n" ++ Body;
 
 handle_uri(_,"/userinfo.html", _,Headers,_, DefaultResponse) ->
-    Challange = "HTTP/1.1 401 Unauthorized \r\n" ++
+    Challenge = "HTTP/1.1 401 Unauthorized \r\n" ++
 	"WWW-Authenticate:Basic" ++"\r\n" ++
 	"Content-Length:0\r\n\r\n",
     case auth_header(Headers) of
 	{ok, Value} ->
-	    handle_auth(Value, Challange, DefaultResponse);
+	    handle_auth(Value, Challenge, DefaultResponse);
 	_ ->
-	    Challange
+	    Challenge
     end;
 
 handle_uri(_,"/dummy_headers.html",_,_,Socket,_) ->

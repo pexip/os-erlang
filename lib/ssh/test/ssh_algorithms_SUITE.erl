@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2008-2020. All Rights Reserved.
+%% Copyright Ericsson AB 2008-2021. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -86,6 +86,24 @@ groups() ->
 	 || {Tag,Algs} <- ErlAlgos ++ DoubleAlgos,
 	    Alg <- Algs],
 
+    ct:log(
+      "ErlAlgos = ~p~n"
+      "SshcAlgos = ~p~n"
+      "SshdAlgos = ~p~n"
+      "DoubleAlgos = ~p~n"
+      "TypeSSH = ~p~n"
+      "TagGroupSet = ~p~n"
+      "AlgoTcSet = ~p~n"
+          ,[
+            ErlAlgos,
+            SshcAlgos,
+            SshdAlgos,
+            DoubleAlgos,
+            TypeSSH,
+            TagGroupSet,
+            AlgoTcSet
+           ]),
+
     TagGroupSet ++ AlgoTcSet.
 
 tags() -> [kex,cipher,mac,compression,public_key].
@@ -146,50 +164,76 @@ init_per_group(Group, Config) ->
 	    Tag = proplists:get_value(name,
 				      hd(proplists:get_value(tc_group_path, Config))),
 	    Alg = Group,
-            init_per_group(Tag, Alg, Config)
+            Algs = split(Tag, Alg),
+            SupportedAlgs = proplists:get_value(Tag, ssh_transport:supported_algorithms()),
+            PA =
+                case Algs of
+                    [_] ->
+                        [Alg];
+                    [A1,A2] when Tag == public_key ->
+                        [A1,A2];
+                    [A1,A2] ->
+                        [{client2server,[A1]},
+                         {server2client,[A2]}]
+                end,
+            case lists:foldl(fun({K,As}, Acc) ->
+                                     ct:log("~p:~p  K=~p, As=~p, SupportedAlgs=~p", [?MODULE,?LINE,K,As,SupportedAlgs]),
+                                     SAs = proplists:get_value(K,SupportedAlgs),
+                                     lists:foldl(fun(A1, Acc1) -> 
+                                                         case lists:member(A1, SAs) of
+                                                             true -> Acc1;
+                                                             false -> [A1|Acc1]
+                                                         end
+                                                 end, Acc, As);
+                                (A, Acc) when is_atom(hd(SupportedAlgs)) ->
+                                     ct:log("~p:~p  A=~p, SupportedAlgs=~p", [?MODULE,?LINE,A,SupportedAlgs]),
+                                     case lists:member(A, SupportedAlgs) of
+                                         true -> Acc;
+                                         false -> [A|Acc]
+                                     end;
+                                (A, Acc) when is_tuple(hd(SupportedAlgs)) ->
+                                     ct:log("~p:~p  A=~p, SupportedAlgs=~p", [?MODULE,?LINE,A,SupportedAlgs]),
+                                     [{_,S1},{_,S2}] = SupportedAlgs,
+
+                                     case lists:member(A, S1) andalso
+                                         lists:member(A, S2) of
+                                         true -> Acc;
+                                         false -> [A|Acc]
+                                     end
+                             end, [], PA) of
+                [] ->
+                    init_per_group(Tag, Algs, Alg, PA, Config);
+                L ->
+                    ct:log("~p:~p  Tag ~p, Alg ~p, Algs ~p, PA ~p,~nSupportedAlgs ~p", [?MODULE,?LINE, Tag, Alg, Algs, PA, SupportedAlgs]),
+                    {skip,io_lib:format("Unsupported ~p: ~p", [Tag,L])}
+            end
     end.
 
 
-init_per_group(public_key=Tag, Alg, Config) ->
-    PA =
-        case split(Tag, Alg) of
-            [_] ->
-                [Alg];
-            [A1,A2] ->
-                [A1,A2]
-        end,
+init_per_group(Tag, Algs, Alg, PA, Config) ->
     OtherAlgs = [{T,L} || {T,L} <- ssh_transport:supported_algorithms(), T=/=Tag],
-    ct:log("Init tests for public_key ~p~nOtherAlgs=~p",[PA,OtherAlgs]),
+    ct:log("init_per_group Tag ~p, Alg ~p, Algs ~p ,PA ~p,~nOtherAlgs ~p", [Tag, Alg, Algs, PA, OtherAlgs]),
     PrefAlgs = {preferred_algorithms,[{Tag,PA}|OtherAlgs]},
-    %% Daemon started later in init_per_testcase
-    try
-        setup_pubkey(PA,
-                 [{pref_algs,PrefAlgs},
-                  {tag_alg,{Tag,PA}}
-                  | Config])
-    catch
-        _C:_E:_S ->
-            ct:log("Exception ~p:~p~n~p",[_C,_E,_S]),
-            {skip, io_lib:format("Unsupported: ~p",[Alg])}
-    end;
+    case Tag of
+        public_key ->
+            %% Daemon started later in init_per_testcase
+            try
+                setup_pubkey(PA,
+                             [{pref_algs,PrefAlgs},
+                              {tag_alg,{Tag,PA}}
+                              | Config])
+            catch
+                _C:_E:_S ->
+                    ct:log("Exception ~p:~p~n~p",[_C,_E,_S]),
+                    {skip, io_lib:format("Unsupported: ~p",[Alg])}
+            end;
 
-init_per_group(Tag, Alg, Config) ->
-    PA =
-        case split(Tag, Alg) of
-            [_] ->
-                [Alg];
-            [A1,A2] ->
-                [{client2server,[A1]},
-                 {server2client,[A2]}]
-        end,
-    OtherAlgs = [{T,L} || {T,L} <- ssh_transport:supported_algorithms(), T=/=Tag],
-    ct:log("Init tests for tag=~p alg=~p~nOtherAlgs=~p",[Tag,PA,OtherAlgs]),
-    PrefAlgs = {preferred_algorithms,[{Tag,PA}|OtherAlgs]},
-    start_std_daemon([PrefAlgs],
-                     [{pref_algs,PrefAlgs},
-                      {tag_alg,{Tag,[Alg]}}
-                      | Config]).
-
+        _ ->
+            start_std_daemon([PrefAlgs],
+                             [{pref_algs,PrefAlgs},
+                              {tag_alg,{Tag,[Alg]}}
+                              | Config])
+    end.
 
 end_per_group(_Alg, Config) ->
     case proplists:get_value(srvr_pid,Config) of
@@ -364,6 +408,7 @@ sshc_simple_exec_os_cmd(Config) ->
                                                         " -o UserKnownHostsFile=",KnownHosts,
                                                         " -o CheckHostIP=no"
                                                         " -o StrictHostKeyChecking=no"
+                                                        " -o UpdateHostKeys=no"
                                                         " -q"
                                                         " -x"
                                                         ],
@@ -393,10 +438,9 @@ sshd_simple_exec(Config) ->
             {public_key,Alg} -> [{pref_public_key_algs,Alg}];
             _ -> []
         end,
-    ConnectionRef = ssh_test_lib:connect(22, [{silently_accept_hosts, true},
-                                              proplists:get_value(pref_algs,Config),
-					      {user_interaction, false}
-                                              | ClientPubKeyOpts]),
+    ConnectionRef = ssh_test_lib:connect(?SSH_DEFAULT_PORT,
+                                         [proplists:get_value(pref_algs,Config)
+                                          | ClientPubKeyOpts]),
     {ok, ChannelId0} = ssh_connection:session_channel(ConnectionRef, infinity),
     success = ssh_connection:exec(ConnectionRef, ChannelId0,
 				  "echo testing", infinity),

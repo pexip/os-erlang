@@ -1,7 +1,7 @@
 /*
  * %CopyrightBegin%
  * 
- * Copyright Ericsson AB 1997-2016. All Rights Reserved.
+ * Copyright Ericsson AB 1997-2021. All Rights Reserved.
  * 
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -25,20 +25,8 @@
 #include "sys.h"
 #include "signal.h"
 
-/* global variable for floating point checks, (see sys.h) */
-/* Note! This is part of the interface Machine <---> sys.c */
-volatile int erl_fp_exception = 0;
-
-static void fpe_exception(int sig);
-
 void
 erts_sys_init_float(void)
-{
-}
-void erts_thread_init_float(void)
-{
-}
-void erts_thread_disable_fpe(void)
 {
 }
 

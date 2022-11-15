@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 1997-2018. All Rights Reserved.
+%% Copyright Ericsson AB 1997-2021. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -1684,6 +1684,18 @@ bad_flag(Config) when is_list(Config) ->
     {'EXIT', {badarg, _}} = (catch erlang:trace(new,
                                                 true,
                                                 [not_a_valid_flag])),
+
+    %% Leaks of {tracer,_} in OTP 23.2
+    Pid = spawn(fun() -> receive die -> ok end end),
+    1 = erlang:trace(Pid, true, [{tracer, self()},
+                                 {tracer, self()}]),
+    Pid ! die,
+    {'EXIT', {badarg, _}} =
+        (catch erlang:trace(new, true, [{tracer, self()}
+                                        | improper])),
+    {'EXIT', {badarg, _}} =
+        (catch erlang:trace(new, true, [{tracer, self()},
+                                        not_a_valid_flag])),
     ok.
 
 %% Test erlang:trace_delivered/1

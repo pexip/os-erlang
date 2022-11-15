@@ -1,7 +1,7 @@
 /*
  * %CopyrightBegin%
  * 
- * Copyright Ericsson AB 2001-2016. All Rights Reserved.
+ * Copyright Ericsson AB 2001-2021. All Rights Reserved.
  * 
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -234,6 +234,9 @@ static int pquotedatom(const char** fmt, ei_x_buff* x)
 static int pformat(const char** fmt, union arg** args, ei_x_buff* x)
 {
     int res = 0;
+
+    ASSERT(args && *args);
+
     ++(*fmt);	/* skip tilde */
     switch (*(*fmt)++) {
     case 'a': 

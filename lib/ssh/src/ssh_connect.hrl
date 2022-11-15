@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2005-2020. All Rights Reserved.
+%% Copyright Ericsson AB 2005-2021. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -25,7 +25,6 @@
 -define(DEFAULT_PACKET_SIZE, 65536).
 -define(DEFAULT_WINDOW_SIZE, 10*?DEFAULT_PACKET_SIZE).
 
--define(DEFAULT_TIMEOUT, 5000).
 -define(MAX_PROTO_VERSION, 255).      % Max length of the hello string
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -267,8 +266,8 @@
 	  channel_id_seed,
 	  cli_spec,
 	  options,
+          suggest_window_size,
+          suggest_packet_size,
 	  exec,
-	  system_supervisor,
-	  sub_system_supervisor,
-	  connection_supervisor
+	  sub_system_supervisor
 	 }).

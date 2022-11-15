@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2019. All Rights Reserved.
+%% Copyright Ericsson AB 2019-2022. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -78,10 +78,15 @@ will_succeed(erlang, 'not', [Arg]) ->
     succeeds_if_type(Arg, beam_types:make_boolean());
 will_succeed(erlang, setelement, [#t_integer{elements={Min,Max}},
                                   #t_tuple{exact=Exact,size=Size}, _]) ->
-    case Min >= 1 andalso Max =< Size of
-        true -> yes;
-        false when Exact -> no;
-        false -> maybe
+    if
+        1 =< Min, Max =< Size ->
+            %% The index is always in range.
+            yes;
+        Max < 1; Exact, Size < Min ->
+            %% The index is always out of range.
+            no;
+        true ->
+            'maybe'
     end;
 will_succeed(erlang, size, [Arg]) ->
     ArgType = beam_types:join(#t_tuple{}, #t_bitstring{}),
@@ -566,6 +571,10 @@ types(maps, fold, [Fun, Init, _Map]) ->
                       any
               end,
     sub_unsafe(RetType, [#t_fun{arity=3}, any, #t_map{}]);
+types(maps, from_keys, [Keys, Value]) ->
+    RetType = #t_map{super_key=erlang_hd_type(Keys),
+                     super_value=Value},
+    sub_unsafe(RetType, [proper_list(), any]);
 types(maps, from_list, [Pairs]) ->
     PairType = erlang_hd_type(Pairs),
     RetType = case beam_types:normalize(PairType) of
@@ -730,7 +739,7 @@ erlang_band_type_1(LHS, Int) ->
             {Intersection, Union} = range_masks(Min0, Max0),
 
             Min = Intersection band Int,
-            Max = min(Max0, Union band Int),
+            Max = max(Min, min(Max0, Union band Int)),
 
             #t_integer{elements={Min,Max}};
         #t_integer{} when Int >= 0 ->

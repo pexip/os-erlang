@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 1996-2019. All Rights Reserved.
+%% Copyright Ericsson AB 1996-2021. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -564,8 +564,8 @@ from({'$gen_sync_all_state_event', From, _Event}) -> From;
 from(_) -> undefined.
 
 %% Send a reply to the client.
-reply({To, Tag}, Reply) ->
-    catch To ! {Tag, Reply}.
+reply(From, Reply) ->
+    gen:reply(From, Reply).
 
 reply(Name, From, Reply, Debug, StateName) ->
     reply(From, Reply),

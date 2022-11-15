@@ -1,7 +1,7 @@
 /*
  * %CopyrightBegin%
  * 
- * Copyright Ericsson AB 1997-2016. All Rights Reserved.
+ * Copyright Ericsson AB 1997-2021. All Rights Reserved.
  * 
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -32,7 +32,7 @@
 
 #ifdef HAVE_MIT_PTHREAD_H
 #include <pthread/mit/pthread.h>
-#elif HAVE_PTHREAD_H 
+#elif defined(HAVE_PTHREAD_H) && HAVE_PTHREAD_H
 #include <pthread.h>
 #endif
 

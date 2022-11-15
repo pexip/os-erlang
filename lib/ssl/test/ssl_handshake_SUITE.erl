@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2008-2020. All Rights Reserved.
+%% Copyright Ericsson AB 2008-2022. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -129,8 +129,8 @@ decode_hello_handshake(_Config) ->
 		    16#70, 16#64, 16#79, 16#2f, 16#32>>,
 	
     Version = {3, 0},
-    {Records, _Buffer} = tls_handshake:get_tls_handshake(Version, HelloPacket, <<>>, 
-                                                         default_options_map()),
+    {Records, _Buffer} = tls_handshake:get_tls_handshakes(Version, HelloPacket, <<>>,
+                                                          default_options_map()),
 
     {Hello, _Data} = hd(Records),
     Extensions = Hello#server_hello.extensions,
@@ -193,10 +193,10 @@ ignore_hassign_extension_pre_tls_1_2(Config) ->
     CertFile = proplists:get_value(certfile, Opts),
     [{_, Cert, _}] = ssl_test_lib:pem_to_der(CertFile),
     HashSigns = #hash_sign_algos{hash_sign_algos = [{sha512, rsa}, {sha, dsa}, {sha256, rsa}]},
-    {sha512, rsa} = ssl_handshake:select_hashsign({HashSigns, undefined}, Cert, ecdhe_rsa, tls_v1:default_signature_algs({3,3}), {3,3}),
+    {sha512, rsa} = ssl_handshake:select_hashsign({HashSigns, undefined}, Cert, ecdhe_rsa, tls_v1:default_signature_algs([{3,3}]), {3,3}),
     %%% Ignore
-    {md5sha, rsa} = ssl_handshake:select_hashsign({HashSigns, undefined}, Cert, ecdhe_rsa, tls_v1:default_signature_algs({3,2}), {3,2}),
-    {md5sha, rsa} = ssl_handshake:select_hashsign({HashSigns, undefined}, Cert, ecdhe_rsa, tls_v1:default_signature_algs({3,0}), {3,0}).
+    {md5sha, rsa} = ssl_handshake:select_hashsign({HashSigns, undefined}, Cert, ecdhe_rsa, tls_v1:default_signature_algs([{3,2}]), {3,2}),
+    {md5sha, rsa} = ssl_handshake:select_hashsign({HashSigns, undefined}, Cert, ecdhe_rsa, tls_v1:default_signature_algs([{3,0}]), {3,0}).
 
 encode_decode_srp(_Config) ->
     Exts = #{srp => #srp{username = <<"foo">>},
@@ -238,7 +238,7 @@ signature_algorithms(Config) ->
     {sha512, rsa} = ssl_handshake:select_hashsign(
                       {HashSigns0, Schemes0},
                       Cert, ecdhe_rsa,
-                      tls_v1:default_signature_algs({3,3}),
+                      tls_v1:default_signature_algs([{3,3}]),
                       {3,3}),
     HashSigns1 = #hash_sign_algos{
                     hash_sign_algos = [{sha, dsa},
@@ -246,7 +246,7 @@ signature_algorithms(Config) ->
     {sha256, rsa} = ssl_handshake:select_hashsign(
                       {HashSigns1, Schemes0},
                       Cert, ecdhe_rsa,
-                      tls_v1:default_signature_algs({3,3}),
+                      tls_v1:default_signature_algs([{3,3}]),
                       {3,3}),
     Schemes1 = #signature_algorithms_cert{
                   signature_scheme_list = [rsa_pkcs1_sha1,
@@ -255,13 +255,13 @@ signature_algorithms(Config) ->
     #alert{} = ssl_handshake:select_hashsign(
                  {HashSigns1, Schemes1},
                  Cert, ecdhe_rsa,
-                 tls_v1:default_signature_algs({3,3}),
+                 tls_v1:default_signature_algs([{3,3}]),
                  {3,3}),
     %% No scheme, hashsign is used
     {sha256, rsa} = ssl_handshake:select_hashsign(
                       {HashSigns1, undefined},
                       Cert, ecdhe_rsa,
-                      tls_v1:default_signature_algs({3,3}),
+                      tls_v1:default_signature_algs([{3,3}]),
                       {3,3}),
     HashSigns2 = #hash_sign_algos{
                     hash_sign_algos = [{sha, dsa}]},
@@ -269,7 +269,7 @@ signature_algorithms(Config) ->
     #alert{} = ssl_handshake:select_hashsign(
                  {HashSigns2, Schemes1},
                  Cert, ecdhe_rsa,
-                 tls_v1:default_signature_algs({3,3}),
+                 tls_v1:default_signature_algs([{3,3}]),
                  {3,3}).
 
 %%--------------------------------------------------------------------

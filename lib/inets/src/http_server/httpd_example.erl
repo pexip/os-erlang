@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %% 
-%% Copyright Ericsson AB 1997-2018. All Rights Reserved.
+%% Copyright Ericsson AB 1997-2021. All Rights Reserved.
 %% 
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -22,6 +22,7 @@
 
 -export([print/3, 
          get/3, 
+         get_reply_headers/3,
          put/3,
          patch/3,
          post/3, 
@@ -77,6 +78,24 @@ do_get(_Env,[]) ->
    footer()];
 do_get(Env,Input) ->
   default(Env,Input).
+%% ------------------------------------------------------
+get_reply_headers(SessionID, Env, Input) ->
+    mod_esi:deliver(SessionID, do_get_reply_headers(Env, Input)).
+do_get_reply_headers(Env,[]) ->
+    EncodingVal = proplists:get_value(http_accept_encoding, Env),
+    Other = proplists:get_value(http_other, Env),
+    NotExistingVal = proplists:get_value("notexistingheader_1", Other),
+    [header("text/html", "Accept-Encoding: " ++ EncodingVal ++ " \r\n" ++
+                "NotExistingheader_1: " ++ NotExistingVal ++ " \r\n"),
+     top("GET Example"),
+     "<FORM ACTION=\"/cgi-bin/erl/httpd_example:get\" METHOD=GET>
+<B>Input:</B> <INPUT TYPE=\"text\" NAME=\"input1\">
+<INPUT TYPE=\"text\" NAME=\"input2\">
+<INPUT TYPE=\"submit\"><BR>
+</FORM>" ++ "\n",
+     footer()];
+do_get_reply_headers(Env,Input) ->
+    default(Env,Input).
 %% ------------------------------------------------------
 put(SessionID, Env, Input) ->
     mod_esi:deliver(SessionID, do_put(Env, Input)).

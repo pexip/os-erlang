@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2015-2020. All Rights Reserved.
+%% Copyright Ericsson AB 2015-2021. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -25,7 +25,11 @@
 	 cons/1,tuple/1,record_float/1,binary_float/1,float_compare/1,
 	 arity_checks/1,elixir_binaries/1,find_best/1,
          test_size/1,cover_lists_functions/1,list_append/1,bad_binary_unit/1,
-         none_argument/1,success_type_oscillation/1,type_subtraction/1]).
+         none_argument/1,success_type_oscillation/1,type_subtraction/1,
+         container_subtraction/1]).
+
+%% Force id/1 to return 'any'.
+-export([id/1]).
 
 suite() -> [{ct_hooks,[ts_install_cth]}].
 
@@ -53,7 +57,8 @@ groups() ->
        bad_binary_unit,
        none_argument,
        success_type_oscillation,
-       type_subtraction
+       type_subtraction,
+       container_subtraction
       ]}].
 
 init_per_suite(Config) ->
@@ -90,6 +95,8 @@ integers(_Config) ->
     {'EXIT',{badarith,_}} = (catch do_integers_6()),
 
     house = do_integers_7(),
+
+    {'EXIT',{badarith,_}} = (catch do_integers_8()),
 
     ok.
 
@@ -155,6 +162,9 @@ do_integers_7() ->
         _:_:_ ->
             house
     end.
+
+do_integers_8() ->
+    -1 band ((0 div 0) band 0).
 
 numbers(_Config) ->
     Int = id(42),
@@ -632,6 +642,24 @@ ts_23(_x@1) ->
         true ->
             2
     end.
+
+%% GH-4774: The validator didn't update container contents on type subtraction.
+container_subtraction(Config) when is_list(Config) ->
+    A = id(baz),
+
+    cs_1({foo,[]}),
+    cs_1({bar,A}),
+    cs_2({bar,A}),
+
+    ok.
+
+cs_1({_,[]}) ->
+    ok;
+cs_1({_,_}=Other) ->
+    cs_2(Other).
+
+cs_2({bar,baz}) ->
+    ok.
 
 id(I) ->
     I.

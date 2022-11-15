@@ -1,7 +1,7 @@
 #
 # %CopyrightBegin%
 #
-# Copyright Ericsson AB 2006-2019. All Rights Reserved.
+# Copyright Ericsson AB 2006-2021. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -38,8 +38,6 @@ EDOC_REF3_FILES = \
 	erl_recomment.xml \
 	erl_syntax.xml \
 	erl_syntax_lib.xml \
-	erl_tidy.xml \
-	igor.xml \
 	merl.xml \
 	merl_transform.xml \
 	prettypr.xml

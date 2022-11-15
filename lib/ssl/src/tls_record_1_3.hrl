@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2018-2018. All Rights Reserved.
+%% Copyright Ericsson AB 2018-2022. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -20,13 +20,17 @@
 
 %%
 %%----------------------------------------------------------------------
-%% Purpose: Record and constant defenitions for the TLS-1.3-record protocol
+%% Purpose: Record and constant definitions for the TLS-1.3-record protocol
 %% see RFC 8446 not present in earlier versions
 %%----------------------------------------------------------------------
 
 -ifndef(tls_record_1_3).
 -define(tls_record_1_3, true).
 
+%% Common to TLS-1.3 and previous TLS versions 
+%% Some definitions may not exist in TLS-1.3 this is 
+%% handled elsewhere
+-include("tls_record.hrl"). 
 %% enum {
 %%         invalid(0),
 %%         %% defined in ssl_record.hrl

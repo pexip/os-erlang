@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %% 
-%% Copyright Ericsson AB 1999-2020. All Rights Reserved.
+%% Copyright Ericsson AB 1999-2021. All Rights Reserved.
 %% 
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -28,7 +28,7 @@
 	 huge_float_field/1, system_limit/1, badarg/1,
 	 copy_writable_binary/1, kostis/1, dynamic/1, bs_add/1,
 	 otp_7422/1, zero_width/1, bad_append/1, bs_append_overflow/1,
-         reductions/1]).
+         reductions/1, fp16/1]).
 
 -include_lib("common_test/include/ct.hrl").
 
@@ -41,7 +41,7 @@ all() ->
      in_guard, mem_leak, coerce_to_float, bjorn, append_empty_is_same,
      huge_float_field, system_limit, badarg,
      copy_writable_binary, kostis, dynamic, bs_add, otp_7422, zero_width,
-     bad_append, bs_append_overflow, reductions].
+     bad_append, bs_append_overflow, reductions, fp16].
 
 init_per_suite(Config) ->
     Config.
@@ -132,6 +132,12 @@ l(I_13, I_big1) ->
      ?T(<<32978297842987249827298387697777669766334937:128/native-integer>>,
 	native_bignum()),
 
+     ?T(<<$э/native-utf16,$т/native-utf16,$о/native-utf16," спутник"/native-utf16>>,
+        native_utf16()),
+
+     ?T(<<$в/native-utf32,"ода"/native-utf32>>,
+	native_utf32()),
+
      %% Unit tests.
      ?T(<<<<5:3>>/bitstring>>, <<5:3>>),
      ?T(<<42,<<7:4>>/binary-unit:4>>, <<42,7:4>>),
@@ -150,6 +156,18 @@ native_bignum() ->
     case <<1:16/native>> of
 	<<0,1>> -> [129,205,18,177,1,213,170,101,39,231,109,128,176,11,73,217];
 	<<1,0>> -> [217,73,11,176,128,109,231,39,101,170,213,1,177,18,205,129]
+    end.
+
+native_utf16() ->
+    case <<1:16/native>> of
+	<<0,1>> -> [4,77,4,66,4,62,0,32,4,65,4,63,4,67,4,66,4,61,4,56,4,58];
+        <<1,0>> -> [77,4,66,4,62,4,32,0,65,4,63,4,67,4,66,4,61,4,56,4,58,4]
+    end.
+
+native_utf32() ->
+    case <<1:16/native>> of
+	<<0,1>> -> [0,0,4,50,0,0,4,62,0,0,4,52,0,0,4,48];
+        <<1,0>> -> [50,4,0,0,62,4,0,0,52,4,0,0,48,4,0,0]
     end.
 
 evaluate(Str, Vars) ->
@@ -173,13 +191,13 @@ eval_list([{C_bin, Str, Bytes} | Rest], Vars) ->
     end.
 
 one_test({C_bin, E_bin, Str, Bytes}) when is_list(Bytes) ->
-    io:format("  ~s, ~p~n", [Str, Bytes]),
+    io:format("  ~ts, ~p~n", [Str, Bytes]),
     Bin = list_to_binary(Bytes),
     if
 	C_bin == Bin ->
 	    ok;
 	true ->
-	    io:format("ERROR: Compiled: ~p. Expected ~p. Got ~p.~n",
+	    io:format("ERROR: Compiled: ~p.~nExpected ~p.~nGot ~p.~n",
 		      [Str, Bytes, binary_to_list(C_bin)]),
 	    ct:fail(comp)
     end,
@@ -187,12 +205,12 @@ one_test({C_bin, E_bin, Str, Bytes}) when is_list(Bytes) ->
 	E_bin == Bin ->
 	    ok;
 	true ->
-	    io:format("ERROR: Interpreted: ~p. Expected ~p. Got ~p.~n",
+	    io:format("ERROR: Interpreted: ~p.~nExpected ~p.~nGot ~p.~n",
 		      [Str, Bytes, binary_to_list(E_bin)]),
 	    ct:fail(comp)
     end;
 one_test({C_bin, E_bin, Str, Result}) ->
-    io:format("  ~s ~p~n", [Str, C_bin]),
+    io:format("  ~ts ~p~n", [Str, C_bin]),
     if
 	C_bin == E_bin ->
 	    ok;
@@ -463,17 +481,27 @@ make_bin(N, Acc) -> make_bin(N-1, <<Acc/binary,Acc/binary>>).
 
 -define(COF(Int0),
 	(fun(Int) ->
-		       true = <<Int:32/float>> =:= <<(float(Int)):32/float>>,
-		       true = <<Int:64/float>> =:= <<(float(Int)):64/float>>
-			   end)(nonliteral(Int0)),
- 	true = <<Int0:32/float>> =:= <<(float(Int0)):32/float>>,
- 	true = <<Int0:64/float>> =:= <<(float(Int0)):64/float>>).
+		 true = <<Int:16/float>> =:= <<(float(Int)):16/float>>,
+		 true = <<Int:32/float>> =:= <<(float(Int)):32/float>>,
+		 true = <<Int:64/float>> =:= <<(float(Int)):64/float>>
+	 end)(nonliteral(Int0)),
+	true = <<Int0:16/float>> =:= <<(float(Int0)):16/float>>,
+	true = <<Int0:32/float>> =:= <<(float(Int0)):32/float>>,
+	true = <<Int0:64/float>> =:= <<(float(Int0)):64/float>>).
+
+-define(COF32(Int0),
+	(fun(Int) ->
+		 true = <<Int:32/float>> =:= <<(float(Int)):32/float>>,
+		 true = <<Int:64/float>> =:= <<(float(Int)):64/float>>
+	 end)(nonliteral(Int0)),
+	true = <<Int0:32/float>> =:= <<(float(Int0)):32/float>>,
+	true = <<Int0:64/float>> =:= <<(float(Int0)):64/float>>).
 
 -define(COF64(Int0),
 	(fun(Int) ->
-		       true = <<Int:64/float>> =:= <<(float(Int)):64/float>>
-			   end)(nonliteral(Int0)),
- 	true = <<Int0:64/float>> =:= <<(float(Int0)):64/float>>).
+		 true = <<Int:64/float>> =:= <<(float(Int)):64/float>>
+	 end)(nonliteral(Int0)),
+	true = <<Int0:64/float>> =:= <<(float(Int0)):64/float>>).
 
 nonliteral(X) -> X.
     
@@ -485,8 +513,10 @@ coerce_to_float(Config) when is_list(Config) ->
     ?COF(255),
     ?COF(-255),
     ?COF(38474),
-    ?COF(387498738948729893849444444443),
-    ?COF(-37489378937773899999999999999993),
+    ?COF(65504),
+    ?COF(-65504),
+    ?COF32(387498738948729893849444444443),
+    ?COF32(-37489378937773899999999999999993),
     ?COF64(298748888888888888888888888883478264866528467367364766666666666666663),
     ?COF64(-367546729879999999999947826486652846736736476555566666663),
     ok.
@@ -582,10 +612,11 @@ system_limit_32() ->
     ok.
 
 badarg(Config) when is_list(Config) ->
-    {'EXIT',{badarg,_}} = (catch <<0:(id(1 bsl 100)),0:(id(-1))>>),
-    {'EXIT',{badarg,_}} = (catch <<0:(id(1 bsl 100)),0:(id(-(1 bsl 70)))>>),
-    {'EXIT',{badarg,_}} = (catch <<0:(id(-(1 bsl 70))),0:(id(1 bsl 100))>>),
-    {'EXIT',{badarg,_}} = (catch <<(id(<<>>))/binary,0:(id(-(1 bsl 100)))>>),
+    <<3:2>> = <<1:(id(1)),1:(id(1))>>,
+    {'EXIT',{badarg,_}} = (catch <<0:(id(1)),0:(id(-1))>>),
+    {'EXIT',{badarg,_}} = (catch <<0:(id(1)),0:(id(-(1 bsl 70)))>>),
+    {'EXIT',{badarg,_}} = (catch <<0:(id(-(1 bsl 70))),0:(id(1))>>),
+    {'EXIT',{badarg,_}} = (catch <<(id(<<>>))/binary,0:(id(-(1)))>>),
     ok.
 
 copy_writable_binary(Config) when is_list(Config) ->
@@ -743,7 +774,6 @@ bs_add(Config) when is_list(Config) ->
     %% Find smallest positive bignum.
     SmallestBig = smallest_big(),
     io:format("~p\n", [SmallestBig]),
-    Expected = SmallestBig + N,
     DoTest = fun() ->
 		     exit(Mod:bs_add(SmallestBig, -SmallestBig))
 	     end,
@@ -751,7 +781,14 @@ bs_add(Config) when is_list(Config) ->
     receive
 	{'DOWN',Mref,process,Pid,Res} -> ok
     end,
-    Expected = Res,
+
+    case erlang:system_info(wordsize) of
+        8 ->
+            %% bignum-sized binaries must system_limit on 64-bit platforms
+            {system_limit, _} = Res;
+        4 ->
+            Res = SmallestBig + N
+    end,
 
     %% Clean up.
     ok = file:delete(AsmFile),
@@ -923,3 +960,45 @@ memsize() ->
     application:ensure_all_started(os_mon),
     {Tot,_Used,_}  = memsup:get_memory_data(),
     Tot.
+
+-define(FP16(EncodedInt, Float),
+        (fun(NlInt, NlFloat) ->
+                 {0, true} = {0, <<NlInt:16>> =:= <<NlFloat:16/float>>},
+                 {1, true} = {1, <<(NlInt+16#8000):16>> =:= <<-NlFloat:16/float>>},
+                 {2, true} = {2, <<NlInt:16/little>> =:= <<NlFloat:16/float-little>>},
+                 {3, true} = {3, <<(NlInt+16#8000):16/little>> =:= <<-NlFloat:16/float-little>>},
+                 {4, true} = {4, <<NlInt:16/native>> =:= <<NlFloat:16/float-native>>},
+                 {5, true} = {5, <<(NlInt+16#8000):16/native>> =:= <<-NlFloat:16/float-native>>}
+         end)(nonliteral(EncodedInt), nonliteral(Float)),
+        {a, true} = {a, <<EncodedInt:16>> =:= <<Float:16/float>>},
+        {b, true} = {b, <<(EncodedInt+16#8000):16>> =:= <<-Float:16/float>>},
+        {c, true} = {c, <<EncodedInt:16/little>> =:= <<Float:16/float-little>>},
+        {d, true} = {d, <<(EncodedInt+16#8000):16/little>> =:= <<-Float:16/float-little>>},
+        {e, true} = {e, <<EncodedInt:16/native>> =:= <<Float:16/float-native>>},
+        {f, true} = {f, <<(EncodedInt+16#8000):16/native>> =:= <<-Float:16/float-native>>}).
+
+fp16(_Config) ->
+    %% smallest positive subnormal number
+    ?FP16(16#0001, 0.000000059604645),
+    %% largest positive subnormal number
+    ?FP16(16#03ff, 0.000060975552),
+    %% smallest positive normal number
+    ?FP16(16#0400, 0.00006103515625),
+    %% largest normal number
+    ?FP16(16#7bff, 65504),
+    ?FP16(16#7bff, 65504.0),
+    %% largest number less than one
+    ?FP16(16#3bff, 0.99951172),
+    %% zero
+    ?FP16(16#0000, 0.0),
+    %% one
+    ?FP16(16#3c00, 1),
+    ?FP16(16#3c00, 1.0),
+    %% smallest number larger than one
+    ?FP16(16#3c01, 1.00097656),
+    %% rounding of 1/3 to nearest
+    ?FP16(16#3555, 0.33325195),
+    %% others
+    ?FP16(16#4000, 2),
+    ?FP16(16#4000, 2.0),
+    ok.

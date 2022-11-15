@@ -1,7 +1,7 @@
 /*
  * %CopyrightBegin%
  *
- * Copyright Ericsson AB 2010-2020. All Rights Reserved.
+ * Copyright Ericsson AB 2010-2022. All Rights Reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -23,6 +23,7 @@
 
 #define OPENSSL_THREAD_DEFINES
 #include <openssl/opensslconf.h>
+#include "openssl_version.h"
 
 #include <openssl/crypto.h>
 #include <openssl/des.h>
@@ -50,15 +51,10 @@
 #include <openssl/hmac.h>
 #include <openssl/err.h>
 
-/* Helper macro to construct a OPENSSL_VERSION_NUMBER.
- * See openssl/opensslv.h
- */
-#define PACKED_OPENSSL_VERSION(MAJ, MIN, FIX, P)	\
-    ((((((((MAJ << 8) | MIN) << 8 ) | FIX) << 8) | (P-'a'+1)) << 4) | 0xf)
-
-#define PACKED_OPENSSL_VERSION_PLAIN(MAJ, MIN, FIX) \
-    PACKED_OPENSSL_VERSION(MAJ,MIN,FIX,('a'-1))
-
+#if OPENSSL_VERSION_NUMBER >= PACKED_OPENSSL_VERSION_PLAIN(3,0,0)
+# define HAS_3_0_API
+# include <openssl/provider.h>
+#endif
 
 /* LibreSSL was cloned from OpenSSL 1.0.1g and claims to be API and BPI compatible
  * with 1.0.1.
@@ -66,7 +62,7 @@
  * LibreSSL has the same names on include files and symbols as OpenSSL, but defines
  * the OPENSSL_VERSION_NUMBER to be >= 2.0.0
  *
- * Therefor works tests like this as intendend:
+ * Therefore works tests like this as intendend:
  *     OPENSSL_VERSION_NUMBER >= PACKED_OPENSSL_VERSION_PLAIN(1,0,0)
  * (The test is for example "2.4.2" >= "1.0.0" although the test
  *  with the cloned OpenSSL test would be "1.0.1" >= "1.0.0")
@@ -78,21 +74,9 @@
  *
  */
 
-#ifdef LIBRESSL_VERSION_NUMBER
-/* A macro to test on in this file */
-#define HAS_LIBRESSL
-#endif
-
 #ifdef HAS_LIBRESSL
 /* LibreSSL dislikes FIPS */
-# ifdef FIPS_SUPPORT
 #  undef FIPS_SUPPORT
-# endif
-
-/* LibreSSL has never supported the custom mem functions */
-#ifndef HAS_LIBRESSL
-#  define HAS_CRYPTO_MEM_FUNCTIONS
-#endif
 
 # if LIBRESSL_VERSION_NUMBER < PACKED_OPENSSL_VERSION_PLAIN(2,7,0)
 /* LibreSSL wants the 1.0.1 API */
@@ -101,10 +85,29 @@
 #endif
 
 
+/* LibreSSL has never supported the custom mem functions */
+#ifndef HAS_LIBRESSL
+/* Since f46401d46f9ed331ff2a09bb6a99376707083c96 this macro can NEVER have been enabled
+ * because its inside an #ifdef HAS_LIBRESSL
+ *
+ * If I enable HAS_CRYPTO_MEM_FUNCTIONS, there are two lab machines that fails:
+ *    SunOS mallor 5.11 illumos-2d990ab13b i86pc i386 i86pc  OpenSSL 1.0.2u  20 Dec 2019
+ *    SunOS fingon 5.11 11.4.0.15.0 i86pc i386 i86pc         OpenSSL 1.0.2o  27 Mar 2018
+ *
+ * Therefore I don't want to enable this until further investigated
+# define HAS_CRYPTO_MEM_FUNCTIONS
+ */
+#endif
+
 #if OPENSSL_VERSION_NUMBER < PACKED_OPENSSL_VERSION_PLAIN(1,1,0)
 # define NEED_EVP_COMPATIBILITY_FUNCTIONS
 #endif
 
+#ifndef HAS_LIBRESSL
+# if OPENSSL_VERSION_NUMBER >= PACKED_OPENSSL_VERSION_PLAIN(1,1,0)
+#  define HAS_BN_bn2binpad
+# endif
+#endif
 
 #ifndef HAS_LIBRESSL
 # if OPENSSL_VERSION_NUMBER >= PACKED_OPENSSL_VERSION_PLAIN(1,0,0)
@@ -119,8 +122,15 @@
 # endif
 #endif
 
-#if defined(HAS_EVP_PKEY_CTX) \
-    && OPENSSL_VERSION_NUMBER < PACKED_OPENSSL_VERSION_PLAIN(1,0,2)
+#ifdef HAS_LIBRESSL
+# if LIBRESSL_VERSION_NUMBER >= 0x3050000fL
+#  define HAS_EVP_PKEY_CTX
+#  define HAVE_EVP_CIPHER_CTX_COPY
+# endif
+#endif
+
+#if defined(HAS_EVP_PKEY_CTX)                                           \
+    && OPENSSL_VERSION_NUMBER < PACKED_OPENSSL_VERSION_PLAIN(1,1,0)
      /* EVP is slow on antique crypto libs.
       * DISABLE_EVP_* is 0 or 1 from the configure script
       */
@@ -129,6 +139,13 @@
 # undef  DISABLE_EVP_HMAC
 # define DISABLE_EVP_HMAC 1
 #endif
+
+#ifdef HAS_3_0_API
+/* Do not use the deprecated interface */
+# undef  DISABLE_EVP_HMAC
+# define DISABLE_EVP_HMAC 0
+#endif
+
 
 #if OPENSSL_VERSION_NUMBER >= PACKED_OPENSSL_VERSION_PLAIN(1,0,0)
 #include <openssl/modes.h>
@@ -153,9 +170,6 @@
 #if OPENSSL_VERSION_NUMBER >= PACKED_OPENSSL_VERSION_PLAIN(0,9,8)	\
     && !defined(OPENSSL_NO_SHA512) && defined(NID_sha512)
 # define HAVE_SHA512
-#endif
-#if OPENSSL_VERSION_NUMBER >= PACKED_OPENSSL_VERSION(0,9,7,'e')
-# define HAVE_DES_ede3_cfb_encrypt
 #endif
 
 // SHA3:
@@ -190,6 +204,14 @@
 # define HAVE_DES
 #endif
 
+#if OPENSSL_VERSION_NUMBER >= PACKED_OPENSSL_VERSION(0,9,7,'e')
+# define HAVE_DES_ede3_cfb
+#endif
+
+#if OPENSSL_VERSION_NUMBER >= PACKED_OPENSSL_VERSION(0,9,7,'e')
+# define HAVE_DES_ede3_cbc
+#endif
+
 #ifndef OPENSSL_NO_DH
 # define HAVE_DH
 #endif
@@ -214,7 +236,9 @@
 # define HAVE_RC4
 #endif
 
-#ifndef OPENSSL_NO_RMD160
+#if !defined(OPENSSL_NO_RMD160) && \
+    !defined(OPENSSL_NO_RIPEMD160) && \
+    !defined(OPENSSL_NO_RIPEMD)
 /* Note RMD160 vs RIPEMD160 */
 # define HAVE_RIPEMD160
 #endif
@@ -237,10 +261,6 @@
 # if OPENSSL_VERSION_NUMBER >= (PACKED_OPENSSL_VERSION_PLAIN(1,1,1))
 #   define HAVE_EDDSA
 # endif
-#endif
-
-#if OPENSSL_VERSION_NUMBER >= PACKED_OPENSSL_VERSION(0,9,8,'c')
-# define HAVE_AES_IGE
 #endif
 
 #if OPENSSL_VERSION_NUMBER >= PACKED_OPENSSL_VERSION_PLAIN(1,0,1)
@@ -301,6 +321,7 @@
 # ifdef RSA_PKCS1_PSS_PADDING
 #  define HAVE_RSA_PKCS1_PSS_PADDING
 # endif
+# define HAS_PKCS5_PBKDF2_HMAC
 #endif
 
 #if OPENSSL_VERSION_NUMBER >= PACKED_OPENSSL_VERSION(0,9,8,'h') \
@@ -308,7 +329,9 @@
 /* If OPENSSL_NO_EC is set, there will be an error in ec.h included from engine.h
    So if EC is disabled, you can't use Engine either....
 */
-#if !defined(OPENSSL_NO_ENGINE)
+#if !defined(OPENSSL_NO_ENGINE) && \
+    !defined(HAS_3_0_API)
+/* Disable FIPS for 3.0 temporaryly until the support is added (might core dump) */
 # define HAS_ENGINE_SUPPORT
 #endif
 #endif
@@ -387,6 +410,10 @@
 /* Current value is: erlang:system_info(context_reductions) * 10 */
 #define MAX_BYTES_TO_NIF 20000
 
+#ifdef HAS_3_0_API
+# define MAX_NUM_PROVIDERS 10
+#endif
+
 #define CONSUME_REDS(NifEnv, Ibin)			\
 do {                                                    \
     size_t _cost = (Ibin).size;                         \
@@ -417,11 +444,44 @@ do {                                                    \
 #  define PRINTF_ERR2(FMT,A1,A2)
 #endif
 
-#ifdef FIPS_SUPPORT
-/* In FIPS mode non-FIPS algorithms are disabled and return badarg. */
-#define CHECK_NO_FIPS_MODE() { if (FIPS_mode()) return atom_notsup; }
+#if defined(FIPS_SUPPORT) \
+    && OPENSSL_VERSION_NUMBER  < PACKED_OPENSSL_VERSION_PLAIN(1,0,1)
+/* FIPS is not supported for versions < 1.0.1.  If FIPS_SUPPORT is enabled
+   there are some warnings/errors for thoose
+*/
+# undef FIPS_SUPPORT
+#endif
+
+/* Disable FIPS for 3.0 temporaryly until the support is added */
+#if defined(FIPS_SUPPORT) &&                                            \
+    defined(HAS_3_0_API)
+# undef FIPS_SUPPORT
+#endif
+
+#if defined(FIPS_SUPPORT) && \
+    defined(HAS_3_0_API)
+# define FIPS_mode() EVP_default_properties_is_fips_enabled(NULL)
+# define FIPS_mode_set(enable) EVP_default_properties_enable_fips(NULL, enable)
+#endif
+
+
+#if defined(FIPS_SUPPORT)
+#  define FIPS_MODE() (FIPS_mode() ? 1 : 0)
 #else
-#define CHECK_NO_FIPS_MODE()
+# define FIPS_MODE() 0
+#endif
+
+#ifdef HAS_3_0_API
+/* Set CRYPTO_DEVELOP_ERRORS to make error messages more verbose,
+   that is, include the error msg from cryptolib.
+   Example:
+      {error,{"api_ng.c",750},"Can't copy ctx_res"}
+   becomes
+      {error,{"api_ng.c",750},"Can't copy ctx_res: error:030000BE:digital envelope routines::not able to copy ctx"}
+   which enables the developer to locate more in detail where in the cryptolib code a test failed.
+*/
+
+//# define CRYPTO_DEVELOP_ERRORS
 #endif
 
 #endif /* E_OPENSSL_CONFIG_H__ */

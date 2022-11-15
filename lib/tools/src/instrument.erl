@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %% 
-%% Copyright Ericsson AB 1998-2018. All Rights Reserved.
+%% Copyright Ericsson AB 1998-2021. All Rights Reserved.
 %% 
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -46,7 +46,7 @@ allocations() ->
 allocations(Options) ->
     Ref = make_ref(),
 
-    Defaults = #{ scheduler_ids => lists:seq(0, erlang:system_info(schedulers)),
+    Defaults = #{ scheduler_ids => lists:seq(0, erts_internal:no_aux_work_threads()-1),
                   allocator_types => erlang:system_info(alloc_util_allocators),
                   histogram_start => 128,
                   histogram_width => 18 },
@@ -118,7 +118,7 @@ carriers() ->
 carriers(Options) ->
     Ref = make_ref(),
 
-    Defaults = #{ scheduler_ids => lists:seq(0, erlang:system_info(schedulers)),
+    Defaults = #{ scheduler_ids => lists:seq(0, erts_internal:no_aux_work_threads()-1),
                   allocator_types => erlang:system_info(alloc_util_allocators),
                   histogram_start => 512,
                   histogram_width => 14 },

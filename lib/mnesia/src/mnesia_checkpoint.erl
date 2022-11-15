@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %% 
-%% Copyright Ericsson AB 1996-2018
+%% Copyright Ericsson AB 1996-2021
 %% 
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -579,7 +579,7 @@ call(Name, Msg) ->
 		{'DOWN', Monitor, _, Pid, Reason} ->
 		    {error, {"Got exit", [Name, Reason]}};
 		{Name, Self, Reply} ->
-		    erlang:demonitor(Monitor),
+                    erlang:demonitor(Monitor, [flush]),
 		    Reply
 	    end;
 	Error ->
@@ -817,7 +817,6 @@ retainer_loop(Cp = #checkpoint_args{is_activated=false, name=Name}) ->
 	{From, deactivate} ->
 	    do_stop(Cp),
 	    reply(From, Name, deactivated),
-	    unlink(From),
 	    exit(shutdown);
 
 	{From, get_checkpoint} ->
@@ -920,7 +919,6 @@ retainer_loop(Cp = #checkpoint_args{name=Name}) ->
 	{From, deactivate} ->
 	    do_stop(Cp),
 	    reply(From, Name, deactivated),
-	    unlink(From),
 	    exit(shutdown);
 
 	{_From, {mnesia_down, Node}} ->

@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 1998-2016. All Rights Reserved.
+%% Copyright Ericsson AB 1998-2021. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -43,19 +43,22 @@ start_link() ->
 %%%  Supervisor callback
 %%%=========================================================================
 init([]) ->    
-    TLSSup = tls_sup_child_spec(),
-    {ok, {{one_for_one, 10, 3600}, [TLSSup]}}.
+    SupFlags = #{strategy  => one_for_one, 
+                 intensity =>   10,
+                 period    => 3600
+                },
+    ChildSpecs = [tls_sup_child_spec()], 
+    {ok, {SupFlags, ChildSpecs}}.
 
-    
 %%--------------------------------------------------------------------
 %%% Internal functions
 %%--------------------------------------------------------------------
 
 tls_sup_child_spec() ->
-    Name = dist_tls_sup,  
-    StartFunc = {tls_dist_sup, start_link, []},
-    Restart = permanent, 
-    Shutdown = 4000,
-    Modules = [tls_dist_sup],
-    Type = supervisor,
-    {Name, StartFunc, Restart, Shutdown, Type, Modules}.
+    #{id       => tls_dist_sup,
+      start    => {tls_dist_sup, start_link, []},
+      restart  => permanent, 
+      shutdown => 4000,
+      modules  => [tls_dist_sup],
+      type     => supervisor
+     }.

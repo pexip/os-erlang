@@ -2,7 +2,7 @@
 /*
  * %CopyrightBegin%
  *
- * Copyright Ericsson AB 1998-2020. All Rights Reserved.
+ * Copyright Ericsson AB 1998-2022. All Rights Reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -25,6 +25,12 @@
 #include "epmd.h"     /* Renamed from 'epmd_r4.h' */
 #include "epmd_int.h"
 #include "erl_printf.h" /* erts_snprintf */
+
+#ifdef __clang_analyzer__
+   /* CodeChecker does not seem to understand inline asm in FD_ZERO */
+#  undef FD_ZERO
+#  define FD_ZERO(FD_SET_PTR) memset(FD_SET_PTR, 0, sizeof(fd_set))
+#endif
 
 #ifndef INADDR_NONE
 #  define INADDR_NONE 0xffffffff
@@ -206,7 +212,7 @@ static const char *epmd_ntop(struct sockaddr_storage *sa, char *buff, size_t len
     /* Save errno so that it is not changed by inet_ntop */
     int myerrno = errno;
     const char *res;
-#if !defined(EPMD6)
+#if defined(EPMD6)
     if (sa->ss_family == AF_INET6) {
         struct sockaddr_in6 *addr = (struct sockaddr_in6 *)sa;
         res = inet_ntop(
@@ -239,6 +245,7 @@ void run(EpmdVars *g)
   char socknamebuf[INET_ADDRSTRLEN];
 #endif
   int num_sockets = 0;
+  int nonfatal_sockets = 0;
   int i;
   int opt;
   unsigned short sport = g->port;
@@ -295,6 +302,14 @@ void run(EpmdVars *g)
       SET_ADDR6(iserv_addr[num_sockets],in6addr_loopback,sport);
       num_sockets++;
 #endif
+
+      /* IPv4 and/or IPv6 loopback may not be present, for example if
+       * the protocol stack is explicitly disabled in the kernel.  If
+       * any sockets to this point fail, log the error but do not exit
+       * with failure.  If any socket after this (explicitly
+       * configured via addresses) fails, then consider the error
+       * fatal. */
+      nonfatal_sockets = num_sockets;
 
 	  if ((tmp = strdup(g->addresses)) == NULL)
 	{
@@ -411,7 +426,6 @@ void run(EpmdVars *g)
 	          epmd_cleanup_exit(g,1);
 	  }
 	}
-      g->listenfd[bound++] = listensock[i];
 
 #if HAVE_DECL_IPV6_V6ONLY
       opt = 1;
@@ -452,7 +466,7 @@ void run(EpmdVars *g)
       if (fcntl(listensock[i], F_SETFL, opt | O_NONBLOCK) == -1)
 #endif /* __WIN32__ */
 	dbg_perror(g,"failed to set non-blocking mode of listening socket %d on ipaddr %s",
-		   listensock[i], epmd_ntop(&iserv_addr[num_sockets],
+		   listensock[i], epmd_ntop(&iserv_addr[i],
                                             socknamebuf, sizeof(socknamebuf)));
 
       if (bind(listensock[i], sa, salen) < 0)
@@ -460,25 +474,33 @@ void run(EpmdVars *g)
 	  if (errno == EADDRINUSE)
 	    {
 	      dbg_tty_printf(g,1,"there is already a epmd running at port %d on ipaddr %s",
-			     g->port, epmd_ntop(&iserv_addr[num_sockets],
+			     g->port, epmd_ntop(&iserv_addr[i],
                                                 socknamebuf, sizeof(socknamebuf)));
 	      epmd_cleanup_exit(g,0);
 	    }
 	  else
 	    {
               dbg_perror(g,"failed to bind on ipaddr %s",
-                         epmd_ntop(&iserv_addr[num_sockets],
+                         epmd_ntop(&iserv_addr[i],
                                    socknamebuf, sizeof(socknamebuf)));
-              epmd_cleanup_exit(g,1);
+              if (i >= nonfatal_sockets)
+                  epmd_cleanup_exit(g,1);
+              else
+              {
+                  close(listensock[i]);
+                  continue;
+              }
+
 	    }
 	}
 
       if(listen(listensock[i], SOMAXCONN) < 0) {
           dbg_perror(g,"failed to listen on ipaddr %s",
-                     epmd_ntop(&iserv_addr[num_sockets],
+                     epmd_ntop(&iserv_addr[i],
                                socknamebuf, sizeof(socknamebuf)));
           epmd_cleanup_exit(g,1);
       }
+      g->listenfd[bound++] = listensock[i];
       select_fd_set(g, listensock[i]);
     }
   if (bound == 0) {
@@ -1047,9 +1069,11 @@ static void do_request(g, fd, s, buf, bsize)
 	      }
 	    dbg_tty_printf(g,1,"** sent STOP_RESP NOEXIST");
 	  }
-
-	conn_close_fd(g,node_fd);
-	dbg_tty_printf(g,1,"epmd connection stopped");
+        else
+          {
+            conn_close_fd(g,node_fd);
+            dbg_tty_printf(g,1,"epmd connection stopped");
+          }
 
 	if (!reply(g, fd,"STOPPED",7))
 	  {
@@ -1162,6 +1186,10 @@ static int conn_local_peer_check(EpmdVars *g, int fd)
 #endif
 
   st = sizeof(si);
+#ifdef __clang_analyzer__
+  /* CodeChecker does not seem to understand getpeername writes to 'si' */
+  memset(&si, 0, sizeof(si));
+#endif
 
   /* Determine if connection is from localhost */
   if (getpeername(fd,(struct sockaddr*) &si,&st) ||
@@ -1434,6 +1462,7 @@ static Node *node_reg2(EpmdVars *g,
 	  (g->debug && (g->nodes.unreg_count > DEBUG_MAX_UNREG_COUNT)))
 	{
 	  /* MAX_UNREG_COUNT > 1 so no need to check unreg_tail */
+          ASSERT(g->nodes.unreg != NULL);
 	  node = g->nodes.unreg;	/* Take first == oldest */
 	  g->nodes.unreg = node->next; /* Link out */
 	  g->nodes.unreg_count--;
