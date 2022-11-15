@@ -1,6 +1,6 @@
 --- a/erts/preloaded/src/init.erl
 +++ b/erts/preloaded/src/init.erl
-@@ -367,6 +367,7 @@
+@@ -403,6 +403,7 @@
  	    terminate(Pid,Kernel,Reason), %% If Pid is a Kernel pid, halt()!
  	    boot_loop(BootPid,State);
  	{stop,Reason} ->
@@ -8,7 +8,7 @@
  	    stop(Reason,State);
  	{From,fetch_loaded} ->   %% Fetch and reset initially loaded modules.
  	    From ! {init,State#state.loaded},
-@@ -439,6 +440,7 @@
+@@ -475,6 +476,7 @@
  	    terminate(Pid,Kernel,Reason), %% If Pid is a Kernel pid, halt()!
  	    loop(State);
  	{stop,Reason} ->
@@ -16,7 +16,7 @@
  	    stop(Reason,State);
  	{From,fetch_loaded} ->           %% The Loaded info is cleared in
  	    Loaded = State#state.loaded, %% boot_loop but is handled here 
-@@ -549,10 +551,13 @@
+@@ -610,11 +612,14 @@
  %%% -------------------------------------------------
  
  stop(Reason,State) ->
@@ -25,12 +25,13 @@
      {_,Progress} = State#state.status,
      State1 = State#state{status = {stopping, Progress}},
 +    debug(true, {stopping, clear_system, State}),
-     clear_system(BootPid,State1),
+     %% There is no need to unload code if the system is shutting down
+     clear_system(Reason=/=stop,BootPid,State1),
 +    debug(true, {stopping, do_stop, State}),
      do_stop(Reason,State1).
  
  do_stop({restart,Mode},#state{start=Start, flags=Flags0, args=Args}) ->
-@@ -563,7 +568,9 @@
+@@ -625,7 +630,9 @@
  do_stop(reboot,_) ->
      halt();
  do_stop(stop,State) ->
@@ -40,7 +41,7 @@
      halt();
  do_stop({stop,Status},State) ->
      stop_heart(State),
-@@ -633,6 +640,7 @@
+@@ -715,6 +722,7 @@
  %% {'EXIT',Parent,Reason} and terminate upon it!
  %%
  shutdown_kernel_pid(Pid, BootPid, Timer, State) ->
