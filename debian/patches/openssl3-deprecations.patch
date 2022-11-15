@@ -1,0 +1,75 @@
+diff --git a/lib/crypto/c_src/ec.c b/lib/crypto/c_src/ec.c
+index 124582c4..0418b3bf 100644
+--- a/lib/crypto/c_src/ec.c
++++ b/lib/crypto/c_src/ec.c
+@@ -400,20 +400,29 @@ ERL_NIF_TERM ec_generate_key_nif(ErlNifEnv* env, int argc, const ERL_NIF_TERM ar
+ 
+ int mk_pub_key_binary(ErlNifEnv* env, EVP_PKEY **peer_pkey, ErlNifBinary *pubkey_bin, ERL_NIF_TERM *ret)
+ {
+-    EC_KEY *ec_key = NULL;
+     EC_POINT *public_key = NULL;
+     EC_GROUP *group = NULL;
+     BIGNUM *priv_bn = NULL;
+-    
++    char *gname = NULL;
++    size_t gname_len = 0;
++    int nid;
++
+     *ret = atom_undefined;
+ 
+-    /* Use the deprecated interface to get the curve and
+-       private key in pre 3.0 form: */
+-    if ((ec_key = EVP_PKEY_get1_EC_KEY(*peer_pkey)) == NULL)
+-        assign_goto(*ret, err, EXCP_ERROR(env, "Couldn't get EC key"));
++    /* Get the curve and private key */
++    (void) EVP_PKEY_get_group_name(peer_pkey, NULL, 0, &gname_len);
++
++    if (!OPENSSL_malloc(gname_len))
++        assign_goto(ret, err, EXCP_ERROR(env, "Can't allocate group name string"));
++
++    if (EVP_PKEY_get_group_name(peer_pkey, gname, gname_len, NULL) != 1)
++        assign_goto(ret, err, EXCP_ERROR(env, "Couldn't get group name string"));
++
++    if ((nid = OBJ_ln2nid(gname)) == NID_undef)
++        assign_goto(ret, err, EXCP_ERROR(env, "Couldn't get group nid"));
+ 
+-    if ((group = EC_GROUP_dup(EC_KEY_get0_group(ec_key))) == NULL)
+-        assign_goto(*ret, err, EXCP_ERROR(env, "Couldn't get EC_GROUP"));
++    if ((group = EC_GROUP_new_by_curve_name(nid)) == NULL)
++        assign_goto(ret, err, EXCP_ERROR(env, "Couldn't create group"));
+ 
+     if ((public_key = EC_POINT_new(group)) == NULL)
+         assign_goto(*ret, err, EXCP_ERROR(env, "Couldn't create POINT"));
+@@ -431,17 +440,9 @@ int mk_pub_key_binary(ErlNifEnv* env, EVP_PKEY **peer_pkey, ErlNifBinary *pubkey
+     if (!EC_POINT_mul(group, public_key, priv_bn, NULL, NULL, NULL))
+         assign_goto(*ret, err, EXCP_ERROR(env, "Couldn't multiply POINT"));
+ 
+-    if (!EC_KEY_set_public_key(ec_key, public_key))
+-        assign_goto(*ret, err, EXCP_ERROR(env, "Couldn't set EC_KEY"));
+-
+-    if (!EVP_PKEY_assign_EC_KEY(*peer_pkey, ec_key))
+-        assign_goto(*ret, err, EXCP_ERROR(env, "Couldn't assign EC_KEY to PKEY"));
+-            
+-    /* And now get the binary representation (by some reason we can't read it from
+-       peer_pubkey in the calling function with 3.0-functions.)
+-    */
++    /* And now get the binary representation */
+     {
+-        point_conversion_form_t form = EC_KEY_get_conv_form(ec_key);
++        point_conversion_form_t form = EVP_PKEY_get_ec_point_conv_form(*peer_pkey);
+         size_t dlen = EC_POINT_point2oct(group, public_key, form, NULL, 0, NULL);
+ 
+         if (!enif_alloc_binary(dlen, pubkey_bin) ||
+@@ -450,7 +451,12 @@ int mk_pub_key_binary(ErlNifEnv* env, EVP_PKEY **peer_pkey, ErlNifBinary *pubkey
+             assign_goto(*ret, err, EXCP_ERROR(env, "Couldn't get public key"));
+     }
+ 
++    /* Fill in the peer's public key */
++    if (EVP_PKEY_set1_encoded_public_key(*peer_pkey, pubkey_bin->data, pubkey_bin->size) != 1)
++        assign_goto(*ret, err, EXCP_ERROR(env, "Couldn't set public key"));
++
+  err:
++    if (gname) OPENSSL_free(gname);
+     if (public_key) EC_POINT_free(public_key);
+     if (group) EC_GROUP_free(group);
+     if (priv_bn) BN_free(priv_bn);

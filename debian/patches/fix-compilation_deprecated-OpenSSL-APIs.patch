@@ -1,0 +1,78 @@
+From 21e5ccf24d57b91ced276d31b332a443821bacc1 Mon Sep 17 00:00:00 2001
+From: Rosen Penev <rosenp@gmail.com>
+Date: Sat, 23 Jul 2022 23:08:00 -0700
+Subject: [PATCH] otp: fix compilation - deprecated OpenSSL APIs
+
+Signed-off-by: Rosen Penev <rosenp@gmail.com>
+---
+ lib/crypto/c_src/engine.c          | 4 ++++
+ lib/crypto/c_src/info.c            | 9 +++++++--
+ lib/crypto/c_src/otp_test_engine.c | 2 ++
+ 3 files changed, 13 insertions(+), 2 deletions(-)
+
+diff --git a/lib/crypto/c_src/engine.c b/lib/crypto/c_src/engine.c
+index 1244a277a983..4cbfc74c4e71 100644
+--- a/lib/crypto/c_src/engine.c
++++ b/lib/crypto/c_src/engine.c
+@@ -513,7 +513,11 @@ ERL_NIF_TERM engine_load_dynamic_nif(ErlNifEnv* env, int argc, const ERL_NIF_TER
+ #ifdef HAS_ENGINE_SUPPORT
+     ASSERT(argc == 0);
+ 
++# if OPENSSL_VERSION_NUMBER < PACKED_OPENSSL_VERSION_PLAIN(1,1,0)
+     ENGINE_load_dynamic();
++# else
++    OPENSSL_init_crypto(OPENSSL_INIT_ENGINE_DYNAMIC, NULL);
++# endif
+     return atom_ok;
+ #else
+     return atom_notsup;
+diff --git a/lib/crypto/c_src/info.c b/lib/crypto/c_src/info.c
+index 3021c3d71b0b..b05dbcca0c34 100644
+--- a/lib/crypto/c_src/info.c
++++ b/lib/crypto/c_src/info.c
+@@ -46,6 +46,11 @@
+ #endif
+ 
+ 
++#if OPENSSL_VERSION_NUMBER < PACKED_OPENSSL_VERSION_PLAIN(1,1,0)
++#define OPENSSL_VERSION	SSLEAY_VERSION
++#define OpenSSL_version	SSLeay_version
++#endif
++
+ #ifdef HAVE_DYNAMIC_CRYPTO_LIB
+ 
+ char *crypto_callback_name = CB_NAME;
+@@ -111,7 +116,7 @@ ERL_NIF_TERM info_nif(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
+ 
+     enif_make_map_put(env, ret,
+                       enif_make_atom(env, "cryptolib_version_linked"),
+-                      enif_make_string(env, SSLeay_version(SSLEAY_VERSION), ERL_NIF_LATIN1),
++                      enif_make_string(env, OpenSSL_version(OPENSSL_VERSION), ERL_NIF_LATIN1),
+                       &ret);
+ 
+ #ifdef HAS_3_0_API
+@@ -140,7 +145,7 @@ ERL_NIF_TERM info_lib(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
+     ASSERT(argc == 0);
+ 
+     name_sz = strlen(libname);
+-    ver = SSLeay_version(SSLEAY_VERSION);
++    ver = OpenSSL_version(OPENSSL_VERSION);
+     ver_sz = strlen(ver);
+     ver_num = OPENSSL_VERSION_NUMBER;
+ 
+diff --git a/lib/crypto/c_src/otp_test_engine.c b/lib/crypto/c_src/otp_test_engine.c
+index 6f030c6f9331..b386dfa4abfe 100644
+--- a/lib/crypto/c_src/otp_test_engine.c
++++ b/lib/crypto/c_src/otp_test_engine.c
+@@ -101,9 +101,11 @@ static int test_init(ENGINE *e) {
+         goto err;
+ #endif /* if defined(FAKE_RSA_IMPL) */
+ 
++#if OPENSSL_VERSION_NUMBER < PACKED_OPENSSL_VERSION_PLAIN(1,1,0)
+     /* Load all digest and cipher algorithms. Needed for password protected private keys */
+     OpenSSL_add_all_ciphers();
+     OpenSSL_add_all_digests();
++#endif
+ 
+     return 111;
+ 
