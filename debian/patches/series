@@ -8,3 +8,4 @@ javascript.patch
 x32.patch
 atomsfontlock.patch
 init.patch
+crypto512.patch
