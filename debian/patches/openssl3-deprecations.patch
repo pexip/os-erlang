@@ -24,10 +24,10 @@ index 124582c4..0418b3bf 100644
 +    /* Get the curve and private key */
 +    (void) EVP_PKEY_get_group_name(peer_pkey, NULL, 0, &gname_len);
 +
-+    if (!OPENSSL_malloc(gname_len))
++    if (!OPENSSL_malloc(gname_len + 1))
 +        assign_goto(ret, err, EXCP_ERROR(env, "Can't allocate group name string"));
 +
-+    if (EVP_PKEY_get_group_name(peer_pkey, gname, gname_len, NULL) != 1)
++    if (EVP_PKEY_get_group_name(peer_pkey, gname, gname_len + 1, NULL) != 1)
 +        assign_goto(ret, err, EXCP_ERROR(env, "Couldn't get group name string"));
 +
 +    if ((nid = OBJ_ln2nid(gname)) == NID_undef)
