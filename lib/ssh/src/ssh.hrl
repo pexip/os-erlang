@@ -322,6 +322,7 @@
       | tcpip_tunnel_in_daemon_option()
       | authentication_daemon_options()
       | diffie_hellman_group_exchange_daemon_option()
+      | max_initial_idle_time_daemon_option()
       | negotiation_timeout_daemon_option()
       | hello_timeout_daemon_option()
       | hardening_daemon_options()
@@ -362,7 +363,9 @@
       | {user_passwords, [{UserName::string(),Pwd::string()}]}
       | {pk_check_user, boolean()}  
       | {password, string()}
-      | {pwdfun, pwdfun_2() | pwdfun_4()} .
+      | {pwdfun, pwdfun_2() | pwdfun_4()}
+      | {no_auth_needed, boolean()}
+        .
 
 -type prompt_texts() ::
         kb_int_tuple()
@@ -390,6 +393,7 @@
 -type explicit_group_file() :: {file,string()} .
 -type ssh_moduli_file() :: {ssh_moduli_file,string()}.
 
+-type max_initial_idle_time_daemon_option() :: {max_initial_idle_time, timeout()} .
 -type negotiation_timeout_daemon_option() :: {negotiation_timeout, timeout()} .
 -type hello_timeout_daemon_option() :: {hello_timeout, timeout()} .
 

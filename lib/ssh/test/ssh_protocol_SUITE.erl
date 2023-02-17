@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2008-2021. All Rights Reserved.
+%% Copyright Ericsson AB 2008-2022. All Rights Reserved.
 %%
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -717,7 +717,7 @@ client_info_line(Config) ->
 %%% The server does not send the extension because
 %%% the client does not tell the server to send it
 no_ext_info_s1(Config) ->
-    %% Start the dameon
+    %% Start the daemon
     Server = {Pid,_,_} = ssh_test_lib:daemon([{send_ext_info,true},
                                               {system_dir, system_dir(Config)}]),
     {ok,AfterKexState} = connect_and_kex([{server,Server}|Config]),
@@ -732,7 +732,7 @@ no_ext_info_s1(Config) ->
 %%% The server does not send the extension because
 %%% the server is not configured to send it
 no_ext_info_s2(Config) ->    
-    %% Start the dameon
+    %% Start the daemon
     Server = {Pid,_,_} = ssh_test_lib:daemon([{send_ext_info,false},
                                               {system_dir, system_dir(Config)}]),
     {ok,AfterKexState} = connect_and_kex([{extra_options,[{recv_ext_info,true}]},
@@ -748,7 +748,7 @@ no_ext_info_s2(Config) ->
 %%%--------------------------------------------------------------------
 %%% The server sends the extension
 ext_info_s(Config) ->    
-    %% Start the dameon
+    %% Start the daemon
     Server = {Pid,_,_} = ssh_test_lib:daemon([{send_ext_info,true},
                                               {system_dir, system_dir(Config)}]),
     {ok,AfterKexState} = connect_and_kex([{extra_options,[{recv_ext_info,true}]},
@@ -903,8 +903,6 @@ modify_combo(Config) ->
 
 %%%----------------------------------------------------------------
 %%%
-client_close_after_hello() -> [{timetrap,{seconds,80}}].
-
 client_close_after_hello(Config0) ->
     MaxSessions = 20,
     SleepSec = 15,
@@ -913,7 +911,7 @@ client_close_after_hello(Config0) ->
                                         {negotiation_timeout,SleepSec*1000}
                                        ]),
 
-    {Parents0, Conns0, []} = find_handshake_parent(server_port(Config)),
+    {_Parents0, Conns0, []} = find_handshake_parent(server_port(Config)),
 
     Cs =
         [ssh_trpt_test_lib:exec(
@@ -984,7 +982,7 @@ chk_pref_algs(Config,
               ExpectedKex,
               ExpectedCiphers,
               ServerPrefOpts) ->
-    %% Start the dameon
+    %% Start the daemon
     case ssh_test_lib:daemon(
                       [{send_ext_info,false},
                        {recv_ext_info,false},
@@ -1103,7 +1101,7 @@ std_connect({Host,Port}, Config, Opts) ->
 std_connect(Host, Port, Config, Opts) ->
     {User,Pwd} = server_user_password(Config),
     ssh:connect(Host, Port, 
-		%% Prefere User's Opts to the default opts
+		%% Prefer User's Opts to the default opts
 		[O || O = {Tag,_} <- [{user,User},{password,Pwd},
 				      {silently_accept_hosts, true},
                                       {save_accepted_host, false},

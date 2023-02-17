@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 1996-2018. All Rights Reserved.
+%% Copyright Ericsson AB 1996-2022. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -61,7 +61,7 @@ all() ->
     Bugs = [otp_5910],
     Always = [api, config, alarm, port, posix_only, unavailable,
               parse_df_output_posix, parse_df_output_susv3] ++ Bugs,
-    case test_server:os_type() of
+    case os:type() of
 	{unix, _OSname} -> Always;
 	{win32, _OSname} -> Always;
 	_OS -> [unavailable]
@@ -81,6 +81,15 @@ api(Config) when is_list(Config) ->
     1200000 = disksup:get_check_interval(),
     {'EXIT',{badarg,_}} = (catch disksup:set_check_interval(0.5)),
     1200000 = disksup:get_check_interval(),
+    ok = disksup:set_check_interval(30),
+
+    %% set_check_interval({TimeUnit, Time})
+    ok = disksup:set_check_interval({second, 1}),
+    1000 = disksup:get_check_interval(),
+    {'EXIT',{badarg,_}} = (catch disksup:set_check_interval({second, 0.5})),
+    {'EXIT',{badarg,_}} = (catch disksup:set_check_interval({badarg, 1})),
+    {'EXIT',{badarg,_}} = (catch disksup:set_check_interval({nanosecond, 1})),
+    1000 = disksup:get_check_interval(),
     ok = disksup:set_check_interval(30),
 
     %% get_almost_full_threshold()
@@ -110,6 +119,13 @@ config(Config) when is_list(Config) ->
     1740000 = disksup:get_check_interval(),
     81 = disksup:get_almost_full_threshold(),
 
+    ok = application:set_env(os_mon, disk_space_check_interval, {second, 2}),
+
+    ok = supervisor:terminate_child(os_mon_sup, disksup),
+    {ok, _Child2} = supervisor:restart_child(os_mon_sup, disksup),
+
+    2000 = disksup:get_check_interval(),
+
     %% Also try this with bad parameter values, should be ignored
     ok =
 	application:set_env(os_mon, disk_space_check_interval, 0.5),
@@ -117,10 +133,31 @@ config(Config) when is_list(Config) ->
 	application:set_env(os_mon, disk_almost_full_threshold, -0.81),
 
     ok = supervisor:terminate_child(os_mon_sup, disksup),
-    {ok, _Child2} = supervisor:restart_child(os_mon_sup, disksup),
+    {ok, _Child3} = supervisor:restart_child(os_mon_sup, disksup),
 
     1800000 = disksup:get_check_interval(),
     80 = disksup:get_almost_full_threshold(),
+
+    ok = application:set_env(os_mon, disk_space_check_interval, {second, 0.5}),
+
+    ok = supervisor:terminate_child(os_mon_sup, disksup),
+    {ok, _Child4} = supervisor:restart_child(os_mon_sup, disksup),
+
+    1800000 = disksup:get_check_interval(),
+
+    ok = application:set_env(os_mon, disk_space_check_interval, {badarg, 1}),
+
+    ok = supervisor:terminate_child(os_mon_sup, disksup),
+    {ok, _Child5} = supervisor:restart_child(os_mon_sup, disksup),
+
+    1800000 = disksup:get_check_interval(),
+
+    ok = application:set_env(os_mon, disk_space_check_interval, {nanosecond, 1}),
+
+    ok = supervisor:terminate_child(os_mon_sup, disksup),
+    {ok, _Child6} = supervisor:restart_child(os_mon_sup, disksup),
+
+    1800000 = disksup:get_check_interval(),
 
     %% Reset configuration parameters
     ok = application:set_env(os_mon, disk_space_check_interval, 30),
@@ -332,8 +369,8 @@ otp_5910(Config) when is_list(Config) ->
 		     0 ->
 			 [{_Id,_Kbyte,Cap}|_] = Data,
 			 io:format("Data ~p Threshold ~p ~n",[Data, Cap-1]),
-			 ok = disksup:set_almost_full_threshold((Cap-1)/100),
-			 Cap-1;
+			 ok = disksup:set_almost_full_threshold((max(0, Cap-1))/100),
+			 max(0, Cap-1);
 		     _N -> Threshold0
 		 end,
     ok = application:set_env(os_mon, disk_almost_full_threshold, Threshold/100),
@@ -404,7 +441,7 @@ check_get_disk_data() ->
 
 % filter get_disk_data and remove entriew with zero capacity
 % "non-normal" filesystems report zero capacity
-% - Perhaps errorneous 'df -k -l'?
+% - Perhaps erroneous 'df -k -l'?
 % - Always list filesystems by type '-t ufs,zfs,..' instead?
 % It is unclear what the intention was from the beginning.
 get_disk_data() ->

@@ -332,6 +332,7 @@ middle_box_client_tls_v2_session_reused(Config) when is_list(Config) ->
 %%--------------------------------------------------------------------
 %% Internal functions and callbacks -----------------------------------
 %%--------------------------------------------------------------------
+
 middlebox_test(Mode, Expected, ClientOpts, ServerOpts, Config) ->
     {ClientNode, ServerNode, Hostname} = ssl_test_lib:run_where(Config),
     Server = ssl_test_lib:start_server([{node, ServerNode}, {port, 0},
@@ -347,19 +348,15 @@ middlebox_test(Mode, Expected, ClientOpts, ServerOpts, Config) ->
                                          [{middlebox_comp_mode, Mode}| ClientOpts]}]),
     ssl_test_lib:check_result(Server, ok, Client, ok).
 
-check_session_id(Socket, empty) ->
+check_session_id(Socket, Expected) ->
    {ok, [{session_id, SessionId}]} = ssl:connection_information(Socket, [session_id]),
-    case SessionId of
-        <<>> ->
+    case {Expected, SessionId} of
+        {empty, <<>>} ->
+            ok;
+        {not_empty, SessionId} when SessionId =/= <<>> ->
             ok;
         _ ->
-            {nok, {{expected, <<>>}, {got, SessionId}}}
-    end;
-check_session_id(Socket, not_empty) ->
-    {ok, [{session_id, SessionId}]} = ssl:connection_information(Socket, [session_id]),
-    case SessionId of
-        <<>> ->
-            {nok, {{expected, not_empty}, {got, SessionId}}};
-        _ ->
-            ok
+            {nok, {{expected, Expected}, {got, SessionId}}}
     end.
+
+

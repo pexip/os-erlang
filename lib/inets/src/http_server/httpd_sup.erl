@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2004-2021. All Rights Reserved.
+%% Copyright Ericsson AB 2004-2022. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -104,7 +104,7 @@ init([HttpdServices]) ->
 %% The format of the httpd service is:
 %% httpd_service() -> {httpd,httpd()}
 %% httpd()         -> [httpd_config()] | file()
-%% httpd_config()  -> {file,file()} |
+%% httpd_config()  -> {proplist_file,file()} |
 %%                    {debug,debug()} |
 %%                    {accept_timeout,integer()}
 %% debug()         -> disable | [debug_options()]
@@ -252,11 +252,14 @@ listen_loop() ->
 	{'EXIT', _, _} ->
 	    ok
     end.
-	    
+
 socket_type(Config) ->
     SocketType = proplists:get_value(socket_type, Config, ip_comm), 
     socket_type(SocketType, Config).
 
+-spec socket_type(SocketType | Term) -> SocketType when
+      Term       :: term(),
+      SocketType :: ip_comm | {ip_comm, _Value} | {ssl, _Value}.
 socket_type(ip_comm = SocketType, _) ->
     SocketType;
 socket_type({ip_comm, _} = SocketType, _) ->
@@ -335,6 +338,9 @@ ssl_ca_certificate_file(Config) ->
 	    [{cacertfile, File}]
     end.
 
+-spec get_fd(Port) -> Object when
+      Port :: integer(),
+      Object :: {ok, integer() | undefined} | {error, {bad_descriptor, term()}}.
 get_fd(0) ->
     {ok, undefined};
 get_fd(Port) ->

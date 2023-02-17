@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %% 
-%% Copyright Ericsson AB 2004-2021. All Rights Reserved.
+%% Copyright Ericsson AB 2004-2022. All Rights Reserved.
 %% 
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -25,6 +25,7 @@
 
 -module(httpc_SUITE).
 
+-include_lib("stdlib/include/assert.hrl").
 -include_lib("kernel/include/file.hrl").
 -include_lib("common_test/include/ct.hrl").
 -include("inets_test_lib.hrl").
@@ -73,7 +74,7 @@ groups() ->
      {sim_http, [], only_simulated() ++ server_closing_connection() ++ [process_leak_on_keepalive]},
      {http_internal, [], real_requests_esi()},
      {http_unix_socket, [], simulated_unix_socket()},
-     {https, [], real_requests()},
+     {https, [], [def_ssl_opt | real_requests()]},
      {sim_https, [], only_simulated()},
      {misc, [], misc()},
      {sim_mixed, [], sim_mixed()}
@@ -136,8 +137,8 @@ real_requests()->
      invalid_method,
      no_scheme,
      invalid_uri,
-     undefined_port,
-     binary_url
+     binary_url,
+     iolist_body
     ].
 
 real_requests_esi() ->
@@ -180,6 +181,7 @@ only_simulated() ->
      redirect_found,
      redirect_see_other,
      redirect_temporary_redirect,
+     redirect_permanent_redirect,
      redirect_relative_uri,
      port_in_host_header,
      redirect_port_in_host_header,
@@ -258,8 +260,8 @@ init_per_group(http_unix_socket = Group, Config0) ->
             file:delete(?UNIX_SOCKET),
             start_apps(Group),
             Config = proplists:delete(port, Config0),
-            Port = server_start(Group, server_config(Group, Config)),
-            [{port, Port} | Config]
+            {Pid, Port} = server_start(Group, server_config(Group, Config)),
+            lists:append([{dummy_server_pid, Pid}, {port, Port}], Config)
     end;
 init_per_group(http_ipv6 = Group, Config0) ->
     case is_ipv6_supported() of
@@ -277,7 +279,16 @@ init_per_group(Group, Config0) ->
     Port = server_start(Group, server_config(Group, Config)),
     [{port, Port} | Config].
 
-end_per_group(http_unix_socket,_Config) ->
+end_per_group(http_unix_socket, Config) ->
+    Pid = ?config(dummy_server_pid, Config),
+    Pid ! {stop, self()},
+    %% request is needed for enforcing dummy server and handlers stop; without a
+    %% it, dummy server waits in gen_tcp:accept and will not process stop request
+    httpc:request(get, {"http://localhost/v1/kv/foo", []}, [], []),
+    receive
+        {stopped, DummyServerPid} ->
+            ok
+    end,
     file:delete(?UNIX_SOCKET),
     ok;
 end_per_group(_, _Config) ->
@@ -420,7 +431,7 @@ post() ->
      "only care about the client side of the the post. The server "
      "script will not actually use the post data."}].
 post(Config) when is_list(Config) ->
-    CGI = case test_server:os_type() of
+    CGI = case os:type() of
 	      {win32, _} ->
 		  "/cgi-bin/cgi_echo.exe";
 	      _ ->
@@ -445,7 +456,7 @@ delete() ->
      "only care about the client side of the the delete. The server "
      "script will not actually use the delete data."}].
 delete(Config) when is_list(Config) ->
-    CGI = case test_server:os_type() of
+    CGI = case os:type() of
           {win32, _} ->
           "/cgi-bin/cgi_echo.exe";
           _ ->
@@ -469,7 +480,7 @@ patch() ->
      "only care about the client side of the the patch. The server "
      "script will not actually use the patch data."}].
 patch(Config) when is_list(Config) ->
-    CGI = case test_server:os_type() of
+    CGI = case os:type() of
 	      {win32, _} ->
 		  "/cgi-bin/cgi_echo.exe";
 	      _ ->
@@ -491,7 +502,7 @@ post_stream() ->
      "We only care about the client side of the the post. "
      "The server script will not actually use the post data."}].
 post_stream(Config) when is_list(Config) ->
-    CGI = case test_server:os_type() of
+    CGI = case os:type() of
 	      {win32, _} ->
 		  "/cgi-bin/cgi_echo.exe";
 	      _ ->
@@ -746,6 +757,26 @@ redirect_temporary_redirect(Config) when is_list(Config) ->
 
     {ok, {{_,200,_}, [_ | _], [_|_]}}
 	= httpc:request(post, {URL307, [],"text/plain", "foobar"},
+			[], []).
+%%-------------------------------------------------------------------------
+redirect_permanent_redirect() ->
+    [{doc, "The server SHOULD generate a Location header field in the response "
+      "containing a preferred URI reference for the new permanent URI. "
+      "The user agent MAY use the Location field value for automatic redirection. "
+      "The server's response content usually contains a short hypertext note with "
+      "a hyperlink to the new URI(s)."}].
+redirect_permanent_redirect(Config) when is_list(Config) ->
+
+    URL308 =  url(group_name(Config), "/308.html", Config),
+
+    {ok, {{_,200,_}, [_ | _], [_|_]}}
+	= httpc:request(get, {URL308, []}, [], []),
+
+    {ok, {{_,200,_}, [_ | _], []}}
+	= httpc:request(head, {URL308, []}, [], []),
+
+    {ok, {{_,200,_}, [_ | _], [_|_]}}
+	= httpc:request(post, {URL308, [],"text/plain", "foobar"},
 			[], []).
 %%-------------------------------------------------------------------------
 redirect_relative_uri() ->
@@ -1350,6 +1381,62 @@ binary_url(Config) ->
     URL = uri_string:normalize(url(group_name(Config), "/dummy.html", Config)),
     {ok, _Response} = httpc:request(unicode:characters_to_binary(URL)).
 
+%%-------------------------------------------------------------------------
+
+iolist_body(Config) ->
+    {ok, ListenSocket} = gen_tcp:listen(0, [{active,once}, binary]),
+    {ok,{_,Port}} = inet:sockname(ListenSocket),
+
+    ProcessHeaders = 
+        fun 
+            F([], Acc) ->
+                Acc;
+            F([Line|Tail], Acc0) ->
+                Acc1 = 
+                    case binary:split(Line, <<": ">>, [trim_all]) of
+                        [Key, Value] ->
+                            Acc0#{Key => Value};
+                        _ ->
+                            Acc0
+                    end,
+                F(Tail, Acc1)
+        end,
+    
+    proc_lib:spawn(fun() ->
+        {ok, Accept} = gen_tcp:accept(ListenSocket),
+        receive
+            {tcp, Accept, Msg} ->
+                ct:log("Message received: ~p", [Msg]),
+                [_HeadLine | HeaderLines] = binary:split(Msg, <<"\r\n">>, [global]),
+                Headers = ProcessHeaders(HeaderLines, #{}),
+                ContentLength = maps:get(<<"content-length">>, Headers, "-1"),
+                gen_tcp:send(Accept, [
+                    "HTTP/1.1 200 OK\r\n",
+                    "\r\n",
+                    ContentLength
+                ])
+        after
+            1000 ->
+                ct:fail("Timeout: did not receive packet")
+        end
+    end),
+
+    {ok, Host} = inet:gethostname(),
+    URL = ?URL_START ++ Host ++ ":" ++ integer_to_list(Port),
+    ReqBody = [
+        <<"abc">>,
+        <<"def">>
+    ],
+    {ok, Resp} = httpc:request(post, {URL, _Headers = [], _ContentType = "text/plain", ReqBody}, [], []),
+    ct:log("Got response ~p", [Resp]),
+    case Resp of
+        {{"HTTP/1.1", 200, "OK"}, [], RespBody} ->
+            ReqBody_ContentLength = list_to_integer([C || C <- RespBody, C =/= $\s]),
+            ?assertEqual(iolist_size(ReqBody), ReqBody_ContentLength);
+        _ ->
+            ct:fail("Didn't receive the correct response")
+    end.
+
 
 %%-------------------------------------------------------------------------
 
@@ -1365,12 +1452,6 @@ no_scheme(_Config) ->
 invalid_uri(Config) ->
     URL = url(group_name(Config), "/bar?x[]=a", Config),
     {error, invalid_uri} = httpc:request(URL),
-    ok.
-
-%%-------------------------------------------------------------------------
-
-undefined_port(_Config) ->
-    {error, {failed_connect, _Reason}} = httpc:request("http://:"),
     ok.
 
 
@@ -1807,7 +1888,16 @@ request_options(Config) when is_list(Config) ->
                                                             [{socket_opts,[{ipfamily, inet6}]}]),
     {error,{failed_connect,_ }} = httpc:request(get, Request, [], []).
 
-
+%%--------------------------------------------------------------------
+def_ssl_opt(_Config) ->
+    CaCerts = public_key:cacerts_get(),
+    Ver = {verify, verify_peer},
+    Certs = {cacerts, CaCerts},
+    [Ver, Certs] = httpc:ssl_verify_host_options(false),
+    [Ver, Certs | WildCard] = httpc:ssl_verify_host_options(true),
+    [{customize_hostname_check, [{match_fun, _}]}] = WildCard,
+    {'EXIT', _} = catch httpc:ssl_verify_host_options(other),
+    ok.
 
 %%--------------------------------------------------------------------
 %% Internal Functions ------------------------------------------------
@@ -1955,9 +2045,9 @@ server_start(http_unix_socket, Config) ->
     Inet = local,
     Socket = proplists:get_value(unix_socket, Config),
     ok = httpc:set_options([{ipfamily, Inet},{unix_socket, Socket}]),
-    {_Pid, Port} = http_test_lib:dummy_server(unix_socket, Inet, [{content_cb, ?MODULE},
+    {Pid, Port} = http_test_lib:dummy_server(unix_socket, Inet, [{content_cb, ?MODULE},
                                                                   {unix_socket, Socket}]),
-    Port;
+    {Pid, Port};
 server_start(http_ipv6, HttpdConfig) ->
     {ok, Pid} = inets:start(httpd, HttpdConfig),
     Serv = inets:services_info(),
@@ -2007,7 +2097,7 @@ server_config(http_internal, Config) ->
      {erl_script_alias, {"", [httpc_SUITE]}}
     ];
 server_config(https, Config) ->
-    [{socket_type, {essl, ssl_config(Config)}} | server_config(http, Config)];
+    [{socket_type, {ssl, ssl_config(Config)}} | server_config(http, Config)];
 server_config(sim_https, Config) ->
     ssl_config(Config);
 server_config(http_unix_socket, _Config) ->
@@ -2051,7 +2141,7 @@ setup_server_dirs(ServerRoot, DocRoot, DataDir) ->
 			       end
 		  end, Files),
     
-    Cgi = case test_server:os_type() of
+    Cgi = case os:type() of
 	      {win32, _} ->
 		  "cgi_echo.exe";
 	      _ ->
@@ -2093,7 +2183,7 @@ receive_replys([ID|IDs]) ->
 	{http, {ID, {{_, 200, _}, [_|_], _}}} ->
 	    receive_replys(IDs);
 	{http, {Other, {{_, 200, _}, [_|_], _}}} ->
-	    ct:pal({recived_canceld_id, Other})
+	    ct:pal("~p",[{recived_canceld_id, Other}])
     end.
 
 
@@ -2529,6 +2619,21 @@ handle_uri(_,"/307.html",Port,_,Socket,_) ->
     Body = "<HTML><BODY><a href=" ++ NewUri ++
 	">New place</a></BODY></HTML>",
     "HTTP/1.1 307 Temporary Rediect \r\n" ++
+	"Location:" ++ NewUri ++  "\r\n" ++
+	"Content-Length:" ++ integer_to_list(length(Body))
+	++ "\r\n\r\n" ++ Body;
+handle_uri("HEAD","/308.html",Port,_,Socket,_) ->
+    NewUri = url_start(Socket) ++
+	integer_to_list(Port) ++ "/dummy.html",
+    "HTTP/1.1 308 Permanent Redirect \r\n" ++
+	"Location:" ++ NewUri ++  "\r\n" ++
+	"Content-Length:0\r\n\r\n";
+handle_uri(_,"/308.html",Port,_,Socket,_) ->
+    NewUri = url_start(Socket) ++
+	integer_to_list(Port) ++ "/dummy.html",
+    Body = "<HTML><BODY><a href=" ++ NewUri ++
+	">New place</a></BODY></HTML>",
+    "HTTP/1.1 308 Permanent Redirect \r\n" ++
 	"Location:" ++ NewUri ++  "\r\n" ++
 	"Content-Length:" ++ integer_to_list(length(Body))
 	++ "\r\n\r\n" ++ Body;

@@ -4,7 +4,7 @@
 <chapter>
   <header>
     <copyright>
-      <year>2003</year><year>2021</year>
+      <year>2003</year><year>2022</year>
       <holder>Ericsson AB. All Rights Reserved.</holder>
     </copyright>
     <legalnotice>
@@ -30,7 +30,15 @@
     <file>data_types.xml</file>
   </header>
     <p>Erlang provides a number of data types, which are listed in
-      this section.</p>
+    this section.</p>
+
+    <marker id="no_user_types" />
+    <p>Note that Erlang has no user defined types, only composite
+    types (data structures) made of Erlang terms.  This means that any
+    function testing for a composite type, typically named
+    <c>is_type/1</c>, might return <c>true</c> for a term
+    that coincides with the chosen representation.  The corresponding
+    functions for built in types do not suffer from this.</p>
 
   <section>
     <title>Terms</title>
@@ -85,8 +93,8 @@
       <p>When working with floats you may not see what you expect when printing or
         doing arithmetic operations. This is because floats
         are represented by a fixed number of bits in a base-2 system while
-        printed floats are represented with a base-10 system. Here are
-        examples of this phenomenon:
+        printed floats are represented with a base-10 system. Erlang
+        uses 64-bit floats. Here are examples of this phenomenon:
       </p>
       <pre>
 > <input>0.1+0.2.</input>

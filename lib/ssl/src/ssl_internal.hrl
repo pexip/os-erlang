@@ -23,7 +23,8 @@
 -ifndef(ssl_internal).
 -define(ssl_internal, true).
 
--include_lib("public_key/include/public_key.hrl"). 
+-include_lib("kernel/include/logger.hrl").
+-include_lib("public_key/include/public_key.hrl").
 
 -define(SECRET_PRINTOUT, "***").
 
@@ -132,6 +133,7 @@
                                                      cacerts]},
           cacerts                    => {undefined, [versions]},
           cert                       => {undefined, [versions]},
+          certs_keys                 => {undefined, [versions]},
           certfile                   => {<<>>,      [versions]},
           certificate_authorities    => {false,     [versions]},
           ciphers                    => {[],        [versions]},
@@ -154,6 +156,7 @@
           hibernate_after            => {infinity,  [versions]},
           honor_cipher_order         => {false,     [versions]},
           honor_ecc_order            => {undefined, [versions]},
+          keep_secrets               => {false,     [versions]},
           key                        => {undefined, [versions]},
           keyfile                    => {undefined, [versions,
                                                      certfile]},
@@ -177,11 +180,12 @@
           password                   => {"",        [versions]},
           protocol                   => {tls,       []},
           psk_identity               => {undefined, [versions]},
+          receiver_spawn_opts        => {[],        [versions]},
           renegotiate_at             => {?DEFAULT_RENEGOTIATE_AT, [versions]},
           reuse_session              => {undefined, [versions]},
           reuse_sessions             => {true,      [versions]},
           secure_renegotiate         => {true,      [versions]},
-          keep_secrets               => {false,     [versions]},
+          sender_spawn_opts          => {[],        [versions]},
           server_name_indication     => {undefined, [versions]},
           session_tickets            => {disabled,     [versions]},
           signature_algs             => {undefined, [versions]},
@@ -217,10 +221,30 @@
           versions                   => {[], [protocol]}
          }).
 
--define('TLS-1_3_ONLY_OPTIONS', [anti_replay, cookie, early_data, key_update_at, middlebox_comp_mode, session_tickets, supported_groups, use_ticket]).
--define('FROM_TLS-1_2_ONLY_OPTIONS', [signature_algs, signature_algs_cert]).
--define('PRE_TLS-1_3_ONLY_OPTIONS', [client_renegotiation, secure_renegotiate]).
--define('TLS-1_0_ONLY_OPTIONS', [padding_check, beast_mitigation]).
+-define('TLS-1_3_ONLY_OPTIONS', [anti_replay,
+                                 certificate_authorities,
+                                 cookie,
+                                 early_data,
+                                 key_update_at,
+                                 middlebox_comp_mode,
+                                 session_tickets,
+                                 supported_groups,
+                                 use_ticket]).
+-define('FROM_TLS-1_2_ONLY_OPTIONS', [signature_algs,
+                                      signature_algs_cert]).
+-define('PRE_TLS-1_3_ONLY_OPTIONS', [client_renegotiation,
+                                     dh_file,
+                                     eccs,
+                                     fallback,
+                                     secure_renegotiate,
+                                     psk_identity,
+                                     reuse_session,
+                                     reuse_sessions,
+                                     srp_identity,
+                                     user_lookup_fun
+                                    ]).
+-define('TLS-1_0_ONLY_OPTIONS', [padding_check,
+                                 beast_mitigation]).
 
 -record(socket_options,
 	{
@@ -246,6 +270,24 @@
 				{next_state, state_name(), any(), timeout()} |
 				{stop, any(), any()}.
 -type ssl_options()          :: map().
+
+
+-define(SSL_LOG(Level, Descr, Reason),
+        fun() ->
+                case get(log_level) of
+                    undefined ->
+                        %% Use debug here, i.e. log everything and let loggers
+                        %% log_level decide if it should be logged
+                        ssl_logger:log(Level, debug,
+                                       #{description => Descr, reason => Reason},
+                                       ?LOCATION);
+                    __LogLevel__ ->
+                        ssl_logger:log(Level, __LogLevel__,
+                                       #{description => Descr, reason => Reason},
+                                       ?LOCATION)
+                end
+        end()).
+
 
 %% Internal ticket data record holding pre-processed ticket data.
 -record(ticket_data,

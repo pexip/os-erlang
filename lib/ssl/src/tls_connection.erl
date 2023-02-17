@@ -140,17 +140,17 @@
 %% Internal application API
 %%====================================================================	     
 init([Role, Sender, Host, Port, Socket, Options,  User, CbInfo]) ->
-    State0 = #state{protocol_specific = Map} = initial_state(Role, Sender,
-                                                             Host, Port, Socket, Options, User, CbInfo),
-    try 
-	State1 = #state{static_env = #static_env{session_cache = Cache,
+    State0 = initial_state(Role, Sender, Host, Port, Socket, Options, User, CbInfo),
+    try
+        State1 = #state{static_env = #static_env{session_cache = Cache,
                                                  session_cache_cb = CacheCb
                                                 },
-                        connection_env = #connection_env{cert_key_pairs = CertKeyPairs},
+                        connection_env = #connection_env{cert_key_alts = CertKeyAlts},
                         ssl_options = SslOptions,
                         session = Session0} = ssl_gen_statem:ssl_config(State0#state.ssl_options, Role, State0),
         State = case Role of
                     client ->
+                        CertKeyPairs = ssl_certificate:available_cert_key_pairs(CertKeyAlts),
                         Session = ssl_session:client_select_session({Host, Port, SslOptions}, Cache, CacheCb, Session0, CertKeyPairs),
                         State1#state{session = Session};
                     server ->
@@ -159,6 +159,7 @@ init([Role, Sender, Host, Port, Socket, Options,  User, CbInfo]) ->
         tls_gen_connection:initialize_tls_sender(State),
         gen_statem:enter_loop(?MODULE, [], initial_hello, State)
     catch throw:Error ->
+            #state{protocol_specific = Map} = State0,
             EState = State0#state{protocol_specific = Map#{error => Error}},
             gen_statem:enter_loop(?MODULE, [], config_error, EState)
     end.
@@ -230,7 +231,6 @@ hello(internal, #client_hello{client_version = ClientVersion} = Hello,
         #state{ssl_options = SslOpts} = State1 = tls_dtls_connection:handle_sni_extension(State0, Hello),
         case choose_tls_fsm(SslOpts, Hello) of
             tls_1_3_fsm ->
-                %% Continue in TLS 1.3 'start' state
                 {next_state, start, State1,
                  [{change_callback_module, tls_connection_1_3}, {next_event, internal, Hello}]};
             tls_1_0_to_1_2_fsm ->
@@ -367,13 +367,14 @@ connection(internal, #hello_request{},
                   handshake_env = #handshake_env{
                                      renegotiation = {Renegotiation, peer},
                                      ocsp_stapling_state = OcspState},
-                  connection_env = #connection_env{cert_key_pairs = CertKeyPairs},
+                  connection_env = #connection_env{cert_key_alts = CertKeyAlts},
 		  session = Session0,
 		  ssl_options = SslOpts, 
                   protocol_specific = #{sender := Pid},
 		  connection_states = ConnectionStates} = State0) ->
     try tls_sender:peer_renegotiate(Pid) of
         {ok, Write} ->
+            CertKeyPairs = ssl_certificate:available_cert_key_pairs(CertKeyAlts),
             Session = ssl_session:client_select_session({Host, Port, SslOpts}, Cache, CacheCb, Session0, CertKeyPairs),
             Hello = tls_handshake:client_hello(Host, Port, ConnectionStates, SslOpts,
                                                Session#session.session_id,
@@ -385,8 +386,9 @@ connection(internal, #hello_request{},
                                                                                   ConnectionStates#{current_write => Write},
                                                                               session = Session}),
             tls_gen_connection:next_event(hello, no_record, State, Actions)
-        catch 
-            _:_ ->
+        catch
+            _:Reason:ST ->
+                ?SSL_LOG(info, internal_error, [{error, Reason}, {stacktrace, ST}]),
                 {stop, {shutdown, sender_blocked}, State0}
         end;
 connection(internal, #hello_request{},
@@ -473,6 +475,7 @@ code_change(_OldVsn, StateName, State, _) ->
 %%--------------------------------------------------------------------
 initial_state(Role, Sender, Host, Port, Socket, {SSLOptions, SocketOptions, Trackers}, User,
 	      {CbModule, DataTag, CloseTag, ErrorTag, PassiveTag}) ->
+    put(log_level, maps:get(log_level, SSLOptions)),
     #{erl_dist := IsErlDist,
       %% Use highest supported version for client/server random nonce generation
       versions := [Version|_],
@@ -527,7 +530,7 @@ handle_client_hello(#client_hello{client_version = ClientVersion} = Hello, State
                               renegotiation = {Renegotiation, _},
                               negotiated_protocol = CurrentProtocol,
                               sni_guided_cert_selection = SNICertSelection} = HsEnv,
-           connection_env = #connection_env{cert_key_pairs = CertKeyPairs} = CEnv,
+           connection_env = #connection_env{cert_key_alts = CertKeyAlts} = CEnv,
            session = Session0,
            ssl_options = SslOpts} = State,
     SessionTracker = proplists:get_value(session_id_tracker, Trackers),
@@ -536,7 +539,7 @@ handle_client_hello(#client_hello{client_version = ClientVersion} = Hello, State
         tls_handshake:hello(Hello,
                             SslOpts,
                             {SessionTracker, Session0,
-                             ConnectionStates0, CertKeyPairs, KeyExAlg},
+                             ConnectionStates0, CertKeyAlts, KeyExAlg},
                             Renegotiation),
     Protocol = case Protocol0 of
                    undefined -> CurrentProtocol;
@@ -563,7 +566,8 @@ gen_info(Event, connection = StateName, State) ->
     try
         tls_gen_connection:handle_info(Event, StateName, State)
     catch
-        _:_ ->
+        _:Reason:ST ->
+            ?SSL_LOG(info, internal_error, [{error, Reason}, {stacktrace, ST}]),
 	    ssl_gen_statem:handle_own_alert(?ALERT_REC(?FATAL, ?INTERNAL_ERROR,
 						       malformed_data),
 					    StateName, State)
@@ -573,7 +577,8 @@ gen_info(Event, StateName, State) ->
     try
         tls_gen_connection:handle_info(Event, StateName, State)
     catch
-        _:_ ->
+        _:Reason:ST ->
+            ?SSL_LOG(info, handshake_error, [{error, Reason}, {stacktrace, ST}]),
 	    ssl_gen_statem:handle_own_alert(?ALERT_REC(?FATAL, ?HANDSHAKE_FAILURE,
 						       malformed_handshake_data),
 					    StateName, State)

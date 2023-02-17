@@ -1,7 +1,7 @@
 #
 # %CopyrightBegin%
 #
-# Copyright Ericsson AB 2008-2020. All Rights Reserved.
+# Copyright Ericsson AB 2008-2022. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -32,8 +32,7 @@ MODULES= \
 	erl_make_certs \
 	public_key_SUITE \
 	pbe_SUITE \
-	pkits_SUITE \
-	pubkey_ssh_SUITE
+	pkits_SUITE
 
 ERL_FILES= $(MODULES:%=%.erl)
 
@@ -56,6 +55,7 @@ RELSYSDIR = $(RELEASE_PATH)/public_key_test
 # FLAGS
 # ----------------------------------------------------
 ERL_COMPILE_FLAGS += $(INCLUDES)
+ERL_COMPILE_FLAGS := $(filter-out +deterministic,$(ERL_COMPILE_FLAGS))
 
 EBIN = .
 
@@ -63,7 +63,7 @@ EBIN = .
 # Targets
 # ----------------------------------------------------
 
-tests debug opt: $(TARGET_FILES)
+tests $(TYPES): $(TARGET_FILES)
 
 
 clean:

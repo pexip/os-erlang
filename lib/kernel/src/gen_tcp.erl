@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %% 
-%% Copyright Ericsson AB 1997-2021. All Rights Reserved.
+%% Copyright Ericsson AB 1997-2023. All Rights Reserved.
 %% 
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -38,6 +38,7 @@
 -type option() ::
         {active,          true | false | once | -32768..32767} |
         {buffer,          non_neg_integer()} |
+        {debug,           boolean()} |
         {delay_send,      boolean()} |
         {deliver,         port | term} |
         {dontroute,       boolean()} |
@@ -78,6 +79,7 @@
 -type option_name() ::
         active |
         buffer |
+        debug |
         delay_send |
         deliver |
         dontroute |
@@ -161,7 +163,7 @@ connect(SockAddr, Opts) ->
 -spec connect(Address, Port, Opts) -> {ok, Socket} | {error, Reason} when
       Address  :: inet:socket_address() | inet:hostname(),
       Port     :: inet:port_number(),
-      Opts     :: [connect_option()],
+      Opts     :: [inet:inet_backend() | connect_option()],
       Socket   :: socket(),
       Reason   :: inet:posix();
              (SockAddr, Opts, Timeout) -> {ok, Socket} | {error, Reason} when
@@ -193,8 +195,8 @@ connect(#{family := Fam} = SockAddr, Opts, Timeout)
                 {'EXIT', Reason} -> exit(Reason);
                 Error            -> Error
             end;
-        {GenTcpMod, Opts} ->
-            GenTcpMod:connect(SockAddr2, Opts, Timeout)
+        {GenTcpMod, Opts2} ->
+            GenTcpMod:connect(SockAddr2, Opts2, Timeout)
     end.
 
 

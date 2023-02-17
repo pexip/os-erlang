@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %% 
-%% Copyright Ericsson AB 2006-2022. All Rights Reserved.
+%% Copyright Ericsson AB 2006-2023. All Rights Reserved.
 %% 
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -32,23 +32,43 @@
 -include_lib("common_test/include/ct.hrl").
 -export([all/0, suite/0,init_per_suite/1, end_per_suite/1]).
 -export([init_per_testcase/2, end_per_testcase/2]).
+-export([groups/0, init_per_group/2, end_per_group/2]).
 
 % Test cases
 -export([xm_sig_order/1,
          kill2killed/1,
          contended_signal_handling/1,
+         dirty_signal_handling_race/1,
          busy_dist_exit_signal/1,
          busy_dist_demonitor_signal/1,
          busy_dist_down_signal/1,
          busy_dist_spawn_reply_signal/1,
          busy_dist_unlink_ack_signal/1,
-         unlink_exit/1]).
+         unlink_exit/1,
+         monitor_order/1,
+         monitor_named_order_local/1,
+         monitor_named_order_remote/1,
+         monitor_nodes_order/1,
+         move_msgs_off_heap_signal_basic/1,
+         move_msgs_off_heap_signal_recv/1,
+         move_msgs_off_heap_signal_exit/1,
+         move_msgs_off_heap_signal_recv_exit/1,
+         copy_literal_area_signal_basic/1,
+         copy_literal_area_signal_recv/1,
+         copy_literal_area_signal_exit/1,
+         copy_literal_area_signal_recv_exit/1,
+         simultaneous_signals_basic/1,
+         simultaneous_signals_recv/1,
+         simultaneous_signals_exit/1,
+         simultaneous_signals_recv_exit/1]).
+
+-export([spawn_spammers/3]).
 
 init_per_testcase(Func, Config) when is_atom(Func), is_list(Config) ->
     [{testcase, Func}|Config].
 
-end_per_testcase(_Func, _Config) ->
-    ok.
+end_per_testcase(_Func, Config) ->
+    erts_test_utils:ept_check_leaked_nodes(Config).
 
 init_per_suite(Config) ->
     Config.
@@ -64,20 +84,47 @@ all() ->
     [xm_sig_order,
      kill2killed,
      contended_signal_handling,
+     dirty_signal_handling_race,
      busy_dist_exit_signal,
      busy_dist_demonitor_signal,
      busy_dist_down_signal,
      busy_dist_spawn_reply_signal,
      busy_dist_unlink_ack_signal,
-     unlink_exit].
+     unlink_exit,
+     monitor_order,
+     monitor_named_order_local,
+     monitor_named_order_remote,
+     monitor_nodes_order,
+     {group, adjust_message_queue}].
+
+groups() ->
+    [{adjust_message_queue, [],
+      [move_msgs_off_heap_signal_basic,
+       move_msgs_off_heap_signal_recv,
+       move_msgs_off_heap_signal_exit,
+       move_msgs_off_heap_signal_recv_exit,
+       copy_literal_area_signal_basic,
+       copy_literal_area_signal_recv,
+       copy_literal_area_signal_exit,
+       copy_literal_area_signal_recv_exit,
+       simultaneous_signals_basic,
+       simultaneous_signals_recv,
+       simultaneous_signals_exit,
+       simultaneous_signals_recv_exit]}].
+
+init_per_group(_GroupName, Config) ->
+    Config.
+
+end_per_group(_GroupName, Config) ->
+    Config.
 
 %% Test that exit signals and messages are received in correct order
 xm_sig_order(Config) when is_list(Config) ->
     LNode = node(),
-    repeat(fun () -> xm_sig_order_test(LNode) end, 1000),
-    {ok, RNode} = start_node(Config),
-    repeat(fun () -> xm_sig_order_test(RNode) end, 1000),
-    stop_node(RNode),
+    repeat(fun (_) -> xm_sig_order_test(LNode) end, 1000),
+    {ok, Peer, RNode} = ?CT_PEER(),
+    repeat(fun (_) -> xm_sig_order_test(RNode) end, 1000),
+    peer:stop(Peer),
     ok.
 
 xm_sig_order_test(Node) ->
@@ -106,10 +153,9 @@ xm_sig_order_proc() ->
 kill2killed(Config) when is_list(Config) ->
     process_flag(trap_exit, true),
     kill2killed_test(node()),
-    {ok, Node} = start_node(Config),
+    {ok, Peer, Node} = ?CT_PEER(),
     kill2killed_test(Node),
-    stop_node(Node),
-    ok.
+    peer:stop(Peer).
 
 kill2killed_test(Node) ->
     if Node == node() ->
@@ -187,7 +233,15 @@ contended_signal_handling(Config) when is_list(Config) ->
     %% when the bug exists, but this testcase at least
     %% sometimes causes a crash when the bug is present.
     %%
+    move_dirty_signal_handlers_to_first_scheduler(),
     process_flag(priority, high),
+    case erlang:system_info(schedulers_online) of
+        1 ->
+            ok;
+        SOnln -> 
+            process_flag(scheduler, SOnln),
+            ok
+    end,
     Drv = unlink_signal_drv,
     ok = load_driver(Config, Drv),
     try
@@ -210,7 +264,7 @@ contended_signal_handling_test(Drv, N) ->
 contended_signal_handling_cmd_ports([]) ->
     ok;
 contended_signal_handling_cmd_ports([P|Ps]) ->
-    P ! {self(), {command, ""}},
+    P ! {self(), {command, "c"}},
     contended_signal_handling_cmd_ports(Ps).
 
 contended_signal_handling_make_ports(_Drv, 0, Ports) ->
@@ -220,18 +274,130 @@ contended_signal_handling_make_ports(Drv, N, Ports) ->
     true = is_port(Port),
     contended_signal_handling_make_ports(Drv, N-1, [Port|Ports]).
 
-busy_dist_exit_signal(Config) when is_list(Config) ->
-    BusyTime = 1000,
-    {ok, BusyChannelNode} = start_node(Config),
-    {ok, OtherNode} = start_node(Config, "-proto_dist gen_tcp"),
+dirty_signal_handling_race(Config) ->
+    %% This test case trigger more or less the same
+    %% problematic scenario as the contended_signal_handling
+    %% test case is trying to trigger. This test case triggers
+    %% it via another signal and is also much more likely
+    %% (close to 100%) to trigger the problematic schenario.
     Tester = self(),
-    Exiter = spawn(BusyChannelNode,
-                   fun () ->
-                           pong = net_adm:ping(OtherNode),
-                           Tester ! {self(), alive},
-                           receive after infinity -> ok end
-                   end),
-    receive {Exiter, alive} -> ok end,
+    move_dirty_signal_handlers_to_first_scheduler(),
+    {S0, S1} = case erlang:system_info(schedulers_online) of
+                   1 -> {1, 1};
+                   2 -> {2, 1};
+                   SOnln -> {SOnln, SOnln-1}
+               end,
+    process_flag(priority, high),
+    process_flag(scheduler, S0),
+    erts_debug:set_internal_state(available_internal_state, true),
+    Drv = unlink_signal_drv,
+    ok = load_driver(Config, Drv),
+    try
+        %% {parallelism, true} option will ensure that each
+        %% signal to the port from a process is scheduled which
+        %% forces the process to release its main lock when
+        %% sending the signal...
+        Port = open_port({spawn, Drv}, [{parallelism, true}]),
+        true = is_port(Port),
+        %% The {alias, reply_demonitor} option will trigger a
+        %% 'demonitor' signal from Tester to the port when an
+        %% alias message sent using the alias is received by
+        %% Tester...
+        MA1 = erlang:monitor(port, Port, [{alias, reply_demonitor}]),
+        MA2 = erlang:monitor(port, Port, [{alias, reply_demonitor}]),
+        Pid = spawn_opt(fun () ->
+                                Tester ! go,
+                                receive after 500 -> ok end,
+                                %% The 'proc_sig_block' test signal will cause
+                                %% dirty signal handling to start and be
+                                %% blocked in the signal handling.
+                                erts_debug:set_internal_state(proc_sig_block,
+                                                              {Tester, 1000}),
+                                %% Tester will be stuck waiting for main lock
+                                %% when being scheduled out from its dirty
+                                %% execution. When this alias message is
+                                %% by the dirty signal handler Tester will be
+                                %% able to aquire the main lock and complete
+                                %% the schedule out operation.
+                                MA1 ! {MA1, trigger_demonitor_port_please},
+                                erts_debug:set_internal_state(proc_sig_block,
+                                                              {Tester, 100}),
+                                %% Tester will have been selected for
+                                %% execution, but stuck waiting for main lock.
+                                %% When this alias message is handled by the
+                                %% dirty signal handler, Tester will be able
+                                %% to aquire the main lock which will let it
+                                %% enter the problematic scenario. That is,
+                                %% ongoing dirty signal handling while it
+                                %% begins executing.
+                                MA2 ! {MA2, trigger_demonitor_port_please},
+                                erts_debug:set_internal_state(proc_sig_block,
+                                                              {Tester, 500}),
+                                ok
+                        end, [link, {scheduler, S1}]),
+        receive go -> ok end,
+        receive {'DOWN', MA1, port, Port, _} -> ct:fail(unexpected_port_down)
+        after 0 -> ok
+        end,
+        receive {'DOWN', MA2, port, Port, _} -> ct:fail(unexpected_port_down)
+        after 0 -> ok
+        end,
+        erts_debug:dirty_cpu(wait, 1000),
+        receive
+            {MA1, trigger_demonitor_port_please} -> ok
+        end,
+        receive
+            {MA2, trigger_demonitor_port_please} -> ok
+        end,
+        unlink(Pid),
+        unlink(Port),
+        exit(Pid, kill),
+        exit(Port, kill),
+        false = erlang:is_process_alive(Pid)
+    after
+        ok = erl_ddll:unload_driver(Drv)
+    end,
+    ok.
+
+move_dirty_signal_handlers_to_first_scheduler() ->
+    SOnln = erlang:system_flag(schedulers_online, 1),
+    try
+        true = lists:foldl(
+                 fun (Pid, FoundOne) ->
+                         case process_info(Pid, initial_call) of
+                             {initial_call, {erts_dirty_process_signal_handler,start,0}} ->
+                                 Pid ! please_execute_a_bit,
+                                 true;
+                             _ ->
+                                 FoundOne
+                         end
+                 end,
+                 false,
+                 processes())
+    after
+        erlang:system_flag(schedulers_online, SOnln)
+    end,
+    ok.
+
+busy_dist_exit_signal(Config) when is_list(Config) ->
+    ct:timetrap({seconds, 10}),
+
+    BusyTime = 1000,
+    {ok, BusyChannelPeer, BusyChannelNode} = ?CT_PEER(),
+    {ok, OtherPeer, OtherNode} = ?CT_PEER(["-proto_dist", "gen_tcp"]),
+    Tester = self(),
+    {Exiter,MRef} = spawn_monitor(BusyChannelNode,
+                                  fun () ->
+                                          pong = net_adm:ping(OtherNode),
+                                          Tester ! {self(), alive},
+                                          receive after infinity -> ok end
+                                  end),
+    receive
+        {Exiter, alive} ->
+            erlang:demonitor(MRef, [flush]);
+        {'DOWN', MRef, process, Why, normal} ->
+            ct:fail({exiter_died, Why})
+    end,
     Linker = spawn_link(OtherNode,
                         fun () ->
                                 process_flag(trap_exit, true),
@@ -244,7 +410,7 @@ busy_dist_exit_signal(Config) when is_list(Config) ->
                                         exit({unexpected_message, Unexpected})
                                 end
                          end),
-    make_busy(BusyChannelNode, OtherNode, 1000),
+    make_busy(BusyChannelNode, OtherNode, BusyTime),
     exit(Exiter, tester_killed_me),
     receive
         {Linker, got_exiter_exit_message} ->
@@ -254,14 +420,16 @@ busy_dist_exit_signal(Config) when is_list(Config) ->
         BusyTime*2 ->
             ct:fail(missing_exit_signal)
     end,
-    stop_node(BusyChannelNode),
-    stop_node(OtherNode),
+    peer:stop(BusyChannelPeer),
+    peer:stop(OtherPeer),
     ok.
 
 busy_dist_demonitor_signal(Config) when is_list(Config) ->
+    ct:timetrap({seconds, 10}),
+
     BusyTime = 1000,
-    {ok, BusyChannelNode} = start_node(Config),
-    {ok, OtherNode} = start_node(Config, "-proto_dist gen_tcp"),
+    {ok, BusyChannelPeer, BusyChannelNode} = ?CT_PEER(),
+    {ok, OtherPeer, OtherNode} = ?CT_PEER(["-proto_dist", "gen_tcp"]),
     Tester = self(),
     Demonitorer = spawn(BusyChannelNode,
                         fun () ->
@@ -293,7 +461,7 @@ busy_dist_demonitor_signal(Config) when is_list(Config) ->
                              end),
     Demonitorer ! {self(), monitor, Demonitoree},
     receive {Demonitoree, monitored} -> ok end,
-    make_busy(BusyChannelNode, OtherNode, 1000),
+    make_busy(BusyChannelNode, OtherNode, BusyTime),
     exit(Demonitorer, tester_killed_me),
     receive
         {Demonitoree, got_demonitorer_demonitor_signal} ->
@@ -303,22 +471,29 @@ busy_dist_demonitor_signal(Config) when is_list(Config) ->
         BusyTime*2 ->
             ct:fail(missing_demonitor_signal)
     end,
-    stop_node(BusyChannelNode),
-    stop_node(OtherNode),
+    peer:stop(BusyChannelPeer),
+    peer:stop(OtherPeer),
     ok.
 
 busy_dist_down_signal(Config) when is_list(Config) ->
+    ct:timetrap({seconds, 10}),
+
     BusyTime = 1000,
-    {ok, BusyChannelNode} = start_node(Config),
-    {ok, OtherNode} = start_node(Config, "-proto_dist gen_tcp"),
+    {ok, BusyChannelPeer, BusyChannelNode} = ?CT_PEER(),
+    {ok, OtherPeer, OtherNode} = ?CT_PEER(["-proto_dist", "gen_tcp"]),
     Tester = self(),
-    Exiter = spawn(BusyChannelNode,
-                   fun () ->
-                           pong = net_adm:ping(OtherNode),
-                           Tester ! {self(), alive},
-                           receive after infinity -> ok end
-                   end),
-    receive {Exiter, alive} -> ok end,
+    {Exiter,MRef} = spawn_monitor(BusyChannelNode,
+                                  fun () ->
+                                          pong = net_adm:ping(OtherNode),
+                                          Tester ! {self(), alive},
+                                          receive after infinity -> ok end
+                                  end),
+    receive
+        {Exiter, alive} ->
+            erlang:demonitor(MRef, [flush]);
+        {'DOWN', MRef, process, Why, normal} ->
+            ct:fail({exiter_died, Why})
+    end,
     Monitorer = spawn_link(OtherNode,
                         fun () ->
                                 process_flag(trap_exit, true),
@@ -331,7 +506,7 @@ busy_dist_down_signal(Config) when is_list(Config) ->
                                         exit({unexpected_message, Unexpected})
                                 end
                          end),
-    make_busy(BusyChannelNode, OtherNode, 1000),
+    make_busy(BusyChannelNode, OtherNode, BusyTime),
     exit(Exiter, tester_killed_me),
     receive
         {Monitorer, got_exiter_down_message} ->
@@ -341,14 +516,16 @@ busy_dist_down_signal(Config) when is_list(Config) ->
         BusyTime*2 ->
             ct:fail(missing_down_signal)
     end,
-    stop_node(BusyChannelNode),
-    stop_node(OtherNode),
+    peer:stop(BusyChannelPeer),
+    peer:stop(OtherPeer),
     ok.
 
 busy_dist_spawn_reply_signal(Config) when is_list(Config) ->
+    ct:timetrap({seconds, 10}),
+
     BusyTime = 1000,
-    {ok, BusyChannelNode} = start_node(Config),
-    {ok, OtherNode} = start_node(Config, "-proto_dist gen_tcp"),
+    {ok, BusyChannelPeer, BusyChannelNode} = ?CT_PEER(),
+    {ok, OtherPeer, OtherNode} = ?CT_PEER(["-proto_dist", "gen_tcp"]),
     Tester = self(),
     Spawner = spawn_link(OtherNode,
                          fun () ->
@@ -367,7 +544,7 @@ busy_dist_spawn_reply_signal(Config) when is_list(Config) ->
                                  end
                          end),
     receive {Spawner, ready} -> ok end,
-    make_busy(BusyChannelNode, OtherNode, 1000),
+    make_busy(BusyChannelNode, OtherNode, BusyTime),
     Spawner ! {self(), go},
     receive
         {Spawner, got_spawn_reply_message} ->
@@ -377,8 +554,8 @@ busy_dist_spawn_reply_signal(Config) when is_list(Config) ->
         BusyTime*2 ->
             ct:fail(missing_spawn_reply_signal)
     end,
-    stop_node(BusyChannelNode),
-    stop_node(OtherNode),
+    peer:stop(BusyChannelPeer),
+    peer:stop(OtherPeer),
     ok.
 
 -record(erl_link, {type,           % process | port | dist_process
@@ -387,17 +564,24 @@ busy_dist_spawn_reply_signal(Config) when is_list(Config) ->
                    id}).
 
 busy_dist_unlink_ack_signal(Config) when is_list(Config) ->
+    ct:timetrap({seconds, 10}),
+
     BusyTime = 1000,
-    {ok, BusyChannelNode} = start_node(Config),
-    {ok, OtherNode} = start_node(Config, "-proto_dist gen_tcp"),
+    {ok, BusyChannelPeer, BusyChannelNode} = ?CT_PEER(),
+    {ok, OtherPeer, OtherNode} = ?CT_PEER(["-proto_dist", "gen_tcp"]),
     Tester = self(),
-    Unlinkee = spawn(BusyChannelNode,
-                     fun () ->
-                             pong = net_adm:ping(OtherNode),
-                             Tester ! {self(), alive},
-                             receive after infinity -> ok end
-                     end),
-    receive {Unlinkee, alive} -> ok end,
+    {Unlinkee,MRef} = spawn_monitor(BusyChannelNode,
+                                    fun () ->
+                                            pong = net_adm:ping(OtherNode),
+                                            Tester ! {self(), alive},
+                                            receive after infinity -> ok end
+                                    end),
+    receive
+        {Unlinkee, alive} ->
+            erlang:demonitor(MRef, [flush]);
+        {'DOWN', MRef, process, Why, normal} ->
+            ct:fail({unlinkee_died, Why})
+    end,
     Unlinker = spawn_link(OtherNode,
                           fun () ->
                                   erts_debug:set_internal_state(available_internal_state, true),
@@ -420,7 +604,7 @@ busy_dist_unlink_ack_signal(Config) when is_list(Config) ->
                                   Tester ! {self(), got_unlink_ack_signal}
                           end),
     receive {Unlinker, ready} -> ok end,
-    make_busy(BusyChannelNode, OtherNode, 1000),
+    make_busy(BusyChannelNode, OtherNode, BusyTime),
     Unlinker ! {self(), go},
     receive
         {Unlinker, got_unlink_ack_signal} ->
@@ -430,10 +614,10 @@ busy_dist_unlink_ack_signal(Config) when is_list(Config) ->
         BusyTime*2 ->
             ct:fail(missing_unlink_ack_signal)
     end,
-    stop_node(BusyChannelNode),
-    stop_node(OtherNode),
+    peer:stop(BusyChannelPeer),
+    peer:stop(OtherPeer),
     ok.
-    
+
 unlink_exit(Config) when is_list(Config) ->
     %% OTP-18177
     %%
@@ -530,9 +714,429 @@ unlink_exit_test() ->
             ct:fail(ChildReason)
     end.
 
+%% Monitors could be reordered relative to message signals when the parallel
+%% signal sending optimization was active.
+monitor_order(_Config) ->
+    process_flag(message_queue_data, off_heap),
+    monitor_order_1(10).
+
+monitor_order_1(0) ->
+    ok;
+monitor_order_1(N) ->
+    Self = self(),
+    {Pid, MRef} = spawn_monitor(fun() ->
+                                        receive
+                                            MRef ->
+                                                %% The first message sets up
+                                                %% the parallel signal buffer,
+                                                %% the second uses it.
+                                                Self ! {self(), MRef, first},
+                                                Self ! {self(), MRef, second}
+                                        end,
+                                        exit(normal)
+                                end),
+    Pid ! MRef,
+    receive
+        {'DOWN', MRef, process, _, normal} ->
+            ct:fail("Down signal arrived before second message!");
+        {Pid, MRef, second} ->
+            receive {Pid, MRef, first} -> ok end,
+            erlang:demonitor(MRef, [flush]),
+            monitor_order_1(N - 1)
+    end.
+
+%% Signal order: Message vs DOWN from local process monitored by name.
+monitor_named_order_local(_Config) ->
+    process_flag(message_queue_data, off_heap),
+    erts_debug:set_internal_state(available_internal_state, true),
+    true = erts_debug:set_internal_state(proc_sig_buffers, true),
+
+    LNode = node(),
+    repeat(fun (N) -> monitor_named_order(LNode, N) end, 100),
+    ok.
+
+%% Signal order: Message vs DOWN from remote process monitored by name.
+monitor_named_order_remote(_Config) ->
+    process_flag(message_queue_data, off_heap),
+    erts_debug:set_internal_state(available_internal_state, true),
+    true = erts_debug:set_internal_state(proc_sig_buffers, true),
+
+    {ok, Peer, RNode} = ?CT_PEER(),
+    repeat(fun (N) -> monitor_named_order(RNode, N) end, 10),
+    peer:stop(Peer),
+    ok.
+
+monitor_named_order(Node, N) ->
+    %% Send messages using pid, name and alias.
+    Pid = self(),
+    register(tester, Pid),
+    Name = {tester, node()},
+    AliasA = alias(),
+    NumMsg = 1000 + N,
+    Sender = spawn_link(Node,
+                     fun() ->
+                             register(monitor_named_order, self()),
+                             Pid ! {self(), ready},
+                             {go, AliasM} = receive_any(),
+                             send_msg_seq(Pid, Name, AliasA, AliasM, NumMsg),
+                             exit(normal)
+                     end),
+    {Sender, ready} = receive_any(),
+    AliasM = monitor(process, {monitor_named_order,Node},
+                     [{alias,explicit_unalias}]),
+    Sender ! {go, AliasM},
+    recv_msg_seq(NumMsg),
+    {'DOWN', AliasM, process, {monitor_named_order,Node}, normal}
+        = receive_any(),
+    unregister(tester),
+    unalias(AliasA),
+    unalias(AliasM),
+    ok.
+
+send_msg_seq(_, _, _, _, 0) -> ok;
+send_msg_seq(To1, To2, To3, To4, N) ->
+    To1 ! N,
+    send_msg_seq(To2, To3, To4, To1, N-1).
+
+recv_msg_seq(0) -> ok;
+recv_msg_seq(N) ->
+    N = receive M -> M end,
+    recv_msg_seq(N-1).
+
+receive_any() ->
+    receive M -> M end.
+
+receive_any(Timeout) ->
+    receive M -> M
+    after Timeout -> timeout
+    end.
+
+monitor_nodes_order(_Config) ->
+    process_flag(message_queue_data, off_heap),
+    erts_debug:set_internal_state(available_internal_state, true),
+    true = erts_debug:set_internal_state(proc_sig_buffers, true),
+
+    {ok, Peer, RNode} = ?CT_PEER(#{peer_down => continue,
+                                   connection => 0}),
+    Self = self(),
+    ok = net_kernel:monitor_nodes(true, [nodedown_reason]),
+    [] = nodes(connected),
+    Pids = peer:call(Peer, ?MODULE, spawn_spammers, [64, Self, []]),
+    {nodeup, RNode, []} = receive_any(),
+
+    ok = peer:cast(Peer, erlang, halt, [0]),
+
+    [put(P, 0) || P <- Pids],  % spam counters per sender
+    {nodedown, RNode, [{nodedown_reason,connection_closed}]} =
+        receive_filter_spam(),
+    [io:format("From spammer ~p: ~p messages\n", [P, get(P)]) || P <- Pids],
+    timeout = receive_any(100),   % Nothing after nodedown
+
+    {down, tcp_closed} = peer:get_state(Peer),
+    peer:stop(Peer),
+    ok.
+
+spawn_spammers(0, _To, Acc) ->
+    Acc;
+spawn_spammers(N, To, Acc) ->
+    Pid = spawn(fun() -> spam_pid(To, 1) end),
+    spawn_spammers(N-1, To, [Pid | Acc]).
+
+spam_pid(To, N) ->
+    To ! {spam, self(), N},
+    erlang:yield(), % Let other spammers run to get lots of different senders
+    spam_pid(To, N+1).
+
+receive_filter_spam() ->
+    receive
+        {spam, From, N} ->
+            match(N, get(From) + 1),
+            put(From, N),
+            receive_filter_spam();
+        M -> M
+    end.
+
+move_msgs_off_heap_signal_basic(Config) when is_list(Config) ->
+    move_msgs_off_heap_signal_test(false, false).
+
+move_msgs_off_heap_signal_recv(Config) when is_list(Config) ->
+    move_msgs_off_heap_signal_test(true, false).
+
+move_msgs_off_heap_signal_exit(Config) when is_list(Config) ->
+    move_msgs_off_heap_signal_test(false, true).
+
+move_msgs_off_heap_signal_recv_exit(Config) when is_list(Config) ->
+    move_msgs_off_heap_signal_test(true, true).
+
+move_msgs_off_heap_signal_test(RecvPair, Exit) ->
+    erlang:trace(new_processes, true, [running_procs]),
+    SFact = test_server:timetrap_scale_factor(),
+    GoTime = erlang:monotonic_time(millisecond) + 1000*SFact,
+    ProcF = fun () ->
+                    Now = erlang:monotonic_time(millisecond),
+                    Tmo = case GoTime - Now of
+                              Left when Left < 0 ->
+                                  erlang:display({go_time_passed, Left}),
+                                  0;
+                              Left ->
+                                  Left
+                          end,
+                    receive after Tmo -> ok end,
+                    on_heap = process_flag(message_queue_data, off_heap),
+                    if RecvPair -> receive_integer_pairs(infinity);
+                       true -> receive after infinity -> ok end
+                    end
+            end,
+    Ps = lists:map(fun (_) ->
+                           spawn_opt(ProcF,
+                                     [link,
+                                      {message_queue_data, on_heap}])
+                   end, lists:seq(1, 100)),
+    lists:foreach(fun (P) ->
+                          lists:foreach(fun (N) when N rem 100 == 0 ->
+                                                P ! [N|N];
+                                            (N) ->
+                                                P ! N
+                                        end, lists:seq(1, 10000))
+                  end, Ps),
+    Now = erlang:monotonic_time(millisecond),
+    Tmo = case GoTime - Now + 10 of
+              Left when Left < 0 ->
+                  erlang:display({go_time_passed, Left}),
+                  0;
+              Left ->
+                  Left
+          end,
+    receive after Tmo -> ok end,
+    if Exit ->
+            _ = lists:foldl(fun (P, N) when N rem 10 ->
+                                    unlink(P),
+                                    exit(P, terminated),
+                                    N+1;
+                                (_P, N) ->
+                                    N+1
+                            end,
+                            0,
+                            Ps),
+            ok;
+       true ->
+            ok
+    end,
+    wait_traced_not_running(1000 + 200*SFact),
+    erlang:trace(new_processes, false, [running_procs]),
+    lists:foreach(fun (P) ->
+                          unlink(P),
+                          exit(P, kill)
+                  end, Ps),
+    lists:foreach(fun (P) ->
+                          false = is_process_alive(P)
+                  end, Ps),
+    ok.
+
+copy_literal_area_signal_basic(Config) when is_list(Config) ->
+    copy_literal_area_signal_test(false, false).
+
+copy_literal_area_signal_recv(Config) when is_list(Config) ->
+    copy_literal_area_signal_test(true, false).
+
+copy_literal_area_signal_exit(Config) when is_list(Config) ->
+    copy_literal_area_signal_test(false, true).
+
+copy_literal_area_signal_recv_exit(Config) when is_list(Config) ->
+    copy_literal_area_signal_test(true, true).
+
+copy_literal_area_signal_test(RecvPair, Exit) ->
+    persistent_term:put({?MODULE, ?FUNCTION_NAME}, make_ref()),
+    Literal = persistent_term:get({?MODULE, ?FUNCTION_NAME}),
+    true = is_reference(Literal),
+    0 = erts_debug:size_shared(Literal), %% Should be a literal...
+    ProcF = fun () ->
+                    0 = erts_debug:size_shared(Literal), %% Should be a literal...
+                    if RecvPair ->
+                            receive receive_pairs -> ok end,
+                            receive_integer_pairs(0);
+                       true ->
+                            ok
+                    end,
+                    receive check_literal_conversion -> ok end,
+                    receive
+                        Literal ->
+                            %% Should not be a literal anymore...
+                            false = (0 == erts_debug:size_shared(Literal))
+                    end
+            end,
+    PMs = lists:map(fun (_) ->
+                            spawn_opt(ProcF, [link, monitor])
+                    end, lists:seq(1, 100)),
+    lists:foreach(fun ({P,_M}) ->
+                          lists:foreach(fun (N) when N rem 100 == 0 ->
+                                                P ! [N|N];
+                                            (N) ->
+                                                P ! N
+                                        end, lists:seq(1, 10000)),
+                          P ! Literal
+                  end, PMs),
+    persistent_term:erase({?MODULE, ?FUNCTION_NAME}),
+    receive after 1 -> ok end,
+    if RecvPair ->
+            lists:foreach(fun ({P,_M}) ->
+                                  P ! receive_pairs
+                          end, PMs);
+       true ->
+            ok
+    end,
+    if Exit ->
+            _ = lists:foldl(fun ({P, _M}, N) when N rem 10 ->
+                                    unlink(P),
+                                    exit(P, terminated),
+                                    N+1;
+                                (_PM, N) ->
+                                    N+1
+                            end,
+                            0,
+                            PMs),
+            ok;
+       true ->
+            ok
+    end,
+    literal_area_collector_test:check_idle(),
+    lists:foreach(fun ({P,_M}) ->
+                          P ! check_literal_conversion
+                  end, PMs),
+    lists:foreach(fun ({P, M}) ->
+                          receive
+                              {'DOWN', M, process, P, R} ->
+                                  case R of
+                                      normal -> ok;
+                                      terminated -> ok
+                                  end
+                          end
+                  end, PMs),
+    ok.
+
+simultaneous_signals_basic(Config) when is_list(Config) ->
+    simultaneous_signals_test(false, false).
+
+simultaneous_signals_recv(Config) when is_list(Config) ->
+    simultaneous_signals_test(true, false).
+
+simultaneous_signals_exit(Config) when is_list(Config) ->
+    simultaneous_signals_test(false, true).
+
+simultaneous_signals_recv_exit(Config) when is_list(Config) ->
+    simultaneous_signals_test(true, true).
+
+simultaneous_signals_test(RecvPairs, Exit) ->
+    erlang:trace(new_processes, true, [running_procs]),
+    persistent_term:put({?MODULE, ?FUNCTION_NAME}, make_ref()),
+    Literal = persistent_term:get({?MODULE, ?FUNCTION_NAME}),
+    true = is_reference(Literal),
+    0 = erts_debug:size_shared(Literal), %% Should be a literal...
+    SFact = test_server:timetrap_scale_factor(),
+    GoTime = erlang:monotonic_time(millisecond) + 1000*SFact,
+    ProcF = fun () ->
+                    0 = erts_debug:size_shared(Literal), %% Should be a literal...
+                    Now = erlang:monotonic_time(millisecond),
+                    Tmo = case GoTime - Now of
+                              Left when Left < 0 ->
+                                  erlang:display({go_time_passed, Left}),
+                                  0;
+                              Left ->
+                                  Left
+                          end,
+                    receive after Tmo -> ok end,
+                    on_heap = process_flag(message_queue_data, off_heap),
+                    if RecvPairs -> receive_integer_pairs(0);
+                       true -> ok
+                    end,
+                    receive check_literal_conversion -> ok end,
+                    receive
+                        Literal ->
+                            %% Should not be a literal anymore...
+                            false = (0 == erts_debug:size_shared(Literal))
+                    end
+            end,
+    PMs = lists:map(fun (_) ->
+                            spawn_opt(ProcF,
+                                      [link,
+                                       monitor,
+                                       {message_queue_data, on_heap}])
+                    end, lists:seq(1, 100)),
+    lists:foreach(fun ({P,_M}) ->
+                          lists:foreach(fun (N) when N rem 100 == 0 ->
+                                                P ! [N|N];
+                                            (N) ->
+                                                P ! N
+                                        end, lists:seq(1, 10000)),
+                          P ! Literal
+                  end, PMs),
+    Now = erlang:monotonic_time(millisecond),
+    Tmo = case GoTime - Now - 5 of % a bit earlier...
+              Left when Left < 0 ->
+                  erlang:display({go_time_passed, Left}),
+                  0;
+              Left ->
+                  Left
+          end,
+    receive after Tmo -> ok end,
+    persistent_term:erase({?MODULE, ?FUNCTION_NAME}),
+    receive after 10 -> ok end,
+    if Exit ->
+            _ = lists:foldl(fun ({P, _M}, N) when N rem 10 ->
+                                    unlink(P),
+                                    exit(P, terminated),
+                                    N+1;
+                                (_PM, N) ->
+                                    N+1
+                            end,
+                            0,
+                            PMs),
+            ok;
+       true ->
+            ok
+    end,
+    wait_traced_not_running(1000 + 200*SFact),
+    erlang:trace(new_processes, false, [running_procs]),
+    literal_area_collector_test:check_idle(),
+    lists:foreach(fun ({P,_M}) ->
+                          P ! check_literal_conversion
+                  end, PMs),
+    lists:foreach(fun ({P, M}) ->
+                          receive
+                              {'DOWN', M, process, P, R} ->
+                                  case R of
+                                      normal -> ok;
+                                      terminated -> ok
+                                  end
+                          end
+                  end, PMs),
+    ok.
+    
+
+wait_traced_not_running(Tmo) ->
+    receive
+        {trace,_,What,_} when What == in;
+                              What == out ->
+            wait_traced_not_running(Tmo)
+    after
+        Tmo ->
+            ok
+    end.
+
+receive_integer_pairs(Tmo) ->
+    receive
+        [N|N] ->
+            receive_integer_pairs(Tmo)
+    after
+        Tmo ->
+            ok
+    end.
+
 %%
 %% -- Internal utils --------------------------------------------------------
 %%
+
+match(X,X) -> ok.
 
 load_driver(Config, Driver) ->
     DataDir = proplists:get_value(data_dir, Config),
@@ -649,8 +1253,11 @@ spam(To, Data) ->
 
 repeat(_Fun, N) when is_integer(N), N =< 0 ->
     ok;
-repeat(Fun, N) when is_integer(N)  ->
+repeat(Fun, N) when is_function(Fun, 0), is_integer(N)  ->
     Fun(),
+    repeat(Fun, N-1);
+repeat(Fun, N) when is_function(Fun, 1), is_integer(N)  ->
+    Fun(N),
     repeat(Fun, N-1).
 
 busy_wait_until(Fun) ->
@@ -658,17 +1265,3 @@ busy_wait_until(Fun) ->
         true -> ok;
         _ -> busy_wait_until(Fun)
     end.
-
-start_node(Config, Args) ->
-    Name = list_to_atom(atom_to_list(?MODULE)
-			++ "-" ++ atom_to_list(proplists:get_value(testcase, Config))
-			++ "-" ++ integer_to_list(erlang:system_time(second))
-			++ "-" ++ integer_to_list(erlang:unique_integer([positive]))),
-    Pa = filename:dirname(code:which(?MODULE)),
-    test_server:start_node(Name, slave, [{args,  "-pa " ++ Pa ++ " " ++ Args}]).
-
-start_node(Config) ->
-    start_node(Config, "").
-
-stop_node(Node) ->
-    test_server:stop_node(Node).

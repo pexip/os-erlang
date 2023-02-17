@@ -19,7 +19,7 @@
 %%
 %%
 %%----------------------------------------------------------------------
-%% Purpose:
+%% Purpose: 
 %%----------------------------------------------------------------------
 
 -module(tls_gen_connection).
@@ -52,7 +52,7 @@
          empty_connection_state/2,
          encode_handshake/4]).
 
-%% State transition handling
+%% State transition handling	 
 -export([next_event/3,
          next_event/4,
          handle_protocol_record/3]).
@@ -70,8 +70,6 @@
          close/4,
          protocol_name/0]).
 
--define(DIST_CNTRL_SPAWN_OPTS, [{priority, max}]).
-
 %%====================================================================
 %% Internal application API
 %%====================================================================
@@ -79,10 +77,10 @@
 %% Setup
 %%====================================================================
 start_fsm(Role, Host, Port, Socket,
-          {#{erl_dist := ErlDist}, _, Trackers} = Opts,
+          {#{erl_dist := ErlDist, sender_spawn_opts := SenderSpawnOpts}, _, Trackers} = Opts,
 	  User, {CbModule, _, _, _, _} = CbInfo,
 	  Timeout) ->
-    SenderOptions = handle_sender_options(ErlDist),
+    SenderOptions = handle_sender_options(ErlDist, SenderSpawnOpts),
     Starter = start_connection_tree(User, ErlDist, SenderOptions,
                                     Role, [Host, Port, Socket, Opts, User, CbInfo]),
     receive
@@ -92,12 +90,12 @@ start_fsm(Role, Host, Port, Socket,
             Error
     end.
 
-handle_sender_options(ErlDist) ->
+handle_sender_options(ErlDist, SpawnOpts) ->
     case ErlDist of
         true ->
-            [[{spawn_opt, ?DIST_CNTRL_SPAWN_OPTS}]];
+            [[{spawn_opt, [{priority, max} | proplists:delete(priority, SpawnOpts)]}]];
         false ->
-            [[]]
+            [[{spawn_opt, SpawnOpts}]]
     end.
 
 start_connection_tree(User, IsErlDist, SenderOpts, Role, ReceiverOpts) ->
@@ -148,24 +146,26 @@ initialize_tls_sender(#state{static_env = #static_env{
                                              trackers = Trackers
                                             },
                              connection_env = #connection_env{negotiated_version = Version},
-                             socket_options = SockOpts, 
+                             socket_options = SockOpts,
                              ssl_options = #{renegotiate_at := RenegotiateAt,
                                              key_update_at := KeyUpdateAt,
                                              erl_dist := ErlDist,
-                                             log_level := LogLevel},
+                                             log_level := LogLevel,
+                                             hibernate_after := HibernateAfter},
                              connection_states = #{current_write := ConnectionWriteState},
                              protocol_specific = #{sender := Sender}}) ->
     Init = #{current_write => ConnectionWriteState,
              role => Role,
              socket => Socket,
              socket_options => SockOpts,
-             erl_dist => ErlDist, 
+             erl_dist => ErlDist,
              trackers => Trackers,
              transport_cb => Transport,
              negotiated_version => Version,
              renegotiate_at => RenegotiateAt,
              key_update_at => KeyUpdateAt,
-             log_level => LogLevel},
+             log_level => LogLevel,
+             hibernate_after => HibernateAfter},
     tls_sender:initialize(Sender, Init).
 
 %%====================================================================
@@ -470,7 +470,8 @@ handle_protocol_record(#ssl_tls{type = ?ALERT, fragment = EncAlerts}, StateName,
         #alert{} = Alert ->
             ssl_gen_statem:handle_own_alert(Alert, StateName, State)
     catch
-	_:_ ->
+	_:Reason:ST ->
+            ?SSL_LOG(info, handshake_error, [{error, Reason}, {stacktrace, ST}]),
 	    ssl_gen_statem:handle_own_alert(?ALERT_REC(?FATAL, ?HANDSHAKE_FAILURE, alert_decode_error),
 					    StateName, State)
 
@@ -527,7 +528,8 @@ send_sync_alert(
   Alert, #state{protocol_specific = #{sender := Sender}} = State) ->
     try tls_sender:send_and_ack_alert(Sender, Alert)
     catch
-        _:_ ->
+        _:Reason:ST ->
+            ?SSL_LOG(info, "Send failed", [{error, Reason}, {stacktrace, ST}]),
             throw({stop, {shutdown, own_alert}, State})
     end.
 
@@ -585,7 +587,6 @@ tls_handshake_events(HSPackets, RecordRest) ->
     RestEvent = {next_event, internal, {protocol_record, #ssl_tls{type = ?HANDSHAKE, fragment = RecordRest}}},
     FirstHS = tls_handshake_events(HSPackets, <<>>),
     FirstHS ++ [RestEvent].
-
 
 unprocessed_events(Events) ->
     %% The first handshake event will be processed immediately

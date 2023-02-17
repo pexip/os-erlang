@@ -56,59 +56,47 @@ init_per_testcase(Case, Config) ->
     runner:init_per_testcase(?MODULE, Case, Config).
 
 ei_accept(Config) when is_list(Config) ->
-
-    [ei_accept_do(Config, CR, SI)
-     || CR <- [0,21],
-        SI <- [default, ussi]],
+    _ = [ei_accept_do(Config, SI) || SI <- [default, ussi]],
     ok.
 
-ei_accept_do(Config, CompatRel, SockImpl) ->
-    io:format("CompatRel=~p, SockImpl=~p\n", [CompatRel, SockImpl]),
+ei_accept_do(Config, SockImpl) ->
+    io:format("SockImpl=~p\n", [SockImpl]),
     P = runner:start(Config, ?interpret),
-    0 = ei_connect_init(P, 42, erlang:get_cookie(), 0, CompatRel, SockImpl),
+    0 = ei_connect_init(P, 42, erlang:get_cookie(), 0, 0, SockImpl),
 
     Myname = hd(tl(string:tokens(atom_to_list(node()), "@"))),
     io:format("Myname ~p ~n",  [Myname]),
     EINode = list_to_atom("c42@"++Myname),
     io:format("EINode ~p ~n",  [EINode]),
 
-    %% We take this opportunity to also test export-funs and bit-strings
-    %% with (ugly) tuple fallbacks in OTP 21 and older.
+    %% We take this opportunity to also test export-funs and bit-strings.
     %% Test both toward pending connection and established connection.
-    TermsAndFallbacks =
-        [{<<1:1>>, {<<128>>,1}},
-         {fun lists:map/2, {lists,map}},
-
-         %% Also test funs with hopeful encoding in environment,
-         %% which lead to incorrect fun size encoding (OTP-18104)
-         %% toward pending connection.
-         {fun_with_env(<<1:1>>), fun_with_env({<<128>>,1})},
-         {fun_with_env(fun lists:map/2), fun_with_env({lists,map})}],
-    {RealTerms, Fallbacks} = lists:unzip(TermsAndFallbacks),
-    EncTerms = case CompatRel of
-                   0 -> RealTerms;
-                   21 -> Fallbacks
-               end,
+    %% OTP-25: This is a bit obsolete now as we no longer support
+    %%         tuple fallbacks for export-funs and bit-strings.
+    RealTerms =
+        [<<1:1>>,
+         fun lists:map/2,
+         fun_with_env(<<1:1>>),
+         fun_with_env(fun lists:map/2)],
 
     Self = self(),
     Funny = fun() -> hello end,
-    TermToSend = {call, Self, "Test", Funny, RealTerms},
-    TermToGet  = {call, Self, "Test", Funny, EncTerms},
+    Terms = {call, Self, "Test", Funny, RealTerms},
     Port = 6543,
     {ok, ListenFd} = ei_publish(P, Port),
-    {any, EINode} ! TermToSend,
+    {any, EINode} ! Terms,
 
     {ok, Fd, Node} = ei_accept(P, ListenFd),
     Node = node(),
     Got1 = ei_receive(P, Fd),
 
     %% Send again, now without auto-connect
-    {any, EINode} ! TermToSend,
+    {any, EINode} ! Terms,
     Got2 = ei_receive(P, Fd),
 
-    io:format("Sent ~p~nExp. ~p~nGot1 ~p~nGot2 ~p~n", [TermToSend, TermToGet, Got1, Got2]),
-    TermToGet = Got1,
-    TermToGet = Got2,
+    io:format("Sent ~p~nExp. ~p~nGot1 ~p~nGot2 ~p~n", [Terms, Terms, Got1, Got2]),
+    Terms = Got1,
+    Terms = Got2,
 
     runner:finish(P),
     ok.
@@ -120,19 +108,18 @@ fun_with_env(Term) ->
 id(X) -> X.
 
 
-%% Send random hopeful encoded terms from emulator to c-node
-%% and verify correct encoding with/without fallback.
+%% Send random encoded terms from emulator to c-node
+%% and verify correct encoding.
 hopeful_random(Config) when is_list(Config) ->
-    [hopeful_random_do(Config, CR, SI)
-     || CR <- [0, 21],
-        SI <- [default, ussi]],
+    [hopeful_random_do(Config, SI)
+     || SI <- [default, ussi]],
     ok.
 
 
-hopeful_random_do(Config, CompatRel, SockImpl) ->
-    io:format("CompatRel=~p, SockImpl=~p\n", [CompatRel, SockImpl]),
+hopeful_random_do(Config, SockImpl) ->
+    io:format("SockImpl=~p\n", [SockImpl]),
     P = runner:start(Config, ?interpret),
-    0 = ei_connect_init(P, 42, erlang:get_cookie(), 0, CompatRel, SockImpl),
+    0 = ei_connect_init(P, 42, erlang:get_cookie(), 0, 0, SockImpl),
 
     Myname = hd(tl(string:tokens(atom_to_list(node()), "@"))),
     io:format("Myname ~p ~n",  [Myname]),
@@ -155,50 +142,20 @@ hopeful_random_do(Config, CompatRel, SockImpl) ->
     [{any, EINode} ! T || T <- Terms],
     {ok, Fd, Node} = ei_accept(P, ListenFd),
     Node = node(),
-    [match(T, ei_receive(P, Fd), CompatRel) || T <- Terms],
+    [match(T, ei_receive(P, Fd)) || T <- Terms],
 
     %% Send again on established connection
     [{any, EINode} ! T || T <- Terms],
-    [match(T, ei_receive(P, Fd), CompatRel) || T <- Terms],
+    [match(T, ei_receive(P, Fd)) || T <- Terms],
 
     runner:finish(P),
     ok.
 
 
-match(A, B, 0) ->
-    match(A, B);
-match(A, B, 21) ->
-    match(fallback(printable(A)),
-          printable(B)). %% B assumed to already be fallback'ed
-
 match(A, A) -> ok;
 match(A, B) ->
-    io:format("match failed\nA = ~p\nB = ~p\n", [A, B]),
+    io:format("match failed\nA = ~p\nB = ~p\n", [printable(A), printable(B)]),
     ct:fail("match failed").
-
-
-%% Convert to fallbacks to bitstrings and export funs.
-%% Does not support local funs with environment terms.
-fallback(Binary) when is_binary(Binary) ->
-    Binary;
-fallback(BitStr) when is_bitstring(BitStr) ->
-    TailBits = bit_size(BitStr) rem 8,
-    PadBits = 8 - TailBits,
-    {<<BitStr/bits, 0:PadBits>>, TailBits};
-fallback(Fun) when is_function(Fun) ->
-    FI = erlang:fun_info(Fun),
-    {type,external} = lists:keyfind(type, 1, FI),
-    {module, Mod} = lists:keyfind(module, 1, FI),
-    {name, Func} = lists:keyfind(name, 1, FI),
-    {Mod, Func};
-fallback([H|T]) ->
-    [fallback(H)|fallback(T)];
-fallback(Tuple) when is_tuple(Tuple) ->
-    list_to_tuple(fallback(tuple_to_list(Tuple)));
-fallback(Map) when is_map(Map) ->
-    maps:from_list(fallback(maps:to_list(Map)));
-fallback(Leaf) ->
-    Leaf.
 
 random_term(MaxSize) ->
     rand_term(rand:uniform(MaxSize)).

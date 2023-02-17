@@ -1,7 +1,7 @@
 %
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2004-2021. All Rights Reserved.
+%% Copyright Ericsson AB 2004-2022. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -35,6 +35,7 @@
 	 channel_info/3,
 	 daemon/1, daemon/2, daemon/3,
 	 daemon_info/1, daemon_info/2,
+         daemon_replace_options/2,
          set_sock_opts/2, get_sock_opts/2,
 	 default_algorithms/0,
          chk_algos_opts/1,
@@ -108,7 +109,7 @@ start(Type) ->
         {ok, _} ->
             %% Clear cached default_algorithms (if exists) ...
             ssh_transport:clear_default_algorithms_env(),
-            %% ... and rebuld them taking configure options in account
+            %% ... and rebuild them taking configure options in account
             ssh_transport:default_algorithms(),
             ok;
         Other ->
@@ -441,6 +442,17 @@ daemon(Host0, Port0, UserOptions0) when 0 =< Port0, Port0 =< 65535,
 
 daemon(_, _, _) ->
     {error, badarg}.
+
+%%--------------------------------------------------------------------
+-spec daemon_replace_options(DaemonRef, NewUserOptions) -> {ok,daemon_ref()}
+                                                         | {error,term()} when
+      DaemonRef :: daemon_ref(),
+      NewUserOptions :: daemon_options().
+
+daemon_replace_options(DaemonRef, NewUserOptions) ->
+    {ok,Os0} = ssh_system_sup:get_acceptor_options(DaemonRef),
+    Os1 = ssh_options:merge_options(server, NewUserOptions, Os0),
+    ssh_system_sup:replace_acceptor_options(DaemonRef, Os1).
 
 %%--------------------------------------------------------------------
 -type daemon_info_tuple() ::

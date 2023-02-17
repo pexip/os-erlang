@@ -200,6 +200,7 @@ RELTESTSYSBINDIR     = $(RELTESTSYSALLDATADIR)/bin
 ERL_COMPILE_FLAGS += \
 	$(INCLUDES) \
 	$(INETS_FLAGS)
+ERL_COMPILE_FLAGS := $(filter-out +deterministic,$(ERL_COMPILE_FLAGS))
 
 # ----------------------------------------------------
 # Targets
@@ -209,7 +210,7 @@ ERL_COMPILE_FLAGS += \
 # 1) INETS_PRIV_DIR must be created
 # ----------------------------------------------------
 
-tests debug opt: $(BUILDTARGET) 
+tests $(TYPES): $(BUILDTARGET) 
 
 targets: $(TARGET_FILES)
 

@@ -1,7 +1,7 @@
 /*
  * %CopyrightBegin%
  *
- * Copyright Ericsson AB 1998-2021. All Rights Reserved.
+ * Copyright Ericsson AB 1998-2022. All Rights Reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -302,7 +302,7 @@ typedef struct db_table_common {
     UWord heir_data;          /* To send in ETS-TRANSFER (is_immed or (DbTerm*) */
     Uint64 heir_started_interval;  /* To further identify the heir */
     Eterm the_name;           /* an atom */
-    Binary *btid;
+    Binary *btid;             /* table magic ref, read only after creation */
     DbTableMethod* meth;      /* table methods */
     /* The ErtsFlxCtr below contains:
      * - Total number of items in table
@@ -321,11 +321,7 @@ typedef struct db_table_common {
     int compress;
 
     /* For unfinished operations that needs to be helped */
-    void (*continuation)(long *reds_ptr,
-                         void** state,
-                         void* extra_context); /* To help yielded process */
-    erts_atomic_t continuation_state;
-    Binary* continuation_res_bin;
+    struct ets_insert_2_list_info* continuation_ctx;
 #ifdef ETS_DBG_FORCE_TRAP
     int dbg_force_trap;  /* force trap on table lookup */
 #endif
@@ -345,12 +341,17 @@ typedef struct db_table_common {
 #define DB_FREQ_READ      (1 << 10) /* read_concurrency */
 #define DB_NAMED_TABLE    (1 << 11)
 #define DB_BUSY           (1 << 12)
+#define DB_EXPLICIT_LOCK_GRANULARITY  (1 << 13)
+#define DB_FINE_LOCKED_AUTO (1 << 14)
 
 #define DB_CATREE_FORCE_SPLIT (1 << 31)  /* erts_debug */
 #define DB_CATREE_DEBUG_RANDOM_SPLIT_JOIN (1 << 30)  /* erts_debug */
 
-#define IS_HASH_TABLE(Status) (!!((Status) & \
-				  (DB_BAG | DB_SET | DB_DUPLICATE_BAG)))
+#define IS_HASH_TABLE(Status) (!!((Status) &                       \
+                                  (DB_BAG | DB_SET | DB_DUPLICATE_BAG)))
+#define IS_HASH_WITH_AUTO_TABLE(Status) \
+    (((Status) &                                                        \
+      (DB_ORDERED_SET | DB_CA_ORDERED_SET | DB_FINE_LOCKED_AUTO)) == DB_FINE_LOCKED_AUTO)
 #define IS_TREE_TABLE(Status) (!!((Status) & \
 				  DB_ORDERED_SET))
 #define IS_CATREE_TABLE(Status) (!!((Status) & \
@@ -516,7 +517,7 @@ typedef struct dmc_err_info {
 ** Compilation flags
 **
 ** The dialect is in the 3 least significant bits and are to be interspaced by
-** by at least 2 (decimal), thats why ((Uint) 2) isn't used. This is to be 
+** by at least 2 (decimal), that's why ((Uint) 2) isn't used. This is to be 
 ** able to add DBIF_GUARD or DBIF BODY to it to use in the match_spec bif
 ** table. The rest of the word is used like ordinary flags, one bit for each 
 ** flag. Note that DCOMP_TABLE and DCOMP_TRACE are mutually exclusive.

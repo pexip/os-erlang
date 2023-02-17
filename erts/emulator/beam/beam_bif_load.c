@@ -804,6 +804,12 @@ BIF_RETTYPE loaded_0(BIF_ALIST_0)
 
 BIF_RETTYPE call_on_load_function_1(BIF_ALIST_1)
 {
+#ifdef BEAMASM
+    /* This is implemented as an instruction. We've skipped providing a more
+     * helpful error message since it's undocumented and should never be called
+     * by the user. */
+    BIF_ERROR(BIF_P, BADARG);
+#else
     Module* modp = erts_get_module(BIF_ARG_1, erts_active_code_ix());
     const BeamCodeHeader *hdr;
 
@@ -819,6 +825,7 @@ BIF_RETTYPE call_on_load_function_1(BIF_ALIST_1)
     }
 
     BIF_ERROR(BIF_P, BADARG);
+#endif
 }
 
 BIF_RETTYPE finish_after_on_load_2(BIF_ALIST_2)
@@ -877,7 +884,7 @@ BIF_RETTYPE finish_after_on_load_2(BIF_ALIST_2)
 	modp->on_load = 0;
 
 	/*
-	 * The on_load function succeded. Fix up export entries.
+	 * The on_load function succeeded. Fix up export entries.
 	 */
 	num_exps = export_list_size(code_ix);
 	for (i = 0; i < num_exps; i++) {
@@ -890,7 +897,8 @@ BIF_RETTYPE finish_after_on_load_2(BIF_ALIST_2)
             DBG_CHECK_EXPORT(ep, code_ix);
 
             if (ep->trampoline.not_loaded.deferred != 0) {
-                    ep->addresses[code_ix] = (void*)ep->trampoline.not_loaded.deferred;
+                    ep->dispatch.addresses[code_ix] =
+                        (void*)ep->trampoline.not_loaded.deferred;
                     ep->trampoline.not_loaded.deferred = 0;
             } else {
                 if (ep->bif_number != -1) {
@@ -967,12 +975,39 @@ set_default_trace_pattern(Eterm module)
 }
 
 int
+erts_check_copy_literals_gc_need_max_reds(Process *c_p)
+{
+    Uint64 words, reds;
+
+    /*
+     * Calculate maximum amount of words that needs
+     * to be scanned...
+     */
+    words = 1; /* fvalue */
+    words += c_p->hend - c_p->stop; /* stack */
+    words += c_p->htop - c_p->heap; /* new heap */
+    if (c_p->abandoned_heap)
+        words += c_p->heap_sz; /* abandoned heap */
+    words += c_p->old_htop - c_p->old_heap; /* old heap */
+    if (c_p->dictionary) {
+	Eterm* start = ERTS_PD_START(c_p->dictionary);
+	Eterm* end = start + ERTS_PD_SIZE(c_p->dictionary);
+
+        words += end - start; /* dictionary */
+    }
+    words += c_p->mbuf_sz; /* heap and message fragments */
+
+    /* Convert to reductions... */
+    reds = ((words - 1)/ERTS_CLA_SCAN_WORDS_PER_RED) + 1;
+    if (reds > CONTEXT_REDS)
+        return CONTEXT_REDS+1;
+    return (int) reds;
+}
+
+int
 erts_check_copy_literals_gc_need(Process *c_p, int *redsp,
                                  char *literals, Uint lit_bsize)
 {
-    /*
-     * TODO: Implement yielding support!
-     */
     ErlHeapFragment *hfrag;
     ErtsMessage *mfp;
     Uint64 scanned = 0;
@@ -1255,7 +1290,7 @@ any_heap_refs(Eterm* start, Eterm* end, char* mod_start, Uint mod_size)
  * - erts_internal:release_literal_area_switch() changes the set of
  *   counters that blocks release of literal areas
  * - The literal area collector process gets suspended waiting thread
- *   progress in order to ensure that the change of counters is visable
+ *   progress in order to ensure that the change of counters is visible
  *   by all schedulers.
  * - When the literal area collector process is resumed after thread
  *   progress has completed, erts_internal:release_literal_area_switch()
@@ -1521,22 +1556,30 @@ erts_literal_area_collector_send_copy_request_3(BIF_ALIST_3)
 
     req_id = TUPLE3(&tmp_heap[0], BIF_ARG_2, BIF_ARG_3, BIF_ARG_1);
 
-    if (BIF_ARG_3 == am_false) {
+    switch (BIF_ARG_3) {
+
+    case am_init:
         /*
-         * Will handle signal queue and check if GC if needed. If
-         * GC is needed operation will be continued by a GC (below).
+         * Will handle signal queue and if possible check if GC if needed.
+         * If GC is needed or needs to be checked the operation will be
+         * restarted later in the 'check_gc' or 'need_gc' case below...
          */
         erts_proc_sig_send_cla_request(BIF_P, BIF_ARG_1, req_id);
-    }
-    else if (BIF_ARG_3 == am_true) {
+        break;
+
+    case am_check_gc:
+    case am_need_gc:
         /*
-         * Will perform a literal GC. Note that this assumes that
-         * signal queue already has been handled...
+         * Will check and/or perform a literal GC. Note that this assumes that
+         * signal queue already has been handled by 'init' case above...
          */
-        erts_schedule_cla_gc(BIF_P, BIF_ARG_1, req_id);
-    }
-    else
+        erts_schedule_cla_gc(BIF_P, BIF_ARG_1, req_id,
+                             BIF_ARG_3 == am_check_gc);
+        break;
+
+    default:
         BIF_ERROR(BIF_P, BADARG);
+    }
 
     BIF_RET(am_ok);
 }
@@ -2019,6 +2062,10 @@ BIF_RETTYPE erts_internal_purge_module_2(BIF_ALIST_2)
 
 		erts_remove_from_ranges(modp->old.code_hdr);
 
+                if (modp->old.code_hdr->are_nifs) {
+                    erts_free(ERTS_ALC_T_PREPARED_CODE,
+                              modp->old.code_hdr->are_nifs);
+                }
 #ifndef BEAMASM
                 erts_free(ERTS_ALC_T_CODE, (void *) modp->old.code_hdr);
 #else

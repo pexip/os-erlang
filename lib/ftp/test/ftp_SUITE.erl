@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2004-2021. All Rights Reserved.
+%% Copyright Ericsson AB 2004-2023. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -32,7 +32,6 @@
                          end)(inet:gethostname())
        ).
 
--define(BAD_HOST, "badhostname").
 -define(BAD_USER, "baduser").
 -define(BAD_DIR,  "baddirectory").
 
@@ -498,17 +497,21 @@ ls() ->
       "\"test\" directory. We assume that ls never fails, since "
       "it's output is meant to be read by humans. "}].
 ls(Config0) ->
-    Config = set_state([reset,{mkdir,"test"}], Config0),
+    TestFileName = "testing-file",
+    Config = set_state([reset,{mkdir,"test"},{mkfile, TestFileName, TestFileName}], Config0),
     Pid = proplists:get_value(ftp, Config),
     {ok, _R1} = ftp:ls(Pid),
     {ok, _R2} = ftp:ls(Pid, id2ftp("test",Config)),
+    {ok, _R3} = ftp:nlist(Pid, id2ftp(TestFileName, Config)),
+    {ok, []} = ftp:nlist(Pid, id2ftp("non-existing-folder",Config)),
+    {ok, []} = ftp:nlist(Pid, id2ftp("test/non-existing-file",Config)),
     %% neither nlist nor ls operates on a directory
     %% they operate on a pathname, which *can* be a
     %% directory, but can also be a filename or a group
     %% of files (including wildcards).
     case proplists:get_value(wildcard_support, Config) of
         true ->
-            {ok, _R3} = ftp:ls(Pid, id2ftp("te*",Config));
+            {ok, _R4} = ftp:ls(Pid, id2ftp("te*",Config));
         _ ->
             ok
     end.
@@ -516,21 +519,25 @@ ls(Config0) ->
 %%-------------------------------------------------------------------------
 nlist() ->
     [{doc,"Open an ftp connection; nlist the current directory, and the "
-               "\"test\" directory. Nlist does not behave consistenly over "
+               "\"test\" directory. Nlist does not behave consistently over "
                "operating systems. On some it is an error to have an empty "
                "directory."}].
 nlist(Config0) ->
-    Config = set_state([reset,{mkdir,"test"}], Config0),
+    TestFileName = "testing-file",
+    Config = set_state([reset,{mkdir,"test"},{mkfile, TestFileName, TestFileName}], Config0),
     Pid = proplists:get_value(ftp, Config),
     {ok, _R1} = ftp:nlist(Pid),
     {ok, _R2} = ftp:nlist(Pid, id2ftp("test",Config)),
+    {ok, _R3} = ftp:nlist(Pid, id2ftp(TestFileName, Config)),
+    {ok, []} = ftp:nlist(Pid, id2ftp("non-existing-folder",Config)),
+    {ok, []} = ftp:nlist(Pid, id2ftp("test/non-existing-file",Config)),
     %% neither nlist nor ls operates on a directory
     %% they operate on a pathname, which *can* be a
     %% directory, but can also be a filename or a group
     %% of files (including wildcards).
     case proplists:get_value(wildcard_support, Config) of
         true ->
-            {ok, _R3} = ftp:nlist(Pid, id2ftp("te*",Config));
+            {ok, _R4} = ftp:nlist(Pid, id2ftp("te*",Config));
         _ ->
             ok
     end.
@@ -862,7 +869,7 @@ recv_chunk_delay(Config0) when is_list(Config0) ->
 delay_recv_chunk(Pid) ->
      delay_recv_chunk(Pid, <<>>).
 delay_recv_chunk(Pid, Acc) ->
-    ct:pal("Received size ~p", [byte_size(Acc)]),
+    ct:log("Received size ~p", [byte_size(Acc)]),
     case ftp:recv_chunk(Pid) of
          ok ->
              {ok, Acc};
@@ -888,7 +895,7 @@ quote(Config) ->
     Pid = proplists:get_value(ftp, Config),
     ["257 \""++_Rest] = ftp:quote(Pid, "pwd"), %% 257
     [_| _] = ftp:quote(Pid, "help"),
-    %% This negativ test causes some ftp servers to hang. This test
+    %% This negative test causes some ftp servers to hang. This test
     %% is not important for the client, so we skip it for now.
     %%["425 Can't build data connection: Connection refused."]
     %% = ftp:quote(Pid, "list"),
@@ -948,7 +955,7 @@ unexpected_call(Config) when is_list(Config) ->
     Flag =  process_flag(trap_exit, true),
     Pid = proplists:get_value(ftp, Config),
 
-    %% Serious programming fault, connetion will be shut down
+    %% A serious programming fault, the connection will be shut down
     case (catch gen_server:call(Pid, {self(), foobar, 10}, infinity)) of
         {error, {connection_terminated, 'API_violation'}} ->
             ok;
@@ -965,7 +972,7 @@ unexpected_cast()->
 unexpected_cast(Config) when is_list(Config) ->
     Flag = process_flag(trap_exit, true),
     Pid = proplists:get_value(ftp, Config),
-    %% Serious programming fault, connetion will be shut down
+     %% A serious programming fault, the connection will be shut down
     gen_server:cast(Pid, {self(), foobar, 10}),
     ct:sleep(500),
     undefined = process_info(Pid, status),
@@ -977,7 +984,7 @@ unexpected_bang()->
 unexpected_bang(Config) when is_list(Config) ->
     Flag = process_flag(trap_exit, true),
     Pid = proplists:get_value(ftp, Config),
-    %% Could be an innocent misstake the connection lives.
+    %% Could be an innocent mistake the connection lives.
     Pid ! foobar,
     ct:sleep(500),
     {status, _} = process_info(Pid, status),
@@ -1016,7 +1023,7 @@ clean_shutdown(Config) ->
 %%-------------------------------------------------------------------------
 ftp_worker() ->
     [{doc, "Makes sure the ftp worker processes are added and removed "
-      "appropriatly to/from the supervison tree."}].
+      "appropriately to/from the supervison tree."}].
 ftp_worker(Config) ->
     Pid = proplists:get_value(ftp,Config),
     case supervisor:which_children(ftp_sup) of
@@ -1217,7 +1224,7 @@ start_ftpd(Config0) ->
                     ct:log("Ftp server ~p started on ~p:~p but is unusable:~n~p:~p",
                            [AbsName,Host,Port,Class,Exception]),
                     catch stop_ftpd(Config),
-                    {skip, [AbsName," started but unusuable"]}
+                    {skip, [AbsName," started but unusable"]}
             end;
         {error,Msg} ->
             {skip, [AbsName," not started: ",Msg]}
@@ -1247,11 +1254,11 @@ ftp_start_service(Config, Options) ->
     Host = proplists:get_value(ftpd_host,Config),
     Port = proplists:get_value(ftpd_port,Config),
     ct:log("Host=~p, Port=~p",[Host,Port]),
-    {ok,Pid} = ftp:start_service([{host, Host},{port,Port} | Options]),
+    {ok,Pid} = ftp:open([{host, Host},{port,Port} | Options]),
     [{ftp,Pid}|Config].
 
 ftp_stop_service(Config) ->
-    ok = ftp:stop_service(proplists:get_value(ftp,Config)),
+    ok = ftp:close(proplists:get_value(ftp,Config)),
     Config.
 
 split(Cs) -> string:tokens(Cs, "\r\n").

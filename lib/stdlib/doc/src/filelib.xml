@@ -4,7 +4,7 @@
 <erlref>
   <header>
     <copyright>
-      <year>2003</year><year>2021</year>
+      <year>2003</year><year>2022</year>
       <holder>Ericsson AB. All Rights Reserved.</holder>
     </copyright>
     <legalnotice>
@@ -108,6 +108,23 @@
     </func>
 
     <func>
+      <name name="ensure_path" arity="1" since="OTP 25.0"/>
+      <fsummary>Ensure that all parent directories for a target directory exist.</fsummary>
+      <desc>
+        <p>Ensures that all parent directories for the specified path
+        <c><anno>Path</anno></c> exist, trying to create them if
+        necessary.</p>
+	<p>Unlike <seemfa
+	marker="#ensure_dir/1"><c>ensure_dir/1</c></seemfa>, this
+	function will attempt to create all path segments as a
+	directory, including the last segment.</p>
+        <p>Returns <c>ok</c> if all parent directories already exist
+        or can be created. Returns <c>{error, <anno>Reason</anno>}</c> if
+        some parent directory does not exist and cannot be created.</p>
+      </desc>
+    </func>
+
+    <func>
       <name name="file_size" arity="1" since=""/>
       <fsummary>Return the size in bytes of a file.</fsummary>
       <desc>
@@ -120,7 +137,8 @@
       <fsummary>Fold over all files matching a regular expression.</fsummary>
       <desc>
         <p>Folds function <c><anno>Fun</anno></c> over all (regular) files
-          <c><anno>F</anno></c> in directory <c><anno>Dir</anno></c> that match
+          <c><anno>F</anno></c> in directory <c><anno>Dir</anno></c> whose basename
+          (for example, just <c>"baz.erl"</c> in <c>"foo/bar/baz.erl"</c>) matches
           the regular expression <c><anno>RegExp</anno></c> (for a description
           of the allowed regular expressions,
           see the <seeerl marker="re"><c>re</c></seeerl> module).
