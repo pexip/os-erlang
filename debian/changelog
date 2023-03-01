@@ -1,3 +1,9 @@
+erlang (1:23.2.6+dfsg-1pexip4) pexip-v31; urgency=medium
+
+  * Hack to dump errors when RAND_bytes() fails
+
+ -- John-Mark Bell <jmb@pexip.com>  Wed, 01 Mar 2023 00:55:06 +0000
+
 erlang (1:23.2.6+dfsg-1pexip3) pexip-bullseye; urgency=medium
 
   * Bullseye rebuild for ARM64 inclusion
