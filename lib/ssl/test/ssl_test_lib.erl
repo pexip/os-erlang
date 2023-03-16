@@ -29,6 +29,7 @@
 -export([clean_start/0,
          clean_start/1,
          clean_env/0,
+         init_per_suite/2, end_per_suite/1,
          init_per_group/2,
          init_per_group_openssl/2,
          end_per_group/2,
@@ -51,6 +52,7 @@
          start_upgrade_server/1,
          start_upgrade_server_error/1,
          start_upgrade_client/1,
+         start_upgrade_client_error/1,
          start_client_error/1,
          start_server_error/1,
          start_server_transport_abuse_socket/1,
@@ -70,6 +72,7 @@
          run_upgrade_server/1,
          run_upgrade_client/1,
          run_upgrade_server_error/1,
+         run_upgrade_client_error/1,
          run_client_error/1,
          send_recv_result_active/3,
          wait_for_result/2,
@@ -103,7 +106,7 @@
          verify_server_early_data/3,
          verify_session_ticket_extension/2,
          update_session_ticket_extension/2,
-         check_sane_openssl_version/1,
+         check_sane_openssl_version/2,
          check_ok/1,
          check_result/4,
          check_result/2,
@@ -124,9 +127,10 @@
          client_msg/2,
          server_msg/2,
          hardcode_rsa_key/1,
+         hardcode_dsa_key/1,
          bigger_buffers/0,
          stop/2,
-         working_openssl_client/0,
+         working_openssl_client/1,
          hostname_format/1
         ]).
 
@@ -146,6 +150,7 @@
 
 -export([tls_version/1,
          is_protocol_version/1,
+         is_tls_version/1,
          is_dtls_version/1,
          protocol_version/1,
          protocol_version/2,
@@ -193,7 +198,6 @@
          openssl_sane_dtls/0,
          kill_openssl/0,
          openssl_allows_server_renegotiate/1,
-         openssl_dtls_maxfraglen_support/0,
          openssl_maxfraglen_support/0,
          is_sane_oppenssl_pss/1,
          consume_port_exit/1,
@@ -204,7 +208,7 @@
          openssl_ecdsa_suites/0,
          openssl_dsa_suites/0,
          enough_openssl_crl_support/1,
-         openssl_ocsp_support/0,
+         openssl_ocsp_support/1,
          openssl_allows_client_renegotiate/1,
          version_flag/1,
          portable_cmd/2,
@@ -298,8 +302,43 @@ get_client_opts(Config) ->
     COpts = proplists:get_value(client_opts, Config, DCOpts),
     ssl_options(COpts, Config).
 
+
+init_per_suite(Config0, Type) ->
+    end_per_suite(Config0),
+    try crypto:start() of
+	ok ->
+            clean_start(),
+            ssl:clear_pem_cache(),
+            case Type of
+                openssl ->
+                    Version = portable_cmd("openssl", ["version"]),
+                    case Version of
+                        "OpenSSL" ++ _ -> ok;
+                        "LibreSSL" ++ _ -> ok;
+                        _ -> throw({skip, "Unknown openssl version: " ++ Version})
+                    end,
+                    [{openssl_version, Version}|Config0];
+                _ ->
+                    Config0
+            end
+    catch _:_ ->
+            throw({skip, "Crypto did not start"})
+    end.
+
+end_per_suite(_Config) ->
+    application:stop(ssl),
+    application:stop(crypto),
+    ssl_test_lib:kill_openssl().
+
+
 %% Default callback functions
 init_per_group(GroupName, Config0) ->
+    case proplists:get_value(openssl_version, Config0) of
+        undefined ->
+            ok;
+        Version ->
+            put(openssl_version, Version)
+    end,
     case is_protocol_version(GroupName) andalso sufficient_crypto_support(GroupName) of
 	true ->
             Config = clean_protocol_version(Config0),
@@ -314,8 +353,8 @@ init_per_group(GroupName, Config0) ->
 	    end
     end.
 
-working_openssl_client() ->
-    case portable_cmd("openssl", ["version"]) of
+working_openssl_client(Config) ->
+    case proplists:get_value(openssl_version, Config) of
         %% These versions of OpenSSL has a client that
         %% can not handle hello extensions. And will
         %% fail with bad packet length if they are present
@@ -324,14 +363,25 @@ working_openssl_client() ->
             false;
         "OpenSSL 0.9.8k" ++ _ ->
             false;
-        _  ->
+        "OpenSSL" ++ _ ->
+            true;
+        "LibreSSL" ++ _ ->
             true
     end.
 
 init_per_group_openssl(GroupName, Config0) ->
-    case is_protocol_version(GroupName) andalso sufficient_crypto_support(GroupName) of
-	true ->
+    case proplists:get_value(openssl_version, Config0) of
+        undefined ->
+            ok;
+        Version ->
+            put(openssl_version, Version)
+    end,
+    CryptoSupport = sufficient_crypto_support(GroupName),
+    IsProtocolVersion = is_protocol_version(GroupName),
+    if
+	CryptoSupport andalso IsProtocolVersion ->
             Config = clean_protocol_version(Config0),
+            ssl:start(),
 	    case openssl_tls_version_support(GroupName, Config)
             of
 		true ->
@@ -339,14 +389,11 @@ init_per_group_openssl(GroupName, Config0) ->
 		false ->
 		    {skip, "Missing openssl support"}
 	    end;
-	_ ->
-            case sufficient_crypto_support(GroupName) of
-		true ->
-		    ssl:start(),
-		    Config0;
-		false ->
-		    {skip, "Missing crypto support"}
-	    end
+        CryptoSupport ->
+            ssl:start(),
+            Config0;
+        true ->
+            {skip, "Missing crypto support"}
     end.
 
 end_per_group(GroupName, Config) ->
@@ -357,8 +404,8 @@ end_per_group(GroupName, Config) ->
           Config
   end.
 
-openssl_ocsp_support() ->
-    case portable_cmd("openssl", ["version"]) of
+openssl_ocsp_support(Config) ->
+    case proplists:get_value(openssl_version, Config) of
         "OpenSSL 1.1.1" ++ _Rest ->
             true;
         _ ->
@@ -432,12 +479,13 @@ normalize_loopback(Address, _) ->
 start_server(Args0, Config) ->
     {_, ServerNode, _} = run_where(Config),
     ServerOpts = get_server_opts(Config),
+    TcServerOpts = proplists:get_value(options, Args0, []),
     Node = proplists:get_value(node, Args0, ServerNode),
     Port = proplists:get_value(port, Args0, 0),
     Args = [{from, self()},
             {node, Node},
             {port, Port},
-            {options, ServerOpts} | Args0],
+            {options, ServerOpts++TcServerOpts} | Args0],
     start_server(Args).
 %%
 start_server(Args) ->
@@ -456,7 +504,6 @@ run_server(Opts) ->
     Pid = proplists:get_value(from, Opts),
     Transport =  proplists:get_value(transport, Opts, ssl),
     ?LOG("~nssl:listen(~p, ~p)~n", [Port, format_options(Options)]),
-    %% {ok, ListenSocket} = Transport:listen(Port, Options),
     case Transport:listen(Port, Options) of
         {ok, ListenSocket} ->
             Pid ! {listen, up},
@@ -495,7 +542,10 @@ do_run_server(ListenSocket, AcceptSocket, Opts) ->
 	    ok;
 	Msg ->
 	    ?LOG("~nServer Msg: ~p ~n", [Msg]),
-	    Pid ! {self(), Msg}
+            case lists:member(return_socket, Opts) of
+                true -> Pid ! {self(), {Msg, AcceptSocket}};
+                false -> Pid ! {self(), Msg}
+            end
     end,
     do_run_server_core(ListenSocket, AcceptSocket, Opts, Transport, Pid).
 
@@ -723,7 +773,12 @@ init_openssl_server(openssl, _, Options) ->
     DOpenssl = proplists:get_value(debug_openssl, Options, false),
     Port = inet_port(node()),
     Pid = proplists:get_value(from, Options),
-     
+
+    case proplists:get_value(openssl_version, Options) of
+        undefined -> ok;
+        Version -> put(openssl_version, Version)
+    end,
+
     Exe = "openssl",
     Ciphers = proplists:get_value(ciphers, Options, default_ciphers(Version)),
     Groups0 = proplists:get_value(groups, Options),
@@ -865,6 +920,11 @@ init_openssl_client(Options) ->
     Port = proplists:get_value(port, Options),
     Pid = proplists:get_value(from, Options),
     SslPort = start_client(openssl, Port, Options, [{version, Version}]),
+    case proplists:get_value(openssl_version, Options) of
+        undefined -> ok;
+        Version -> put(openssl_version, Version)
+    end,
+
     openssl_client_loop(Pid, SslPort, []).
 
 
@@ -1324,7 +1384,10 @@ format_certs(Cert) when is_binary(Cert) ->
     lists:flatten(format_cert(Cert)).
 
 format_cert(BinCert) when is_binary(BinCert) ->
-    OtpCert = #'OTPCertificate'{tbsCertificate = Cert} = public_key:pkix_decode_cert(BinCert, otp),
+    format_cert(public_key:pkix_decode_cert(BinCert, otp));
+format_cert(#cert{otp=Otp}) ->
+    format_cert(Otp);
+format_cert(#'OTPCertificate'{tbsCertificate = Cert} = OtpCert) ->
     #'OTPTBSCertificate'{subject = Subject, serialNumber = Nr, issuer = Issuer} = Cert,
     case public_key:pkix_is_self_signed(OtpCert) of
         true ->
@@ -1989,6 +2052,25 @@ run_upgrade_client(Opts) ->
 	    ?LOG("~nUpgrade Client closing~n", []),
 	    ssl:close(SslSocket)
     end.
+
+start_upgrade_client_error(Args) ->
+    Node = proplists:get_value(node, Args),
+    spawn_link(Node, ?MODULE, run_upgrade_client_error, [Args]).
+
+run_upgrade_client_error(Opts) ->
+    Host = proplists:get_value(host, Opts),
+    Port = proplists:get_value(port, Opts),
+    Pid = proplists:get_value(from, Opts),
+    Timeout = proplists:get_value(timeout, Opts, infinity),
+    TcpOptions = proplists:get_value(tcp_options, Opts),
+    SslOptions = proplists:get_value(ssl_options, Opts),
+    ?LOG("gen_tcp:connect(~p, ~p, ~p)",
+               [Host, Port, TcpOptions]),
+    {ok, Socket} = gen_tcp:connect(Host, Port, TcpOptions),
+    send_selected_port(Pid, Port, Socket),
+    ?LOG("ssl:connect(~p, ~p)", [Socket, SslOptions]),
+    Error = ssl:connect(Socket, SslOptions, Timeout),
+    Pid ! {self(), Error}.
 
 start_upgrade_server_error(Args) ->
     Node = proplists:get_value(node, Args),
@@ -3117,24 +3199,27 @@ is_sane_oppenssl_pss(rsa_pss_rsae) ->
             false
     end.
 
-is_fips(openssl) ->
-    VersionStr = portable_cmd("openssl",["version"]),
+is_fips(openssl, Config) ->
+    VersionStr = proplists:get_value(openssl_version, Config),
     case re:split(VersionStr, "fips") of
 	[_] ->
-	    false;
-	_ ->
+            case re:split(VersionStr, "FIPS") of
+                [_] ->
+                    false;
+                _ ->
+                    true
+            end;
+        _ ->
 	    true
     end;
-is_fips(crypto) ->
+is_fips(crypto, _) ->
     [{_,_, Bin}]  = crypto:info_lib(),
     case re:split(Bin, <<"fips">>) of
 	[_] ->
 	    false;
 	_ ->
 	    true
-    end;
-is_fips(_) ->
-    false.
+    end.
 
 %% Actual support is tested elsewhere, this is to exclude some LibreSSL and OpenSSL versions
 openssl_sane_dtls() -> 
@@ -3157,10 +3242,10 @@ openssl_sane_dtls() ->
             false
         end.
 
-check_sane_openssl_version(Version) ->
-    case supports_ssl_tls_version(Version) of 
+check_sane_openssl_version(Version, Config) ->
+    case supports_ssl_tls_version(Version, Config) of
 	true ->
-	    case {Version, portable_cmd("openssl",["version"])} of
+	    case {Version, proplists:get_value(openssl_version, Config)} of
                 {'dtlsv1', "OpenSSL 0" ++ _} ->
 		    false;
 		{'dtlsv1.2', "OpenSSL 0" ++ _} ->
@@ -3170,9 +3255,9 @@ check_sane_openssl_version(Version) ->
 		{'dtlsv1',  "OpenSSL 1.0.0" ++ _} ->
 		    false;
                 {'dtlsv1', _} ->
-		    not is_fips(openssl);
+		    not is_fips(openssl, Config);
 		{'dtlsv1.2', _} ->
-		    not is_fips(openssl);
+		    not is_fips(openssl, Config);
 		{_, "OpenSSL 1.0.2" ++ _} ->
 		    true;
 		{_, "OpenSSL 1.0.1" ++ _} ->
@@ -3196,7 +3281,7 @@ check_sane_openssl_version(Version) ->
 check_sane_openssl_renegotiate(Config, Version) when  Version == 'tlsv1';
                                                       Version == 'tlsv1.1';
                                                       Version == 'tlsv1.2' ->
-    case portable_cmd("openssl", ["version"]) of
+    case proplists:get_value(openssl_version, Config) of
 	"OpenSSL 1.0.1c" ++ _ ->
 	    {skip, "Known renegotiation bug in OpenSSL"};
 	"OpenSSL 1.0.1b" ++ _ ->
@@ -3216,7 +3301,7 @@ check_sane_openssl_renegotiate(Config, _) ->
     check_sane_openssl_renegotiate(Config).
 
 check_sane_openssl_renegotiate(Config) ->
-    case portable_cmd("openssl", ["version"]) of
+    case proplists:get_value(openssl_version, Config) of
 	"OpenSSL 1.0.0" ++ _ ->
 	    {skip, "Known renegotiation bug in OpenSSL"};
 	"OpenSSL 0.9.8" ++ _ ->
@@ -3232,7 +3317,7 @@ check_sane_openssl_renegotiate(Config) ->
     end.
 
 openssl_allows_client_renegotiate(Config) ->
-    case portable_cmd("openssl", ["version"]) of
+    case proplists:get_value(openssl_version, Config) of
         "OpenSSL 3" ++ _ ->
             {skip, "OpenSSL does not allow client renegotiation"};
 	"OpenSSL 1.1" ++ _ ->
@@ -3244,7 +3329,7 @@ openssl_allows_client_renegotiate(Config) ->
      end.
 
 openssl_allows_server_renegotiate(Config) ->
-     case portable_cmd("openssl", ["version"]) of
+    case proplists:get_value(openssl_version, Config) of
 	"LibreSSL 3.1" ++ _ ->
 	    {skip, "LibreSSL 3.1 does not allow server renegotiation"};
          _ ->
@@ -3362,6 +3447,17 @@ portable_open_port(Exe, Args) ->
     open_port({spawn_executable, AbsPath},
 	      [{args, Args}, stderr_to_stdout]).
 
+
+portable_cmd("openssl", ["version"]) ->
+    case get(openssl_version) of
+        undefined ->
+            Port = portable_open_port("openssl", ["version"]),
+            Version = collect_port_data(Port),
+            put(openssl_version, Version),
+            Version;
+        Version ->
+            Version
+    end;
 portable_cmd(Exe, Args) ->
     Port = portable_open_port(Exe, Args),
     collect_port_data(Port).
@@ -3383,12 +3479,13 @@ maybe_collect_more_port_data(Port, Acc) ->
             Acc
     end.
 
-supports_ssl_tls_version(Version) when Version == sslv2;
-                                       Version == sslv3 ->
+supports_ssl_tls_version(Version, Config) 
+  when Version == sslv2;
+       Version == sslv3 ->
 
     case ubuntu_legacy_support() of
         true ->   
-            case portable_cmd("openssl", ["version"]) of
+            case proplists:get_value(openssl_version, Config) of
                 "OpenSSL 1.0.1" ++ _ ->
                     Version =/= sslv2;
                 "OpenSSL 1" ++ _ ->
@@ -3411,7 +3508,7 @@ supports_ssl_tls_version(Version) when Version == sslv2;
         false ->
             false             
     end;
-supports_ssl_tls_version(Version) ->
+supports_ssl_tls_version(Version, _) ->
     VersionFlag = version_flag(Version),
     Exe = "openssl",
     Args = ["s_client", VersionFlag],
@@ -3854,13 +3951,14 @@ erlang_ssl_receive_and_assert_negotiated_protocol(Socket, Protocol, Data) ->
     end. 
 
 check_openssl_npn_support(Config) ->
-    HelpText = portable_cmd("openssl", ["s_client --help"]),
-    case string:str(HelpText, "nextprotoneg") of
-        0 ->
-            {skip, "Openssl not compiled with nextprotoneg support"};
+    case proplists:get_value(openssl_version, Config) of
+        "OpenSSL 1.0"  ++ _  ->
+            false;
+        "OpenSSL 1.1" ++ _ ->
+            true;
         _ ->
-            Config
-    end.
+            false
+     end.
 
 new_config(PrivDir, ServerOpts0) ->
     CaCertFile = proplists:get_value(cacertfile, ServerOpts0),
@@ -3970,26 +4068,6 @@ openssl_maxfraglen_support() ->
             false;
 	"OpenSSL 1.1.1" ++ _ ->
             true;
-        "OpenSSL" ++ _ ->
-            true;
-        _  ->
-            false
-    end.
-
-openssl_dtls_maxfraglen_support() -> 
-    case portable_cmd("openssl", ["version"]) of
-        "OpenSSL 0" ++ _  ->
-            false;
-        "OpenSSL 1.0" ++ _  ->
-            false;
-        "OpenSSL 1.1.0" ++ _ ->
-            false;
-	"OpenSSL 1.1.1" ++ _ ->
-            false;
-        "OpenSSL 1.1" ++ _ ->
-            false;
-	"OpenSSL 3.0.1" ++ _ ->
-	    false; %% OpenSSL sends internal error alert
         "OpenSSL" ++ _ ->
             true;
         _  ->

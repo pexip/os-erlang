@@ -503,10 +503,6 @@ message_to_string({opaque_size, [SizeType, Size]}, I, _E) ->
 message_to_string({opaque_call, [M, F, Args, Culprit, OpaqueType]}, I, _E) ->
   io_lib:format("The call ~s:~ts~ts breaks the opacity of the term ~ts :: ~ts\n",
                 [M, F, a(Args, I), c(Culprit, I), t(OpaqueType, I)]);
-%%----- Warnings for concurrency errors --------------------
-message_to_string({race_condition, [M, F, Args, Reason]}, I, _E) ->
-  %% There is a possibly huge type in Reason.
-  io_lib:format("The call ~w:~tw~ts ~ts\n", [M, F, a(Args, I), Reason]);
 %%----- Warnings for behaviour errors --------------------
 message_to_string({callback_type_mismatch, [B, F, A, ST, CT]}, I, _E) ->
   io_lib:format("The inferred return type of ~tw/~w ~ts has nothing in"
@@ -531,6 +527,9 @@ message_to_string({callback_spec_arg_type_mismatch, [B, F, A, N, ST, CT]},
 		[ordinal(N), F, A, t(ST, I), t(CT, I), B]);
 message_to_string({callback_missing, [B, F, A]}, _I, _E) ->
   io_lib:format("Undefined callback function ~tw/~w (behaviour ~w)\n",
+		[F, A, B]);
+message_to_string({callback_not_exported, [B, F, A]}, _I, _E) ->
+  io_lib:format("Callback function ~tw/~w exists but is not exported (behaviour ~w)\n",
 		[F, A, B]);
 message_to_string({callback_info_missing, [B]}, _I, _E) ->
   io_lib:format("Callback info about the ~w behaviour is not available\n", [B]);

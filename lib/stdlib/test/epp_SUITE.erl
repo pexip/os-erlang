@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 1998-2021. All Rights Reserved.
+%% Copyright Ericsson AB 1998-2022. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -29,7 +29,8 @@
          otp_8562/1, otp_8665/1, otp_8911/1, otp_10302/1, otp_10820/1,
          otp_11728/1, encoding/1, extends/1,  function_macro/1,
 	 test_error/1, test_warning/1, otp_14285/1,
-	 test_if/1,source_name/1,otp_16978/1,otp_16824/1,scan_file/1,file_macro/1]).
+	 test_if/1,source_name/1,otp_16978/1,otp_16824/1,scan_file/1,file_macro/1,
+   deterministic_include/1, nondeterministic_include/1]).
 
 -export([epp_parse_erl_form/2]).
 
@@ -50,6 +51,7 @@ config(data_dir, _) ->
     filename:absname("./epp_SUITE_data").
 -else.
 -include_lib("common_test/include/ct.hrl").
+-include_lib("stdlib/include/assert.hrl").
 -export([init_per_testcase/2, end_per_testcase/2]).
 
 init_per_testcase(_, Config) ->
@@ -70,7 +72,8 @@ all() ->
      overload_mac, otp_8388, otp_8470, otp_8562,
      otp_8665, otp_8911, otp_10302, otp_10820, otp_11728,
      encoding, extends, function_macro, test_error, test_warning,
-     otp_14285, test_if, source_name, otp_16978, otp_16824, scan_file, file_macro].
+     otp_14285, test_if, source_name, otp_16978, otp_16824, scan_file, file_macro,
+     deterministic_include, nondeterministic_include].
 
 groups() ->
     [{upcase_mac, [], [upcase_mac_1, upcase_mac_2]},
@@ -122,6 +125,64 @@ file_macro(Config) when is_list(Config) ->
     {attribute,_,a,FileA} = lists:keyfind(a, 3, List),
     {attribute,_,b,FileB} = lists:keyfind(b, 3, List),
     "Other source" = FileA = FileB,
+    ok.
+
+deterministic_include(Config) when is_list(Config) ->
+    DataDir = proplists:get_value(data_dir, Config),
+    File = filename:join(DataDir, "deterministic_include.erl"),
+    {ok, List} = epp:parse_file(File, [{includes, [DataDir]},
+                                       {deterministic, true},
+                                       {source_name, "deterministic_include.erl"}]),
+
+    %% In deterministic mode, only basenames, rather than full paths, should
+    %% be written to the -file() attributes resulting from -include and -include_lib
+    ?assert(lists:any(fun
+                       ({attribute,_Anno,file,{"baz.hrl",_Line}}) -> true;
+                       (_) -> false
+                     end,
+                     List),
+            "Expected a basename in the -file attribute resulting from " ++
+            "including baz.hrl in deterministic mode."),
+    ?assert(lists:any(fun
+                       ({attribute,_Anno,file,{"file.hrl",_Line}}) -> true;
+                       (_) -> false
+                     end,
+                     List),
+            "Expected a basename in the -file attribute resulting from " ++
+            "including file.hrl in deterministic mode."),
+    ok.
+
+nondeterministic_include(Config) when is_list(Config) ->
+    DataDir = proplists:get_value(data_dir, Config),
+    File = filename:join(DataDir, "deterministic_include.erl"),
+    {ok, List} = epp:parse_file(File, [{includes, [DataDir]},
+                                       {source_name, "deterministic_include.erl"}]),
+
+    %% Outside of deterministic mode, full paths, should be written to
+    %% the -file() attributes resulting from -include and -include_lib
+    %% to make debugging easier.
+    %% We don't try to assume what the full absolute path will be in the
+    %% unit test, since that can depend on the environment and how the
+    %% test is executed. Instead, we just look for whether there is
+    %% the parent directory along with the basename at least.
+    IncludeAbsolutePathSuffix = filename:join("include","baz.hrl"),
+    ?assert(lists:any(fun
+                       ({attribute,_Anno,file,{IncludePath,_Line}}) ->
+                         lists:suffix(IncludeAbsolutePathSuffix,IncludePath);
+                       (_) -> false
+                     end,
+                     List),
+            "Expected an absolute in the -file attribute resulting from " ++
+            "including baz.hrl outside of deterministic mode."),
+    IncludeLibAbsolutePathSuffix = filename:join("include","file.hrl"),
+    ?assert(lists:any(fun
+                       ({attribute,_Anno,file,{IncludePath,_line}}) ->
+                         lists:suffix(IncludeLibAbsolutePathSuffix,IncludePath);
+                       (_) -> false
+                     end,
+                     List),
+            "Expected an absolute in the -file attribute resulting from " ++
+            "including file.hrl outside of deterministic mode."),
     ok.
 
 %%% Here is a little reimplementation of epp:parse_file, which times out
@@ -816,7 +877,8 @@ otp_8130(Config) when is_list(Config) ->
                                "t() -> ?a.\n"),
     {ok,Epp} = epp:open(File, []),
     PreDefMacs = macs(Epp),
-    ['BASE_MODULE','BASE_MODULE_STRING','BEAM','FILE',
+    ['BASE_MODULE','BASE_MODULE_STRING','BEAM',
+     'FEATURE_AVAILABLE', 'FEATURE_ENABLED','FILE',
      'FUNCTION_ARITY','FUNCTION_NAME',
      'LINE','MACHINE','MODULE','MODULE_STRING',
      'OTP_RELEASE'] = PreDefMacs,
@@ -941,7 +1003,7 @@ ifdef(Config) ->
              "-else.\n"
              "t() -> a.\n"
              "-endif.\n">>,
-           {errors,[{{3,1},epp,{bad,else}}],[]}},
+           {errors,[{{3,1},epp,{bad,'else'}}],[]}},
 
           {ifdef_c8,
            <<"-ifdef(a).\n"
@@ -1530,20 +1592,20 @@ otp_10820(Config) when is_list(Config) ->
     Dir = proplists:get_value(priv_dir, Config),
     File = filename:join(Dir, L++".erl"),
     C1 = <<"%% coding: utf-8\n -module(any).">>,
-    ok = do_otp_10820(File, C1, "+pc latin1"),
-    ok = do_otp_10820(File, C1, "+pc unicode"),
+    ok = do_otp_10820(File, C1, ["+pc", "latin1"]),
+    ok = do_otp_10820(File, C1, ["+pc", "unicode"]),
     C2 = <<"\n-module(any).">>,
-    ok = do_otp_10820(File, C2, "+pc latin1"),
-    ok = do_otp_10820(File, C2, "+pc unicode").
+    ok = do_otp_10820(File, C2, ["+pc", "latin1"]),
+    ok = do_otp_10820(File, C2, ["+pc", "unicode"]).
 
 do_otp_10820(File, C, PC) ->
-    {ok,Node} = start_node(erl_pp_helper, "+fnu " ++ PC),
+    {ok,Peer,Node} = ?CT_PEER(["+fnu"] ++ PC),
     ok = rpc:call(Node, file, write_file, [File, C]),
     {ok, Forms} = rpc:call(Node, epp, parse_file, [File, [],[]]),
     [{attribute,1,file,{File,1}},
      {attribute,2,module,any},
      {eof,2}] = unopaque_forms(Forms),
-    true = test_server:stop_node(Node),
+    peer:stop(Peer),
     ok.
 
 %% OTP_14285: Unicode atoms.
@@ -1609,8 +1671,9 @@ encoding(Config) when is_list(Config) ->
 	epp_parse_file(ErlFile, [{default_encoding,latin1}]),
     {ok,[{attribute,1,file,_},
 	 {attribute,1,module,encoding},
-	 {eof,3}],[{encoding,none}]} =
+	 {eof,3}],Extra0} =
 	epp_parse_file(ErlFile, [{default_encoding,latin1},extra]),
+    none = proplists:get_value(encoding, Extra0),
 
     %% Try a latin-1 file with encoding given in a comment.
     C2 = <<"-module(encoding).
@@ -1632,16 +1695,20 @@ encoding(Config) when is_list(Config) ->
 	epp_parse_file(ErlFile, [{default_encoding,utf8}]),
     {ok,[{attribute,1,file,_},
 	 {attribute,1,module,encoding},
-	 {eof,4}],[{encoding,latin1}]} =
+	 {eof,4}],Extra1} =
 	epp_parse_file(ErlFile, [extra]),
+    latin1 = proplists:get_value(encoding, Extra1),
+
     {ok,[{attribute,1,file,_},
 	 {attribute,1,module,encoding},
-	 {eof,4}],[{encoding,latin1}]} =
+	 {eof,4}],Extra2} =
 	epp_parse_file(ErlFile, [{default_encoding,latin1},extra]),
+    latin1 = proplists:get_value(encoding, Extra2),
     {ok,[{attribute,1,file,_},
 	 {attribute,1,module,encoding},
-	 {eof,4}],[{encoding,latin1}]} =
+	 {eof,4}],Extra3} =
 	epp_parse_file(ErlFile, [{default_encoding,utf8},extra]),
+    latin1 = proplists:get_value(encoding, Extra3),
     ok.
 
 extends(Config) ->
@@ -1802,7 +1869,7 @@ otp_16824(Config) when is_list(Config) ->
           {otp_16824_8,
            <<"\n-else\n"
              "-endif.">>,
-           {errors,[{{3,1},epp,{bad,else}}],[]}},
+           {errors,[{{3,1},epp,{bad,'else'}}],[]}},
 
           {otp_16824_9,
            <<"\n-ifndef.\n"
@@ -2010,6 +2077,9 @@ eval_tests(Config, Fun, Tests) ->
     F = fun({N,P,Opts,E}, BadL) ->
                 %% io:format("Testing ~p~n", [P]),
                 Return = Fun(Config, P, Opts),
+                %% The result should be the same when enabling maybe ... end
+                %% (making 'else' a keyword instead of an atom).
+                Return = Fun(Config, P, [{feature,maybe_expr,enable}|Opts]),
                 case message_compare(E, Return) of
                     true ->
                         case E of
@@ -2032,7 +2102,7 @@ check_test(Config, Test, Opts) ->
     PrivDir = proplists:get_value(priv_dir, Config),
     File = filename:join(PrivDir, Filename),
     ok = file:write_file(File, Test),
-    case epp:parse_file(File, [PrivDir], Opts) of
+    case epp:parse_file(File, [{includes, PrivDir}| Opts]) of
 	{ok,Forms} ->
 	    Errors = [E || E={error,_} <- Forms],
 	    call_format_error([E || {error,E} <- Errors]),
@@ -2107,18 +2177,28 @@ run_test(Config, Test0, Opts0) ->
     Opts = [return, {i,PrivDir},{outdir,PrivDir}] ++ Opts0,
     {ok, epp_test, []} = compile:file(File, Opts),
     AbsFile = filename:rootname(File, ".erl"),
-    {module, epp_test} = code:load_abs(AbsFile, epp_test),
-    Reply = epp_test:t(),
-    code:purge(epp_test),
-    Reply.
+
+    case lists:member({feature, maybe_expr, enable}, Opts0) of
+        false ->
+            %% Run in node
+            {module, epp_test} = code:load_abs(AbsFile, epp_test),
+            Reply = epp_test:t(),
+            code:purge(epp_test),
+            Reply;
+        true ->
+            %% Run in peer with maybe_expr enabled
+            {ok, Peer, Node} =
+                ?CT_PEER(#{args => ["-enable-feature","maybe_expr"],
+                           connection => 0}),
+            {module, epp_test} =
+                rpc:call(Node, code, load_abs, [AbsFile, epp_test]),
+            Reply = rpc:call(Node, epp_test, t, []),
+            peer:stop(Peer),
+            Reply
+    end.
 
 fail() ->
     ct:fail(failed).
 
 message_compare(T, T) ->
     T =:= T.
-
-%% +fnu means a peer node has to be started; slave will not do
-start_node(Name, Xargs) ->
-    PA = filename:dirname(code:which(?MODULE)),
-    test_server:start_node(Name, peer, [{args, "-pa " ++ PA ++ " " ++ Xargs}]).

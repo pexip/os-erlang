@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2019-2020. All Rights Reserved.
+%% Copyright Ericsson AB 2019-2022. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -386,7 +386,7 @@ init_per_testcase(TestCase, Config) when TestCase == psk_3des_ede_cbc;
                                          TestCase == ecdh_anon_3des_ede_cbc;
                                          TestCase == ecdhe_ecdsa_3des_ede_cbc ->
     SupCiphers = proplists:get_value(ciphers, crypto:supports()),
-    case lists:member(des_ede3, SupCiphers) of
+    case lists:member(des_ede3_cbc, SupCiphers) of
         true ->
             ct:timetrap(?TIMEOUT),
             Config;

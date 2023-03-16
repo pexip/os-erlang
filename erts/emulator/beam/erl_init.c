@@ -37,7 +37,6 @@
 #include "erl_mseg.h"
 #include "erl_threads.h"
 #include "erl_hl_timer.h"
-#include "erl_mtrace.h"
 #include "erl_printf_term.h"
 #include "erl_misc_utils.h"
 #include "packet_parser.h"
@@ -53,6 +52,7 @@
 #include "erl_osenv.h"
 #include "erl_proc_sig_queue.h"
 #include "beam_load.h"
+#include "erl_global_literals.h"
 
 #include "jit/beam_asm.h"
 
@@ -132,12 +132,6 @@ static int modified_sched_thread_suggested_stack_size = 0;
 
 Eterm erts_init_process_id = ERTS_INVALID_PID;
 
-/*
- * Note about VxWorks: All variables must be initialized by executable code,
- * not by an initializer. Otherwise a new instance of the emulator will
- * inherit previous values.
- */
-
 extern void erl_crash_dump_v(char *, int, const char *, va_list);
 #ifdef __WIN32__
 extern void ConNormalExit(void);
@@ -168,7 +162,7 @@ int erts_initialized = 0;
 
 int H_MIN_SIZE;			/* The minimum heap grain */
 int BIN_VH_MIN_SIZE;		/* The minimum binary virtual*/
-int H_MAX_SIZE;			/* The maximum heap size */
+Uint H_MAX_SIZE;		/* The maximum heap size */
 int H_MAX_FLAGS;		/* The maximum heap flags */
 
 Uint32 erts_debug_flags;	/* Debug flags. */
@@ -302,6 +296,17 @@ void erl_error(const char *fmt, va_list args)
 
 static int early_init(int *argc, char **argv);
 
+static void init_constant_literals(void) {
+       Eterm* hp = erts_alloc_global_literal(ERTS_LIT_EMPTY_TUPLE, 2);
+       Eterm tuple;
+       hp[0] = make_arityval_zero();
+       hp[1] = make_arityval_zero();
+       tuple = make_tuple(hp);
+       erts_register_global_literal(ERTS_LIT_EMPTY_TUPLE, tuple);
+       ERTS_GLOBAL_LIT_EMPTY_TUPLE =
+           erts_get_global_literal(ERTS_LIT_EMPTY_TUPLE);
+}
+
 static void
 erl_init(int ncpu,
 	 int proc_tab_sz,
@@ -315,6 +320,7 @@ erl_init(int ncpu,
 	 int node_tab_delete_delay,
 	 ErtsDbSpinCount db_spin_count)
 {
+    init_constant_literals();
     erts_monitor_link_init();
     erts_bif_unique_init();
     erts_proc_sig_queue_init(); /* Must be after erts_bif_unique_init(); */
@@ -381,6 +387,7 @@ erl_init(int ncpu,
     packet_parser_init();
     erl_nif_init();
     erts_msacc_init();
+    beamfile_init();
 }
 
 static Eterm
@@ -683,6 +690,7 @@ void erts_usage(void)
     erts_fprintf(stderr, "               none | very_short | short | medium | long | very_long\n");
     erts_fprintf(stderr, "-scl bool      enable/disable compaction of scheduler load\n");
     erts_fprintf(stderr, "-sct cput      set cpu topology\n");
+    erts_fprintf(stderr, "-ssrct         skip reading cpu topology\n");
     erts_fprintf(stderr, "-secio bool    enable or disable eager check I/O scheduling\n");
 #if ERTS_HAVE_SCHED_UTIL_BALANCING_SUPPORT_OPT
     erts_fprintf(stderr, "-sub bool      enable or disable scheduler utilization balancing\n");
@@ -834,6 +842,7 @@ early_init(int *argc, char **argv) /*
     int decentralized_counter_groups;
     char envbuf[21]; /* enough for any 64-bit integer */
     size_t envbufsz;
+    int skip_read_topology = 0;
 
     erts_save_emu_args(*argc, argv);
 
@@ -973,7 +982,18 @@ early_init(int *argc, char **argv) /*
 		    }
 		    break;
 		}
-
+		case 's' : {
+		    char *sub_param = argv[i]+2;
+		    if (has_prefix("srct", sub_param)) {
+			/* skip reading cpu topology */
+			skip_read_topology = 1;
+		    }
+		    else if (has_prefix("ct", sub_param)) {
+			/* cpu topology */
+			skip_read_topology = 1;
+		    }
+		    break;
+		}
 		case 'S' :
 		    if (argv[i][2] == 'P') {
 			int ptot, ponln;
@@ -1270,7 +1290,8 @@ early_init(int *argc, char **argv) /*
 				 max_reader_groups,
 				 &reader_groups,
                                  max_decentralized_counter_groups,
-                                 &decentralized_counter_groups);
+                                 &decentralized_counter_groups,
+                                 skip_read_topology);
     erts_flxctr_setup(decentralized_counter_groups);
     {
 	erts_thr_late_init_data_t elid = ERTS_THR_LATE_INIT_DATA_DEF_INITER;
@@ -1603,8 +1624,11 @@ erl_start(int argc, char **argv)
 		}
 		VERBOSE(DEBUG_SYSTEM, ("using max heap log %d\n", H_MAX_FLAGS));
 	    } else if (has_prefix("max", sub_param)) {
+                Sint hMaxSize;
+                char *rest;
 		arg = get_arg(sub_param+3, argv[i+1], &i);
-		if ((H_MAX_SIZE = atoi(arg)) < 0) {
+		hMaxSize = ErtsStrToSint(arg, &rest, 10);
+		if (hMaxSize < 0 || hMaxSize > MAX_SMALL) {
 		    erts_fprintf(stderr, "bad max heap size %s\n", arg);
 		    erts_usage();
 		}
@@ -1614,6 +1638,7 @@ erl_start(int argc, char **argv)
                                  arg, H_MIN_SIZE);
 		    erts_usage();
 		}
+		H_MAX_SIZE = hMaxSize;
 		VERBOSE(DEBUG_SYSTEM, ("using max heap size %d\n", H_MAX_SIZE));
 	    } else {
 	        /* backward compatibility */
@@ -1789,8 +1814,8 @@ erl_start(int argc, char **argv)
 		errno = 0;
 		port_tab_sz = strtol(arg, NULL, 10);
 		if (errno != 0
-		    || port_tab_sz < ERTS_MIN_PROCESSES
-		    || ERTS_MAX_PROCESSES < port_tab_sz) {
+		    || port_tab_sz < ERTS_MIN_PORTS
+		    || ERTS_MAX_PORTS < port_tab_sz) {
 		    erts_fprintf(stderr, "bad number of ports %s\n", arg);
 		    erts_usage();
 		}
@@ -2098,6 +2123,9 @@ erl_start(int argc, char **argv)
 		    erts_usage();
 		}
 		erts_runq_supervision_interval = val;
+	    }
+	    else if (has_prefix("srct", sub_param)) {
+		/* skip reading cpu topology, already handled */
 	    }
 	    else {
 		erts_fprintf(stderr, "bad scheduling option %s\n", argv[i]);
@@ -2491,13 +2519,21 @@ erl_start(int argc, char **argv)
 __decl_noreturn void erts_thr_fatal_error(int err, const char *what)
 {
     const char *errstr = err ? strerror(err) : NULL;
-    erts_fprintf(stderr,
-		 "Failed to %s: %s%s(%d)\n",
-		 what,
-		 errstr ? errstr : "",
-		 errstr ? " " : "",
-		 err);
-    abort();
+    if (err == ENOMEM) {
+        erts_exit(ERTS_DUMP_EXIT, "Failed to %s: %s%s(%d)\n",
+                  what,
+                  errstr ? errstr : "",
+                  errstr ? " " : "",
+                  err);
+    } else {
+        erts_fprintf(stderr,
+                     "Failed to %s: %s%s(%d)\n",
+                     what,
+                     errstr ? errstr : "",
+                     errstr ? " " : "",
+                     err);
+        abort();
+    }
 }
 
 
@@ -2550,9 +2586,6 @@ static __decl_noreturn void __noreturn
 erts_exit_vv(int n, int flush_async, const char *fmt, va_list args1, va_list args2)
 {
     system_cleanup(flush_async);
-
-    if (erts_mtrace_enabled)
-	erts_mtrace_exit((Uint32) n);
 
     if (fmt != NULL && *fmt != '\0')
 	erl_error(fmt, args2);	/* Print error message. */

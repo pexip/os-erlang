@@ -4,7 +4,7 @@
 <cref>
   <header>
     <copyright>
-      <year>2002</year><year>2021</year>
+      <year>2002</year><year>2022</year>
       <holder>Ericsson AB. All Rights Reserved.</holder>
     </copyright>
     <legalnotice>
@@ -514,6 +514,29 @@
 	  <p>See also <seecref marker="#M_acul"><c>acul</c></seecref>.</p>
         </item>
 
+        <tag><marker id="M_acful"/><c><![CDATA[+M<S>acful <utilization>|de]]></c>
+        </tag>
+        <item>
+            <p>Abandon carrier free utilization limit. When the utilization of
+              a carrier falls belows this limit erts_alloc instructs the OS that
+              unused memory in the carrier can be re-used for allocation by other OS
+              procesesses. On Unix this is done by calling <c>madvise(..., ..., MADV_FREE)</c>
+              on the unused memory region, on Windows it is done by calling
+              <c>VirtualAlloc(..., ..., MEM_RESET, PAGE_READWRITE)</c>. Defaults to 0
+              which means that no memory will be marked as re-usable by the OS.</p>
+            <p>A valid
+              <c><![CDATA[<utilization>]]></c> is an integer in the range
+              <c>[0, 100]</c> representing utilization in percent. If this value is
+              larger than the <c>acul</c> limit it will be lowered to the current
+              <c>acul</c> limit. If <c>de</c> (default
+              enabled) is passed instead of a <c><![CDATA[<utilization>]]></c>,
+              a recommended non-zero utilization value is used. The value
+              chosen depends on the allocator type and can be changed between
+              ERTS versions.
+              </p>
+	  <p>See also <seecref marker="#M_acul"><c>acul</c></seecref>.</p>
+        </item>
+
         <tag><marker id="M_as"/>
           <c><![CDATA[+M<S>as bf|aobf|aoff|aoffcbf|aoffcaobf|ageffcaoff|ageffcbf|ageffcaobf|gf|af]]></c></tag>
         <item>
@@ -638,7 +661,7 @@
             good fit strategy is selected for allocator
             <c><![CDATA[<S>]]></c>. When the good fit strategy is used, free
             blocks are placed in segregated free-lists. Each free-list
-            contains blocks of sizes in a specific range. The maxiumum block
+            contains blocks of sizes in a specific range. The maximum block
             search depth sets a limit on the maximum number of blocks to
             inspect in a free-list during a search for suitable block
             satisfying the request.</p>
@@ -780,10 +803,6 @@
             information about what it is and who allocated it. See
             <seecref marker="#M_atags"><c>+M&lt;S&gt;atags</c></seecref> for a
             more complete description.</p>
-        </item>
-        <tag><marker id="Mit"/><c>+Mit X</c></tag>
-        <item>
-          <p>Reserved for future use. Do <em>not</em> use this flag.</p>
         </item>
       </taglist>
 

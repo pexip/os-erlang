@@ -4,7 +4,7 @@
 <erlref>
   <header>
     <copyright>
-      <year>1996</year><year>2021</year>
+      <year>1996</year><year>2022</year>
       <holder>Ericsson AB. All Rights Reserved.</holder>
     </copyright>
     <legalnotice>
@@ -866,6 +866,12 @@ f.txt:  {person, "kalle", 25}.
               <seemfa marker="#read_file_info/1"><c>read_file_info/1</c></seemfa>
 	      does probably not match the number of bytes that can be
 	      read from a compressed file.</p>
+          </item>
+          <tag><c>compressed_one</c></tag>
+          <item>
+            <p>Read one member of a gzip compressed file.
+	      Option <c>compressed_one</c> can only be combined
+	      with <c>read</c>.</p>
           </item>
           <tag><c>{encoding, Encoding}</c></tag>
           <item>

@@ -417,7 +417,7 @@ certify(internal, #certificate_request{},
 	#state{static_env = #static_env{role = client,
                                         protocol_cb = Connection},
                session = Session0,
-               connection_env = #connection_env{cert_key_pairs = [#{certs := [[]]}]}} = State) ->
+               connection_env = #connection_env{cert_key_alts = [#{certs := [[]]}]}} = State) ->
     %% The client does not have a certificate and will send an empty reply, the server may fail 
     %% or accept the connection by its own preference. No signature algorithms needed as there is
     %% no certificate to verify.
@@ -430,11 +430,12 @@ certify(internal, #certificate_request{} = CertRequest,
                                         cert_db = CertDbHandle,
                                         cert_db_ref = CertDbRef},
                connection_env = #connection_env{negotiated_version = Version,
-                                                cert_key_pairs = CertKeyPairs
+                                                cert_key_alts = CertKeyAlts
                                                },
                session = Session0,
                ssl_options = #{signature_algs := SupportedHashSigns}} = State) ->
     TLSVersion = ssl:tls_version(Version),
+    CertKeyPairs = ssl_certificate:available_cert_key_pairs(CertKeyAlts, ssl:tls_version(Version)),
     Session = select_client_cert_key_pair(Session0, CertRequest, CertKeyPairs,
                                           SupportedHashSigns, TLSVersion,
                                           CertDbHandle, CertDbRef),
@@ -685,7 +686,8 @@ downgrade(Type, Event, State) ->
 gen_handshake(StateName, Type, Event, State) ->
     try
         tls_dtls_connection:StateName(Type, Event, State)
-    catch error:_ ->
+    catch error:Reason:ST ->
+            ?SSL_LOG(info, handshake_error, [{error, Reason}, {stacktrace, ST}]),
             throw(?ALERT_REC(?FATAL, ?HANDSHAKE_FAILURE, malformed_handshake_data))
     end.
 
@@ -717,8 +719,12 @@ handle_call({prf, Secret, Label, Seed, WantedLength}, From, _,
 					  end, [], Seed)),
 		ssl_handshake:prf(ssl:tls_version(Version), PRFAlgorithm, SecretToUse, Label, SeedToUse, WantedLength)
 	    catch
-		exit:_ -> {error, badarg};
-		error:Reason -> {error, Reason}
+		exit:Reason:ST ->
+                    ?SSL_LOG(info, handshake_error, [{error, Reason}, {stacktrace, ST}]),
+                    {error, badarg};
+		error:Reason:ST ->
+                    ?SSL_LOG(info, handshake_error, [{error, Reason}, {stacktrace, ST}]),
+                    {error, Reason}
 	    end,
     {keep_state_and_data, [{reply, From, Reply}]};
 handle_call(Msg, From, StateName, State) ->
@@ -1483,22 +1489,20 @@ generate_srp_server_keys(_SrpParams, 10) ->
 generate_srp_server_keys(SrpParams =
 			     #srp_user{generator = Generator, prime = Prime,
 				       verifier = Verifier}, N) ->
-    try crypto:generate_key(srp, {host, [Verifier, Generator, Prime, '6a']}) of
-	Keys ->
-	    Keys
+    try crypto:generate_key(srp, {host, [Verifier, Generator, Prime, '6a']})
     catch
-	error:_ ->
+	error:Reason:ST ->
+            ?SSL_LOG(debug, crypto_error, [{error, Reason}, {stacktrace, ST}]),
 	    generate_srp_server_keys(SrpParams, N+1)
     end.
 
 generate_srp_client_keys(_Generator, _Prime, 10) ->
     throw(?ALERT_REC(?FATAL, ?ILLEGAL_PARAMETER));
 generate_srp_client_keys(Generator, Prime, N) ->
-    try crypto:generate_key(srp, {user, [Generator, Prime, '6a']}) of
-	Keys ->
-	    Keys
+    try crypto:generate_key(srp, {user, [Generator, Prime, '6a']})
     catch
-	error:_ ->
+	error:Reason:ST ->
+            ?SSL_LOG(debug, crypto_error, [{error, Reason}, {stacktrace, ST}]),
 	    generate_srp_client_keys(Generator, Prime, N+1)
     end.
 
@@ -1687,7 +1691,7 @@ select_client_cert_key_pair(Session0, CertRequest, CertKeyPairs, SupportedHashSi
     select_client_cert_key_pair(Session0, CertRequest, CertKeyPairs, SupportedHashSigns, TLSVersion, CertDbHandle, CertDbRef, undefined).
 
 select_client_cert_key_pair(Session0,_,[], _, _,_,_, undefined) ->
-    %% No certificate compliant with signing algorithms found: empty certificate will be sent
+    %% No certificate compliant with supported algorithms: empty certificate will be sent
     Session0#session{own_certificates = [[]],
                      private_key = #{}};
 select_client_cert_key_pair(_,_,[], _, _,_,_,#session{}=Session) ->
@@ -1697,7 +1701,7 @@ select_client_cert_key_pair(Session0, #certificate_request{certificate_authoriti
                             [#{private_key := PrivateKey, certs := [Cert| _] = Certs} | Rest],
                             SupportedHashSigns, TLSVersion, CertDbHandle, CertDbRef, Default) ->
     case ssl_handshake:select_hashsign(CertRequest, Cert, SupportedHashSigns, TLSVersion) of
-        #alert {} ->
+        #alert{} ->
             select_client_cert_key_pair(Session0, CertRequest, Rest, SupportedHashSigns, TLSVersion, CertDbHandle, CertDbRef, Default);
         SelectedHashSign ->
             case ssl_certificate:handle_cert_auths(Certs, CertAuths, CertDbHandle, CertDbRef) of

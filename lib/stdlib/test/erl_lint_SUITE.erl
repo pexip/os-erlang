@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 1999-2021. All Rights Reserved.
+%% Copyright Ericsson AB 1999-2022. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -65,16 +65,20 @@
          maps/1,maps_type/1,maps_parallel_match/1,
          otp_11851/1,otp_11879/1,otp_13230/1,
          record_errors/1, otp_11879_cont/1,
-         non_latin1_module/1, otp_14323/1,
+         non_latin1_module/1, illegal_module_name/1, otp_14323/1,
          stacktrace_syntax/1,
          otp_14285/1, otp_14378/1,
          external_funs/1,otp_15456/1,otp_15563/1,
          unused_type/1,binary_types/1,removed/1, otp_16516/1,
          inline_nifs/1,
+         undefined_nifs/1,
+         no_load_nif/1,
          warn_missing_spec/1,
          otp_16824/1,
          underscore_match/1,
-         unused_record/1]).
+         unused_record/1,
+         unused_type2/1,
+         eep49/1]).
 
 suite() ->
     [{ct_hooks,[ts_install_cth]},
@@ -94,11 +98,15 @@ all() ->
      too_many_arguments, basic_errors, bin_syntax_errors, predef,
      maps, maps_type, maps_parallel_match,
      otp_11851, otp_11879, otp_13230,
-     record_errors, otp_11879_cont, non_latin1_module, otp_14323,
+     record_errors, otp_11879_cont,
+     non_latin1_module, illegal_module_name, otp_14323,
      stacktrace_syntax, otp_14285, otp_14378, external_funs,
      otp_15456, otp_15563, unused_type, binary_types, removed, otp_16516,
+     undefined_nifs,
+     no_load_nif,
      inline_nifs, warn_missing_spec, otp_16824,
-     underscore_match, unused_record].
+     underscore_match, unused_record, unused_type2,
+     eep49].
 
 groups() -> 
     [{unused_vars_warn, [],
@@ -958,14 +966,13 @@ binary_types(Config) when is_list(Config) ->
     Ts = [{binary1,
            <<"-type nonempty_binary() :: term().">>,
            [nowarn_unused_type],
-           {warnings,[{{1,22},erl_lint,
-                       {new_builtin_type,{nonempty_binary,0}}}]}},
-
+           {errors,[{{1,22},erl_lint,
+                     {builtin_type,{nonempty_binary,0}}}],[]}},
           {binary2,
            <<"-type nonempty_bitstring() :: term().">>,
            [nowarn_unused_type],
-           {warnings,[{{1,22},erl_lint,
-                       {new_builtin_type,{nonempty_bitstring,0}}}]}}],
+           {errors,[{{1,22},erl_lint,
+                     {builtin_type,{nonempty_bitstring,0}}}],[]}}],
     [] = run(Config, Ts),
     ok.
 
@@ -1645,8 +1652,20 @@ guard(Config) when is_list(Config) ->
             [],
             {error,
 	     [{{2,26},erl_lint,{obsolete_guard_overridden,port}}],
-	     [{{2,26},erl_lint,{obsolete_guard,{port,1}}}]}}
-	  ],
+	     [{{2,26},erl_lint,{obsolete_guard,{port,1}}}]}},
+           {guard11,
+            <<"-record(bar, {a = mk_a()}).
+               mk_a() -> 1.
+
+               test_rec(Rec) when Rec =:= #bar{} -> true.
+               map_pattern(#{#bar{} := _}) -> ok.
+              ">>,
+            [],
+            {errors,
+             [{{4,43},erl_lint,{illegal_guard_local_call,{mk_a,0}}},
+              {{5,30},erl_lint,{illegal_guard_local_call,{mk_a,0}}}],
+             []}}
+          ],
     [] = run(Config, Ts1),
     ok.
 
@@ -3725,7 +3744,10 @@ predef(Config) when is_list(Config) ->
     %% dict(), digraph() and so on were removed in Erlang/OTP 18.0.
     E2 = get_compilation_result(Config, "predef2", []),
     Tag = undefined_type,
-    {[{{7,13},erl_lint,{Tag,{array,0}}},
+    {[{{5,2},erl_lint,{Tag,{array,0}}},
+      {{5,2},erl_lint,{Tag,{digraph,0}}},
+      {{5,2},erl_lint,{Tag,{gb_set,0}}},
+      {{7,13},erl_lint,{Tag,{array,0}}},
       {{12,12},erl_lint,{Tag,{dict,0}}},
       {{17,15},erl_lint,{Tag,{digraph,0}}},
       {{27,14},erl_lint,{Tag,{gb_set,0}}},
@@ -4091,9 +4113,10 @@ otp_11879_cont(Config) ->
 %% OTP-14285: We currently don't support non-latin1 module names.
 
 non_latin1_module(Config) ->
-    do_non_latin1_module('юникод'),
-    do_non_latin1_module(list_to_atom([256,$a,$b,$c])),
-    do_non_latin1_module(list_to_atom([$a,$b,256,$c])),
+    Expected = [non_latin1_module_unsupported],
+    Expected = check_module_name('юникод'),
+    Expected = check_module_name(list_to_atom([256,$a,$b,$c])),
+    Expected = check_module_name(list_to_atom([$a,$b,256,$c])),
 
     "module names with non-latin1 characters are not supported" =
         format_error(non_latin1_module_unsupported),
@@ -4152,16 +4175,48 @@ non_latin1_module(Config) ->
     run(Config, Ts),
     ok.
 
-do_non_latin1_module(Mod) ->
+illegal_module_name(_Config) ->
+    [empty_module_name] = check_module_name(''),
+
+    [ctrl_chars_in_module_name] = check_module_name('\x00'),
+    [ctrl_chars_in_module_name] = check_module_name('abc\x1F'),
+    [ctrl_chars_in_module_name] = check_module_name('\x7F'),
+    [ctrl_chars_in_module_name] = check_module_name('abc\x80'),
+    [ctrl_chars_in_module_name] = check_module_name('abc\x80xyz'),
+    [ctrl_chars_in_module_name] = check_module_name('\x9Fxyz'),
+
+    [ctrl_chars_in_module_name,
+     non_latin1_module_unsupported] = check_module_name('атом\x00'),
+
+    [blank_module_name] = check_module_name(' '),
+    [blank_module_name] = check_module_name('\xA0'),
+    [blank_module_name] = check_module_name('\xAD'),
+    [blank_module_name] = check_module_name('  \xA0\xAD '),
+
+    %% White space and soft hyphens are OK if there are visible
+    %% characters in the name.
+    ok = check_module_name(' abc '),
+    ok = check_module_name('abc '),
+    ok = check_module_name(' abc '),
+    ok = check_module_name(' abc xyz '),
+    ok = check_module_name(' abc\xADxyz '),
+
+    ok.
+
+check_module_name(Mod) ->
     File = atom_to_list(Mod) ++ ".erl",
     L1 = erl_anno:new(1),
     Forms = [{attribute,L1,file,{File,1}},
              {attribute,L1,module,Mod},
              {eof,2}],
-    error = compile:forms(Forms),
-    {error,_,[]} = compile:forms(Forms, [return]),
-    ok.
-
+    _ = compile:forms(Forms),
+    case compile:forms(Forms, [return]) of
+        {error,Errors,[]} ->
+            [{_ModName,L}] = Errors,
+            lists:sort([Reason || {1,erl_lint,Reason} <- L]);
+        {ok,Mod,Code,Ws} when is_binary(Code), is_list(Ws)  ->
+            ok
+    end.
 
 otp_14378(Config) ->
     Ts = [
@@ -4479,6 +4534,34 @@ inline_nifs(Config) ->
            {warnings,[{{2,22},erl_lint,nif_inline}]}}],
     [] = run(Config, Ts).
 
+undefined_nifs(Config) when is_list(Config) ->
+    Ts = [{undefined_nifs,
+          <<"-export([t/0]).
+             -nifs([hej/1]).
+              t() ->
+                  erlang:load_nif(\"lib\", []).
+            ">>,
+           [],
+           {errors,[{{2,15},erl_lint,{undefined_nif,{hej,1}}}],[]}}
+         ],
+    [] = run(Config, Ts),
+
+    ok.
+
+no_load_nif(Config) when is_list(Config) ->
+    Ts = [{no_load_nif,
+          <<"-export([t/0]).
+             -nifs([t/0]).
+              t() ->
+                  a.
+            ">>,
+           [],
+           {warnings,[{{2,15},erl_lint,no_load_nif}]}}
+         ],
+    [] = run(Config, Ts),
+
+    ok.
+
 warn_missing_spec(Config) ->
     Test = <<"-export([external_with_spec/0, external_no_spec/0]).
 
@@ -4629,6 +4712,141 @@ unused_record(Config) when is_list(Config) ->
          ],
     [] = run(Config, Ts),
 
+    ok.
+
+unused_type2(Config) when is_list(Config) ->
+    Ts = [{unused_type2_1,
+           <<"-type t() :: [t()].
+              t() ->
+                  a.
+            ">>,
+           {[]},
+           {warnings,[{{1,22},erl_lint,{unused_type,{t,0}}},
+                      {{2,15},erl_lint,{unused_function,{t,0}}}]}},
+          {unused_type2_2,
+           <<"-type t1() :: t2().
+              -type t2() :: t1().
+               t() ->
+                   a.
+            ">>,
+           {[]},
+           {warnings,[{{1,22},erl_lint,{unused_type,{t1,0}}},
+                      {{2,16},erl_lint,{unused_type,{t2,0}}},
+                      {{3,16},erl_lint,{unused_function,{t,0}}}]}},
+          {unused_type2_3,
+           <<"-callback cb() -> t().
+              -type t() :: atom().
+               t() ->
+                   a.
+            ">>,
+           {[]},
+           {warnings,[{{3,16},erl_lint,{unused_function,{t,0}}}]}},
+          {unused_type2_4,
+           <<"-spec t() -> t().
+              -type t() :: atom().
+               t() ->
+                   a.
+            ">>,
+           {[]},
+           {warnings,[{{3,16},erl_lint,{unused_function,{t,0}}}]}},
+          {unused_type2_5,
+           <<"-export_type([t/0]).
+              -type t() :: atom().
+               t() ->
+                   a.
+            ">>,
+           {[]},
+           {warnings,[{{3,16},erl_lint,{unused_function,{t,0}}}]}},
+          {unused_type2_6,
+           <<"-record(r, {f :: t()}).
+              -type t() :: atom().
+               t() ->
+                   a.
+            ">>,
+           {[]},
+           {warnings,[{{1,22},erl_lint,{unused_record,r}},
+                      {{3,16},erl_lint,{unused_function,{t,0}}}]}}
+         ],
+    [] = run(Config, Ts),
+
+    ok.
+
+%% Test maybe ... else ... end.
+eep49(Config) when is_list(Config) ->
+    EnableMaybe = {feature,maybe_expr,enable},
+    Ts = [{exp1,
+           <<"t(X) ->
+                  maybe
+                      A = X()
+                  end,
+                  A.
+           ">>,
+           [EnableMaybe],
+           {errors,[{{5,19},erl_lint,{unsafe_var,'A',{'maybe',{2,19}}}}],
+            []}},
+
+          {exp2,
+           <<"t(X) ->
+                  maybe
+                      A = X()
+                  else
+                      _ -> {ok,A}
+                  end,
+                  A.
+           ">>,
+           [EnableMaybe],
+           {errors,[{{5,32},erl_lint,{unsafe_var,'A',{'maybe',{2,19}}}},
+                    {{7,19},erl_lint,{unsafe_var,'A',{'maybe',{2,19}}}}],
+            []}},
+
+          {exp3,
+           <<"t(X) ->
+                  maybe
+                      X()
+                  else
+                      A ->
+                          B = 42,
+                          {error,A}
+                  end,
+                  {A,B}.
+           ">>,
+           [EnableMaybe],
+           {errors,[{{9,20},erl_lint,{unsafe_var,'A',{'else',{4,19}}}},
+                    {{9,22},erl_lint,{unsafe_var,'B',{'else',{4,19}}}}],
+            []}},
+
+          {exp4,
+           <<"t(X) ->
+                  maybe
+                      X()
+                  else
+                      ok ->
+                          A = 42;
+                      error ->
+                          error
+                  end,
+                  A.
+           ">>,
+           [EnableMaybe],
+           {errors,[{{10,19},erl_lint,{unsafe_var,'A',{'else',{4,19}}}}],
+            []}},
+
+          %% Using '?=' not at the top-level of a 'maybe' ... 'else' is forbidden.
+          {illegal_maybe_match1,
+           <<"t(X) ->
+                  maybe (ok ?= X()) end.
+           ">>,
+           [EnableMaybe],
+           {errors,[{{2,29},erl_parse,["syntax error before: ","'?='"]}],[]}},
+          {illegal_maybe_match2,
+           <<"t(X) ->
+                  ok ?= X().
+           ">>,
+           [EnableMaybe],
+           {errors,[{{2,22},erl_parse,["syntax error before: ","'?='"]}],[]}}
+         ],
+
+    [] = run(Config, Ts),
     ok.
 
 format_error(E) ->

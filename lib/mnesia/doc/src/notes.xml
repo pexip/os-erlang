@@ -4,7 +4,7 @@
 <chapter>
   <header>
     <copyright>
-      <year>1996</year><year>2021</year>
+      <year>1996</year><year>2022</year>
       <holder>Ericsson AB. All Rights Reserved.</holder>
     </copyright>
     <legalnotice>
@@ -38,6 +38,70 @@
     bugfixes for every release of Mnesia. Each release of Mnesia
     thus constitutes one section in this document. The title of each
     section is the version number of Mnesia.</p>
+
+  <section><title>Mnesia 4.21.3</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+          <p>
+	    Fixed crash which could happen during startup if too many
+	    decisions where sent from remote nodes.</p>
+          <p>
+	    Own Id: OTP-18319 Aux Id: ERIERL-875 </p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>Mnesia 4.21.2</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+          <p>
+	    Don't fill the logs if mnesia can't connect to all nodes,
+	    due to partitioned network.</p>
+          <p>
+	    Own Id: OTP-18288 Aux Id: ERIERL-868 </p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>Mnesia 4.21.1</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+          <p>
+	    Fixed <c>add_table_copy</c> which could leave a table
+	    lock if the receiving node went down during the
+	    operation.</p>
+          <p>
+	    Own Id: OTP-18128 Aux Id: PR-6013 </p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>Mnesia 4.21</title>
+
+    <section><title>Improvements and New Features</title>
+      <list>
+        <item>
+          <p>
+	    Documentation fixes.</p>
+          <p>
+	    Own Id: OTP-17930</p>
+        </item>
+      </list>
+    </section>
+
+</section>
 
   <section><title>Mnesia 4.20.4.1</title>
 

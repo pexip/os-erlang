@@ -1,7 +1,7 @@
 %% 
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2004-2021. All Rights Reserved.
+%% Copyright Ericsson AB 2004-2022. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -750,8 +750,18 @@ handle_info_down(Info, State) ->
 %% Purpose: Shutdown the server
 %% Returns: any (ignored by gen_server)
 %%--------------------------------------------------------------------
-terminate(Reason, #state{log = Log, irgc = IrGcRef}) ->
+terminate(Reason, #state{log        = Log,
+                         irgc       = IrGcRef,
+                         transports = Transports}) ->
     ?vdebug("terminate: ~p", [Reason]),
+    %% Close all transports:
+    Close =
+        fun(S) ->
+                ?vlog("try close socket ~p", [S]),
+                (catch gen_udp:close(S))
+        end,
+    _ = [Close(Socket) || #transport{socket = Socket} <- Transports],
+    %% Stop IR GC timer
     irgc_stop(IrGcRef),
     %% Close logs
     do_close_log(Log),
@@ -782,7 +792,7 @@ maybe_handle_recv_msg(Domain, Addr, Bytes, State) ->
        fun (Pid, Class, Reason, Stacktrace) ->
 	       warning_msg(
 		 "Worker process (~p) terminated "
-		 "while processing (incomming) message from %s:~n"
+		 "while processing (incoming) message from %s:~n"
 		 "~w:~w at ~p",
 		 [Pid, snmp_conf:mk_addr_string({Domain, Addr}),
 		  Class, Reason, Stacktrace])

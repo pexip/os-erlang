@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 1998-2021. All Rights Reserved.
+%% Copyright Ericsson AB 1998-2022. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -356,6 +356,7 @@ bif(node, 0) -> true;
 bif(node, 1) -> true;
 bif(nodes, 0) -> true;
 bif(nodes, 1) -> true;
+bif(nodes, 2) -> true;
 bif(now, 0) -> true;
 bif(open_port, 2) -> true;
 bif(pid_to_list, 1) -> true;

@@ -957,13 +957,13 @@ get_ext_types_disc_() ->
             []
     end.
 
-%% Convert attribute name to integer if neccessary
+%% Convert attribute name to integer if necessary
 attr_tab_to_pos(_Tab, Pos) when is_integer(Pos) ->
     Pos;
 attr_tab_to_pos(Tab, Attr) ->
     attr_to_pos(Attr, val({Tab, attributes})).
 
-%% Convert attribute name to integer if neccessary
+%% Convert attribute name to integer if necessary
 attr_to_pos({_} = P, _) -> P;
 attr_to_pos(Pos, _Attrs) when is_integer(Pos) ->
     Pos;
@@ -1024,14 +1024,14 @@ verify_cstruct(#cstruct{} = Cs) ->
 
 expand_index_attrs(#cstruct{index = Ix, attributes = Attrs,
 			    name = Tab} = Cs) ->
-    Prefered = prefered_index_types(Cs),
-    expand_index_attrs(Ix, Tab, Attrs, Prefered).
+    Preferred = prefered_index_types(Cs),
+    expand_index_attrs(Ix, Tab, Attrs, Preferred).
 
-expand_index_attrs(Ix, Tab, Attrs, Prefered) ->
+expand_index_attrs(Ix, Tab, Attrs, Preferred) ->
     lists:map(fun(P) when is_integer(P); is_atom(P) ->
-		      {attr_to_pos(P, Attrs), Prefered};
+		      {attr_to_pos(P, Attrs), Preferred};
 		 ({A} = P) when is_atom(A) ->
-		      {P, Prefered};
+		      {P, Preferred};
 		 ({P, Type}) ->
 		      {attr_to_pos(P, Attrs), Type};
 		 (_Other) ->
@@ -1352,7 +1352,7 @@ check_active([], _Expl, _Tab) ->
 
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-%% Function for definining an external backend type
+%% Function for defining an external backend type
 
 add_backend_type(Name, Module) ->
     case schema_transaction(fun() -> do_add_backend_type(Name, Module) end) of
@@ -3095,7 +3095,7 @@ ext_real_suffixes(Ext) ->
 		    [M || {_,M} <- Ext])
     catch
         error:E ->
-            verbose("Cant find real ext suffixes (~tp)~n", [E]),
+            verbose("Can't find real ext suffixes (~tp)~n", [E]),
             []
     end.
 
@@ -3104,7 +3104,7 @@ ext_tmp_suffixes(Ext) ->
 		    [M || {_,M} <- Ext])
     catch
         error:E ->
-            verbose("Cant find tmp ext suffixes (~tp)~n", [E]),
+            verbose("Can't find tmp ext suffixes (~tp)~n", [E]),
             []
     end.
 
@@ -3398,8 +3398,7 @@ do_merge_schema(LockTabs0) ->
 		    RemoteRunning = mnesia_lib:intersect(New ++ Old, RemoteRunning1),
 		    if
 			RemoteRunning /= RemoteRunning1 ->
-			    mnesia_lib:error("Mnesia on ~p could not connect to node(s) ~p~n",
-					     [node(), RemoteRunning1 -- RemoteRunning]),
+                            warn_user_connect_failed(RemoteRunning1 -- RemoteRunning),
 			    mnesia:abort({node_not_running, RemoteRunning1 -- RemoteRunning});
 			true -> ok
 		    end,
@@ -3439,6 +3438,22 @@ do_merge_schema(LockTabs0) ->
 	    %% No more nodes to merge schema with
 	    not_merged
     end.
+
+warn_user_connect_failed(Missing) ->
+    Tag = {user_warned, do_schema_merge},
+    case ?catch_val(Tag) of
+        {'EXIT', _} ->
+            mnesia_lib:error("Mnesia on ~p could not connect to node(s) ~p~n",
+                             [node(), Missing]),
+            mnesia_lib:set(Tag, 1);
+        N when N rem 2000 =:= 0 ->  %% ~10 min
+            mnesia_lib:error("Mnesia on ~p could not connect to node(s) ~p~n",
+                             [node(), Missing]),
+            mnesia_lib:set(Tag, N+1);
+        N ->
+            mnesia_lib:set(Tag, N+1)
+    end.
+
 
 fetch_cstructs(Node) ->
     rpc:call(Node, mnesia_controller, get_remote_cstructs, []).

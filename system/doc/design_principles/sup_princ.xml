@@ -4,7 +4,7 @@
 <chapter>
   <header>
     <copyright>
-      <year>1997</year><year>2021</year>
+      <year>1997</year><year>2022</year>
       <holder>Ericsson AB. All Rights Reserved.</holder>
     </copyright>
     <legalnotice>
@@ -69,7 +69,7 @@ init(_Args) ->
                     restart => permanent,
                     shutdown => brutal_kill,
                     type => worker,
-                    modules => [cg3]}],
+                    modules => [ch3]}],
     {ok, {SupFlags, ChildSpecs}}.</code>
     <p>The <c>SupFlags</c> variable in the return value
       from <c>init/1</c> represents
@@ -374,7 +374,7 @@ child_spec() = #{id => child_id(),             % mandatory
 	<p>Note that this identifier occasionally has been called
 	  "name". As far as possible, the terms "identifier" or "id"
 	  are now used but in order to keep backwards compatibility,
-	  some occurences of "name" can still be found, for example
+	  some occurrences of "name" can still be found, for example
 	  in error messages.</p>
       </item>
       <item>

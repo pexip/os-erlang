@@ -33,6 +33,187 @@
     <file>notes.xml</file>
   </header>
   
+  <section><title>Inets 8.2.2</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+          <p>
+	    Ensure graceful shutdown</p>
+          <p>
+	    Own Id: OTP-18461 Aux Id: ERIERL-890 </p>
+        </item>
+        <item>
+          <p>
+	    Return type of the type specification for function
+	    <c>httpc:cookie_header/{1,2,3}</c> has been fixed from
+	    <c>-spec cookie_header(url()) -&gt; [{ field(), value()
+	    }] | {error, Reason}</c> to <c>-spec cookie_header(url())
+	    -&gt; { field(), value() } | {error, Reason}</c></p>
+          <p>
+	    Own Id: OTP-18462 Aux Id: GH-6846 </p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>Inets 8.2.1</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+          <p>
+	    fixes a missing case of the type specification for
+	    httpd:info/2/3/4</p>
+          <p>
+	    Own Id: OTP-18362 Aux Id: GH-6558, ERIERL-895 </p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>Inets 8.2</title>
+
+    <section><title>Improvements and New Features</title>
+      <list>
+        <item>
+          <p>
+	    This change allows body requests to
+	    <c>httpc:request/5</c> be an <c>iolist()</c></p>
+          <p>
+	    Own Id: OTP-18250</p>
+        </item>
+        <item>
+          <p>
+	    addition of type specs in <c>httpc.erl</c></p>
+          <p>
+	    Own Id: OTP-18251 Aux Id: GH-6245 </p>
+        </item>
+        <item>
+          <p>
+	    httpc: Add support for HTTP 308 status code</p>
+          <p>
+	    Own Id: OTP-18280 Aux Id: GH-6290, PR-6291 </p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>Inets 8.1</title>
+
+    <section><title>Improvements and New Features</title>
+      <list>
+        <item>
+          <p>
+	    Add <c>httpc:ssl_verify_host_options/1</c> to help
+	    setting default ssl options for the https client.</p>
+          <p>
+	    Own Id: OTP-18118</p>
+        </item>
+        <item>
+          <p>
+	    This change fixes dialyzer warnings generated for
+	    inets/httpd examples (includes needed adjustment of spec
+	    for ssh_sftp module).</p>
+          <p>
+	    Own Id: OTP-18178 Aux Id: ERIERL-833, ERIERL-834,
+	    ERIERL-835 </p>
+        </item>
+        <item>
+          <p>
+	    Remove documentation of no longer supported callback.</p>
+          <p>
+	    Own Id: OTP-18193 Aux Id: GH-6122 </p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>Inets 8.0</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+          <p>
+	    Adjust uri_string:normalize behavior for URIs with
+	    undefined port (URI string with a port colon but no port
+	    value or URI map with port => undefined).</p>
+          <p>
+	    Remove redundant normalization from http_request module.</p>
+          <p>
+	    Before this change, normalize would not remove port
+	    subcomponent in such cases and could for example return
+	    "http://localhost:" URI.</p>
+          <p>
+	    *** POTENTIAL INCOMPATIBILITY ***</p>
+          <p>
+	    Own Id: OTP-17627</p>
+        </item>
+        <item>
+          <p>
+	    Fixed typo in Reason term returned from
+	    httpc_handler:handle_http_body.</p>
+          <p>
+	    After this change, could_not_establish_ssl_tunnel atom is
+	    returned within Reason term.</p>
+          <p>
+	    *** POTENTIAL INCOMPATIBILITY ***</p>
+          <p>
+	    Own Id: OTP-17889</p>
+        </item>
+        <item>
+          <p>
+	    With this change, inet6fb4 option is documented for
+	    inets/httpc. Option can be used when IP family needs to
+	    be discovered by a connection attempt.</p>
+          <p>
+	    Own Id: OTP-18063 Aux Id: ERIERL-798 </p>
+        </item>
+      </list>
+    </section>
+
+
+    <section><title>Improvements and New Features</title>
+      <list>
+        <item>
+          <p>
+	    This change removes deprecated functions:
+	    http_uri:parse/1, http_uri:parse/2 and
+	    http_uri:scheme_defaults/0.</p>
+          <p>
+	    This change delays until OTP-26 removal of deprecated
+	    functions: http_uri:encode/1 and http_uri:decode/1.</p>
+          <p>
+	    This change marks httpd_util:decode_hex/1 and
+	    httpd_util:encode_hex/1 as deprecated.</p>
+          <p>
+	    *** POTENTIAL INCOMPATIBILITY ***</p>
+          <p>
+	    Own Id: OTP-17866</p>
+        </item>
+        <item>
+          <p>
+	    After this change, connect_timeout value is re-used when
+	    upgrading TCP connection to TLS over a proxy.</p>
+          <p>
+	    Own Id: OTP-17997 Aux Id: GH-5782 </p>
+        </item>
+        <item>
+          <p>
+	    Remove reference to unsupported Apache-like config file
+	    from httpd manual.</p>
+          <p>
+	    Own Id: OTP-18088 Aux Id: GH-5276 </p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
   <section><title>Inets 7.5.3.1</title>
 
     <section><title>Improvements and New Features</title>
@@ -242,6 +423,21 @@
 	    variables.</p>
           <p>
 	    Own Id: OTP-17385 Aux Id: OTP-17123 </p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+  <section><title>Inets 7.3.2.3</title>
+
+    <section><title>Improvements and New Features</title>
+      <list>
+        <item>
+          <p>
+	    Remove documentation of no longer supported callback.</p>
+          <p>
+	    Own Id: OTP-18193 Aux Id: GH-6122 </p>
         </item>
       </list>
     </section>
@@ -2583,8 +2779,7 @@
           <p>Utility module 
 	  <seeerl marker="http_uri">http_uri</seeerl>
 	  now officially supported. </p>
-	  <p>Also, the 
-	  <seeerl marker="http_uri#parse">parse</seeerl> 
+	  <p>Also, the <c>http_uri:parse</c>
 	  function has been extended with more
 	  scheme support and a way to provide your own scheme info. </p>
 	  <p>Own Id: OTP-9983</p>

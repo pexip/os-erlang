@@ -221,7 +221,7 @@ cast(Msg) ->
             ok
     catch
         C:E:_ ->
-            {error, {catched, C, E}}
+            {error, {caught, C, E}}
     end.
 
 
@@ -234,10 +234,10 @@ call(Req, Timeout) when is_integer(Timeout) andalso (Timeout > 1000) ->
 call(Req, Timeout) when is_integer(Timeout) ->
     call(Req, Timeout, Timeout div 2).
 
-%% This peace of wierdness is because on some machines this call has
+%% This peace of weirdness is because on some machines this call has
 %% hung (in a call during end_per_testcase, which had a 1 min timeout,
 %% or if that was the total time for the test case).
-%% But because it hung there, we don't really know what where it git stuck.
+%% But because it hung there, we don't really know where it got stuck.
 %% So, by making the call in a tmp process, that we supervise, we can
 %% keep control. Also, we change the default timeout from infinity to an
 %% actual time (16 seconds).
@@ -250,11 +250,11 @@ call(Req, Timeout1, Timeout2) ->
                             {?MODULE, Ref, Rep} ->
                                 exit(Rep)
                         after Timeout2 ->
-                                {error, timeout}
+                                exit({error, timeout})
                         end
                 catch
-                    C:E:_ ->
-                        {error, {catched, C, E}}
+                    C:E:S ->
+                        exit({error, {caught, C, E, S}})
                 end
         end,
     {Pid, Mon} = spawn_monitor(F),

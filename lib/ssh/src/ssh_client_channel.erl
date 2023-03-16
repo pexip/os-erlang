@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2008-2021. All Rights Reserved.
+%% Copyright Ericsson AB 2008-2022. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -261,10 +261,9 @@ handle_info({ssh_cm, ConnectionManager, {closed, ChannelId}},
     (catch ssh_connection:close(ConnectionManager, ChannelId)),
     {stop, normal, State#state{close_sent = true}};
 
-handle_info({ssh_cm, _, _} = Msg, #state{cm = ConnectionManager,
-			channel_cb = Module, 
-			channel_state = ChannelState0} = State) ->
-    case Module:handle_ssh_msg(Msg, ChannelState0) of
+handle_info({ssh_cm, _, _} = Msg, #state{channel_cb = Module, 
+                                         channel_state = ChannelState0} = State) ->
+    try Module:handle_ssh_msg(Msg, ChannelState0) of
 	{ok, ChannelState} ->
 	    adjust_window(Msg),
 	    {noreply, State#state{channel_state = ChannelState}};
@@ -272,9 +271,10 @@ handle_info({ssh_cm, _, _} = Msg, #state{cm = ConnectionManager,
 	    adjust_window(Msg),
 	    {noreply, State#state{channel_state = ChannelState}, Timeout};
 	{stop, ChannelId, ChannelState} ->
-	    catch ssh_connection:close(ConnectionManager, ChannelId),
-	    {stop, normal, State#state{close_sent = true,
-				       channel_state = ChannelState}}
+            do_the_close(Msg, ChannelId, State#state{channel_state = ChannelState})
+    catch
+        error:_ ->
+            do_the_close(Msg, State#state.channel_id, State)
     end;
 
 handle_info(Msg, #state{channel_cb = Module, 

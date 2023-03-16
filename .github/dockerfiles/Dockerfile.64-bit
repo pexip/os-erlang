@@ -1,12 +1,10 @@
-FROM docker.pkg.github.com/erlang/otp/ubuntu-base
-## We do a SSA lint check here
-ENV ERL_COMPILER_OPTIONS=ssalint
+ARG BASE=docker.pkg.github.com/erlang/otp/ubuntu-base
+FROM $BASE
 
-ARG MAKEFLAGS=-j4
+ARG MAKEFLAGS=$MAKEFLAGS
 ENV MAKEFLAGS=$MAKEFLAGS \
-        ERLC_USE_SERVER=yes \
-        ERL_TOP=/buildroot/otp \
-        PATH=/buildroot/otp/bin:$PATH
+    ERL_TOP=/buildroot/otp \
+    PATH=/otp/bin:/buildroot/otp/bin:$PATH
 
 ARG ARCHIVE=./otp.tar.gz
 COPY $ARCHIVE /buildroot/otp.tar.gz
@@ -14,19 +12,37 @@ RUN cd /buildroot && tar -xzf ./otp.tar.gz
 
 WORKDIR /buildroot/otp/
 
-ENV CC=clang CXX=clang++ \
-        CFLAGS="-O2 -g -Werror"
+ENV CFLAGS="-O2 -g -Werror"
 
 ## Configure, check that no application are disabled and then make
-# We need --with-ssl-lib-subdir=lib/x86_64-linux-gnu since clang does not
-# give us this information such as gcc does...
-RUN  ./configure --with-ssl --with-ssl-lib-subdir=lib/x86_64-linux-gnu --prefix=/otp && \
+RUN  ./configure --prefix=/otp && \
         if cat lib/*/CONF_INFO || cat lib/*/SKIP || cat lib/SKIP-APPLICATIONS; then exit 1; fi && \
-        make && make install
+        make && sudo make install
 
 ## Disable -Werror as testcases do not compile with it on
 ENV CFLAGS="-O2 -g"
 
-RUN TESTSUITE_ROOT=/tests ./otp_build tests
+WORKDIR /buildroot/
 
-ENTRYPOINT ["bash","-c"]
+## Install test tools rebar3, proper and jsx
+RUN latest () { \
+    local VSN=$(curl -sL "https://api.github.com/repos/$1/tags" | jq -r ".[] | .name" | grep -E '^v?[0-9]' | sort -V | tail -1); \
+    curl -sL "https://github.com/$1/archive/$VSN.tar.gz" > $(basename $1).tar.gz; \
+    } && \
+    latest erlang/rebar3 && ls -la && \
+    (tar xzf rebar3.tar.gz && cd rebar3-* && ./bootstrap && sudo cp rebar3 /usr/bin) && \
+    latest proper-testing/proper && \
+    (tar xzf proper.tar.gz && mv proper-* proper && cd proper && make) && \
+    latest talentdeficit/jsx && \
+    (tar xzf jsx.tar.gz && mv jsx-* jsx && cd jsx && rebar3 compile)
+
+ENV ERL_LIBS=/buildroot/proper:/buildroot/jsx
+
+WORKDIR /buildroot/otp/
+
+## Update init.sh with correct env vars
+RUN echo "export MAKEFLAGS=$MAKEFLAGS" > /buildroot/env.sh && \
+    echo "export ERLC_USE_SERVER=$ERLC_USE_SERVER" >> /buildroot/env.sh && \
+    echo "export ERL_TOP=$ERL_TOP" >> /buildroot/env.sh && \
+    echo "export PATH=$PATH" >> /buildroot/env.sh && \
+    echo "export ERL_LIBS=$ERL_LIBS" >> /buildroot/env.sh

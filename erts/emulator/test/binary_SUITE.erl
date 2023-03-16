@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 1997-2021. All Rights Reserved.
+%% Copyright Ericsson AB 1997-2022. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -62,19 +62,21 @@
 	 t_hash/1,
          sub_bin_copy/1,
 	 bad_size/1,
+         unsorted_map_in_map/1,
 	 bad_term_to_binary/1,
 	 bad_binary_to_term_2/1,safe_binary_to_term2/1,
 	 bad_binary_to_term/1, bad_terms/1, more_bad_terms/1,
+         big_binary_to_term/1,
 	 otp_5484/1,otp_5933/1,
 	 ordering/1,unaligned_order/1,gc_test/1,
 	 bit_sized_binary_sizes/1,
 	 otp_6817/1,deep/1,
-         term2bin_tuple_fallbacks/1,
          robustness/1,otp_8117/1,
 	 otp_8180/1, trapping/1, large/1,
 	 error_after_yield/1, cmp_old_impl/1,
          t2b_system_limit/1,
-         term_to_iovec/1]).
+         term_to_iovec/1,
+         is_binary_test/1]).
 
 %% Internal exports.
 -export([sleeper/0,trapping_loop/4]).
@@ -93,14 +95,16 @@ all() ->
      b2t_used_big, t2b_deterministic,
      bad_binary_to_term_2, safe_binary_to_term2,
      bad_binary_to_term, bad_terms, t_hash, bad_size,
+     big_binary_to_term,
      sub_bin_copy, bad_term_to_binary, t2b_system_limit,
      term_to_iovec, more_bad_terms,
+     unsorted_map_in_map,
      otp_5484, otp_5933,
      ordering, unaligned_order, gc_test,
      bit_sized_binary_sizes, otp_6817, otp_8117, deep,
-     term2bin_tuple_fallbacks,
      robustness, otp_8180, trapping, large,
-     error_after_yield, cmp_old_impl].
+     error_after_yield, cmp_old_impl,
+     is_binary_test].
 
 groups() -> 
     [
@@ -471,10 +475,8 @@ bad_term_to_binary(Config) when is_list(Config) ->
 t2b_system_limit(Config) when is_list(Config) ->
     case erlang:system_info(wordsize) of
         8 ->
-            case proplists:get_value(system_total_memory,
-                                     memsup:get_system_memory_data()) of
-                Memory when is_integer(Memory),
-                            Memory > 6*1024*1024*1024 ->
+            case total_memory() of
+                Memory when is_integer(Memory), Memory > 6 ->
                     do_t2b_system_limit();
                 _ ->
                     {skipped, "Not enough memory on this machine"}
@@ -497,9 +499,9 @@ do_t2b_system_limit() ->
                 garbage_collect(),
                 ok
         end,
-    Opts = [{args, "-pa " ++ filename:dirname(code:which(?MODULE))}],
-    {ok,Node} = test_server:start_node(?FUNCTION_NAME, slave, Opts),
-    erpc:call(Node, F).
+    {ok, Peer, Node} = ?CT_PEER(),
+    erpc:call(Node, F),
+    peer:stop(Peer).
 
 test_t2b_system_limit(HugeBin, Name, F1, F2) ->
     io:format("Testing ~p(HugeBin)~n", [Name]),
@@ -921,10 +923,8 @@ build_iolist(N0, Base) ->
 	    [47,L,L|Seq]
     end.
 
-approx_4GB_bin() ->
-    Bin = lists:duplicate(4194304, 255),
-    BinRet = erlang:iolist_to_binary(lists:duplicate(1124, Bin)),
-    BinRet.
+approx_1GB_bin() ->
+    iolist_to_binary(lists:duplicate(281, <<-1:4194304/unit:8>>)).
 
 duplicate_iolist(IOList, 0) ->
     IOList;
@@ -934,9 +934,15 @@ duplicate_iolist(IOList, NrOfTimes) ->
 t_iolist_size_huge_list(Config)  when is_list(Config) ->
     run_when_enough_resources(
       fun() ->
-              {TimeToCreateIOList, IOList} = timer:tc(fun()->duplicate_iolist(approx_4GB_bin(), 32) end),
-              {IOListSizeTime, CalculatedSize} = timer:tc(fun()->erlang:iolist_size(IOList) end),
-              20248183924657750016 = CalculatedSize,
+              {TimeToCreateIOList, IOList} =
+                  timer:tc(fun() ->
+                                   duplicate_iolist(approx_1GB_bin(), 32)
+                           end),
+              {IOListSizeTime, CalculatedSize} =
+                  timer:tc(fun() ->
+                                   iolist_size(IOList)
+                           end),
+              5062045981164437504 = CalculatedSize,
               {comment, io_lib:format("Time to create iolist: ~f s. Time to calculate size: ~f s.", 
                                       [TimeToCreateIOList / 1000000, IOListSizeTime / 1000000])}
       end).
@@ -945,9 +951,10 @@ t_iolist_size_huge_bad_arg_list(Config)  when is_list(Config) ->
     run_when_enough_resources(
       fun() ->
               P = self(),
-              spawn_link(fun()-> IOListTmp = duplicate_iolist(approx_4GB_bin(), 32),
+              spawn_link(fun() ->
+                                 IOListTmp = duplicate_iolist(approx_1GB_bin(), 32),
                                  IOList = [IOListTmp, [badarg]],
-                                 {'EXIT',{badarg,_}} = (catch erlang:iolist_size(IOList)),
+                                 {'EXIT',{badarg,_}} = catch iolist_size(IOList),
                                  P ! ok
                          end),
               receive ok -> ok end
@@ -1034,15 +1041,14 @@ report_throughput(Fun, NrOfItems) ->
 total_memory() ->
     %% Total memory in GB.
     try
-	MemoryData = memsup:get_system_memory_data(),
-	case lists:keysearch(total_memory, 1, MemoryData) of
-	    {value, {total_memory, TM}} ->
-		TM div (1024*1024*1024);
-	    false ->
-		{value, {system_total_memory, STM}} =
-		    lists:keysearch(system_total_memory, 1, MemoryData),
-		STM div (1024*1024*1024)
-	end
+	SMD = memsup:get_system_memory_data(),
+        TM = proplists:get_value(
+               available_memory, SMD,
+               proplists:get_value(
+                 total_memory, SMD,
+                 proplists:get_value(
+                   system_total_memory, SMD))),
+        TM div (1024*1024*1024)
     catch
 	_ : _ ->
 	    undefined
@@ -1067,7 +1073,7 @@ run_when_enough_resources(Fun) ->
 
 %% OTP-4053
 bad_binary_to_term_2(Config) when is_list(Config) ->
-    {ok, N} = test_server:start_node(plopp, slave, []),
+    {ok, Peer, N} = ?CT_PEER(),
     R = rpc:call(N, erlang, binary_to_term, [<<131,111,255,255,255,0>>]),
     case R of
 	      {badrpc, {'EXIT', _}} ->
@@ -1075,7 +1081,7 @@ bad_binary_to_term_2(Config) when is_list(Config) ->
 	      _Other ->
 		  ct:fail({rpcresult, R})
 	  end,
-    test_server:stop_node(N),
+    peer:stop(Peer),
     ok.
 
 %% Try bad input to binary_to_term/1.
@@ -1102,6 +1108,36 @@ bad_bin_to_term(BadBin) ->
 bad_bin_to_term(BadBin,Opts) ->
     {'EXIT',{badarg,_}} = (catch binary_to_term_stress(BadBin,Opts)).
 
+-define(MAP_EXT, 116).
+-define(SMALL_INTEGER_EXT, 97).
+-define(NIL, 106).
+-define(MAP_SMALL_MAP_LIMIT, 32).
+
+%% OTP-18343: Decode unsorted flatmap as key in hashmap
+unsorted_map_in_map(Config) when is_list(Config) ->
+    K1 = 1,
+    K2 = 2,
+    true = K1 < K2,
+    FMap = #{K1 => [], K2 => []},
+    FMapBin = <<?MAP_EXT, 2:32,
+                %% unsorted list of key/value pairs
+                ?SMALL_INTEGER_EXT, K2, ?NIL,
+                ?SMALL_INTEGER_EXT, K1, ?NIL>>,
+    FMap = binary_to_term(<<131, FMapBin/binary>>),
+
+    HKeys = lists:seq(1, ?MAP_SMALL_MAP_LIMIT+1),
+    HMap0 = maps:from_list([{K,[]} || K <- HKeys]),
+    HMap0Bin = term_to_binary(HMap0),
+
+    %% Replace last key/value pair with FMap => []
+    Prologue = binary:part(HMap0Bin, 0, byte_size(HMap0Bin)-3),
+    HMap1Bin = <<Prologue/binary, FMapBin/binary, ?NIL>>,
+    HMap1 = binary_to_term(HMap1Bin),
+
+    %% Moment of truth, can we lookup key FMap
+    [] = maps:get(FMap, HMap1),
+    ok.
+
 %% Test safety options for binary_to_term/2
 safe_binary_to_term2(Config) when is_list(Config) ->
     bad_bin_to_term(<<131,100,0,14,"undefined_atom">>, [safe]),
@@ -1115,6 +1151,23 @@ safe_binary_to_term2(Config) when is_list(Config) ->
     BadExtFun = <<131,113,100,0,4,98,108,117,101,100,0,4,109,111,111,110,97,3>>,
     bad_bin_to_term(BadExtFun, [safe]),
     ok.
+
+%% OTP-18306 Decode binary/bitstring with size >= 2Gbyte
+big_binary_to_term(Config) ->
+    run_when_enough_resources(
+      fun() ->
+              Bin = binary:copy(<<0>>, 2 * 1024 * 1024 * 1024),
+              big_binary_roundtrip(Bin),
+              erlang:garbage_collect(),
+              <<_:1, BitStr/bits>> = Bin,
+              big_binary_roundtrip(BitStr),
+              ok
+      end).
+
+big_binary_roundtrip(Bin) ->
+    Bin = erlang:binary_to_term(erlang:term_to_binary(Bin)),
+    ok.
+
 
 %% Tests bad input to binary_to_term/1.
 
@@ -1547,11 +1600,14 @@ test_terms(Test_Func) ->
     Test_Func("abcdef"),
     Test_Func([a, b, 1, 2]),
     Test_Func([a|b]),
+    Test_Func([make_port(), make_ref(), make_pid(), fun() -> ok end,
+               Very_Big | lists:seq(1, 75)]),
 
     Test_Func({}),
     Test_Func({1}),
     Test_Func({a, b}),
     Test_Func({a, b, c}),
+    Test_Func({make_port(), make_ref(), make_pid(), fun() -> ok end}),
     Test_Func(list_to_tuple(lists:seq(0, 255))),
     Test_Func(list_to_tuple(lists:seq(0, 256))),
 
@@ -1602,9 +1658,11 @@ test_terms(Test_Func) ->
     Test_Func(<<42:10>>),
     Test_Func(list_to_bitstring([<<5:6>>|lists:seq(0, 255)])),
 
+    %% Funs in a list.
     Test_Func(F = fun(A) -> 42*A end),
     Test_Func(lists:duplicate(32, F)),
 
+    %% External funs in a list.
     Test_Func(FF = fun binary_SUITE:all/0),
     Test_Func(lists:duplicate(32, FF)),
 
@@ -1744,29 +1802,6 @@ deep(Config) when is_list(Config) ->
 deep_roundtrip(T) ->
     B = term_to_binary(T),
     T = binary_to_term(B).
-
-term2bin_tuple_fallbacks(Config) when is_list(Config) ->
-    erts_debug:set_internal_state(available_internal_state, true),
-
-    term2bin_tf(fun ?MODULE:all/1),
-    term2bin_tf(<<1:1>>),
-    term2bin_tf(<<90,80:7>>),
-
-    erts_debug:set_internal_state(available_internal_state, false),
-    ok.
-
-term2bin_tf(Term) ->
-    Tuple = case Term of
-                Fun when is_function(Fun) ->
-                    {type, external} = erlang:fun_info(Fun, type),
-                    {module,M} = erlang:fun_info(Fun, module),
-                    {name,F} = erlang:fun_info(Fun, name),
-                    {M,F};
-                BS when bit_size(BS) rem 8 =/= 0 ->
-                    Bits = bit_size(BS) rem 8,
-                    {<<BS/bitstring, 0:(8-Bits)>>, Bits}
-            end,
-    Tuple = binary_to_term_stress(erts_debug:get_internal_state({term_to_binary_tuple_fallbacks,Term})).
 
 %% Test non-standard encodings never generated by term_to_binary/1
 %% but recognized by binary_to_term/1.
@@ -1976,18 +2011,11 @@ cmp_old_impl(Config) when is_list(Config) ->
     %% implementation in R16B. Since OTP 22 we can't talk distribution with such
     %% old nodes (< 19). The test case it kept but compares with previous major
     %% version for semantic regression test.
-    Cookie = atom_to_list(erlang:get_cookie()),
-    Rel = (integer_to_list(list_to_integer(erlang:system_info(otp_release)) - 1)
-           ++ "_latest"),
-    case test_server:is_release_available(Rel) of
-	false ->
+    Rel = integer_to_list(list_to_integer(erlang:system_info(otp_release)) - 1),
+    case ?CT_PEER([], Rel, proplists:get_value(priv_dir, Config)) of
+	not_available ->
 	    {skipped, "No OTP "++Rel++" available"};
-	true ->
-	    {ok, Node} = test_server:start_node(list_to_atom(atom_to_list(?MODULE)++"_"++Rel),
-				       peer,
-				       [{args, " -setcookie "++Cookie},
-					{erl, [{release, Rel}]}]),
-
+        {ok, Peer, Node}  ->
 	    cmp_node(Node, {erlang, list_to_binary, [list2iolist(mk_list(1))]}),
 	    cmp_node(Node, {erlang, list_to_binary, [list2iolist(mk_list(10))]}),
 	    cmp_node(Node, {erlang, list_to_binary, [list2iolist(mk_list(100))]}),
@@ -2025,7 +2053,7 @@ cmp_old_impl(Config) when is_list(Config) ->
 	    cmp_node(Node, {erlang, bitstring_to_list, [list_to_bitstring(list2bitstrlist(mk_list(1000000)))]}),
 	    cmp_node(Node, {erlang, bitstring_to_list, [list_to_bitstring(list2bitstrlist(mk_list(10000000)))]}),
 
-	    test_server:stop_node(Node),
+	    peer:stop(Peer),
 
 	    ok
     end.
@@ -2065,6 +2093,28 @@ echo(Papa) ->
     receive M -> Papa ! M end,
     echo(Papa).
 
+%% GH-6239.
+is_binary_test(_Config) ->
+    <<"foo42">> = concat_stuff(foo, 42),
+    <<"foo2749963626218098647">> = concat_stuff(foo, 2749963626218098647), %Bignum.
+    <<"foobar">> = concat_stuff(foo, <<"bar">>),
+    <<"bar100">> = concat_stuff(<<"bar">>, 100),
+    <<"bar2749963626218098647">> = concat_stuff(<<"bar">>, 2749963626218098647), %Bignum.
+    <<"barfood">> = concat_stuff(<<"bar">>, <<"food">>),
+
+    ok.
+
+concat_stuff(A, B) when is_integer(B); is_binary(B) ->
+    <<(case A of
+           X when is_binary(X) -> X;
+           _ -> atom_to_binary(A)
+       end)/binary,
+      (case B of
+           %% The JIT would do an unsafe simplification of the is_binary/1 test,
+           %% accepting any boxed term (such as a bignum) as a binary.
+           Y when is_binary(Y) -> Y;
+           _ -> integer_to_binary(B)
+       end)/binary>>.
 
 %% Utilities.
 

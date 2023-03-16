@@ -1,7 +1,7 @@
 #
 # %CopyrightBegin%
 #
-# Copyright Ericsson AB 2010-2020. All Rights Reserved.
+# Copyright Ericsson AB 2010-2022. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -122,6 +122,12 @@ ERL_COMPILE_FLAGS += \
 # -pa is to be able to include_lib from the include directory: the
 # path must contain the application name.
 
+ifeq ($(ERL_DETERMINISTIC),yes)
+	DETERMINISM_FLAG = +deterministic
+else
+	DETERMINISM_FLAG =
+endif
+
 # ----------------------------------------------------
 # Targets
 # ----------------------------------------------------
@@ -146,13 +152,13 @@ patch:
 	git diff --exit-code HEAD
 	$(MAKE) opt PRE_VSN="-$(shell git rev-list --max-count=1 HEAD | cut -c 1-8)"
 
-debug:
-	@$(MAKE) TYPE=debug opt
+$(filter-out opt, $(TYPES)):
+	@${MAKE} TYPE=$@ opt
 
 # The dictionary parser.
 gen/$(DICT_YRL).erl: compiler/$(DICT_YRL).yrl
 	$(yecc_verbose) \
-	$(ERLC) -Werror -o $(@D) $<
+	$(ERLC) -Werror $(DETERMINISM_FLAG) -o $(@D) $<
 
 # Generate the app file.
 $(APP_TARGET): $(APP_SRC) ../vsn.mk modules.mk
@@ -256,8 +262,8 @@ release_spec: opt
 	$(INSTALL_DATA) $(EXTERNAL_HRLS:%=../include/%) $(DICT_HRLS) \
 	                "$(RELSYSDIR)/include"
 	$(INSTALL_DATA) $(DICTS:%=dict/%.dia) "$(RELSYSDIR)/src/dict"
-	$(MAKE) $(TARGET_DIRS:%/=release_src_%)
-	$(MAKE) $(EXAMPLE_DIRS:%/=release_examples_%)
+	$(MAKE) ERL_DETERMINISTIC=$(ERL_DETERMINISTIC) $(TARGET_DIRS:%/=release_src_%)
+	$(MAKE) ERL_DETERMINISTIC=$(ERL_DETERMINISTIC) $(EXAMPLE_DIRS:%/=release_examples_%)
 
 $(TARGET_DIRS:%/=release_src_%): release_src_%:
 	$(INSTALL_DIR) "$(RELSYSDIR)/src/$*"
