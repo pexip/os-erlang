@@ -7,6 +7,5 @@ java.patch
 javascript.patch
 x32.patch
 init.patch
-crypto512.patch
 openssl3-deprecations.patch
 fix-compilation_deprecated-OpenSSL-APIs.patch
