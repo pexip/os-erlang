@@ -65,6 +65,7 @@
          sign_verify_rsa_fake/1,
          sign_verify_dsa/1,
          sign_verify_ecdsa/1,
+         sign_verify_eddsa/1,
          sign_verify_rsa_pwd/1,
          sign_verify_rsa_pwd_bad_pwd/1,
          priv_encrypt_pub_decrypt_rsa/1,
@@ -113,6 +114,7 @@ groups() ->
        sign_verify_rsa,
        sign_verify_dsa,
        sign_verify_ecdsa,
+       sign_verify_eddsa,
        sign_verify_rsa_pwd,
        sign_verify_rsa_pwd_bad_pwd,
        priv_encrypt_pub_decrypt_rsa,
@@ -126,9 +128,11 @@ groups() ->
        get_pub_from_priv_key_dsa,
        get_pub_from_priv_key_ecdsa
       ]},
-    {engine_fakes_rsa, [], [sign_verify_rsa_fake
-                     ]}
-     ].
+    {engine_fakes_rsa, [],
+     [
+      sign_verify_rsa_fake
+     ]}
+    ].
 
 
 init_per_suite(Config) ->
@@ -212,18 +216,22 @@ end_per_group(_, Config) ->
 
 %%--------------------------------------------------------------------
 init_per_testcase(Case, Config) ->
-    case string:tokens(atom_to_list(Case),"_") of
-        ["sign","verify",Type|_] ->
-            skip_if_unsup(list_to_atom(Type), Config);
-
-        ["priv","encrypt","pub","decrypt",Type|_] ->
-            skip_if_unsup(list_to_atom(Type), Config);
-
-        ["get","pub","from","priv","key",Type|_] ->
-            skip_if_unsup(list_to_atom(Type), Config);
-
+    HasMD5 = lists:member(md5, crypto:supports(hashs)),
+    case Case of
+        ensure_load                 when HasMD5==false -> {skip, "md5 not available"};
+	engine_load_register_method when HasMD5==false -> {skip, "md5 not available"};
+	gc_clean                    when HasMD5==false -> {skip, "md5 not available"};
         _ ->
-            Config
+            case string:tokens(atom_to_list(Case),"_") of
+                ["sign","verify",Type|_] ->
+                    skip_if_unsup(list_to_atom(Type), Config);
+                ["priv","encrypt","pub","decrypt",Type|_] ->
+                    skip_if_unsup(list_to_atom(Type), Config);
+                ["get","pub","from","priv","key",Type|_] ->
+                    skip_if_unsup(list_to_atom(Type), Config);
+                _ ->
+                    Config
+            end
     end.
 
 end_per_testcase(_Case, _Config) ->
@@ -811,6 +819,13 @@ sign_verify_ecdsa(Config) ->
              key_id => key_id(Config, "ecdsa_public_key.pem")},
     sign_verify(ecdsa, sha, Priv, Pub).
 
+sign_verify_eddsa(Config) ->
+    Priv = #{engine => engine_ref(Config),
+             key_id => key_id(Config, "eddsa_private_key.pem")},
+    Pub  = #{engine => engine_ref(Config),
+             key_id => key_id(Config, "eddsa_public_key.pem")},
+    sign_verify(eddsa, sha, Priv, Pub).
+
 sign_verify_rsa_pwd(Config) ->
     Priv = #{engine => engine_ref(Config),
              key_id => key_id(Config, "rsa_private_key_pwd.pem"),
@@ -828,7 +843,7 @@ sign_verify_rsa_pwd_bad_pwd(Config) ->
     try sign_verify(rsa, sha, Priv, Pub) of
         _ -> {fail, "PWD prot pubkey sign succeeded with no pwd!"}
     catch
-        error:badarg -> ok
+        error:{badarg,_,_} -> ok
     end.
 
 priv_encrypt_pub_decrypt_rsa(Config) ->

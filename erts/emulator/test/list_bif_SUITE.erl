@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %% 
-%% Copyright Ericsson AB 1997-2020. All Rights Reserved.
+%% Copyright Ericsson AB 1997-2022. All Rights Reserved.
 %% 
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -21,7 +21,8 @@
 -module(list_bif_SUITE).
 -include_lib("common_test/include/ct.hrl").
 
--export([all/0, suite/0]).
+-export([all/0, suite/0,
+         init_per_testcase/2, end_per_testcase/2]).
 -export([hd_test/1,tl_test/1,t_length/1,t_list_to_pid/1,
          t_list_to_ref/1, t_list_to_ext_pidportref/1,
          t_list_to_port/1,t_list_to_float/1,t_list_to_integer/1]).
@@ -36,6 +37,11 @@ all() ->
     [hd_test, tl_test, t_length, t_list_to_pid, t_list_to_port,
      t_list_to_ref, t_list_to_ext_pidportref,
      t_list_to_float, t_list_to_integer].
+
+init_per_testcase(_TestCase, Config) ->
+    Config.
+end_per_testcase(_TestCase, Config) ->
+    erts_test_utils:ept_check_leaked_nodes(Config).
 
 %% Tests list_to_integer and string:to_integer
 t_list_to_integer(Config) when is_list(Config) ->
@@ -143,7 +149,7 @@ t_list_to_ref(Config) when is_list(Config) ->
 
 %% Test list_to_pid/port/ref for external pids/ports/refs.
 t_list_to_ext_pidportref(Config) when is_list(Config) ->
-    {ok, Node} = slave:start(net_adm:localhost(), t_list_to_ext_pidportref),
+    {ok, Peer, Node} = ?CT_PEER(),
     Pid = rpc:call(Node, erlang, self, []),
     Port = hd(rpc:call(Node, erlang, ports, [])),
     Ref = rpc:call(Node, erlang, make_ref, []),
@@ -175,27 +181,8 @@ t_list_to_ext_pidportref(Config) when is_list(Config) ->
     true = rpc:call(Node, erlang, '=:=', [Ref, Ref2]),
     true = rpc:call(Node, erlang, '==',  [Ref, Ref2]),
 
-    %% Make sure no ugly comparison with 0-creation as wildcard is done.
-    Pid0 = make_0_creation(Pid),
-    Port0 = make_0_creation(Port),
-    Ref0 = make_0_creation(Ref),
-    false = (Pid =:= Pid0),
-    false = (Port =:= Port0),
-    false = (Ref =:= Ref0),
-    false = (Pid == Pid0),
-    false = (Port == Port0),
-    false = (Ref == Ref0),
 
-    %% Check 0-creations are converted to local node creations
-    %% when sent to matching node name.
-    true = rpc:call(Node, erlang, '=:=', [Pid, Pid0]),
-    true = rpc:call(Node, erlang, '==',  [Pid, Pid0]),
-    true = rpc:call(Node, erlang, '=:=', [Port, Port0]),
-    true = rpc:call(Node, erlang, '==',  [Port, Port0]),
-    true = rpc:call(Node, erlang, '=:=', [Ref, Ref0]),
-    true = rpc:call(Node, erlang, '==',  [Ref, Ref0]),
-
-    slave:stop(Node),
+    peer:stop(Peer),
     ok.
 
 -define(NEW_PID_EXT, 88).

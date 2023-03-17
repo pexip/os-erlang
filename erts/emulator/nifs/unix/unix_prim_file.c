@@ -141,11 +141,7 @@ static int get_flags(enum efile_modes_t modes) {
     if(modes & EFILE_MODE_READ && !(modes & EFILE_MODE_WRITE)) {
         flags |= O_RDONLY;
     } else if(modes & EFILE_MODE_WRITE && !(modes & EFILE_MODE_READ)) {
-        if(!(modes & EFILE_MODE_NO_TRUNCATE)) {
-            flags |= O_TRUNC;
-        }
-
-        flags |= O_WRONLY | O_CREAT;
+        flags |= O_TRUNC | O_WRONLY | O_CREAT;
     } else if(modes & EFILE_MODE_READ_WRITE) {
         flags |= O_RDWR | O_CREAT;
     } else {
@@ -554,7 +550,9 @@ int efile_sync(efile_data_t *d, int data_only) {
     }
 #endif
 
-#if defined(__DARWIN__) && defined(F_FULLFSYNC)
+#if defined(__DARWIN__) && defined(F_BARRIERFSYNC)
+    if(fcntl(u->fd, F_BARRIERFSYNC) < 0) {
+#elif defined(__DARWIN__) && defined(F_FULLFSYNC)
     if(fcntl(u->fd, F_FULLFSYNC) < 0) {
 #else
     if(fsync(u->fd) < 0) {

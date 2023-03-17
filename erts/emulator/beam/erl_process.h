@@ -283,7 +283,7 @@ typedef enum {
 
 /*
  * Keep ERTS_SSI_AUX_WORK flags ordered in expected frequency
- * order relative eachother. Most frequent at lowest at lowest
+ * order relative each other. Most frequent at lowest at lowest
  * index.
  *
  * ERTS_SSI_AUX_WORK_DEBUG_WAIT_COMPLETED_IX *need* to be
@@ -581,6 +581,7 @@ typedef struct ErtsAuxWorkData_ {
 	UWord size;
 	ErtsThrPrgrLaterOp *first;
 	ErtsThrPrgrLaterOp *last;
+        Uint list_len;
     } later_op;
     struct {
 	int need_thr_prgr;
@@ -664,11 +665,11 @@ typedef struct ErtsSchedulerRegisters_ {
     ErtsCodePtr start_time_i;
     UWord start_time;
 
-#if !defined(NATIVE_ERLANG_STACK) && defined(JIT_HARD_DEBUG)
+#if (!defined(NATIVE_ERLANG_STACK) || defined(__aarch64__)) && defined(JIT_HARD_DEBUG)
     /* Holds the initial thread stack pointer. Used to ensure that everything
      * that is pushed to the stack is also popped. */
     UWord *initial_sp;
-#elif defined(NATIVE_ERLANG_STACK) && defined(DEBUG)
+#elif defined(NATIVE_ERLANG_STACK) && defined(DEBUG) && !defined(__aarch64__)
     /* Raw pointers to the start and end of the stack. Used to test bounds
      * without clobbering any registers. */
     UWord *runtime_stack_start;
@@ -957,6 +958,21 @@ typedef struct ErtsProcSysTaskQs_ ErtsProcSysTaskQs;
     (ASSERT((p)->htop <= (p)->stop),                                           \
      MAX((p)->htop, (p)->stop - S_REDZONE))
 
+#ifdef ERLANG_FRAME_POINTERS
+/* The current frame pointer on the Erlang stack. */
+#  define FRAME_POINTER(p)  (p)->frame_pointer
+#else
+/* We define this to a trapping lvalue when frame pointers are unsupported to
+ * provoke crashes when used without checking `erts_frame_layout`. The checks
+ * will always be optimized out because the variable is hardcoded to
+ *  `ERTS_FRAME_LAYOUT_RA`. */
+#  define FRAME_POINTER(p)  (((Eterm ** volatile)0xbadf00d)[0])
+
+#  ifndef erts_frame_layout
+#    error "erts_frame_layout has not been hardcoded to ERTS_FRAME_LAYOUT_RA"
+#  endif
+#endif
+
 #  define HEAP_END(p)       (p)->hend
 #  define HEAP_SIZE(p)      (p)->heap_sz
 #  define STACK_START(p)    (p)->hend
@@ -996,8 +1012,13 @@ struct process {
      * shorter instruction can be used to access them.
      */
 
-    Eterm* htop;		/* Heap top */
-    Eterm* stop;		/* Stack top */
+    Eterm *htop;                /* Heap top */
+    Eterm *stop;                /* Stack top */
+
+#ifdef ERLANG_FRAME_POINTERS
+    Eterm *frame_pointer;       /* Frame pointer */
+#endif
+
     Sint fcalls;		/* Number of reductions left to execute.
 				 * Only valid for the current process.
 				 */
@@ -1046,7 +1067,7 @@ struct process {
     Eterm seq_trace_token;	/* Sequential trace token (tuple size 5 see below) */
 
 #ifdef USE_VM_PROBES
-    Eterm dt_utag;              /* Place to store the dynamc trace user tag */
+    Eterm dt_utag;              /* Place to store the dynamic trace user tag */
     Uint dt_utag_flags;         /* flag field for the dt_utag */
 #endif
     union {
@@ -1083,6 +1104,7 @@ struct process {
     Uint16 gen_gcs;		/* Number of (minor) generational GCs. */
     Uint16 max_gen_gcs;		/* Max minor gen GCs before fullsweep. */
     ErlOffHeap off_heap;	/* Off-heap data updated by copy_struct(). */
+    struct erl_off_heap_header* wrt_bins; /* Writable binaries */
     ErlHeapFragment* mbuf;	/* Pointer to heap fragment list */
     ErlHeapFragment* live_hf_end;
     ErtsMessage *msg_frag;	/* Pointer to message fragment list */
@@ -1098,8 +1120,9 @@ struct process {
 
     erts_atomic32_t state;  /* Process state flags (see ERTS_PSFLG_*) */
     erts_atomic32_t dirty_state; /* Process dirty state flags (see ERTS_PDSFLG_*) */
-
+    Uint sig_inq_contention_counter;
     ErtsSignalInQueue sig_inq;
+    erts_atomic_t sig_inq_buffers;
     ErlTraceMessageQueue *trace_msg_q;
     erts_proc_lock_t lock;
     ErtsSchedulerData *scheduler_data;
@@ -1224,8 +1247,9 @@ void erts_check_for_holes(Process* p);
    process table. Always ACTIVE while EXITING. Never
    SUSPENDED unless also FREE. */
 #define ERTS_PSFLG_EXITING		ERTS_PSFLG_BIT(5)
-/* UNUSED */
-#define ERTS_PSFLG_UNUSED		ERTS_PSFLG_BIT(6)
+/* MAYBE_SELF_SIGS - We might have outstanding signals
+   from ourselves to ourselvs. */
+#define ERTS_PSFLG_MAYBE_SELF_SIGS	ERTS_PSFLG_BIT(6)
 /* ACTIVE - Process "wants" to execute */
 #define ERTS_PSFLG_ACTIVE		ERTS_PSFLG_BIT(7)
 /* IN_RUNQ - Real process (not proxy) struct used in a
@@ -1233,7 +1257,7 @@ void erts_check_for_holes(Process* p);
 #define ERTS_PSFLG_IN_RUNQ		ERTS_PSFLG_BIT(8)
 /* RUNNING - Executing in process_main() */
 #define ERTS_PSFLG_RUNNING		ERTS_PSFLG_BIT(9)
-/* SUSPENDED - Process suspended; supress active but
+/* SUSPENDED - Process suspended; suppress active but
    not active-sys nor dirty-active-sys */
 #define ERTS_PSFLG_SUSPENDED		ERTS_PSFLG_BIT(10)
 /* GC - gc */
@@ -1545,15 +1569,18 @@ extern int erts_system_profile_ts_type;
 #define F_TRAP_EXIT          (1 << 22) /* Trapping exit */
 #define F_FRAGMENTED_SEND    (1 << 23) /* Process is doing a distributed fragmented send */
 #define F_DBG_FORCED_TRAP    (1 << 24) /* DEBUG: Last BIF call was a forced trap */
+#define F_DIRTY_CHECK_CLA    (1 << 25) /* Check if copy literal area GC scheduled */
 
 /* Signal queue flags */
 #define FS_OFF_HEAP_MSGQ       (1 << 0) /* Off heap msg queue */
 #define FS_ON_HEAP_MSGQ        (1 << 1) /* On heap msg queue */
 #define FS_OFF_HEAP_MSGQ_CHNG  (1 << 2) /* Off heap msg queue changing */
-#define FS_LOCAL_SIGS_ONLY     (1 << 3) /* Handle privq sigs only */
+#define FS_UNUSED              (1 << 3) /* Unused */
 #define FS_HANDLING_SIGS       (1 << 4) /* Process is handling signals */
 #define FS_WAIT_HANDLE_SIGS    (1 << 5) /* Process is waiting to handle signals */
 #define FS_DELAYED_PSIGQS_LEN  (1 << 6) /* Delayed update of sig_qs.len */
+#define FS_FLUSHING_SIGS       (1 << 7) /* Currently flushing signals */
+#define FS_FLUSHED_SIGS        (1 << 8) /* Flushing of signals completed */
 
 /*
  * F_DISABLE_GC and F_DELAY_GC are similar. Both will prevent
@@ -1725,9 +1752,9 @@ Uint64 erts_get_proc_interval(void);
 Uint64 erts_ensure_later_proc_interval(Uint64);
 Uint64 erts_step_proc_interval(void);
 
-ErtsProcList *erts_proclist_create(Process *);
-ErtsProcList *erts_proclist_copy(ErtsProcList *);
 void erts_proclist_destroy(ErtsProcList *);
+ErtsProcList *erts_proclist_create(Process *) ERTS_ATTR_MALLOC_D(erts_proclist_destroy,1);
+ErtsProcList *erts_proclist_copy(ErtsProcList *);
 void erts_proclist_dump(fmtfn_t to, void *to_arg, ErtsProcList*);
 
 ERTS_GLB_INLINE int erts_proclist_same(ErtsProcList *, Process *);
@@ -1909,7 +1936,7 @@ void erts_schedule_thr_prgr_later_cleanup_op(void (*)(void *),
 					     ErtsThrPrgrLaterOp *,
 					     UWord);
 void erts_schedule_complete_off_heap_message_queue_change(Eterm pid);
-void erts_schedule_cla_gc(Process *c_p, Eterm to, Eterm req_id);
+void erts_schedule_cla_gc(Process *c_p, Eterm to, Eterm req_id, int check);
 struct db_fixation;
 void erts_schedule_ets_free_fixation(Eterm pid, struct db_fixation*);
 void erts_schedule_flush_trace_messages(Process *proc, int force_on_proc);
@@ -2495,7 +2522,7 @@ erts_init_runq_proc(Process *p, ErtsRunQueue *rq, int bnd)
  * @param bndp[in,out]  Pointer to integer. On input non-zero
  *                      value causes the process to be bound to
  *                      the run-queue. On output, indicating
- *                      wether process previously was bound or
+ *                      whether process previously was bound or
  *                      not.
  * @return              Previous run-queue.
  */
@@ -2574,7 +2601,7 @@ erts_bind_runq_proc(Process *p, int bind)
 }
 
 /**
- * Determine wether a process is bound to a run-queue or not.
+ * Determine whether a process is bound to a run-queue or not.
  *
  * @return              Returns a non-zero value if bound,
  *                      and zero of not bound.
@@ -2596,7 +2623,7 @@ erts_proc_runq_is_bound(Process *p)
  *                      value if the process is bound to the
  *                      run-queue.
  * @return              Pointer to the normal run-queue that
- *                      the process currently is assigend to.
+ *                      the process currently is assigned to.
  *                      A process is always assigned to a
  *                      normal run-queue.
  */

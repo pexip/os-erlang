@@ -98,6 +98,11 @@ cl(["-I", Dir|T]) ->
 cl(["-I"++Dir|T]) ->
   append_include(Dir),
   cl(T);
+cl(["--input_list_file"]) ->
+  cl_error("No input list file specified");
+cl(["--input_list_file",File|L]) ->
+  read_input_list_file(File),
+  cl(L);
 cl(["-c"++_|T]) ->
   NewTail = command_line(T),
   cl(NewTail);
@@ -243,6 +248,16 @@ command_line(T0) ->
     false -> ok
   end,
   T.
+
+read_input_list_file(File) ->
+  case file:read_file(File) of
+    {ok,Bin} ->
+      Files = binary:split(Bin, <<"\n">>, [trim_all,global]),
+      NewFiles = [binary_to_list(string:trim(F)) || F <- Files],
+      append_var(dialyzer_options_files, NewFiles);
+    {error,Reason} ->
+      cl_error(io_lib:format("Reading of ~s failed: ~s", [File,file:format_error(Reason)]))
+  end.
 
 -spec cl_error(deep_string()) -> no_return().
 
@@ -395,6 +410,9 @@ Options:
       Same as the previous but the specified directories are searched
       recursively for subdirectories containing .erl or .beam files in
       them, depending on the type of analysis.
+  --input_list_file file
+      Specify the name of a file that contains the names of the files
+      to be analyzed (one file name per line).
   --apps applications
       Option typically used when building or modifying a plt as in:
         dialyzer --build_plt --apps erts kernel stdlib mnesia ...
@@ -544,11 +562,15 @@ warning_options_msg() ->
      value or do not match against one of many possible return value(s).
   -Werror_handling ***
      Include warnings for functions that only return by means of an exception.
-  -Wrace_conditions ***
-     Include warnings for possible race conditions.
   -Wunderspecs ***
      Warn about underspecified functions
      (those whose -spec is strictly more allowing than the success typing).
+  -Wextra_return ***
+     Warn about functions whose specification includes types that the
+     function cannot return.
+  -Wmissing_return ***
+     Warn about functions that return values that are not part
+     of the specification.
   -Wunknown ***
      Let warnings about unknown functions and types affect the
      exit status of the command line version. The default is to ignore
@@ -572,4 +594,8 @@ They are primarily intended to be used with the -dialyzer attribute:
   -Wno_underspecs
      Suppress warnings about underspecified functions (those whose -spec
      is strictly more allowing than the success typing).
+  -Wno_extra_return
+     Suppress warnings about functions whose specification includes types that the function cannot return.
+  -Wno_missing_return
+     Suppress warnings about functions that return values that are not part of the specification.
 ".

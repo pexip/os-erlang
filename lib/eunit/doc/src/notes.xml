@@ -33,6 +33,55 @@
   </header>
   <p>This document describes the changes made to the EUnit application.</p>
 
+<section><title>Eunit 2.8.1</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+          <p>
+	    With this change, eunit exact_execution option works with
+	    application primitive.</p>
+          <p>
+	    Own Id: OTP-18264 Aux Id: PR-6322, GH-6320 </p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>Eunit 2.8</title>
+
+    <section><title>Improvements and New Features</title>
+      <list>
+        <item>
+          <p>
+	    With this change, Eunit can optionally not try to execute
+	    related module with "_tests" suffix. This might be used
+	    for avoiding duplicated executions when source and test
+	    modules are located in the same folder.</p>
+          <p>
+	    Own Id: OTP-18181 Aux Id: ERL-97, GH-3064, PR-5461 </p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>Eunit 2.7.1</title>
+
+    <section><title>Improvements and New Features</title>
+      <list>
+        <item>
+          <p>
+	    Minor internal improvements.</p>
+          <p>
+	    Own Id: OTP-17884 Aux Id: GH-5617 </p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
 <section><title>Eunit 2.7</title>
 
     <section><title>Improvements and New Features</title>

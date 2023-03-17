@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %% 
-%% Copyright Ericsson AB 1997-2021. All Rights Reserved.
+%% Copyright Ericsson AB 1997-2022. All Rights Reserved.
 %% 
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -23,6 +23,7 @@
 -include_lib("common_test/include/ct.hrl").
 
 -export([all/0, suite/0, groups/0,
+         init_per_testcase/2, end_per_testcase/2,
          fpe/1,fp_drv/1,fp_drv_thread/1,denormalized/1,match/1,
          t_mul_add_ops/1,negative_zero/1,
          bad_float_unpack/1, write/1, cmp_zero/1, cmp_integer/1, cmp_bignum/1]).
@@ -42,6 +43,11 @@ all() ->
 
 groups() -> 
     [{comparison, [parallel], [cmp_zero, cmp_integer, cmp_bignum]}].
+
+init_per_testcase(_TestCase, Config) ->
+    Config.
+end_per_testcase(_TestCase, Config) ->
+    erts_test_utils:ept_check_leaked_nodes(Config).
 
 %%
 %% OTP-7178, list_to_float on very small numbers should give 0.0
@@ -98,7 +104,7 @@ fp_drv_thread(Config) when is_list(Config) ->
     %% Run in a separate node since it used to crash the emulator...
     Parent = self(),
     DrvDir = proplists:get_value(data_dir, Config),
-    {ok,Node} = start_node(Config),
+    {ok, Peer, Node} = ?CT_PEER(),
     Tester = spawn_link(Node,
                         fun () ->
                                 Parent !
@@ -107,7 +113,7 @@ fp_drv_thread(Config) when is_list(Config) ->
                                              DrvDir)}
                         end),
     Result = receive {Tester, Res} -> Res end,
-    stop_node(Node),
+    peer:stop(Peer),
     Result.
 
 fp_drv_test(Test, DrvDir) ->
@@ -192,7 +198,7 @@ cmp_zero(_Config) ->
     cmp(0.5e-323,0).
 
 cmp_integer(_Config) ->
-    Axis = (1 bsl 53)-2.0, %% The point where floating points become unprecise
+    Axis = (1 bsl 53)-2.0, %% The point where floating points become imprecise
     span_cmp(Axis,2,200),
     cmp(Axis*Axis,round(Axis)).
 
@@ -285,23 +291,8 @@ cmp(Big,Small,BigGtSmall,BigLtSmall,SmallGtBig,SmallLtBig,
 
 id(I) -> I.
 
-start_node(Config) when is_list(Config) ->
-    Pa = filename:dirname(code:which(?MODULE)),
-    Name = list_to_atom(atom_to_list(?MODULE)
-                        ++ "-"
-                        ++ atom_to_list(proplists:get_value(testcase, Config))
-                        ++ "-"
-                        ++ integer_to_list(erlang:system_time(second))
-                        ++ "-"
-                        ++ integer_to_list(erlang:unique_integer([positive]))),
-    test_server:start_node(Name, slave, [{args, "-pa "++Pa}]).
-
-stop_node(Node) ->
-    test_server:stop_node(Node).
-
-
 %% Test that operations that might hide infinite intermediate results
-%% do not supress the badarith.
+%% do not suppress the badarith.
 hidden_inf(Config) when is_list(Config) ->
     ZeroP = 0.0,
     ZeroN = id(ZeroP) * (-1),
@@ -410,7 +401,7 @@ my_apply(M, F, A) ->
     catch apply(id(M), id(F), A).
 
 % Unify exceptions be removing stack traces.
-% and add argument info to make it easer to debug failed matches.
+% and add argument info to make it easier to debug failed matches.
 unify({'EXIT',{Reason,_Stack}}, Info) ->
     {{'EXIT', Reason}, Info};
 unify(Other, Info) ->

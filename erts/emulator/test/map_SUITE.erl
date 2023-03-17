@@ -18,6 +18,7 @@
 %%
 -module(map_SUITE).
 -export([all/0, suite/0, init_per_suite/1, end_per_suite/1,
+         init_per_testcase/2, end_per_testcase/2,
          groups/0]).
 
 -export([t_build_and_match_literals/1, t_build_and_match_literals_large/1,
@@ -84,13 +85,19 @@
 
          %% instruction-level tests
          t_has_map_fields/1,
+         t_get_map_elements/1,
          y_regs/1,
-         badmap_17/1,
 
          %%Bugs
          t_large_unequal_bins_same_hash_bug/1]).
 
+%% Benchmarks
+-export([benchmarks/1]).
+
 -include_lib("stdlib/include/ms_transform.hrl").
+
+-include_lib("common_test/include/ct_event.hrl").
+-include_lib("common_test/include/ct.hrl").
 
 -define(CHECK(Cond,Term),
 	case (catch (Cond)) of
@@ -102,7 +109,7 @@
 suite() -> [].
 
 all() ->
-    run_once() ++ [{group,main}].
+    [{group,main}, benchmarks].
 
 groups() ->
     [{main,[],
@@ -157,11 +164,12 @@ groups() ->
 
        %% instruction-level tests
        t_has_map_fields,
+       t_get_map_elements,
        y_regs,
 
        %% Bugs
        t_large_unequal_bins_same_hash_bug]},
-     {once,[],[badmap_17]}].
+    {benchmarks, [{repeat,10}], [benchmarks]}].
 
 run_once() ->
     case ?MODULE of
@@ -188,6 +196,12 @@ end_per_suite(Config) ->
     As = proplists:get_value(started_apps, Config),
     lists:foreach(fun (A) -> application:stop(A) end, As),
     Config.
+
+init_per_testcase(_TestCase, Config) ->
+    Config.
+end_per_testcase(_TestCase, Config) ->
+    erts_test_utils:ept_check_leaked_nodes(Config).
+
 
 %% tests
 
@@ -1630,6 +1644,7 @@ t_map_compare(Config) when is_list(Config) ->
     io:format("seed = ~p\n", [rand:export_seed()]),
     repeat(100, fun(_) -> float_int_compare() end, []),
     repeat(100, fun(_) -> recursive_compare() end, []),
+    repeat(10, fun(_) -> atoms_compare() end, []),
     ok.
 
 float_int_compare() ->
@@ -1637,10 +1652,24 @@ float_int_compare() ->
     %%io:format("Keys to use: ~p\n", [Terms]),
     Pairs = lists:map(fun(K) -> list_to_tuple([{K,V} || V <- Terms]) end, Terms),
     lists:foreach(fun(Size) ->
-			  MapGen = fun() -> map_gen(list_to_tuple(Pairs), Size) end,
+			  MapGen = fun() -> map_gen(Pairs, Size) end,
 			  repeat(100, fun do_compare/1, [MapGen, MapGen])
 		  end,
 		  lists:seq(1,length(Terms))),
+    ok.
+
+atoms_compare() ->
+    Atoms = [true, false, ok, '', ?MODULE, list_to_atom(id("a new atom"))],
+    Pairs = lists:map(fun(K) -> list_to_tuple([{K,V} || V <- Atoms]) end,
+                      Atoms),
+    lists:foreach(
+      fun(Size) ->
+              M1 = map_gen(Pairs, Size),
+              M2 = map_gen(Pairs, Size),
+              %%io:format("Atom maps to compare: ~p AND ~p\n", [M1, M2]),
+              do_cmp(M1, M2)
+      end,
+      lists:seq(1,length(Atoms))),
     ok.
 
 numeric_keys(N) ->
@@ -1758,6 +1787,8 @@ cmp_others(I, F, true) when is_integer(I), is_float(F) ->
     -1;
 cmp_others(F, I, true) when is_float(F), is_integer(I) ->
     1;
+cmp_others(A1, A2, Exact) when is_atom(A1), is_atom(A2) ->
+    cmp_others(atom_to_list(A1), atom_to_list(A2), Exact);
 cmp_others(T1, T2, _) ->
     case {T1<T2, T1==T2} of
 	{true,false} -> -1;
@@ -1772,7 +1803,7 @@ map_gen(Pairs, Size) ->
 				KV = element(rand:uniform(size(K)), K),
 				{erlang:delete_element(KI,Keys), [KV | Acc]}
 			end,
-			{Pairs, []},
+			{list_to_tuple(Pairs), []},
 			lists:seq(1,Size)),
 
     maps:from_list(L).
@@ -1784,12 +1815,8 @@ recursive_compare() ->
     %%io:format("Recursive term A = ~p\n", [A]),
     %%io:format("Recursive term B = ~p\n", [B]),
 
-    ?CHECK({true,false} =:=  case do_cmp(A, B, false) of
-				 -1 -> {A<B, A>=B};
-				 0 -> {A==B, A/=B};
-				 1 -> {A>B, A=<B}
-			     end,
-	   {A,B}),
+    do_cmp(A, B),
+
     A2 = copy_term(A),
     ?CHECK(A == A2, {A,A2}),
     ?CHECK(0 =:= cmp(A, A2, false), {A,A2}),
@@ -1799,9 +1826,13 @@ recursive_compare() ->
     ?CHECK(0 =:= cmp(B, B2, false), {B,B2}),
     ok.
 
-do_cmp(A, B, Exact) ->
-    C = cmp(A, B, Exact),
-    C.
+do_cmp(A, B) ->
+    ?CHECK({true,false} =:=  case cmp(A, B, false) of
+				 -1 -> {A<B, A>=B};
+				 0 -> {A==B, A/=B};
+				 1 -> {A>B, A=<B}
+			     end,
+	   {A,B}).
 
 %% Generate two terms {A,B} that may only differ
 %% at float vs integer types.
@@ -3143,6 +3174,19 @@ has_map_fields_3(#{a:=_,b:=_}) -> true;
 has_map_fields_3(#{[]:=_,42.0:=_}) -> true;
 has_map_fields_3(#{}) -> false.
 
+t_get_map_elements(Config) when is_list(Config) ->
+    %% Tests that the JIT implementation of `get_map_elements` handles
+    %% collisions properly.
+    N = 500000,
+    Is = lists:seq(1, N),
+    Test = maps:from_list([{I,I}||I<-Is]),
+    [begin
+         #{ Key := Val } = Test,
+         Key = Val
+     end || Key <- Is],
+
+    ok.
+
 y_regs(Config) when is_list(Config) ->
     Val = [length(Config)],
     Map0 = y_regs_update(#{}, Val),
@@ -3211,15 +3255,6 @@ do_badmap(Test) ->
 	     [],{a,b,c},[a,b],atom,10.0,42,(1 bsl 65) + 3],
     [Test(T) || T <- Terms].
 
-%% Test that a module compiled with the OTP 17 compiler will
-%% generate the correct 'badmap' exception.
-badmap_17(Config) ->
-    Mod = badmap_17,
-    DataDir = test_server:lookup_config(data_dir, Config),
-    Beam = filename:join(DataDir, Mod),
-    {module,Mod} = code:load_abs(Beam),
-    do_badmap(fun Mod:update/1).
-
 %% Use this function to avoid compile-time evaluation of an expression.
 id(I) -> I.
 
@@ -3261,8 +3296,7 @@ t_hash_entropy(Config) when is_list(Config)  ->
 %% Provoke major GC with a lot of "fat" maps on external format in msg queue
 %% causing heap fragments to be allocated.
 t_gc_rare_map_overflow(Config) when is_list(Config) ->
-    Pa = filename:dirname(code:which(?MODULE)),
-    {ok, Node} = test_server:start_node(gc_rare_map_overflow, slave, [{args, "-pa \""++Pa++"\""}]),
+    {ok, Peer, Node} = ?CT_PEER(),
     erts_debug:set_internal_state(available_internal_state, true),
     try
 	Echo = spawn_link(Node, fun Loop() -> receive {From,Msg} -> From ! Msg
@@ -3293,7 +3327,7 @@ t_gc_rare_map_overflow(Config) when is_list(Config) ->
     after
 	process_flag(trap_exit, false),
 	erts_debug:set_internal_state(available_internal_state, false),
-	test_server:stop_node(Node)
+	peer:stop(Peer)
     end.
 
 t_gc_rare_map_overflow_do(Echo, FatMap, GcFun) ->
@@ -3492,16 +3526,154 @@ run_when_enough_resources(Fun) ->
 total_memory() ->
     %% Total memory in GB.
     try
-	MemoryData = memsup:get_system_memory_data(),
-	case lists:keysearch(total_memory, 1, MemoryData) of
-	    {value, {total_memory, TM}} ->
-		TM div (1024*1024*1024);
-	    false ->
-		{value, {system_total_memory, STM}} =
-		    lists:keysearch(system_total_memory, 1, MemoryData),
-		STM div (1024*1024*1024)
-	end
+	SMD = memsup:get_system_memory_data(),
+        TM = proplists:get_value(
+               available_memory, SMD,
+               proplists:get_value(
+                 total_memory, SMD,
+                 proplists:get_value(
+                   system_total_memory, SMD))),
+        TM div (1024*1024*1024)
     catch
 	_ : _ ->
 	    undefined
     end.
+
+%%%
+%%% Benchmarks
+%%%
+
+-define(SMALL_MAP_SIZE, 32).
+-define(BIG_MAP_SIZE, 3333).
+
+benchmarks(_Config) ->
+    N = 5000000,
+
+    %% Looks up a known value in a flatmap and (relatively large) hashmap,
+    %% the value will be near the middle of the tested flatmap in an
+    %% attempt to make the test more representative.
+    lookup_literal_immed_small(N),
+    lookup_literal_immed_big(N),
+
+    %% Looks up a value that _COULD_ be an immediate (and always is in this
+    %% test), benchmarking the common case of looking up an unknown integer
+    %% or similar.
+    %%
+    %% Like literal_immed_small, we try to pick a value that will be in the
+    %% middle of the tested flatmap.
+    lookup_any_immed_small(N),
+    lookup_any_immed_big(N),
+
+    %% Looks up `[{}]`, looking for regressions in pre-hashed complex
+    %% lookups.
+    lookup_literal_complex_small(N),
+    lookup_literal_complex_big(N),
+
+    %% Looks up some unknown complex term, looking for regressions in complex
+    %% lookups that need to be hashed in runtime. 
+    lookup_any_complex_small(N),
+    lookup_any_complex_big(N),
+
+    %% Looks up a bunch of keys in parallel, benchmarking maps-as-structs.
+    lookup_literal_multi_small(N),
+    lookup_literal_multi_big(N),
+
+    ok.
+
+lookup_literal_immed_small(Iterations) ->
+    Map0 = maps:from_keys(lists:seq(1, ?SMALL_MAP_SIZE), []),
+    F = fun(N) -> literal_immed(N, Map0, []) end,
+    time(?FUNCTION_NAME, F, Iterations).
+
+lookup_literal_immed_big(Iterations) ->
+    Map0 = maps:from_keys(lists:seq(1, ?BIG_MAP_SIZE), []),
+    F = fun(N) -> literal_immed(N, Map0, []) end,
+    time(?FUNCTION_NAME, F, Iterations).
+
+literal_immed(0, _Map, Acc) ->
+    Acc;
+literal_immed(N, Map, _) ->
+    #{ (?SMALL_MAP_SIZE div 2) := Acc } = Map,
+    literal_immed(N - 1, Map, Acc).
+
+lookup_any_immed_small(Iterations) ->
+    Size = ?SMALL_MAP_SIZE div 2 - 1,
+    Map = maps:from_list([{V, -V} || V <- lists:seq(-Size, Size)]),
+    F = fun(N) -> any_immed(N, Map, Size div 2) end,
+    time(?FUNCTION_NAME, F, Iterations).
+
+lookup_any_immed_big(Iterations) ->
+    Size = ?BIG_MAP_SIZE div 2 - 1,
+    Map = maps:from_list([{V, -V} || V <- lists:seq(-Size, Size)]),
+    F = fun(N) -> any_immed(N, Map, Size div 2) end,
+    time(?FUNCTION_NAME, F, Iterations).
+
+any_immed(0, _Map, Acc) ->
+    Acc;
+any_immed(N, Map, Acc0) ->
+    #{ Acc0 := Acc } = Map,
+    any_immed(N - 1, Map, Acc).
+
+lookup_literal_complex_small(Iterations) ->
+    Map0 = maps:from_keys(lists:seq(1, ?SMALL_MAP_SIZE), []),
+    F = fun(N) -> literal_complex(N, Map0#{ [{}] => [{}] }, [{}]) end,
+    time(?FUNCTION_NAME, F, Iterations).
+
+lookup_literal_complex_big(Iterations) ->
+    Map0 = maps:from_keys(lists:seq(1, ?BIG_MAP_SIZE), []),
+    F = fun(N) -> literal_complex(N, Map0#{ [{}] => [{}] }, [{}]) end,
+    time(?FUNCTION_NAME, F, Iterations).
+
+literal_complex(0, Map, Acc) ->
+    {Map, Acc};
+literal_complex(N, Map, _) ->
+    #{ [{}] := Acc } = Map,
+    literal_complex(N - 1, Map, Acc).
+
+lookup_any_complex_small(Iterations) ->
+    Map0 = maps:from_keys(lists:seq(1, ?SMALL_MAP_SIZE - 2), []),
+    F = fun(N) ->
+                any_complex(N, Map0#{ [{}] => {[]}, {[]} => [{}] }, [{}])
+        end,
+    time(?FUNCTION_NAME, F, Iterations).
+
+lookup_any_complex_big(Iterations) ->
+    Map0 = maps:from_keys(lists:seq(1, ?BIG_MAP_SIZE - 2), []),
+    F = fun(N) ->
+                any_complex(N, Map0#{ [{}] => {[]}, {[]} => [{}] }, [{}])
+        end,
+    time(?FUNCTION_NAME, F, Iterations).
+
+any_complex(0, _Map, Acc) ->
+    Acc;
+any_complex(N, Map, Acc0) ->
+    #{ Acc0 := Acc } = Map,
+    any_complex(N - 1, Map, Acc).
+
+lookup_literal_multi_small(Iterations) ->
+    Map0 = maps:from_keys(lists:seq(1, ?SMALL_MAP_SIZE), id([])),
+    F = fun(N) -> literal_multi(N, Map0, []) end,
+    time(?FUNCTION_NAME, F, Iterations).
+
+lookup_literal_multi_big(Iterations) ->
+    Map0 = maps:from_keys(lists:seq(1, ?BIG_MAP_SIZE), id([])),
+    F = fun(N) -> literal_multi(N, Map0, []) end,
+    time(?FUNCTION_NAME, F, Iterations).
+
+literal_multi(0, _Map, Acc) ->
+    Acc;
+literal_multi(N, Map, _) ->
+    #{ (?SMALL_MAP_SIZE div 2 + 0) := Same,
+       (?SMALL_MAP_SIZE div 2 + 1) := Same,
+       (?SMALL_MAP_SIZE div 2 - 1) := Same,
+       (?SMALL_MAP_SIZE div 2 + 2) := Same,
+       (?SMALL_MAP_SIZE div 2 - 2) := Same } = Map,
+    literal_multi(N - 1, Map, Same).
+
+time(Name, F, Iterations) ->
+    Time = element(1, timer:tc(F, [Iterations])),
+    ct_event:notify(#event{name=benchmark_data,
+                           data=[{value, Time},
+                                 {suite, ?MODULE_STRING},
+                                 {name, atom_to_list(Name)}]}),
+    Time.

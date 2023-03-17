@@ -47,10 +47,10 @@
          client_auth_empty_cert_rejected/1,
          client_auth_partial_chain/0,
          client_auth_partial_chain/1,
-         client_auth_allow_partial_chain/0,
-         client_auth_allow_partial_chain/1,
-         client_auth_do_not_allow_partial_chain/0,
-         client_auth_do_not_allow_partial_chain/1,
+         client_auth_use_partial_chain/0,
+         client_auth_use_partial_chain/1,
+         client_auth_do_not_use_partial_chain/0,
+         client_auth_do_not_use_partial_chain/1,
          client_auth_partial_chain_fun_fail/0,
          client_auth_partial_chain_fun_fail/1,
          missing_root_cert_no_auth/0,
@@ -149,19 +149,10 @@ all_version_tests() ->
     ].
 
 init_per_suite(Config) ->
-    catch crypto:stop(),
-    try crypto:start() of
-	ok ->
-	    ssl_test_lib:clean_start(),
-            Config
-    catch _:_ ->
-	    {skip, "Crypto did not start"}
-    end.
+    ssl_test_lib:init_per_suite(Config, openssl).
 
-end_per_suite(_Config) ->
-    ssl:stop(),
-    application:unload(ssl),
-    application:stop(crypto).
+end_per_suite(Config) ->
+    ssl_test_lib:end_per_suite(Config).
 
 init_per_group(openssl_server, Config0) ->
     Config = proplists:delete(server_type, proplists:delete(client_type, Config0)),
@@ -350,7 +341,17 @@ init_per_group(dsa = Group, Config0) ->
             {skip, "Missing DSS crypto support"}
     end;    
 init_per_group(GroupName, Config) ->
-    ssl_test_lib:init_per_group_openssl(GroupName, Config).
+    case ssl_test_lib:is_protocol_version(GroupName) of
+        true  ->
+            case ssl_test_lib:check_sane_openssl_version(GroupName, Config) of
+                true ->
+                    ssl_test_lib:init_per_group_openssl(GroupName, Config);
+                false  ->
+                    {skip, {atom_to_list(GroupName) ++ " not supported by OpenSSL"}}
+            end;
+        false ->
+            Config
+    end.
 
 end_per_group(GroupName, Config) ->
     ssl_test_lib:end_per_group(GroupName, Config).
@@ -394,15 +395,15 @@ client_auth_partial_chain(Config) when is_list(Config) ->
     ssl_cert_tests:client_auth_partial_chain(Config).
 
 %%--------------------------------------------------------------------
-client_auth_allow_partial_chain() ->
-    ssl_cert_tests:client_auth_allow_partial_chain().
-client_auth_allow_partial_chain(Config) when is_list(Config) ->
-    ssl_cert_tests:client_auth_allow_partial_chain(Config).
+client_auth_use_partial_chain() ->
+    ssl_cert_tests:client_auth_use_partial_chain().
+client_auth_use_partial_chain(Config) when is_list(Config) ->
+    ssl_cert_tests:client_auth_use_partial_chain(Config).
 %%--------------------------------------------------------------------
-client_auth_do_not_allow_partial_chain() ->
-   ssl_cert_tests:client_auth_do_not_allow_partial_chain().
-client_auth_do_not_allow_partial_chain(Config) when is_list(Config) ->
-    ssl_cert_tests:client_auth_do_not_allow_partial_chain(Config).
+client_auth_do_not_use_partial_chain() ->
+   ssl_cert_tests:client_auth_do_not_use_partial_chain().
+client_auth_do_not_use_partial_chain(Config) when is_list(Config) ->
+    ssl_cert_tests:client_auth_do_not_use_partial_chain(Config).
 
 %%--------------------------------------------------------------------
 client_auth_partial_chain_fun_fail() ->

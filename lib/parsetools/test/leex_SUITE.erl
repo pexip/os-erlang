@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %% 
-%% Copyright Ericsson AB 2010-2021. All Rights Reserved.
+%% Copyright Ericsson AB 2010-2022. All Rights Reserved.
 %% 
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -22,6 +22,7 @@
 %-define(debug, true).
 
 -include_lib("stdlib/include/erl_compile.hrl").
+-include_lib("stdlib/include/assert.hrl").
 -include_lib("kernel/include/file.hrl").
 
 -ifdef(debug).
@@ -39,7 +40,7 @@
 	 init_per_testcase/2, end_per_testcase/2]).
 
 -export([
-	 file/1, compile/1, syntax/1,
+	 file/1, compile/1, syntax/1, deterministic/1,
 	 
 	 pt/1, man/1, ex/1, ex2/1, not_yet/1,
 	 line_wrap/1,
@@ -64,7 +65,7 @@ all() ->
     [{group, checks}, {group, examples}, {group, tickets}, {group, bugs}].
 
 groups() -> 
-    [{checks, [], [file, compile, syntax]},
+    [{checks, [], [file, compile, syntax, deterministic]},
      {examples, [], [pt, man, ex, ex2, not_yet, unicode]},
      {tickets, [], [otp_10302, otp_11286, otp_13916, otp_14285, otp_17023,
                     compiler_warnings]},
@@ -368,6 +369,42 @@ syntax(Config) when is_list(Config) ->
         leex:file(Filename, Ret),
     ok.
 
+deterministic(doc) ->
+    "Check leex respects the +deterministic flag.";
+deterministic(suite) -> [];
+deterministic(Config) when is_list(Config) ->
+    Dir = ?privdir,
+    Filename = filename:join(Dir, "file.xrl"),
+    Scannerfile = filename:join(Dir, "file.erl"),
+    Mini = <<"Definitions.\n"
+             "D  = [0-9]\n"
+             "Rules.\n"
+             "{L}+  : {token,{word,TokenLine,TokenChars}}.\n"
+             "Erlang code.\n">>,
+    ok = file:write_file(Filename, Mini),
+
+    %% Generated leex scanners include the leexinc.hrl header file by default,
+    %% so we'll get a -file attribute corresponding to that include. In
+    %% deterministic mode, that include should only use the basename,
+    %% "leexinc.hrl", but otherwise, it should contain the full path.
+
+    %% Matches when OTP is not installed (e.g. /lib/parsetools/include/leexinc.hrl)
+    %% and when it is (e.g. /lib/parsetools-2.3.2/include/leexinc.hrl)
+    AbsolutePathSuffix = ".*/lib/parsetools.*/include/leexinc\.hrl",
+
+    ok = leex:compile(Filename, Scannerfile, #options{specific=[deterministic]}),
+    {ok, FormsDet} = epp:parse_file(Scannerfile,[]),
+    ?assertMatch(false, search_for_file_attr(AbsolutePathSuffix, FormsDet)),
+    ?assertMatch({value, _}, search_for_file_attr("leexinc\.hrl", FormsDet)),
+    file:delete(Scannerfile),
+
+    ok = leex:compile(Filename, Scannerfile, #options{}),
+    {ok, Forms} = epp:parse_file(Scannerfile,[]),
+    ?assertMatch({value, _}, search_for_file_attr(AbsolutePathSuffix, Forms)),
+    file:delete(Scannerfile),
+
+    file:delete(Filename),
+    ok.
 
 pt(doc) ->
     "Pushing back characters.";
@@ -1043,7 +1080,7 @@ otp_11286(doc) ->
     "OTP-11286. A Unicode filename bug; both Leex and Yecc.";
 otp_11286(suite) -> [];
 otp_11286(Config) when is_list(Config) ->
-    Node = start_node(otp_11286, "+fnu"),
+    {ok, Peer, Node} = ?CT_PEER(["+fnu"]),
     Dir = ?privdir,
     UName = [1024] ++ "u",
     UDir = filename:join(Dir, UName),
@@ -1087,7 +1124,7 @@ otp_11286(Config) when is_list(Config) ->
     {ok,_,_} = rpc:call(Node, compile, file,
                   [Scannerfile,[basic_validation,return]]),
 
-    true = test_server:stop_node(Node),
+    peer:stop(Peer),
     ok.
 
 otp_13916(doc) ->
@@ -1127,8 +1164,6 @@ otp_13916(Config) when is_list(Config) ->
     ok.
 
 otp_14285(Config) ->
-    Dir = ?privdir,
-
     Ts = [{otp_14285_1,
            <<"%% encoding: latin-1\n"
              "Definitions.\n"
@@ -1210,17 +1245,6 @@ erlang:display({erlfile,ErlFile}),
     {ok, compiler_warnings, []} = compile:file(ErlFile, [return]),
     ok.
 
-start_node(Name, Args) ->
-    [_,Host] = string:tokens(atom_to_list(node()), "@"),
-    ct:log("Trying to start ~w@~s~n", [Name,Host]),
-    case test_server:start_node(Name, peer, [{args,Args}]) of
-	{error,Reason} ->
-	    ct:fail(Reason);
-	{ok,Node} ->
-	    ct:log("Node ~p started~n", [Node]),
-	    Node
-    end.
-
 unwritable(Fname) ->
     {ok, Info} = file:read_file_info(Fname),
     Mode = Info#file_info.mode - 8#00200,
@@ -1285,3 +1309,13 @@ extract(File, {error, Es, Ws}) ->
     {errors, extract(File, Es), extract(File, Ws)};    
 extract(File, Ts) ->
     lists:append([T || {F, T} <- Ts,  F =:= File]).
+
+search_for_file_attr(PartialFilePathRegex, Forms) ->
+    lists:search(fun
+                   ({attribute, _, file, {FileAttr, _}}) ->
+                      case re:run(FileAttr, PartialFilePathRegex) of
+                        nomatch -> false;
+                        _ -> true
+                      end;
+                   (_) -> false end,
+                 Forms).

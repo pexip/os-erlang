@@ -327,7 +327,7 @@ extern ErtsCodePtr beam_bif_export_trap;
 
 #define ERTS_BIF_PREP_TRAP(Export, Proc, Arity)                               \
     do {                                                                      \
-        (Proc)->i = (Export)->addresses[erts_active_code_ix()];               \
+        (Proc)->i = (Export)->dispatch.addresses[erts_active_code_ix()];      \
         (Proc)->arity = (Arity);                                              \
         (Proc)->freason = TRAP;                                               \
     } while(0);
@@ -522,12 +522,12 @@ do {									\
 
 extern Export erts_bif_handle_signals_return_export;
 
-#define ERTS_BIF_HANDLE_SIGNALS_RETURN(P, VAL)                          \
-    BIF_TRAP1(&erts_bif_handle_signals_return_export, (P), (VAL))
+#define ERTS_BIF_HANDLE_SIGNALS_FROM_RETURN(P, FROM, VAL)               \
+    BIF_TRAP2(&erts_bif_handle_signals_return_export, (P), (FROM), (VAL))
 
-#define ERTS_BIF_PREP_HANDLE_SIGNALS_RETURN(Ret, P, Val)                \
-    ERTS_BIF_PREP_TRAP1((Ret), &erts_bif_handle_signals_return_export,  \
-                        (P), (Val))
+#define ERTS_BIF_PREP_HANDLE_SIGNALS_FROM_RETURN(Ret, P, From, Val)     \
+    ERTS_BIF_PREP_TRAP2((Ret), &erts_bif_handle_signals_return_export,  \
+                        (P), (From), (Val))
 
 #define ERTS_BIF_PREP_EXITED(RET, PROC)	                                \
 do {                                                                    \

@@ -4,11 +4,11 @@ XSBC-Pexip-Original-Maintainer: Debian Erlang Packagers <pkg-erlang-devel@lists.
 XSBC-Pexip-Original-Uploaders: Sergei Golovan <sgolovan@debian.org>
 Section: interpreters
 Priority: optional
-Standards-Version: 4.6.0
-Build-Depends: debhelper (>= 10.0.0), autoconf (>= 2.69), openssl, libssl-dev (>= 3), m4,
- libncurses5-dev, unixodbc-dev, bison, flex, ed, zlib1g-dev,
+Standards-Version: 4.6.1
+Build-Depends: debhelper-compat (= 13), autoconf (>= 2.69), openssl, libssl-dev (>= 3), m4,
+ libncurses-dev, unixodbc-dev, bison, flex, ed, zlib1g-dev,
  libwxgtk3.0-gtk3-dev, libwxgtk-webview3.0-gtk3-dev, libx11-dev, dctrl-tools, xsltproc,
- libgl1-mesa-dev | libgl-dev, libglu1-mesa-dev | libglu-dev,
+ libgl-dev, libglu-dev,
  libsctp-dev [linux-any], libsystemd-dev [linux-any], erlang-base:native <cross>
 Build-Depends-Indep: libxml2-utils, fop, default-jdk | sun-java6-jdk
 Build-Conflicts: autoconf2.13, libwxgtk2.4-dev, libwxgtk2.6-dev, libwxgtk2.8-dev

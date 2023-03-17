@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %% 
-%% Copyright Ericsson AB 1997-2021. All Rights Reserved.
+%% Copyright Ericsson AB 1997-2022. All Rights Reserved.
 %% 
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -86,7 +86,7 @@ listen(Name) ->
 
 gen_listen(Driver, Name, Host) ->
     ErlEpmd = net_kernel:epmd_module(),
-    case gen_listen(ErlEpmd, Name, Host, Driver, [{active, false}, {packet,2}, {reuseaddr, true}]) of
+    case gen_listen(ErlEpmd, Name, Host, Driver) of
 	{ok, Socket} ->
 	    TcpAddress = get_tcp_address(Driver, Socket),
 	    {_,Port} = TcpAddress#net_address.address,
@@ -100,8 +100,8 @@ gen_listen(Driver, Name, Host) ->
 	    Error
     end.
 
-gen_listen(ErlEpmd, Name, Host, Driver, Options) ->
-    ListenOptions = listen_options(Options),
+gen_listen(ErlEpmd, Name, Host, Driver) ->
+    ListenOptions = listen_options(),
     case call_epmd_function(ErlEpmd, listen_port_please, [Name, Host]) of
         {ok, 0} ->
             {First,Last} = get_port_range(),
@@ -133,25 +133,52 @@ do_listen(Driver, First,Last,Options) ->
 	    Other
     end.
 
-listen_options(Opts0) ->
-    Opts1 =
-	case application:get_env(kernel, inet_dist_use_interface) of
-	    {ok, Ip} ->
-		[{ip, Ip} | Opts0];
-	    _ ->
-		Opts0
-	end,
-    case application:get_env(kernel, inet_dist_listen_options) of
-	{ok,ListenOpts} ->
-	    case proplists:is_defined(backlog, ListenOpts) of
-		true ->
-		    ListenOpts ++ Opts1;
-		false ->
-		    ListenOpts ++ [{backlog, 128} | Opts1]
-	    end;
-	_ ->
-	    [{backlog, 128} | Opts1]
-    end.
+listen_options() ->
+    DefaultOpts = [{reuseaddr, true}, {backlog, 128}],
+    ForcedOpts =
+        [{active, false}, {packet,2} |
+         case application:get_env(kernel, inet_dist_use_interface) of
+             {ok, Ip}  -> [{ip, Ip}];
+             undefined -> []
+         end],
+    Force = maps:from_list(ForcedOpts),
+    InetDistListenOpts =
+        case application:get_env(kernel, inet_dist_listen_options) of
+            {ok, Opts} -> Opts;
+            undefined  -> []
+        end,
+    ListenOpts = listen_options(InetDistListenOpts, ForcedOpts, Force),
+    Seen =
+        maps:from_list(
+          lists:filter(
+            fun ({_,_}) -> true;
+                (_)     -> false
+            end, ListenOpts)),
+    lists:filter(
+      fun ({OptName,_}) when is_map_key(OptName, Seen) ->
+              false;
+          (_) ->
+              true
+      end, DefaultOpts) ++ ListenOpts.
+
+%% Pass through all but forced
+listen_options([Opt | Opts], ForcedOpts, Force) ->
+    case Opt of
+        {OptName,_} ->
+            case is_map_key(OptName, Force) of
+                true ->
+                    listen_options(Opts, ForcedOpts, Force);
+                false ->
+                    [Opt |
+                     listen_options(Opts, ForcedOpts, Force)]
+            end;
+        _ ->
+            [Opt |
+             listen_options(Opts, ForcedOpts, Force)]
+    end;
+listen_options([], ForcedOpts, _Force) ->
+    %% Append forced
+    ForcedOpts.
 
 
 %% ------------------------------------------------------------
@@ -208,7 +235,7 @@ accept_connection(AcceptPid, Socket, MyNode, Allowed, SetupTime) ->
 gen_accept_connection(Driver, AcceptPid, Socket, MyNode, Allowed, SetupTime) ->
     spawn_opt(?MODULE, do_accept,
 	      [Driver, self(), AcceptPid, Socket, MyNode, Allowed, SetupTime],
-	      [link, {priority, max}]).
+	      dist_util:net_ticker_spawn_options()).
 
 do_accept(Driver, Kernel, AcceptPid, Socket, MyNode, Allowed, SetupTime) ->
     receive
@@ -274,7 +301,6 @@ nodelay() ->
 	    {nodelay, true}
     end.
 
-
 %% ------------------------------------------------------------
 %% Get remote information about a Socket.
 %% ------------------------------------------------------------
@@ -304,7 +330,7 @@ setup(Node, Type, MyNode, LongOrShortNames,SetupTime) ->
 gen_setup(Driver, Node, Type, MyNode, LongOrShortNames, SetupTime) ->
     spawn_opt(?MODULE, do_setup, 
 	      [Driver, self(), Node, Type, MyNode, LongOrShortNames, SetupTime],
-	      [link, {priority, max}]).
+	      dist_util:net_ticker_spawn_options()).
 
 do_setup(Driver, Kernel, Node, Type, MyNode, LongOrShortNames, SetupTime) ->
     ?trace("~p~n",[{inet_tcp_dist,self(),setup,Node}]),

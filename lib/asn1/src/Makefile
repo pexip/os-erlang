@@ -1,7 +1,7 @@
 #
 # %CopyrightBegin%
 # 
-# Copyright Ericsson AB 1997-2020. All Rights Reserved.
+# Copyright Ericsson AB 1997-2022. All Rights Reserved.
 # 
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -102,13 +102,19 @@ ERL_COMPILE_FLAGS += \
 	-I$(ERL_TOP)/lib/stdlib \
 	-Werror
 
-YRL_FLAGS = 
+ifeq ($(ERL_DETERMINISTIC),yes)
+	YRL_FLAGS = +deterministic
+	DETERMINISM_FLAG = +deterministic
+else
+	YRL_FLAGS = 
+	DETERMINISM_FLAG =
+endif
 
 # ----------------------------------------------------
 # Targets
 # ----------------------------------------------------
 
-debug opt: $(TARGET_FILES) $(APP_TARGET) $(APPUP_TARGET)
+$(TYPES): $(TARGET_FILES) $(APP_TARGET) $(APPUP_TARGET)
 
 
 clean:
@@ -182,10 +188,10 @@ asn1ct_rtt.erl: prepare_templates.$(EMULATOR) $(RT_TEMPLATES_TARGET)
            $(RT_TEMPLATES_TARGET)
 
 prepare_templates.$(EMULATOR): prepare_templates.erl
-	$(V_ERLC) prepare_templates.erl
+	$(V_ERLC) $(DETERMINISM_FLAG) prepare_templates.erl
 
 asn1rtt_%.$(EMULATOR): asn1rtt_%.erl
-	$(V_ERLC) +debug_info $<
+	$(V_ERLC) +debug_info $(DETERMINISM_FLAG) $<
 
 $(EVAL_CT_MODULES:%=%.erl): prepare_templates.$(EMULATOR) \
 			    $(EBIN)/asn1ct_rtt.$(EMULATOR) \

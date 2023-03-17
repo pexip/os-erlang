@@ -5,7 +5,7 @@
   <header>
     <copyright>
       <year>2008</year>
-      <year>2021</year>
+      <year>2022</year>
       <holder>Ericsson AB, All Rights Reserved</holder>
     </copyright>
     <legalnotice>
@@ -34,6 +34,90 @@
     <rev>A</rev>
     <file>notes.xml</file>
   </header>
+
+<section><title>Public_Key 1.13.2</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+          <p>
+	    Disregard LDAP URIs when HTTP URIs are expected.</p>
+          <p>
+	    Own Id: OTP-18333 Aux Id: GH-6363 </p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>Public_Key 1.13.1</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+          <p>
+	    Support more Linux distributions in cacerts_load/0.</p>
+          <p>
+	    Own Id: OTP-18154 Aux Id: PR-6002 </p>
+        </item>
+        <item>
+          <p>
+	    Correct asn1 typenames available in type pki_asn1_type()</p>
+          <p>
+	    Own Id: OTP-18189 Aux Id: ERIERL-829 </p>
+        </item>
+        <item>
+          <p>
+	    Sign/verify does now behave as in OTP-24 and earlier for
+	    eddsa.</p>
+          <p>
+	    Own Id: OTP-18205 Aux Id: GH-6219 </p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>Public_Key 1.13</title>
+
+    <section><title>Improvements and New Features</title>
+      <list>
+        <item>
+          <p>
+	    Added functions to retrieve OS provided CA-certs.</p>
+          <p>
+	    Own Id: OTP-17798 Aux Id: GH-5760 </p>
+        </item>
+        <item>
+          <p>
+	    Allow key file passwords to be input as a single binary,
+	    that is we change the data type to be the more for the
+	    purpose logical data type iodata() instead of string().</p>
+          <p>
+	    Own Id: OTP-17890</p>
+        </item>
+        <item>
+          <p>
+	    The deprecated public_key functions ssh_decode/2,
+	    ssh_encode/2, ssh_hostkey_fingerprint/1 and
+	    ssh_hostkey_fingerprint/2 are removed.</p>
+          <p>
+	    They are replaced by ssh_file:decode/2,
+	    ssh_file:encode/2, ssh:hostkey_fingerprint/1 and
+	    ssh:hostkey_fingerprint/2 respectively.</p>
+          <p>
+	    Note that the decode/2 and encode/2 are not exact
+	    replacement functions, some minor changes may be needed.
+	    Se the manual for more information.</p>
+          <p>
+	    *** POTENTIAL INCOMPATIBILITY ***</p>
+          <p>
+	    Own Id: OTP-17921</p>
+        </item>
+      </list>
+    </section>
+
+</section>
 
 <section><title>Public_Key 1.12.0.1</title>
 
@@ -441,7 +525,7 @@
       <list>
         <item>
           <p>
-	    Support Pasword based encryption with AES</p>
+	    Support Password based encryption with AES</p>
           <p>
 	    Own Id: OTP-15870 Aux Id: ERL-952 </p>
         </item>
@@ -612,7 +696,7 @@
         </item>
         <item>
           <p>
-	    Compleate PKCS-8 encoding support and enhance the
+	    Complete PKCS-8 encoding support and enhance the
 	    decoding of 'PrivateKeyInfo' to conform to the rest of
 	    Erlang public_key API.</p>
           <p>
@@ -709,7 +793,7 @@
 	    saltlength setting<br/> * X9.31 RSA padding.<br/> * sha,
 	    sha224, sha256, sha384, and sha512 for dss signatures as
 	    mentioned in NIST SP 800-57 Part 1.<br/> * ripemd160 to
-	    be used for rsa signatures.</p>
+	    be used for RSA signatures.</p>
           <p>
 	    This is a manual merge of half of the pull request 838 by
 	    potatosalad from Sept 2015.</p>
@@ -720,7 +804,7 @@
           <p>
 	    Add API function pkix_test_data/1 for facilitating
 	    automated testing. This is useful for applications that
-	    preform X509-certifcate path validation of so called
+	    perform X509-certifcate path validation of so called
 	    certificate chains, such as TLS.</p>
           <p>
 	    Own Id: OTP-14181</p>
@@ -904,7 +988,7 @@
         </item>
         <item>
           <p>
-	    Add different upper bounds for diffrent string types as
+	    Add different upper bounds for different string types as
 	    suggested by comment in PKIX1Explicit88.</p>
           <p>
 	    Own Id: OTP-13132</p>
@@ -1108,7 +1192,7 @@
         <item>
           <p>
 	    Add support for ISO oids 1.3.14.3.2.29 and 1.3.14.3.2.27
-	    that are somtimes used instead of the PKCS defined oids
+	    that are sometimes used instead of the PKCS defined oids
 	    1.2.840.113549.1.1.5 and 1.2.840.10040.4.3. Add function
 	    pkix_sign_types:/1 that translates oids to to algorithm
 	    atoms ex:</p>
@@ -1201,7 +1285,7 @@
         <item>
           <p>
 	    ssh_decode now handles comments, at the end of the line,
-	    containing withe spaces correctly</p>
+	    containing with spaces correctly</p>
           <p>
 	    Own Id: OTP-9361</p>
         </item>
@@ -1219,7 +1303,7 @@
       <list>
         <item>
           <p>
-	    public_key now supports PKCS-10 and includes exprimental
+	    public_key now supports PKCS-10 and includes experimental
 	    support for PKCS-7</p>
           <p>
 	    Own Id: OTP-10509 Aux Id: kunagi-291 [202] </p>

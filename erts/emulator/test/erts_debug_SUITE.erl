@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %% 
-%% Copyright Ericsson AB 2005-2021. All Rights Reserved.
+%% Copyright Ericsson AB 2005-2022. All Rights Reserved.
 %% 
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -23,6 +23,7 @@
 -include_lib("common_test/include/ct_event.hrl").
 
 -export([all/0, suite/0, groups/0,
+         init_per_testcase/2, end_per_testcase/2,
          test_size/1,flat_size_big/1,df/1,term_type/1,
          instructions/1, stack_check/1, alloc_blocks_size/1,
          t_copy_shared/1,
@@ -43,6 +44,11 @@ all() ->
 groups() -> 
     [{interpreter_size_bench, [], [interpreter_size_bench]}].
 
+init_per_testcase(_TestCase, Config) ->
+    Config.
+end_per_testcase(_TestCase, Config) ->
+    erts_test_utils:ept_check_leaked_nodes(Config).
+
 interpreter_size_bench(_Config) ->
     Size = erts_debug:interpreter_size(),
     ct_event:notify(#event{name=benchmark_data,
@@ -58,12 +64,12 @@ test_size(Config) when is_list(Config) ->
     0 = do_test_size([]),
     0 = do_test_size(42),
     ConsCellSz = do_test_size(ConsCell1),
-    1 = do_test_size({}),
+    0 = do_test_size({}),
     2 = do_test_size({[]}),
     3 = do_test_size({a,b}),
     7 = do_test_size({a,[b,c]}),
     8 = do_test_size(#{b => 2,c => 3}),
-    4 = do_test_size(#{}),
+    3 = do_test_size(#{}),
     32 = do_test_size(#{b => 2,c => 3,txt => "hello world"}),
 
     true = do_test_size(maps:from_list([{I,I}||I<-lists:seq(1,256)])) >= map_size_lower_bound(256),
@@ -76,7 +82,7 @@ test_size(Config) when is_list(Config) ->
 
     %% Fun environment size = 0 (the smallest fun possible)
     SimplestFun = fun() -> ok end,
-    FunSz0 = 6,
+    FunSz0 = 5,
     FunSz0 = do_test_size(SimplestFun),
 
     %% Fun environment size = 1
@@ -89,7 +95,8 @@ test_size(Config) when is_list(Config) ->
 
     FunSz1 = do_test_size(fun() -> ConsCell1 end) - do_test_size(ConsCell1),
 
-    2 = do_test_size(fun lists:sort/1),
+    %% External funs are the same size as local ones without environment
+    FunSz0 = do_test_size(fun lists:sort/1),
 
     Arch = 8 * erlang:system_info({wordsize, external}),
     case {Arch, do_test_size(mk_ext_pid({a@b, 1}, 17, 42))} of
@@ -259,29 +266,21 @@ instructions(Config) when is_list(Config) ->
 
 alloc_blocks_size(Config) when is_list(Config) ->
     F = fun(Args) ->
-                Node = start_slave(Args),
+                {ok, Peer, Node} = ?CT_PEER(Args),
                 ok = rpc:call(Node, ?MODULE, do_alloc_blocks_size, []),
-                true = test_server:stop_node(Node)
+                peer:stop(Peer)
         end,
     case test_server:is_asan() of
-	false -> F("+Meamax");
+	false -> F(["+Meamax"]);
 	true -> skip
     end,
-    F("+Meamin"),
-    F(""),
+    F(["+Meamin"]),
+    F([]),
     ok.
 
 do_alloc_blocks_size() ->
     _ = erts_debug:alloc_blocks_size(binary_alloc),
     ok.
-
-start_slave(Args) ->
-    Name = ?MODULE_STRING ++ "_slave",
-    Pa = filename:dirname(code:which(?MODULE)),
-    {ok, Node} = test_server:start_node(list_to_atom(Name),
-                                        slave,
-                                        [{args, "-pa " ++ Pa ++ " " ++ Args}]),
-    Node.
 
 id(I) ->
     I.

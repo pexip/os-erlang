@@ -52,8 +52,8 @@ legacy_session_id(_) ->
     ?EMPTY_ID.
 %%--------------------------------------------------------------------
 -spec is_new(ssl:session_id() | #session{}, ssl:session_id()) -> boolean().
-%%
-%% Description: Checks if the session id decided by the server is a
+ %%
+ %% Description: Checks if the session id decided by the server is a
 %%              new or resumed sesion id. TLS-1.3 middlebox negotiation
 %%              requies that client also needs to check "is_resumable" in
 %%              its current session data when pre TLS-1.3 version is
@@ -104,13 +104,13 @@ client_select_session({_, _, #{versions := Versions,
     end.
 
 %%--------------------------------------------------------------------
--spec server_select_session(ssl_record:ssl_version(), pid(), binary(), map(),
+-spec server_select_session(ssl_record:ssl_version(), pid(), ssl:session_id(), map(),
                             list())  -> {binary(), #session{} | undefined}.
 %%
 %% Description: Should be called by the server side to get an id
 %%              for the client hello message.
 %%--------------------------------------------------------------------
-server_select_session(_, SessIdTracker, <<>>, _SslOpts, _CertKeyPairs) ->
+server_select_session(_, SessIdTracker, ?EMPTY_ID, _SslOpts, _CertKeyPairs) ->
     {ssl_server_session_cache:new_session_id(SessIdTracker), undefined};
 server_select_session(_, SessIdTracker, SuggestedId, Options, CertKeyPairs) ->
     case is_resumable(SuggestedId, SessIdTracker, Options, CertKeyPairs)
@@ -143,13 +143,13 @@ do_client_select_session({_, _, #{reuse_session := {SessionId, SessionData}}},
             Session#session{is_resumable = true}
     catch
         _:_ ->
-            NewSession#session{session_id = <<>>}
+            NewSession#session{session_id = ?EMPTY_ID}
     end;
 do_client_select_session({Host, Port, #{reuse_session := SessionId}},
                          Cache, CacheCb, NewSession, _) when is_binary(SessionId)->
     case CacheCb:lookup(Cache, {{Host, Port}, SessionId}) of
         undefined ->
-	    NewSession#session{session_id = <<>>};
+	    NewSession#session{session_id = ?EMPTY_ID};
 	#session{} = Session->
 	    Session
     end;
@@ -239,8 +239,7 @@ record_cb(dtls) ->
 legacy_session_id() ->
     crypto:strong_rand_bytes(32).
 
-maybe_handle_middlebox({3, 4}, #session{session_id = ?EMPTY_ID} = Session, 
-                       #{middlebox_comp_mode := true})->
+maybe_handle_middlebox({3, 4}, #session{session_id = ?EMPTY_ID} = Session, #{middlebox_comp_mode := true})->
     Session#session{session_id = legacy_session_id()};
 maybe_handle_middlebox(_, Session, _) ->
     Session.

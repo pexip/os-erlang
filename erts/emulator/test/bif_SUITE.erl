@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2005-2021. All Rights Reserved.
+%% Copyright Ericsson AB 2005-2022. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -37,6 +37,7 @@
 	 error_stacktrace_during_call_trace/1,
          group_leader_prio/1, group_leader_prio_dirty/1,
          is_process_alive/1,
+         is_process_alive_signal_from/1,
          process_info_blast/1,
          os_env_case_sensitivity/1,
          verify_middle_queue_save/1,
@@ -57,7 +58,8 @@ all() ->
      erl_crash_dump_bytes, min_max, erlang_halt, is_builtin,
      error_stacktrace, error_stacktrace_during_call_trace,
      group_leader_prio, group_leader_prio_dirty,
-     is_process_alive, process_info_blast, os_env_case_sensitivity,
+     is_process_alive, is_process_alive_signal_from,
+     process_info_blast, os_env_case_sensitivity,
      verify_middle_queue_save, test_length,fixed_apply_badarg,
      external_fun_apply3].
 
@@ -70,8 +72,8 @@ init_per_testcase(shadow_comments, Config) when is_list(Config) ->
 init_per_testcase(Func, Config) when is_atom(Func), is_list(Config) ->
     Config.
 
-end_per_testcase(_Func, _Config) ->
-    ok.
+end_per_testcase(_Func, Config) ->
+    erts_test_utils:ept_check_leaked_nodes(Config).
 
 %% erl_bif_types comes from dialyzer which some test runs skip building, so
 %% we'll skip the tests that use it as the result shouldn't vary based on
@@ -85,11 +87,9 @@ skip_missing_erl_bif_types(Config) ->
 
 %% Uses erlang:display to test that erts_printf does not do deep recursion
 display(Config) when is_list(Config) ->
-    Pa = filename:dirname(code:which(?MODULE)),
-    {ok, Node} = test_server:start_node(display_huge_term,peer,
-					[{args, "-pa \""++Pa++"\""}]),
+    {ok, Peer, Node} = ?CT_PEER(),
     true = rpc:call(Node,?MODULE,display_huge,[]),
-    test_server:stop_node(Node),
+    peer:stop(Peer),
     ok.
 
 display_huge() ->
@@ -390,6 +390,9 @@ list_to_utf8_atom(Config) when is_list(Config) ->
     _ = atom_roundtrip([16#1000]),
     _ = atom_roundtrip([16#10FFFF]),
     atom_badarg([16#110000]),
+
+    atom_badarg([-1]),
+    [atom_badarg([(-1 bsl N) + $A]) || N <- lists:seq(8,16)],
     ok.
 
 atom_roundtrip(String) ->
@@ -777,33 +780,32 @@ erlang_halt(Config) when is_list(Config) ->
     try halt(0, [{flush,true,undefined}]) of
 	_-> ct:fail({halt,{0,[{flush,true,undefined}]}})
     catch error:badarg -> ok end,
-    H = hostname(),
-    {ok,N1} = slave:start(H, halt_node1),
+    {ok, _, N1} = ?CT_PEER(),
     {badrpc,nodedown} = rpc:call(N1, erlang, halt, []),
-    {ok,N2} = slave:start(H, halt_node2),
+    {ok, _, N2} = ?CT_PEER(),
     {badrpc,nodedown} = rpc:call(N2, erlang, halt, [0]),
-    {ok,N3} = slave:start(H, halt_node3),
+    {ok, _, N3} = ?CT_PEER(),
     {badrpc,nodedown} = rpc:call(N3, erlang, halt, [0,[]]),
-    {ok,N4} = slave:start(H, halt_node4),
+    {ok, _, N4} = ?CT_PEER(),
     {badrpc,nodedown} = rpc:call(N4, erlang, halt, [lists:duplicate(300,$x)]),
     %% Test unicode slogan
-    {ok,N4} = slave:start(H, halt_node4),
-    {badrpc,nodedown} = rpc:call(N4, erlang, halt, [[339,338,254,230,198,295,167,223,32,12507,12531,12480]]),
+    {ok, _, N5} = ?CT_PEER(),
+    {badrpc,nodedown} = rpc:call(N5, erlang, halt, [[339,338,254,230,198,295,167,223,32,12507,12531,12480]]),
 
     % This test triggers a segfault when dumping a crash dump
     % to make sure that we can handle it properly.
 
     %% Prevent address sanitizer from catching SEGV in slave node
     AsanOpts = add_asan_opt("handle_segv=0"),
-    {ok,N4} = slave:start(H, halt_node4),
+    {ok, _, N6} = ?CT_PEER(),
     reset_asan_opts(AsanOpts),
 
     CrashDump = filename:join(proplists:get_value(priv_dir,Config),
                               "segfault_erl_crash.dump"),
-    true = rpc:call(N4, os, putenv, ["ERL_CRASH_DUMP",CrashDump]),
-    false = rpc:call(N4, erts_debug, set_internal_state,
+    true = rpc:call(N6, os, putenv, ["ERL_CRASH_DUMP",CrashDump]),
+    false = rpc:call(N6, erts_debug, set_internal_state,
                      [available_internal_state, true]),
-    {badrpc,nodedown} = rpc:call(N4, erts_debug, set_internal_state,
+    {badrpc,nodedown} = rpc:call(N6, erts_debug, set_internal_state,
                                  [broken_halt, "Validate correct crash dump"]),
     {ok,_} = wait_until_stable_size(CrashDump,-1),
     {ok, Bin} = file:read_file(CrashDump),
@@ -860,8 +862,7 @@ erl_crash_dump_bytes(Config) when is_list(Config) ->
     ok.
 
 do_limited_crash_dump(Config, Bytes) ->
-    H = hostname(),
-    {ok,N} = slave:start(H, halt_node),
+    {ok, _, N} = ?CT_PEER(),
     BytesStr = integer_to_list(Bytes),
     CrashDump = filename:join(proplists:get_value(priv_dir,Config),
                               "erl_crash." ++ BytesStr ++ ".dump"),
@@ -1110,7 +1111,7 @@ group_leader_prio_test(Dirty) ->
                    end,
                    100};
               true ->
-                  %% These processes wont handle incoming signals by
+                  %% These processes won't handle incoming signals by
                   %% them selves since they are stuck on dirty schedulers
                   %% when we try to change group leader. A dirty process
                   %% signal handler process (system process) will be notified
@@ -1208,6 +1209,51 @@ is_process_alive(Config) when is_list(Config) ->
                   end,
                   Ps),
     ok.
+
+is_process_alive_signal_from(Config) when is_list(Config) ->
+    process_flag(priority, high),
+    process_flag(scheduler, 1),
+    Schdlr = case erlang:system_info(schedulers_online) of
+                 1 -> 1;
+                 _ -> 2
+             end,
+    X = is_process_alive_signal_from_test(100000, 0, Schdlr),
+    erlang:display({exits_detected, X}),
+    {comment, integer_to_list(X) ++ " exited processes detected"}.
+
+is_process_alive_signal_from_test(0, X, _Schdlr) ->
+    X;
+is_process_alive_signal_from_test(N, X, Schdlr) ->
+    Tester = self(),
+    {Testee, TMon} = spawn_opt(fun () ->
+                                       Mon = erlang:monitor(process, Tester),
+                                       Tester ! {self(), ready},
+                                       busy_wait_go(),
+                                       _ = erlang:demonitor(Mon),
+                                       exit(normal)
+                               end,
+                               [link,
+                                monitor,
+                                {priority, high},
+                                {scheduler, Schdlr}]),
+    receive {Testee, ready} -> ok end,
+    {monitored_by, MBList1} = process_info(self(), monitored_by),
+    true = lists:member(Testee, MBList1),
+    erlang:yield(),
+    Testee ! {go, ok},
+    erlang:yield(),
+    NewX = case erlang:is_process_alive(Testee) of
+               true ->
+                   X;
+               false ->
+                   %% Demonitor signal should have reached us before the
+                   %% is-process-alive reply...
+                   {monitored_by, MBList2} = process_info(self(), monitored_by),
+                   false = lists:member(Testee, MBList2),
+                   X+1
+           end,
+    receive {'DOWN', TMon, process, Testee, normal} -> ok end,
+    is_process_alive_signal_from_test(N-1, NewX, Schdlr).
 
 process_info_blast(Config) when is_list(Config) ->
     Tester = self(),
@@ -1400,7 +1446,16 @@ external_fun_apply3(_Config) ->
     ok.
 
 %% helpers
-    
+
+busy_wait_go() ->
+    receive
+        {go, Info} ->
+            Info
+    after
+        0 ->
+            busy_wait_go()
+    end.
+
 id(I) -> I.
 
 %% Get code path, including the path for the erts application.
@@ -1431,14 +1486,6 @@ extract_abstract(Mod, Path) ->
 	beam_lib:chunks(Beam, [abstract_code]),
     {Mod,Abstr}.
 
-
-hostname() ->
-    hostname(atom_to_list(node())).
-
-hostname([$@ | Hostname]) ->
-    list_to_atom(Hostname);
-hostname([_C | Cs]) ->
-    hostname(Cs).
 
 tok_loop() ->
     tok_loop(hej).

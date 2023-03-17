@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2002-2022. All Rights Reserved.
+%% Copyright Ericsson AB 2002-2023. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -1255,7 +1255,7 @@ handle_cast({Pid, close}, State) ->
     error_logger:info_report(Report),
     {noreply, State};
 
-%% Catch all -  This can oly happen if the application programmer writes
+%% Catch all -  This can only happen if the application programmer writes
 %% really bad code that violates the API.
 handle_cast(Msg, State) ->
   {stop, {'API_violation_connection_closed', Msg}, State}.
@@ -1549,6 +1549,12 @@ start_link(Opts, GenServerOptions) ->
 %%% Help functions to handle_call and/or handle_ctrl_result
 %%--------------------------------------------------------------------------
 %% User handling
+-spec handle_user(User, Password, Account, State) -> Result when
+      User     :: io:format(),
+      Password :: io:format(),
+      Account  :: io:format(),
+      State    :: #state{},
+      Result   :: {noreply, #state{}}.
 handle_user(User, Password, Acc, State0) ->
     _ = send_ctrl_message(State0, mk_cmd("USER ~s", [User])),
     State = activate_ctrl_connection(State0),
@@ -1568,6 +1574,31 @@ handle_user_account(Acc, State0) ->
 %%--------------------------------------------------------------------------
 %% handle_ctrl_result
 %%--------------------------------------------------------------------------
+-type ctrl_status_operation() :: efnamena
+                               | elogin
+                               | enofile
+                               | epath
+                               | error
+                               | etnospc
+                               | epnospc
+                               | efnamena
+                               | econn
+                               | perm_neg_compl
+                               | pos_compl
+                               | pos_interm
+                               | pos_interm_acct
+                               | pos_prel
+                               | tls_upgrade
+                               | trans_neg_compl.
+
+-spec handle_ctrl_result(Operation, State) -> Result when
+      Operation :: {ctrl_status_operation(), list() | atom()},
+      State     :: #state{},
+      Result    :: {noreply, #state{}, integer()}
+                 | {noreply, #state{}}
+                 | {stop, normal | {error, Reason}, #state{}}
+                 | {error, term()},
+      Reason    :: term().
 handle_ctrl_result({pos_compl, _}, #state{csock = {tcp, _Socket},
                                           tls_options = TLSOptions,
                                           timeout = Timeout,
@@ -1753,75 +1784,26 @@ handle_ctrl_result({pos_prel, _}, #state{caller = {dir, Dir}} = State0) ->
             ctrl_result_response(error, State0, Error)
     end;
 
-handle_ctrl_result({pos_compl, _}, #state{caller = {handle_dir_result, Dir,
-                                                    Data}, client = From}
-                   = State) ->
-    case Dir of
-        "" -> % Current directory
-            gen_server:reply(From, {ok, Data}),
-            {noreply, State#state{client = undefined,
-                                  caller = undefined}};
-        _ ->
-            %% <WTF>
-            %% Dir cannot be assumed to be a dir. It is a string that
-            %% could be a dir, but could also be a file or even a string
-            %% containing wildcards (*).
-            %%
-            %% %% If there is only one line it might be a directory with one
-            %% %% file but it might be an error message that the directory
-            %% %% was not found. So in this case we have to endure a little
-            %% %% overhead to be able to give a good return value. Alas not
-            %% %% all ftp implementations behave the same and returning
-            %% %% an error string is allowed by the FTP RFC.
-            %% case lists:dropwhile(fun(?CR) -> false;(_) -> true end,
-            %%                          binary_to_list(Data)) of
-            %%         L when (L =:= [?CR, ?LF]) orelse (L =:= []) ->
-            %%             send_ctrl_message(State, mk_cmd("PWD", [])),
-            %%             activate_ctrl_connection(State),
-            %%             {noreply,
-            %%              State#state{caller = {handle_dir_data, Dir, Data}}};
-            %%         _ ->
-            %%             gen_server:reply(From, {ok, Data}),
-            %%             {noreply, State#state{client = undefined,
-            %%                                   caller = undefined}}
-            %% end
-            %% </WTF>
-            gen_server:reply(From, {ok, Data}),
-            {noreply, State#state{client = undefined,
-                                  caller = undefined}}
-    end;
+handle_ctrl_result({pos_compl, _}, #state{caller = {handle_dir_result, ""=_CurrentDir,
+                                                    Data}, client = From}= State) ->
+    gen_server:reply(From, {ok, Data}),
+    {noreply, State#state{client = undefined,
+                          caller = undefined}};
 
-handle_ctrl_result({pos_compl, Lines},
-                   #state{caller = {handle_dir_data, Dir, DirData}} =
-                   State0) ->
-    OldDir = pwd_result(Lines),
-    _ = send_ctrl_message(State0, mk_cmd("CWD ~s", [Dir])),
-    State = activate_ctrl_connection(State0),
-    {noreply, State#state{caller = {handle_dir_data_second_phase, OldDir,
-                                    DirData}}};
-handle_ctrl_result({Status, _},
-                   #state{caller = {handle_dir_data, _, _}} = State) ->
-    ctrl_result_response(Status, State, {error, epath});
+handle_ctrl_result({pos_compl, _}, #state{caller = {handle_dir_result, _Dir,
+                                                    Data}, client = From}= State) ->
+    gen_server:reply(From, {ok, Data}),
+    {noreply, State#state{client = undefined,
+                          caller = undefined}};
+
+handle_ctrl_result({pos_compl, _}=Operation, #state{caller = {handle_dir_result, Dir},
+                                                    data   = Data}= State) ->
+    handle_ctrl_result(Operation, State#state{caller = {handle_dir_result, Dir, Data}});
 
 handle_ctrl_result(S={_Status, _},
                    #state{caller = {handle_dir_result, _, _}} = State) ->
     %% OTP-5731, macosx
     ctrl_result_response(S, State, {error, epath});
-
-handle_ctrl_result({pos_compl, _},
-                   #state{caller = {handle_dir_data_second_phase, OldDir,
-                                    DirData}} = State0) ->
-    _ = send_ctrl_message(State0, mk_cmd("CWD ~s", [OldDir])),
-    State = activate_ctrl_connection(State0),
-    {noreply, State#state{caller = {handle_dir_data_third_phase, DirData}}};
-handle_ctrl_result({Status, _},
-                   #state{caller = {handle_dir_data_second_phase, _, _}}
-                   = State) ->
-    ctrl_result_response(Status, State, {error, epath});
-handle_ctrl_result(_, #state{caller = {handle_dir_data_third_phase, DirData},
-                             client = From} = State) ->
-    gen_server:reply(From, {ok, DirData}),
-    {noreply, State#state{client = undefined, caller = undefined}};
 
 handle_ctrl_result({Status, _}, #state{caller = cd} = State) ->
     ctrl_result_response(Status, State, {error, Status});
@@ -1959,6 +1941,13 @@ handle_ctrl_result(CtrlMsg, #state{caller = undefined} = State) ->
 %%--------------------------------------------------------------------------
 %% Help functions to handle_ctrl_result
 %%--------------------------------------------------------------------------
+
+-spec ctrl_result_response(Status, State, Error) -> Result when
+      Status :: ctrl_status_operation() | {ctrl_status_operation(), _},
+      State  :: #state{},
+      Error  :: {error, Reason},
+      Reason :: term(),
+      Result :: {noreply, #state{}} | Error.
 ctrl_result_response(pos_compl, #state{client = From} = State, _)  ->
     gen_server:reply(From, ok),
     {noreply, State#state{client = undefined, caller = undefined}};
@@ -1990,6 +1979,9 @@ ctrl_result_response(_, #state{client = From} = State, ErrorMsg) ->
     {noreply, State#state{client = undefined, caller = undefined}}.
 
 %%--------------------------------------------------------------------------
+-spec handle_caller(State) -> Result when
+      State  :: #state{},
+      Result :: {noreply, #state{}}.
 handle_caller(#state{caller = {dir, Dir, Len}} = State0) ->
     Cmd = case Len of
               short -> "NLST";
@@ -2043,6 +2035,13 @@ handle_caller(#state{caller = {transfer_data, {Cmd, Bin, RemoteFile}}} =
 
 %% Connect to FTP server at Host (default is TCP port 21)
 %% in order to establish a control connection.
+-spec setup_ctrl_connection(Host, Port, Timeout, State) -> Result when
+      Host    :: inet:socket_address() | inet:hostname(),
+      Port    :: inet:port_number(),
+      Timeout :: timeout(),
+      State   :: #state{},
+      Reason  :: timeout | inet:posix(),
+      Result  :: {ok, State, integer()} | {error, Reason}.
 setup_ctrl_connection(Host, Port, Timeout, #state{sockopts_ctrl = SockOpts} = State0) ->
     MsTime = erlang:monotonic_time(),
     case connect(Host, Port, SockOpts, Timeout, State0) of
@@ -2060,6 +2059,9 @@ setup_ctrl_connection(Host, Port, Timeout, #state{sockopts_ctrl = SockOpts} = St
             Error
     end.
 
+-spec setup_data_connection(State) -> Result when
+      State :: #state{},
+      Result :: {noreply, State}.
 setup_data_connection(#state{mode   = active,
                              caller = Caller,
                              csock  = CSock,
@@ -2122,6 +2124,14 @@ setup_data_connection(#state{mode = passive, ipfamily = inet,
     State = activate_ctrl_connection(State0),
     {noreply, State#state{caller = {setup_data_connection, Caller}}}.
 
+-spec connect(Host, Port, SockOpts, Timeout, State) -> Result when
+      Host     :: inet:socket_address() | inet:hostname(),
+      Port     :: inet:port_number(),
+      SockOpts :: [inet:inet_backend() | gen_tcp:connect_option()],
+      Timeout :: timeout(),
+      State   :: #state{},
+      Reason  :: timeout | inet:posix(),
+      Result  :: {ok, inet:address_family(), gen_tcp:socket()} | {error, Reason}.
 connect(Host, Port, SockOpts, Timeout, #state{ipfamily = inet = IpFam}) ->
     connect2(Host, Port, IpFam, SockOpts, Timeout);
 
@@ -2155,6 +2165,14 @@ connect(Host, Port, SockOpts, Timeout, #state{ipfamily = inet6fb4}) ->
             end
     end.
 
+-spec connect2(Host, Port, IpFam, SockOpts, Timeout) -> Result when
+      Host     :: inet:socket_address() | inet:hostname(),
+      Port     :: inet:port_number(),
+      SockOpts :: [inet:inet_backend() | gen_tcp:connect_option()],
+      Timeout  :: timeout(),
+      IpFam    :: inet:address_family(),
+      Reason   :: timeout | inet:posix(),
+      Result   :: {ok, inet:address_family(), gen_tcp:socket()} | {error, Reason}.
 connect2(Host, Port, IpFam, SockOpts, Timeout) ->
     Opts = [IpFam, binary, {packet, 0}, {active, false} | SockOpts],
     case gen_tcp:connect(Host, Port, Opts, Timeout) of
@@ -2164,6 +2182,9 @@ connect2(Host, Port, IpFam, SockOpts, Timeout) ->
             Error
     end.
 
+-spec accept_data_connection_tls_options(State) -> Result when
+      State  :: #state{},
+      Result :: [tuple()].
 accept_data_connection_tls_options(#state{ csock = {ssl,Socket}, tls_options = TO0, tls_ctrl_session_reuse = true }) ->
 	TO = lists:keydelete(reuse_sessions, 1, TO0),
 	{ok, [{session_id,SSLSessionId},{session_data,SSLSessionData}]} = ssl:connection_information(Socket, [session_id, session_data]),
@@ -2171,6 +2192,10 @@ accept_data_connection_tls_options(#state{ csock = {ssl,Socket}, tls_options = T
 accept_data_connection_tls_options(#state{ tls_options = TO }) ->
 	TO.
 
+-spec accept_data_connection(State) -> Result when
+      State  :: #state{},
+      Result :: {ok, #state{}} | {error, Reason},
+      Reason :: term().
 accept_data_connection(#state{mode     = active,
                               dtimeout = DTimeout,
                               tls_options = TLSOptions0,
@@ -2208,7 +2233,9 @@ accept_data_connection(#state{mode = passive,
 accept_data_connection(#state{mode = passive} = State) ->
     {ok,State}.
 
-
+-spec send_ctrl_message(State, Message) -> _ when
+      State   :: #state{},
+      Message :: [term() | Message].
 send_ctrl_message(_S=#state{csock = Socket, verbose = Verbose}, Message) ->
     verbose(lists:flatten(Message),Verbose,send),
     ?DBG('<--ctrl ~p ---- ~s~p~n',[Socket,Message,_S]),
@@ -2260,7 +2287,7 @@ activate_connection(API, CloseTag, Socket0) ->
     case API:setopts(Socket, [{active, once}]) of
         ok ->
             ok;
-        {error, _} -> %% inet can retrun einval instead of closed
+        {error, _} -> %% inet can return einval instead of closed
             self() ! {CloseTag, Socket}
     end.
 
@@ -2481,6 +2508,7 @@ start_options(Options) ->
 %%    progress
 %%          ftp_extension
 
+-spec open_options([tuple()]) -> {ok, [tuple()]} | no_return().
 open_options(Options) ->
     ValidateMode =
         fun(active) -> true;
@@ -2557,6 +2585,8 @@ open_options(Options) ->
          {ftp_extension, ValidateFtpExtension, false, ?FTP_EXT_DEFAULT}],
     validate_options(Options, ValidOptions, []).
 
+%% validates socket options and set defaults
+-spec socket_options([tuple()]) -> {ok, tuple()} | no_return().
 socket_options(Options) ->
     CtrlOpts = proplists:get_value(sock_ctrl, Options, []),
     DataActOpts = proplists:get_value(sock_data_act, Options, CtrlOpts),
@@ -2583,6 +2613,11 @@ valid_socket_option({packet_size,_} ) -> false;
 valid_socket_option(_) -> true.
 
 
+-spec validate_options(Options, ValidOptions, Acc) -> Result when
+      Options      :: [tuple()],
+      ValidOptions :: [tuple()],
+      Acc          :: [tuple()],
+      Result       :: {ok, [tuple()]} | no_return().
 validate_options([], [], Acc) ->
     {ok, lists:reverse(Acc)};
 validate_options([], ValidOptions, Acc) ->

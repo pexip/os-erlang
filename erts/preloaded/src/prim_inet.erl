@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %% 
-%% Copyright Ericsson AB 2000-2021. All Rights Reserved.
+%% Copyright Ericsson AB 2000-2022. All Rights Reserved.
 %% 
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -28,7 +28,7 @@
 
 -export([open/3, open/4, fdopen/4, fdopen/5, close/1]).
 -export([bind/3, listen/1, listen/2, peeloff/2]).
--export([connect/3, connect/4, async_connect/4]).
+-export([connect/3, connect/4, async_connect/4, connectx/2, connectx/3]).
 -export([accept/1, accept/2, accept/3, async_accept/2]).
 -export([shutdown/2]).
 -export([send/2, send/3, sendto/4, sendmsg/3, sendfile/4]).
@@ -332,7 +332,7 @@ bindx_check_addrs([Addr|Addrs]) ->
 bindx_check_addrs([]) ->
     true.
 
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+ %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %%
 %% CONNECT(insock(), IP, Port [,Timeout]) -> ok | {error, Reason}
 %%
@@ -407,6 +407,41 @@ async_connect0(S, Addr, Time) ->
     of
 	{ok, [R1,R0]} -> {ok, S, ?u16(R1,R0)};
 	{error, _}=Error -> Error
+    end.
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%
+%% CONNECTX(insock(), IPs, Port) -> {ok, AssocId} | {error, Reason}
+%% CONNECTX(insock(), SockAddrs) -> {ok, AssocId} | {error, Reason}
+%%
+%% For SCTP sockets only
+%%
+%% connect the insock() to the addresses given by IPs and Port or SockAddrs
+%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+connectx(S, IPs, Port) ->
+    connectx(S, {IPs, Port}).
+
+connectx(S, AddrList) ->
+    case type_value(set, addr_list, AddrList) of
+	true ->
+	    connectx0(S, AddrList);
+	false ->
+	    {error, einval}
+    end.
+
+
+connectx0(S, Addrs) ->
+    Args = [enc_time(-1),enc_value(set, addr_list, Addrs)],
+    case ctl_cmd(S, ?INET_REQ_CONNECT, Args) of
+	{ok, [R1,R0]} ->
+	    Ref = ?u16(R1,R0),
+	    receive
+		{inet_async, S, Ref, Status} ->
+		    Status
+	    end;
+	Error ->
+	    Error
     end.
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -1521,6 +1556,7 @@ enc_opt(show_econnreset) -> ?INET_LOPT_TCP_SHOW_ECONNRESET;
 enc_opt(line_delimiter)  -> ?INET_LOPT_LINE_DELIM;
 enc_opt(raw)             -> ?INET_OPT_RAW;
 enc_opt(bind_to_device)  -> ?INET_OPT_BIND_TO_DEVICE;
+enc_opt(debug)           -> ?INET_OPT_DEBUG;
 % Names of SCTP opts:
 enc_opt(sctp_rtoinfo)	 	   -> ?SCTP_OPT_RTOINFO;
 enc_opt(sctp_associnfo)	 	   -> ?SCTP_OPT_ASSOCINFO;
@@ -1588,6 +1624,7 @@ dec_opt(?INET_LOPT_TCP_SHOW_ECONNRESET) -> show_econnreset;
 dec_opt(?INET_LOPT_LINE_DELIM)      -> line_delimiter;
 dec_opt(?INET_OPT_RAW)              -> raw;
 dec_opt(?INET_OPT_BIND_TO_DEVICE) -> bind_to_device;
+dec_opt(?INET_OPT_DEBUG)          -> debug;
 dec_opt(I) when is_integer(I)     -> undefined.
 
 
@@ -1605,7 +1642,7 @@ dec_opt(I) when is_integer(I)     -> undefined.
 %% The use of [] and [[Type,Default]] is commented out in enc_value/2
 %% and type_value/2 below since they are only used in record fields.
 %% And record fields does not call enc_value/2 nor type_value/2.
-%% Anyone introducing these metatypes otherwhere will have to activate
+%% Anyone introducing these metatypes elsewhere will have to activate
 %% those clauses in enc_value/2 and type_value/2. You have been warned!
 
 type_opt(get, raw) -> [{[int],[int],[binary_or_uint]}];
@@ -1647,9 +1684,9 @@ type_opt_1(ipv6_v6only)     -> bool;
 %% multicast
 type_opt_1(multicast_ttl)   -> int;
 type_opt_1(multicast_loop)  -> bool;
-type_opt_1(multicast_if)    -> ip;
-type_opt_1(add_membership)  -> {ip,ip};
-type_opt_1(drop_membership) -> {ip,ip};
+type_opt_1(multicast_if)    -> mif;
+type_opt_1(add_membership)  -> membership;
+type_opt_1(drop_membership) -> membership;
 %% driver options
 type_opt_1(header)          -> uint;
 type_opt_1(buffer)          -> int;
@@ -1696,6 +1733,7 @@ type_opt_1(read_packets)    -> uint;
 type_opt_1(netns)           -> binary;
 type_opt_1(show_econnreset) -> bool;
 type_opt_1(bind_to_device)  -> binary;
+type_opt_1(debug)           -> bool;
 %% 
 %% SCTP options (to be set). If the type is a record type, the corresponding
 %% record signature is returned, otherwise, an "elementary" type tag 
@@ -1883,7 +1921,23 @@ type_value_2(uint16, X) when X band 16#ffff =:= X     -> true;
 type_value_2(uint8, X)  when X band 16#ff =:= X       -> true;
 type_value_2(time, infinity)                          -> true;
 type_value_2(time, X) when is_integer(X), X >= 0      -> true;
-type_value_2(ip,{A,B,C,D}) when ?ip(A,B,C,D)          -> true;
+%% type_value_2(ip,{A,B,C,D}) when ?ip(A,B,C,D)          -> true;
+type_value_2(mif,{A,B,C,D}) when ?ip(A,B,C,D)         -> true;
+type_value_2(mif,Idx) when is_integer(Idx)            -> true;
+type_value_2(membership,{{A1,B1,C1,D1}, {A2,B2,C2,D2}})
+  when ?ip(A1,B1,C1,D1) andalso ?ip(A2,B2,C2,D2)      -> true;
+type_value_2(membership,{{A1,B1,C1,D1}, any})
+  when ?ip(A1,B1,C1,D1)                               -> true;
+type_value_2(membership,{{A1,B1,C1,D1}, {A2,B2,C2,D2}, Idx})
+  when ?ip(A1,B1,C1,D1) andalso
+       ?ip(A2,B2,C2,D2) andalso
+       is_integer(Idx)                                -> true;
+type_value_2(membership,{{A1,B1,C1,D1}, any, Idx})
+  when ?ip(A1,B1,C1,D1) andalso
+       is_integer(Idx)                                -> true;
+type_value_2(membership,{{A,B,C,D,E,F,G,H}, Idx})
+  when ?ip6(A,B,C,D,E,F,G,H) andalso
+       is_integer(Idx)                                -> true;
 %%
 type_value_2(addr, {any,Port}) ->
     type_value_2(uint16, Port);
@@ -1907,15 +1961,19 @@ type_value_2(addr, {inet6,{{A,B,C,D,E,F,G,H},Port}})
   when ?ip6(A,B,C,D,E,F,G,H) ->
     type_value_2(uint16, Port);
 type_value_2(addr, #{family := inet,
-                     addr   := {A,B,C,D},
-                     port   := Port})
-  when ?ip(A,B,C,D) ->
-    type_value_2(uint16, Port);
+                     addr   := Addr,
+                     port   := Port}) ->
+    (Addr =:= any orelse
+     Addr =:= loopback orelse
+     ?ip(Addr))
+        andalso type_value_2(uint16, Port);
 type_value_2(addr, #{family := inet6,
-                     addr   := {A,B,C,D,E,F,G,H},
-                     port   := Port})
-  when ?ip6(A,B,C,D,E,F,G,H) ->
-    type_value_2(uint16, Port);
+                     addr   := Addr,
+                     port   := Port}) ->
+    (Addr =:= any orelse
+     Addr =:= loopback orelse
+     ?ip6(Addr))
+        andalso type_value_2(uint16, Port);
 type_value_2(addr, {local,Addr}) ->
     if
 	is_binary(Addr) ->
@@ -1936,6 +1994,16 @@ type_value_2(addr, {local,Addr}) ->
 		    false
 	    end
     end;
+type_value_2(addr_list, [_|_]=SockAddrs)
+  when length(SockAddrs) =< 255 ->
+    lists:all(fun(SockAddr) -> type_value_2(addr, SockAddr) end, SockAddrs);
+type_value_2(addr_list, {[_|_] = IPs, Port})
+  when length(IPs) =< 255 ->
+    lists:all(fun({A,B,C,D})         when ?ip(A,B,C,D)          -> true;
+                 ({A,B,C,D,E,F,G,H}) when ?ip6(A,B,C,D,E,F,G,H) -> true;
+                 (_) -> false
+              end, IPs)
+	andalso type_value_2(uint16, Port);
 %%
 type_value_2(ether,[X1,X2,X3,X4,X5,X6])
   when ?ether(X1,X2,X3,X4,X5,X6)                    -> true;
@@ -2029,21 +2097,58 @@ enc_value_tuple(_, _, _, _) -> [].
 %%
 %% Encoding of option VALUES:
 %%
-enc_value_2(bool, true)     -> [0,0,0,1];
-enc_value_2(bool, false)    -> [0,0,0,0];
-enc_value_2(bool8, true)    -> [1];
-enc_value_2(bool8, false)   -> [0];
-enc_value_2(int, Val)       -> ?int32(Val);
-enc_value_2(uint, Val)      -> ?int32(Val);
-enc_value_2(uint32, Val)    -> ?int32(Val);
-enc_value_2(uint24, Val)    -> ?int24(Val);
-enc_value_2(uint16, Val)    -> ?int16(Val);
-enc_value_2(uint8, Val)     -> ?int8(Val);
-enc_value_2(time, infinity) -> ?int32(-1);
-enc_value_2(time, Val)      -> ?int32(Val);
-enc_value_2(ip,{A,B,C,D})   -> [A,B,C,D];
-enc_value_2(ip, any)        -> [0,0,0,0];
-enc_value_2(ip, loopback)   -> [127,0,0,1];
+enc_value_2(bool, true)      -> [0,0,0,1];
+enc_value_2(bool, false)     -> [0,0,0,0];
+enc_value_2(bool8, true)     -> [1];
+enc_value_2(bool8, false)    -> [0];
+enc_value_2(int, Val)        -> ?int32(Val);
+enc_value_2(uint, Val)       -> ?int32(Val);
+enc_value_2(uint32, Val)     -> ?int32(Val);
+enc_value_2(uint24, Val)     -> ?int24(Val);
+enc_value_2(uint16, Val)     -> ?int16(Val);
+enc_value_2(uint8, Val)      -> ?int8(Val);
+enc_value_2(time, infinity)  -> ?int32(-1);
+enc_value_2(time, Val)       -> ?int32(Val);
+%% enc_value_2(ip, IP)
+%%   when (tuple_size(IP) =:= 4) -> ip4_to_bytes(IP);
+%% enc_value_2(ip, any)          -> ip4_any();
+%% enc_value_2(ip, loopback)     -> ip4_loopback();
+enc_value_2(mif, IP)
+  when (tuple_size(IP) =:= 4) -> ip4_to_bytes(IP);
+enc_value_2(mif, Idx)
+  when is_integer(Idx)        -> ?int32(Idx);
+enc_value_2(membership, {IP1, IP2})
+  when (tuple_size(IP1) =:= 4) andalso
+       (tuple_size(IP2) =:= 4) ->
+    enc_value_2(membership, {IP1, IP2, 0});
+enc_value_2(membership, {IP1, IP2})
+  when (tuple_size(IP1) =:= 4) andalso
+       (IP2 =:= any) ->
+    enc_value_2(membership, {IP1, IP2, 0});
+%% enc_value_2(membership, {IP1, any = _IP2})
+%%   when (tuple_size(IP1) =:= 4) ->
+%%     [?INET_AF_INET, ?int32(0), ip4_to_bytes(IP1), ip4_any()];
+enc_value_2(membership, {IP1, IP2, Idx})
+  when (tuple_size(IP1) =:= 4) andalso
+       (tuple_size(IP2) =:= 4) andalso
+       is_integer(Idx) ->
+    %% The reason for turning this thing around (the interface
+    %% before the two address'es) so that we as much as possible
+    %% "look like" IPv6...se below
+    [?int32(?INET_AF_INET), ?int32(Idx), ip4_to_bytes(IP1), ip4_to_bytes(IP2)];
+enc_value_2(membership, {IP1, any = _IP2, Idx})
+  when (tuple_size(IP1) =:= 4) andalso
+       is_integer(Idx) ->
+    [?int32(?INET_AF_INET), ?int32(Idx), ip4_to_bytes(IP1), ip4_any()];
+enc_value_2(membership, {IP, Idx})
+  when (tuple_size(IP) =:= 8) andalso
+       is_integer(Idx) ->
+    %% The reason for turning this thing around (the interface
+    %% before the address) is because of the inet-driver (it reads out a
+    %% 32-bit value for *all* options, so we might as well put a 32-bit
+    %% value "first".
+    [?int32(?INET_AF_INET6), ?int32(Idx), ip6_to_bytes(IP)];
+
 %%
 enc_value_2(addr, {any,Port}) ->
     [?INET_AF_ANY|?int16(Port)];
@@ -2055,27 +2160,19 @@ enc_value_2(addr, {IP,Port}) when tuple_size(IP) =:= 8 ->
     [?INET_AF_INET6,?int16(Port),ip6_to_bytes(IP),?int32(0),?int32(0)];
 enc_value_2(addr, #{family   := inet,
                     addr     := IP,
-                    port     := Port}) when (tuple_size(IP) =:= 4) ->
+                    port     := Port}) ->
     [?INET_AF_INET,?int16(Port)|ip4_to_bytes(IP)];
 enc_value_2(addr, #{family   := inet6,
                     addr     := IP,
                     port     := Port,
                     flowinfo := FlowInfo,
-                    scope_id := ScopeID}) when (tuple_size(IP) =:= 8) ->
+                    scope_id := ScopeID}) ->
     [?INET_AF_INET6,?int16(Port),ip6_to_bytes(IP),?int32(FlowInfo),?int32(ScopeID)];
 enc_value_2(addr, {File,_}) when is_list(File); is_binary(File) ->
     [?INET_AF_LOCAL,iolist_size(File)|File];
 %%
-enc_value_2(addr, {inet,{any,Port}}) ->
-    [?INET_AF_INET,?int16(Port)|ip4_to_bytes({0,0,0,0})];
-enc_value_2(addr, {inet,{loopback,Port}}) ->
-    [?INET_AF_INET,?int16(Port)|ip4_to_bytes({127,0,0,1})];
 enc_value_2(addr, {inet,{IP,Port}}) ->
     [?INET_AF_INET,?int16(Port)|ip4_to_bytes(IP)];
-enc_value_2(addr, {inet6,{any,Port}}) ->
-    [?INET_AF_INET6,?int16(Port),ip6_to_bytes({0,0,0,0,0,0,0,0}),?int32(0),?int32(0)];
-enc_value_2(addr, {inet6,{loopback,Port}}) ->
-    [?INET_AF_INET6,?int16(Port),ip6_to_bytes({0,0,0,0,0,0,0,1}),?int32(0),?int32(0)];
 enc_value_2(addr, {inet6,{IP,Port}}) ->
     [?INET_AF_INET6,?int16(Port),ip6_to_bytes(IP),?int32(0),?int32(0)];
 enc_value_2(addr, {local,Addr}) ->
@@ -2091,6 +2188,12 @@ enc_value_2(addr, {local,Addr}) ->
 		  Addr, file:native_name_encoding())
 	end,
     [?INET_AF_LOCAL,byte_size(Bin),Bin];
+enc_value_2(addr_list, {IPs, Port}) ->
+    [?INET_AF_LIST, length(IPs) |
+     [enc_value_2(addr, {IP, Port}) || IP <- IPs]];
+enc_value_2(addr_list, SockAddrs) ->
+    [?INET_AF_LIST, length(SockAddrs) |
+     [enc_value_2(addr, SockAddr) || SockAddr <- SockAddrs]];
 %%
 enc_value_2(ether, [_,_,_,_,_,_]=Xs) -> Xs;
 enc_value_2(sockaddr, any) ->
@@ -2125,7 +2228,7 @@ enc_value_2(binary_or_uint,Datum) when is_integer(Datum) ->
 
 
 %%
-%% Decoding of option VALUES receved from "getopt":
+%% Decoding of option VALUES received from "getopt":
 %% NOT required for SCTP, as it always returns ready terms, not lists:
 %%
 dec_value(bool, [0,0,0,0|T])       -> {false,T};
@@ -2145,7 +2248,15 @@ dec_value(time, [X3,X2,X1,X0|T]) ->
 	-1 -> {infinity, T};
 	Val -> {Val, T}
     end;
-dec_value(ip, [A,B,C,D|T])             -> {{A,B,C,D}, T};
+%% dec_value(ip,  [A,B,C,D|T])             -> {{A,B,C,D}, T};
+dec_value(mif, [A,B,C,D, X3,X2,X1,X0|T]) ->
+    Domain = ?i32(X3, X2, X1, X0),
+    case Domain of
+        ?INET_AF_INET ->
+            {{A,B,C,D}, T};
+        ?INET_AF_INET6 ->
+            {?i32(A,B,C,D), T}
+    end;
 %% dec_value(ether, [X1,X2,X3,X4,X5,X6|T]) -> {[X1,X2,X3,X4,X5,X6],T};
 dec_value(sockaddr, [X|T]) ->
     get_ip(X, T);
@@ -2451,7 +2562,8 @@ decode_ifopts([B | Buf], Acc) ->
 	undefined -> 
 	    {error, einval};
 	Opt ->
-	    {Val,T} = dec_value(type_ifopt(Opt), Buf),
+            OptType = type_ifopt(Opt),
+	    {Val,T} = dec_value(OptType, Buf),
 	    decode_ifopts(T, [{Opt,Val} | Acc])
     end;
 decode_ifopts(_,Acc) -> {ok,Acc}.
@@ -2518,7 +2630,7 @@ dec_subs([]) -> [].
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %%
-%% handle statictics options
+%% handle statistics options
 %%
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
@@ -2731,12 +2843,37 @@ utf8_to_characters(Bs, U, 0) ->
 utf8_to_characters([B|Bs], U, N) when ((B band 16#3F) bor 16#80) =:= B ->
     utf8_to_characters(Bs, (U bsl 6) bor (B band 16#3F), N-1).
 
+ip4_to_bytes(any) ->
+    ip4_any();
+ip4_to_bytes(loopback) ->
+    ip4_loopback();
 ip4_to_bytes({A,B,C,D}) ->
     [A band 16#ff, B band 16#ff, C band 16#ff, D band 16#ff].
 
+ip4_any() -> [0,0,0,0].
+ip4_loopback() -> [127,0,0,1].
+    
+
+ip6_to_bytes(any) ->
+    ip6_any();
+ip6_to_bytes(loopback) ->
+    ip6_loopback();
 ip6_to_bytes({A,B,C,D,E,F,G,H}) ->
     [?int16(A), ?int16(B), ?int16(C), ?int16(D),
      ?int16(E), ?int16(F), ?int16(G), ?int16(H)].
+
+ip6_any() ->
+    Z1 = ?int16(0),
+    Z2 = [Z1, Z1],
+    Z3 = [Z2, Z2],
+    [Z3, Z3].
+
+ip6_loopback() ->
+    Z1 = ?int16(0),
+    Z2 = [Z1, Z1],
+    Z3 = [Z2, Z2],
+    [Z3, Z2, Z1, ?int16(1)].
+
 
 get_addrs([]) ->
     [];

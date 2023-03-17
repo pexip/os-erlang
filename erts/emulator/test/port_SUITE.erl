@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 1997-2021. All Rights Reserved.
+%% Copyright Ericsson AB 1997-2022. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -226,8 +226,8 @@ init_per_testcase(Case, Config) when Case =:= mon_port_driver_die;
 init_per_testcase(Case, Config) ->
     [{testcase, Case} |Config].
 
-end_per_testcase(_Case, _Config) ->
-    ok.
+end_per_testcase(_Case, Config) ->
+    erts_test_utils:ept_check_leaked_nodes(Config).
 
 init_per_suite(Config) when is_list(Config) ->
     ignore_cores:init(Config).
@@ -250,15 +250,9 @@ win_massive(Config) when is_list(Config) ->
 
 do_win_massive() ->
     ct:timetrap({minutes, 6}),
-    SuiteDir = filename:dirname(code:which(?MODULE)),
-    Ports = " +Q 8192",
-    {ok, Node} =
-    test_server:start_node(win_massive,
-                           slave,
-                           [{args, " -pa " ++ SuiteDir ++ Ports}]),
+    {ok, Peer, Node} = ?CT_PEER(["+Q", "8192"]),
     ok = rpc:call(Node,?MODULE,win_massive_client,[3000]),
-    test_server:stop_node(Node),
-    ok.
+    peer:stop(Peer).
 
 win_massive_client(N) ->
     {ok,P}=gen_tcp:listen(?WIN_MASSIVE_PORT,[{reuseaddr,true}]),
@@ -766,13 +760,11 @@ iter_max_ports_test(Config) ->
                 _ -> 10
             end,
     %% Run on a different node in order to limit the effect if this test fails.
-    Dir = filename:dirname(code:which(?MODULE)),
-    {ok,Node} = test_server:start_node(test_iter_max_socks,slave,
-                                       [{args,"+Q 2048 -pa " ++ Dir}]),
+    {ok, Peer, Node} = ?CT_PEER(["+Q", "2048"]),
     L = rpc:call(Node,?MODULE,do_iter_max_ports,[Iters, Command]),
-    test_server:stop_node(Node),
+    peer:stop(Peer),
 
-    io:format("Result: ~p",[L]),
+    ct:log("Result: ~p",[L]),
     all_equal(L),
     all_equal(L),
     {comment, "Max ports: " ++ integer_to_list(hd(L))}.
@@ -809,7 +801,7 @@ open_ports(Name, Settings) ->
     case os:type() of
         {unix, freebsd} ->
             %% FreeBsd has issues with sendmsg/recvmsg in fork
-            %% implementation and we therefor have to spawn
+            %% implementation and we therefore have to spawn
             %% slower to make sure that we always hit the same
             %% make roof.
             test_server:sleep(10);
@@ -1307,18 +1299,12 @@ otp_3906(Config)  when is_list(Config) ->
 
 otp_3906(Config, OSName) ->
     DataDir = filename:dirname(proplists:get_value(data_dir,Config)),
-    {ok, Variables} = file:consult(
-                        filename:join([DataDir,"..","..",
-                                       "test_server","variables"])),
+    {ok, Variables, _} = file:path_consult(code:get_path(),"variables"),
     case lists:keysearch('CC', 1, Variables) of
         {value,{'CC', CC}} ->
-            SuiteDir = filename:dirname(code:which(?MODULE)),
             PrivDir = proplists:get_value(priv_dir, Config),
             Prog = otp_3906_make_prog(CC, PrivDir),
-            {ok, Node} = test_server:start_node(otp_3906,
-                                                slave,
-                                                [{args, " -pa " ++ SuiteDir},
-                                                 {linked, false}]),
+            {ok, Peer, Node} = ?CT_PEER(),
             OP = process_flag(priority, max),
             OTE = process_flag(trap_exit, true),
             FS = spawn_link(Node,
@@ -1330,11 +1316,11 @@ otp_3906(Config, OSName) ->
                              {failed, Reason};
                          {emulator_pid, EmPid} ->
                              case otp_3906_wait_result(FS, 0, 0) of
-                                 {succeded,
+                                 {succeeded,
                                   ?OTP_3906_CHILDREN,
                                   ?OTP_3906_CHILDREN} ->
-                                     succeded;
-                                 {succeded, Forked, Exited} ->
+                                     succeeded;
+                                 {succeeded, Forked, Exited} ->
                                      otp_3906_list_defunct(EmPid, OSName),
                                      {failed,
                                       {mismatch,
@@ -1347,9 +1333,9 @@ otp_3906(Config, OSName) ->
                      end,
             process_flag(trap_exit, OTE),
             process_flag(priority, OP),
-            test_server:stop_node(Node),
+            peer:stop(Peer),
             case Result of
-                succeded ->
+                succeeded ->
                     ok;
                 _ ->
                     ct:fail(Result)
@@ -1413,8 +1399,8 @@ otp_3906_wait_result(ForkerStarter, F, E) ->
             otp_3906_wait_result(ForkerStarter, F, E+1);
         tick ->
             otp_3906_wait_result(ForkerStarter, F, E);
-        succeded ->
-            {succeded, F, E}
+        succeeded ->
+            {succeeded, F, E}
     after
         ?OTP_3906_TICK_TIMEOUT ->
             unlink(ForkerStarter),
@@ -1451,7 +1437,7 @@ otp_3906_start_forker_starter(N, RefList, Sup, Prog) ->
 otp_3906_forker_starter(0, RefList, Sup, _) ->
     otp_3906_collect(RefList, Sup),
     unlink(Sup),
-    Sup ! succeded;
+    Sup ! succeeded;
 otp_3906_forker_starter(N, RefList, Sup, Prog)
   when length(RefList) >= ?OTP_3906_MAX_CONC_OSP ->
     otp_3906_forker_starter(N, otp_3906_collect_one(RefList, Sup), Sup, Prog);
@@ -1773,7 +1759,7 @@ test_bat_file(Dir) ->
     [DN,"hello","world"] =
     run_echo_args(Dir,FN,
                   [default,"hello","world"]),
-    %% The arg0 argumant should be ignored when running batch files
+    %% The arg0 argument should be ignored when running batch files
     [DN,"hello","world"] =
     run_echo_args(Dir,FN,
                   ["knaskurt","hello","world"]),
@@ -1929,6 +1915,7 @@ otp_5112(Config) when is_list(Config) ->
     true = lists:member(Port, Links1),
     Port ! {self(), {command, ""}},
     wait_until(fun () -> lists:member(Port, erlang:ports()) == false end),
+    receive after 1000 -> ok end, %% Give signal some time to propagate...
     {links, Links2} = process_info(self(),links),
     io:format("Links2: ~p~n",[Links2]),
     false = lists:member(Port, Links2), %% This used to fail
@@ -2256,7 +2243,7 @@ port_expect(Config, Actions, HSize, CmdLine, Options0) ->
         _ -> {packet, HSize}
     end,
     Options = [PortType|Options0],
-    io:format("open_port({spawn, ~p}, ~p)", [Cmd, Options]),
+    ct:log("open_port({spawn, ~p}, ~p)", [Cmd, Options]),
     Port = open_port({spawn, Cmd}, Options),
     port_expect(Port, Actions, Options),
     Port.

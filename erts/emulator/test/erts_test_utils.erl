@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %% 
-%% Copyright Ericsson AB 2002-2020. All Rights Reserved.
+%% Copyright Ericsson AB 2002-2022. All Rights Reserved.
 %% 
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -19,7 +19,7 @@
 %%
 
 -module(erts_test_utils).
--compile(r20).
+-compile(r22).
 
 %%
 %% THIS MODULE IS ALSO USED BY *OTHER* APPLICATIONS TEST CODE
@@ -29,7 +29,8 @@
          mk_ext_port/2,
          mk_ext_ref/2,
          available_internal_state/1,
-         check_node_dist/0, check_node_dist/1, check_node_dist/3]).
+         check_node_dist/0, check_node_dist/1, check_node_dist/3,
+         ept_check_leaked_nodes/1]).
 
 
 
@@ -292,3 +293,21 @@ check_refc(ThisNodeName,ThisCreation,Table,EntryList) when is_list(EntryList) ->
       end,
       EntryList),
     ok.
+
+%% To be called by end_per_testcase
+%% to check and kill leaked node connections.
+ept_check_leaked_nodes(Config) ->
+    case nodes(connected) of
+        [] -> ok;
+        Nodes ->
+            [net_kernel:disconnect(N) || N <- Nodes],
+            Leaked =  {"Leaked connections", Nodes},
+            Fail = case proplists:get_value(tc_status, Config) of
+                       ok -> Leaked;
+                       {failed, Reason} ->
+                           [Reason, {end_per_testcase, Leaked}];
+                       {skipped, _}=Skipped ->
+                           [Skipped, {end_per_testcase, Leaked}]
+                   end,
+            {fail, Fail}
+    end.

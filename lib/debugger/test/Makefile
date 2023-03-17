@@ -1,7 +1,7 @@
 #
 # %CopyrightBegin%
 #
-# Copyright Ericsson AB 1998-2021. All Rights Reserved.
+# Copyright Ericsson AB 1998-2022. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -71,6 +71,7 @@ RELSYSDIR = $(RELEASE_PATH)/debugger_test
 
 ERL_MAKE_FLAGS +=
 ERL_COMPILE_FLAGS +=
+ERL_COMPILE_FLAGS := $(filter-out +deterministic,$(ERL_COMPILE_FLAGS))
 
 EBIN = .
 
@@ -84,7 +85,7 @@ make_emakefile:
 	$(ERL_TOP)/make/make_emakefile $(ERL_COMPILE_FLAGS) -o$(EBIN) '*_SUITE_make' \
 	>> $(EMAKEFILE)
 
-tests debug opt: make_emakefile
+tests $(TYPES): make_emakefile
 	erl $(ERL_MAKE_FLAGS) -make
 
 clean:

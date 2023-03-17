@@ -34,7 +34,8 @@
          keep_set_options/2,
          no_sensitive/2,
          initial_default_algorithms/2,
-         check_preferred_algorithms/1
+         check_preferred_algorithms/1,
+         merge_options/3
         ]).
 
 -export_type([private_options/0
@@ -153,6 +154,14 @@ delete_key(internal_options, Key, Opts, _CallerMod, _CallerLine) when is_map(Opt
 
 %%%================================================================
 %%%
+%%% Replace 0 or more options in an options map
+%%%
+merge_options(Role, NewPropList, Opts0) when is_list(NewPropList),
+                                             is_map(Opts0) ->
+    check_and_save(NewPropList, default(Role), Opts0).
+
+%%%================================================================
+%%%
 %%% Initialize the options
 %%%
 
@@ -219,10 +228,8 @@ handle_options(Role, OptsList0, Opts0) when is_map(Opts0),
 
         %% Enter the user's values into the map; unknown keys are
         %% treated as socket options
-        final_preferred_algorithms(
-          lists:foldl(fun(KV, Vals) ->
-                              save(KV, OptionDefinitions, Vals)
-                      end, InitialMap, OptsList2))
+        check_and_save(OptsList2, OptionDefinitions, InitialMap)
+
     catch
         error:{EO, KV, Reason} when EO == eoptions ; EO == eerl_env ->
             if
@@ -234,6 +241,13 @@ handle_options(Role, OptsList0, Opts0) when is_map(Opts0),
                     {error, {EO,{KV,Reason}}}
             end
     end.
+
+check_and_save(OptsList, OptionDefinitions, InitialMap) ->
+    final_preferred_algorithms(
+      lists:foldl(fun(KV, Vals) ->
+                          save(KV, OptionDefinitions, Vals)
+                  end, InitialMap, OptsList)).
+    
 
 cnf_key(server) -> server_options;
 cnf_key(client) -> client_options.
@@ -295,7 +309,7 @@ save({Inet,false}, _Defs, OptMap) when Inet==inet ; Inet==inet6 -> OptMap;
 save({special_trpt_args,T}, _Defs, OptMap) when is_map(OptMap) ->
     OptMap#{socket_options := [T | maps:get(socket_options,OptMap)]};
 
-%% and finaly the 'real stuff':
+%% and finally the 'real stuff':
 save({Key,Value}, Defs, OptMap) when is_map(OptMap) ->
     try (check_fun(Key,Defs))(Value)
     of
@@ -477,6 +491,12 @@ default(server) ->
             class => user_option
            },
 
+      no_auth_needed =>
+          #{default => false,
+            chk => fun(V) -> erlang:is_boolean(V) end,
+            class => user_option
+           },
+
       pk_check_user =>
           #{default => false,
             chk => fun(V) -> erlang:is_boolean(V) end,
@@ -510,6 +530,12 @@ default(server) ->
       pwdfun =>
           #{default => undefined,
             chk => fun(V) -> check_function4(V) orelse check_function2(V) end,
+            class => user_option
+           },
+
+      max_initial_idle_time =>
+          #{default => infinity, %% To not break compatibility
+            chk => fun(V) -> check_timeout(V) end,
             class => user_option
            },
 
@@ -1078,11 +1104,11 @@ normalize_mod_algs([K|Ks], KVs0, Acc, UseDefaultAlgs) ->
     normalize_mod_algs(Ks, KVs, [{K,Vs} | Acc], UseDefaultAlgs);
 normalize_mod_algs([], [], Acc, _) ->
     %% No values left in the key-value list after removing the expected entries
-    %% (thats good)
+    %% (that's good)
     lists:reverse(Acc);
 normalize_mod_algs([], [{K,_}|_], _, _) ->
     %% Some values left in the key-value list after removing the expected entries
-    %% (thats bad)
+    %% (that's bad)
     case ssh_transport:algo_class(K) of
         true -> error_in_check(K, "Duplicate key");
         false -> error_in_check(K, "Unknown key")

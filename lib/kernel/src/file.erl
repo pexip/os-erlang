@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 1996-2021. All Rights Reserved.
+%% Copyright Ericsson AB 1996-2022. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -95,7 +95,7 @@
                       Size :: non_neg_integer(),
                       Delay :: non_neg_integer()}
 		   | 'delayed_write' | {'read_ahead', Size :: pos_integer()}
-		   | 'read_ahead' | 'compressed'
+		   | 'read_ahead' | 'compressed' | 'compressed_one'
 		   | {'encoding', unicode:encoding()}
 		   | sync.
 -type deep_list() :: [char() | atom() | deep_list()].

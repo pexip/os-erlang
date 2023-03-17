@@ -26,6 +26,7 @@
 -module(ssl).
 
 -include_lib("public_key/include/public_key.hrl").
+-include_lib("kernel/include/logger.hrl").
 
 -include("ssl_internal.hrl").
 -include("ssl_api.hrl").
@@ -310,7 +311,8 @@
                                 {certfile, cert_pem()} |
                                 {key, key()} |
                                 {keyfile, key_pem()} |
-                                {password, key_password()} |
+                                {password, key_pem_password()} |
+                                {certs_keys, certs_keys()} |
                                 {ciphers, cipher_suites()} |
                                 {eccs, [named_curve()]} |
                                 {signature_algs, signature_algs()} |
@@ -333,7 +335,9 @@
                                 {beast_mitigation, beast_mitigation()} |
                                 {ssl_imp, ssl_imp()} |
                                 {session_tickets, session_tickets()} |
-                                {key_update_at, key_update_at()}.
+                                {key_update_at, key_update_at()} |
+                                {receiver_spawn_opts, spawn_opts()} |
+                                {sender_spawn_opts, spawn_opts()}.
 
 -type protocol()                  :: tls | dtls.
 -type handshake_completion()      :: hello | full.
@@ -346,8 +350,14 @@
                                        key_id := crypto:key_id(), 
                                        password => crypto:password()}. % exported
 -type key_pem()                   :: file:filename().
--type key_password()              :: string() | fun(() -> string()).
--type cipher_suites()             :: ciphers().    
+-type key_pem_password()          :: iodata() | fun(() -> iodata()).
+-type certs_keys()                :: [cert_key_conf()].
+-type cert_key_conf()             :: #{cert => cert(),
+                                       key => key(),
+                                       certfile => cert_pem(),
+                                       keyfile => key_pem(),
+                                       password => key_pem_password()}.
+-type cipher_suites()             :: ciphers().
 -type ciphers()                   :: [erl_cipher_suite()] |
                                      string(). % (according to old API) exported
 -type cipher_filters()            :: list({key_exchange | cipher | mac | prf,
@@ -390,6 +400,7 @@
 -type middlebox_comp_mode()      :: boolean().
 -type client_early_data()        :: binary().
 -type server_early_data()        :: disabled | enabled.
+-type spawn_opts()               :: [erlang:spawn_opt_option()].
 
 %% -------------------------------------------------------------------------------------------------------
 
@@ -407,7 +418,7 @@
                                 {customize_hostname_check, customize_hostname_check()} |
                                 {fallback, fallback()} |
                                 {middlebox_comp_mode, middlebox_comp_mode()} |
-                                {certificate_authorities, certificate_authorities()} |
+                                {certificate_authorities, client_certificate_authorities()} |
                                 {session_tickets, client_session_tickets()} |
                                 {use_ticket, use_ticket()} |
                                 {early_data, client_early_data()}.
@@ -418,8 +429,8 @@
 -type client_verify_type()       :: verify_type().
 -type client_reuse_session()     :: session_id() | {session_id(), SessionData::binary()}.
 -type client_reuse_sessions()    :: boolean() | save.
--type certificate_authorities()  :: boolean().
--type client_cacerts()           :: [public_key:der_encoded()].
+-type client_certificate_authorities()  :: boolean().
+-type client_cacerts()           :: [public_key:der_encoded()] | [public_key:combined_cert()].
 -type client_cafile()            :: file:filename().
 -type app_level_protocol()       :: binary().
 -type client_alpn()              :: [app_level_protocol()].
@@ -447,6 +458,7 @@
                                 {dhfile, dh_file()} |
                                 {verify, server_verify_type()} |
                                 {fail_if_no_peer_cert, fail_if_no_peer_cert()} |
+                                {certificate_authorities, server_certificate_authorities()} |
                                 {reuse_sessions, server_reuse_sessions()} |
                                 {reuse_session, server_reuse_session()} |
                                 {alpn_preferred_protocols, server_alpn()} |
@@ -462,7 +474,7 @@
                                 {cookie, cookie()} |
                                 {early_data, server_early_data()}.
 
--type server_cacerts()           :: [public_key:der_encoded()].
+-type server_cacerts()           :: [public_key:der_encoded()] | [public_key:combined_cert()].
 -type server_cafile()            :: file:filename().
 -type server_alpn()              :: [app_level_protocol()].
 -type server_next_protocol()     :: [app_level_protocol()].
@@ -479,6 +491,7 @@
 -type honor_ecc_order()          :: boolean().
 -type client_renegotiation()     :: boolean().
 -type cookie()                   :: boolean().
+-type server_certificate_authorities() :: boolean().
 %% -------------------------------------------------------------------------------------------------------
 -type prf_random() :: client_random | server_random. % exported
 -type protocol_extensions()  :: #{renegotiation_info => binary(),
@@ -1673,11 +1686,11 @@ handle_option(fallback = Option, Value0, OptionsMap, #{role := Role}) ->
     assert_role(client_only, Role, Option, Value0),
     Value = validate_option(Option, Value0),
     OptionsMap#{Option => Value};
-handle_option(certificate_authorities = Option, unbound, OptionsMap, #{role := Role}) ->
-    Value = default_option_role(client, false, Role),
-    OptionsMap#{Option => Value};
-handle_option(certificate_authorities = Option, Value0, #{versions := Versions} = OptionsMap, #{role := Role}) ->
-    assert_role(client_only, Role, Option, Value0),
+handle_option(certificate_authorities = Option, unbound, OptionsMap, #{role := server}) ->
+    OptionsMap#{Option => true};
+handle_option(certificate_authorities = Option, unbound, OptionsMap, #{role := client}) ->
+    OptionsMap#{Option => false};
+handle_option(certificate_authorities = Option, Value0, #{versions := Versions} = OptionsMap, _Env) ->
     assert_option_dependency(Option, versions, Versions, ['tlsv1.3']),
     Value = validate_option(Option, Value0),
     OptionsMap#{Option => Value};
@@ -1713,6 +1726,13 @@ handle_option(key_update_at = Option, Value0, #{versions := Versions} = OptionsM
     assert_option_dependency(Option, versions, Versions, ['tlsv1.3']),
     Value = validate_option(Option, Value0),
     OptionsMap#{Option => Value};
+handle_option(log_level = Option, unbound, OptionsMap, _Env) ->
+    DefaultLevel = case logger:get_module_level(?MODULE) of
+                       [] -> notice;
+                       [{ssl,Level}] -> Level
+                   end,
+    Value = validate_option(Option, DefaultLevel),
+    OptionsMap#{Option => Value};
 handle_option(next_protocols_advertised = Option, unbound, OptionsMap,
               #{rules := Rules}) ->
     Value = validate_option(Option, default_value(Option, Rules)),
@@ -1746,6 +1766,11 @@ handle_option(password = Option, unbound, OptionsMap, #{rules := Rules}) ->
 handle_option(password = Option, Value0, OptionsMap, _Env) ->
     Value = validate_option(Option, Value0),
     OptionsMap#{password => Value};
+handle_option(certs_keys, unbound, OptionsMap, _Env) ->
+    OptionsMap;
+handle_option(certs_keys = Option, Value0, OptionsMap, _Env) ->
+    Value = validate_option(Option, Value0),
+    OptionsMap#{certs_keys => Value};
 handle_option(psk_identity = Option, unbound, OptionsMap, #{rules := Rules}) ->
     Value = validate_option(Option, default_value(Option, Rules)),
     OptionsMap#{Option => Value};
@@ -2293,10 +2318,12 @@ validate_option(partial_chain, Value, _)
   when is_function(Value) ->
     Value;
 validate_option(password, Value, _)
-  when is_list(Value) ->
+  when is_list(Value); is_binary(Value) ->
     Value;
 validate_option(password, Value, _)
   when is_function(Value, 0) ->
+    Value;
+validate_option(certs_keys, Value, _) when is_list(Value) ->
     Value;
 validate_option(protocol, Value = tls, _) ->
     Value;
@@ -2307,6 +2334,9 @@ validate_option(psk_identity, undefined, _) ->
 validate_option(psk_identity, Identity, _)
   when is_list(Identity), Identity =/= "", length(Identity) =< 65535 ->
     binary_filename(Identity);
+validate_option(receiver_spawn_opts, Value, _)
+  when is_list(Value) ->
+    Value;
 validate_option(renegotiate_at, Value, _) when is_integer(Value) ->
     erlang:min(Value, ?DEFAULT_RENEGOTIATE_AT);
 validate_option(reuse_session, undefined, _) ->
@@ -2328,6 +2358,9 @@ validate_option(reuse_sessions, save = Value, _) ->
     Value;
 validate_option(secure_renegotiate, Value, _)
   when is_boolean(Value) ->
+    Value;
+validate_option(sender_spawn_opts, Value, _)
+  when is_list(Value) ->
     Value;
 validate_option(server_name_indication, Value, _)
   when is_list(Value) ->
@@ -2465,7 +2498,7 @@ handle_hashsigns_option(_, _Version) ->
     undefined.
 
 handle_signature_algorithms_option(Value, Version) when is_list(Value)
-                                                        andalso Version >= {3, 4} ->
+                                                        andalso Version >= {3, 3} ->
     case tls_v1:signature_schemes(Version, Value) of
 	[] ->
 	    throw({error, {options,
@@ -2849,8 +2882,10 @@ add_filter(Filter, Filters) ->
 maybe_client_warn_no_verify(#{verify := verify_none,
                              warn_verify_none := true,
                              log_level := LogLevel}, client) ->
-            ssl_logger:log(warning, LogLevel, #{description => "Authenticity is not established by certificate path validation",
-                                                reason => "Option {verify, verify_peer} and cacertfile/cacerts is missing"}, #{});
+    ssl_logger:log(warning, LogLevel,
+                   #{description => "Server authenticity is not verified since certificate path validation is not enabled",
+                     reason => "The option {verify, verify_peer} and one of the options 'cacertfile' or "
+                     "'cacerts' are required to enable this."}, ?LOCATION);
 maybe_client_warn_no_verify(_,_) ->
     %% Warning not needed. Note client certificate validation is optional in TLS
     ok.
@@ -2859,7 +2894,13 @@ unambiguous_path(Value) ->
     AbsName = filename:absname(Value),
     case file:read_link(AbsName) of
         {ok, PathWithNoLink} ->
-            PathWithNoLink;
+            case filename:pathtype(PathWithNoLink) of
+                relative ->
+                    Dirname = filename:dirname(AbsName),
+                    filename:join([Dirname, PathWithNoLink]);
+                _ ->
+                    PathWithNoLink
+            end;
         _ ->
             AbsName
     end.

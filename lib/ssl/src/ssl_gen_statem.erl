@@ -25,8 +25,6 @@
 
 -module(ssl_gen_statem).
 
--include_lib("kernel/include/logger.hrl").
-
 -include("ssl_api.hrl").
 -include("ssl_internal.hrl").
 -include("ssl_connection.hrl").
@@ -102,24 +100,28 @@
 %%% Initial Erlang process setup
 %%--------------------------------------------------------------------
 %%--------------------------------------------------------------------
--spec start_link(client| server, pid(), ssl:host(), inet:port_number(), port(), list(), pid(), tuple()) ->
+-spec start_link(client| server, pid(), ssl:host(), inet:port_number(), port(), tuple(), pid(), tuple()) ->
     {ok, pid()} | ignore |  {error, reason()}.
 %%
 %% Description: Creates a process which calls Module:init/1 to
 %% choose appropriat gen_statem and initialize.
 %%--------------------------------------------------------------------
-start_link(Role, Sender, Host, Port, Socket, Options, User, CbInfo) ->
-    {ok, proc_lib:spawn_link(?MODULE, init, [[Role, Sender, Host, Port, Socket, Options, User, CbInfo]])}.
+start_link(Role, Sender, Host, Port, Socket, {#{receiver_spawn_opts := ReceiverOpts}, _, _} = Options, User, CbInfo) ->
+    Opts = [link | proplists:delete(link, ReceiverOpts)],
+    Pid = proc_lib:spawn_opt(?MODULE, init, [[Role, Sender, Host, Port, Socket, Options, User, CbInfo]], Opts),
+    {ok, Pid}.
 
 %%--------------------------------------------------------------------
--spec start_link(atom(), ssl:host(), inet:port_number(), port(), list(), pid(), tuple()) ->
+-spec start_link(atom(), ssl:host(), inet:port_number(), port(), tuple(), pid(), tuple()) ->
 			{ok, pid()} | ignore |  {error, reason()}.
 %%
 %% Description: Creates a gen_statem process which calls Module:init/1 to
 %% initialize.
 %%--------------------------------------------------------------------
-start_link(Role, Host, Port, Socket, Options, User, CbInfo) ->
-    {ok, proc_lib:spawn_link(?MODULE, init, [[Role, Host, Port, Socket, Options, User, CbInfo]])}.
+start_link(Role, Host, Port, Socket, {#{receiver_spawn_opts := ReceiverOpts}, _, _} = Options, User, CbInfo) ->
+    Opts = [link | proplists:delete(link, ReceiverOpts)],
+    Pid = proc_lib:spawn_opt(?MODULE, init, [[Role, Host, Port, Socket, Options, User, CbInfo]], Opts),
+    {ok, Pid}.
 
 
 %%--------------------------------------------------------------------
@@ -157,7 +159,7 @@ ssl_config(Opts, Role, #state{static_env = InitStatEnv0,
            fileref_db_handle := FileRefHandle,
            session_cache := CacheHandle,
            crl_db_info := CRLDbHandle,
-           cert_key_pairs := CertKeyPairs,
+           cert_key_alts := CertKeyAlts,
            dh_params := DHParams}} =
 	ssl_config:init(Opts, Role),
     TimeStamp = erlang:monotonic_time(),
@@ -182,7 +184,7 @@ ssl_config(Opts, Role, #state{static_env = InitStatEnv0,
                                },
                  handshake_env = HsEnv#handshake_env{diffie_hellman_params = DHParams,
                                                      continue_status = ContinueStatus},
-                 connection_env = CEnv#connection_env{cert_key_pairs = CertKeyPairs},
+                 connection_env = CEnv#connection_env{cert_key_alts = CertKeyAlts},
                  ssl_options = Opts}.
 
 %%--------------------------------------------------------------------
@@ -849,10 +851,9 @@ handle_info({ErrorTag, Socket, econnaborted}, StateName,
 handle_info({ErrorTag, Socket, Reason}, StateName, #state{static_env = #static_env{
                                                                           role = Role,
                                                                           socket = Socket,
-                                                                          error_tag = ErrorTag},
-                                                          ssl_options = #{log_level := Level}} = State)  ->
-    ssl_logger:log(info, Level, #{description => "Socket error",
-                                  reason => [{error_tag, ErrorTag}, {description, Reason}]}, ?LOCATION),
+                                                                          error_tag = ErrorTag}
+                                                         } = State)  ->
+    ?SSL_LOG(info, "Socket error", [{error_tag, ErrorTag}, {description, Reason}]),
     Alert = ?ALERT_REC(?FATAL, ?CLOSE_NOTIFY, {transport_error, Reason}),
     handle_normal_shutdown(Alert#alert{role = Role}, StateName, State),
     {stop, {shutdown,normal}, State};
@@ -879,11 +880,9 @@ handle_info({'EXIT', Socket, Reason}, _StateName, #state{static_env = #static_en
     {stop,{shutdown, Reason}, State};
 handle_info(allow_renegotiate, StateName, #state{handshake_env = HsEnv} = State) -> %% PRE TLS-1.3
     {next_state, StateName, State#state{handshake_env = HsEnv#handshake_env{allow_renegotiate = true}}};
-handle_info(Msg, StateName, #state{static_env = #static_env{socket = Socket, error_tag = ErrorTag},
-                                   ssl_options = #{log_level := Level}} = State) ->
-    ssl_logger:log(notice, Level, #{description => "Unexpected INFO message",
-                                    reason => [{message, Msg}, {socket, Socket},
-                                               {error_tag, ErrorTag}]}, ?LOCATION),
+handle_info(Msg, StateName, #state{static_env = #static_env{socket = Socket, error_tag = ErrorTag}} = State) ->
+    ?SSL_LOG(notice, "Unexpected INFO message",
+             [{message, Msg}, {socket, Socket}, {error_tag, ErrorTag}]),
     {next_state, StateName, State}.
 
 %%====================================================================
@@ -905,9 +904,25 @@ read_application_data(Data,
             try read_application_dist_data(DHandle, Front, BufferSize, Rear) of
                 Buffer ->
                     {no_record, State#state{user_data_buffer = Buffer}}
-            catch error:_ ->
-                    {stop,disconnect,
-                     State#state{user_data_buffer = {Front,BufferSize,Rear}}}
+            catch
+                error:notsup ->
+                    %% Distribution controller has shut down
+                    %% so we are no longer input handler and therefore
+                    %% erlang:dist_ctrl_put_data/2 raises this exception
+                    {stop, {shutdown, dist_closed},
+                     %% This buffers known data, but we might have delivered
+                     %% some of it to the VM, which makes buffering all
+                     %% incorrect, as would be wasting all.
+                     %% But we are stopping the server so
+                     %% user_data_buffer is not important at all...
+                     State#state{
+                       user_data_buffer = {Front,BufferSize,Rear}}};
+                error:Reason:Stacktrace ->
+                    %% Unforeseen exception in parsing application data
+                    {stop,
+                     {disconnect,{error,Reason,Stacktrace}},
+                     State#state{
+                       user_data_buffer = {Front,BufferSize,Rear}}}
             end
     end.
 passive_receive(#state{user_data_buffer = {Front,BufferSize,Rear},
@@ -1160,7 +1175,7 @@ terminate(Reason, connection, #state{static_env = #static_env{
     handle_trusted_certs_db(State),
     Alert = terminate_alert(Reason),
     %% Send the termination ALERT if possible
-    catch (ok = Connection:send_alert_in_connection(Alert, State)),
+    catch Connection:send_alert_in_connection(Alert, State),
     Connection:close({timeout, ?DEFAULT_TIMEOUT}, Socket, Transport, ConnectionStates);
 terminate(Reason, _StateName, #state{static_env = #static_env{transport_cb = Transport,
                                                               protocol_cb = Connection,
@@ -1287,7 +1302,7 @@ handle_sni_hostname(Hostname,
                    fileref_db_handle := FileRefHandle,
                    session_cache := CacheHandle,
                    crl_db_info := CRLDbHandle,
-                   cert_key_pairs := CertKeyPairs,
+                   cert_key_alts := CertKeyAlts,
                    dh_params := DHParams}} =
                  ssl_config:init(NewOptions, Role),
              State0#state{
@@ -1298,7 +1313,7 @@ handle_sni_hostname(Hostname,
                               crl_db = CRLDbHandle,
                               session_cache = CacheHandle
                              },
-               connection_env = CEnv#connection_env{cert_key_pairs = CertKeyPairs},
+               connection_env = CEnv#connection_env{cert_key_alts = CertKeyAlts},
                ssl_options = NewOptions,
                handshake_env = HsEnv#handshake_env{sni_hostname = Hostname,
                                                    diffie_hellman_params = DHParams}

@@ -358,7 +358,8 @@ certify(#certificate{asn1_certificates = ASN1Certs}, CertDbHandle, CertDbRef,
         error:{_,{error, {asn1, Asn1Reason}}} ->
             %% ASN-1 decode of certificate somehow failed
             ?ALERT_REC(?FATAL, ?CERTIFICATE_UNKNOWN, {failed_to_decode_certificate, Asn1Reason});
-        error:OtherReason ->
+        error:OtherReason:ST ->
+            ?SSL_LOG(info, internal_error, [{error, OtherReason}, {stacktrace, ST}]),
             ?ALERT_REC(?FATAL, ?INTERNAL_ERROR, {unexpected_error, OtherReason})
     end.
 %%--------------------------------------------------------------------
@@ -427,7 +428,8 @@ master_secret(Version, #session{master_secret = Mastersecret},
     try master_secret(Version, Mastersecret, SecParams,
 		      ConnectionStates, Role)
     catch
-	exit:_ ->
+	exit:Reason:ST ->
+            ?SSL_LOG(info, handshake_error, [{error, Reason}, {stacktrace, ST}]),
             ?ALERT_REC(?FATAL, ?HANDSHAKE_FAILURE, key_calculation_failure)
     end;
 
@@ -443,7 +445,8 @@ master_secret(Version, PremasterSecret, ConnectionStates, Role) ->
 					 ClientRandom, ServerRandom),
 		      SecParams, ConnectionStates, Role)
     catch
-	exit:_ ->
+	exit:Reason:ST ->
+            ?SSL_LOG(info, handshake_error, [{error, Reason}, {stacktrace, ST}]),
             ?ALERT_REC(?FATAL, ?HANDSHAKE_FAILURE, master_secret_calculation_failure)
     end.
 
@@ -983,6 +986,7 @@ decode_suites('2_bytes', Dec) ->
 decode_suites('3_bytes', Dec) ->
     from_3bytes(Dec).
 
+
 %%====================================================================
 %% Cipher suite handling
 %%====================================================================
@@ -1058,7 +1062,8 @@ cipher_suites(Suites, true) ->
 prf({3,_N}, PRFAlgo, Secret, Label, Seed, WantedLength) ->
     {ok, tls_v1:prf(PRFAlgo, Secret, Label, Seed, WantedLength)}.
 
-select_session(SuggestedSessionId, CipherSuites, HashSigns, Compressions, SessIdTracker, Session0, Version, SslOpts, CertKeyPairs) ->
+select_session(SuggestedSessionId, CipherSuites, HashSigns, Compressions, SessIdTracker, Session0, Version, SslOpts, CertKeyAlts) ->
+    CertKeyPairs = ssl_certificate:available_cert_key_pairs(CertKeyAlts, Version),
     {SessionId, Resumed} = ssl_session:server_select_session(Version, SessIdTracker, SuggestedSessionId,
                                                              SslOpts, CertKeyPairs),
     case Resumed of
@@ -1076,7 +1081,7 @@ select_session(SuggestedSessionId, CipherSuites, HashSigns, Compressions, SessId
 new_session_parameters(SessionId, #session{ecc = ECCCurve0} = Session, CipherSuites, SslOpts,
                        Version, Compressions, HashSigns, CertKeyPairs) ->
     Compression = select_compression(Compressions),
-    {Certs, Key, {ECCCurve, CipherSuite}} = select_cert_key_pair_and_params(CipherSuites, CertKeyPairs, HashSigns,
+    {Certs, Key, {ECCCurve, CipherSuite}} = server_select_cert_key_pair_and_params(CipherSuites, CertKeyPairs, HashSigns,
                                                                             ECCCurve0, SslOpts, Version),
     Session#session{session_id = SessionId,
                     ecc = ECCCurve,
@@ -1087,29 +1092,43 @@ new_session_parameters(SessionId, #session{ecc = ECCCurve0} = Session, CipherSui
 
 %% Possibly support part of "trusted_ca_keys" extension that corresponds to TLS-1.3 certificate_authorities?!
 
-select_cert_key_pair_and_params(CipherSuites, [#{private_key := NoKey, certs := [[]] = NoCerts}], HashSigns, ECCCurve0,
+server_select_cert_key_pair_and_params(CipherSuites, [#{private_key := NoKey, certs := [[]] = NoCerts}], HashSigns, ECCCurve0,
               #{ciphers := UserSuites, honor_cipher_order := HonorCipherOrder}, Version) ->
     %% This can happen if anonymous cipher suites are enabled
     Suites = available_suites(undefined, UserSuites, Version, HashSigns, ECCCurve0),
     CipherSuite0 = select_cipher_suite(CipherSuites, Suites, HonorCipherOrder),
     CurveAndSuite = cert_curve(undefined, ECCCurve0, CipherSuite0),
     {NoCerts, NoKey, CurveAndSuite};
-select_cert_key_pair_and_params(CipherSuites, [#{private_key := Key, certs := [Cert | _] = Certs}], HashSigns, ECCCurve0,
+server_select_cert_key_pair_and_params(CipherSuites, [#{private_key := Key, certs := [Cert | _] = Certs}], HashSigns, ECCCurve0,
                                 #{ciphers := UserSuites, honor_cipher_order := HonorCipherOrder}, Version) ->
     Suites = available_suites(Cert, UserSuites, Version, HashSigns, ECCCurve0),
     CipherSuite0 = select_cipher_suite(CipherSuites, Suites, HonorCipherOrder),
     CurveAndSuite = cert_curve(Cert, ECCCurve0, CipherSuite0),
     {Certs, Key, CurveAndSuite};
-select_cert_key_pair_and_params(CipherSuites, [#{private_key := Key, certs := [Cert | _] = Certs} | Rest], HashSigns, ECCCurve0,
+server_select_cert_key_pair_and_params(CipherSuites, [#{private_key := Key, certs := [Cert | _] = Certs} | Rest], HashSigns, ECCCurve0,
                  #{ciphers := UserSuites, honor_cipher_order := HonorCipherOrder} = Opts, Version) ->
     Suites = available_suites(Cert, UserSuites, Version, HashSigns, ECCCurve0),
     case select_cipher_suite(CipherSuites, Suites, HonorCipherOrder) of
         no_suite ->
-            select_cert_key_pair_and_params(CipherSuites, Rest, HashSigns, ECCCurve0, Opts, Version);
+            server_select_cert_key_pair_and_params(CipherSuites, Rest, HashSigns, ECCCurve0, Opts, Version);
         CipherSuite0 ->
-            CurveAndSuite = cert_curve(Cert, ECCCurve0, CipherSuite0),
-            {Certs, Key, CurveAndSuite}
+            case is_acceptable_cert(Cert, HashSigns, ssl:tls_version(Version)) of
+                true ->
+                    CurveAndSuite = cert_curve(Cert, ECCCurve0, CipherSuite0),
+                    {Certs, Key, CurveAndSuite};
+                false ->
+                    server_select_cert_key_pair_and_params(CipherSuites, Rest, HashSigns, ECCCurve0, Opts, Version)
+            end
     end.
+
+is_acceptable_cert(Cert, HashSigns, {Major, Minor}) when Major == 3,
+                                                         Minor >= 3 ->
+    {SignAlgo0, Param, _, _, _} = get_cert_params(Cert),
+    SignAlgo = sign_algo(SignAlgo0, Param),
+    is_acceptable_hash_sign(SignAlgo, HashSigns);
+is_acceptable_cert(_,_,_) ->
+    %% Not negotiable pre TLS-1.2. So if cert is available for version it is acceptable
+    true.
 
 supported_ecc({Major, Minor}) when ((Major == 3) and (Minor >= 1)) orelse (Major > 3) ->
     Curves = tls_v1:ecc_curves(Minor),
@@ -1118,26 +1137,27 @@ supported_ecc(_) ->
     #elliptic_curves{elliptic_curve_list = []}.
 
 premaster_secret(OtherPublicDhKey, MyPrivateKey, #'DHParameter'{} = Params) ->
-    try 
-	public_key:compute_key(OtherPublicDhKey, MyPrivateKey, Params)  
-    catch 
-	error:computation_failed -> 
+    try
+	public_key:compute_key(OtherPublicDhKey, MyPrivateKey, Params)
+    catch
+	error:Reason:ST ->
+            ?SSL_LOG(debug, crypto_error, [{reason, Reason}, {stacktrace, ST}]),
 	    throw(?ALERT_REC(?FATAL, ?ILLEGAL_PARAMETER))
-    end;	   
+    end;
 premaster_secret(PublicDhKey, PrivateDhKey, #server_dh_params{dh_p = Prime, dh_g = Base}) ->
-    try 
+    try
 	crypto:compute_key(dh, PublicDhKey, PrivateDhKey, [Prime, Base])
-    catch 
-	error:computation_failed -> 
+    catch
+	error:Reason:ST ->
+            ?SSL_LOG(debug, crypto_error, [{reason, Reason}, {stacktrace, ST}]),
 	    throw(?ALERT_REC(?FATAL, ?ILLEGAL_PARAMETER))
     end;
 premaster_secret(#client_srp_public{srp_a = ClientPublicKey}, ServerKey, #srp_user{prime = Prime,
 										   verifier = Verifier}) ->
-    try crypto:compute_key(srp, ClientPublicKey, ServerKey, {host, [Verifier, Prime, '6a']}) of
-	PremasterSecret ->
-	    PremasterSecret
+    try crypto:compute_key(srp, ClientPublicKey, ServerKey, {host, [Verifier, Prime, '6a']})
     catch
-	error:_ ->
+	error:Reason:ST ->
+            ?SSL_LOG(debug, crypto_error, [{reason, Reason}, {stacktrace, ST}]),
 	    throw(?ALERT_REC(?FATAL, ?ILLEGAL_PARAMETER))
     end;
 premaster_secret(#server_srp_params{srp_n = Prime, srp_g = Generator, srp_s = Salt, srp_b = Public},
@@ -1145,14 +1165,13 @@ premaster_secret(#server_srp_params{srp_n = Prime, srp_g = Generator, srp_s = Sa
     case ssl_srp_primes:check_srp_params(Generator, Prime) of
 	ok ->
 	    DerivedKey = crypto:hash(sha, [Salt, crypto:hash(sha, [Username, <<$:>>, Password])]),
-	    try crypto:compute_key(srp, Public, ClientKeys, {user, [DerivedKey, Prime, Generator, '6a']}) of
-		PremasterSecret ->
-		    PremasterSecret
+	    try crypto:compute_key(srp, Public, ClientKeys, {user, [DerivedKey, Prime, Generator, '6a']})
             catch
-		error ->
+		error:Reason:ST ->
+                    ?SSL_LOG(debug, crypto_error, [{reason, Reason}, {stacktrace, ST}]),
 		    throw(?ALERT_REC(?FATAL, ?ILLEGAL_PARAMETER))
 	    end;
-	_ ->
+	not_accepted ->
 	    throw(?ALERT_REC(?FATAL, ?ILLEGAL_PARAMETER))
     end;
 premaster_secret(#client_rsa_psk_identity{
@@ -1198,14 +1217,16 @@ premaster_secret(EncSecret, #'RSAPrivateKey'{} = RSAPrivateKey) ->
     try public_key:decrypt_private(EncSecret, RSAPrivateKey,
 				   [{rsa_pad, rsa_pkcs1_padding}])
     catch
-	_:_ ->
+	_:Reason:ST ->
+            ?SSL_LOG(debug, decrypt_error, [{reason, Reason}, {stacktrace, ST}]),
 	    throw(?ALERT_REC(?FATAL, ?DECRYPT_ERROR))
     end;
 premaster_secret(EncSecret, #{algorithm := rsa} = Engine) ->
     try crypto:private_decrypt(rsa, EncSecret, maps:remove(algorithm, Engine),
 				   [{rsa_pad, rsa_pkcs1_padding}])
     catch
-	_:_ ->
+	_:Reason:ST ->
+            ?SSL_LOG(debug, decrypt_error, [{reason, Reason}, {stacktrace, ST}]),
 	    throw(?ALERT_REC(?FATAL, ?DECRYPT_ERROR))
     end.
 %%====================================================================
@@ -2029,8 +2050,8 @@ validation_fun_and_state(undefined, VerifyState, CertPath, LogLevel) ->
 apply_user_fun(Fun, OtpCert, VerifyResult0, UserState0, SslState, CertPath, LogLevel) when
       (VerifyResult0 == valid) or (VerifyResult0 == valid_peer) ->
     VerifyResult = maybe_check_hostname(OtpCert, VerifyResult0, SslState),
-    case Fun(OtpCert, VerifyResult, UserState0) of
-	{Valid, UserState} when (Valid == valid) or (Valid == valid_peer) ->
+    case apply_fun(Fun, OtpCert, VerifyResult, UserState0, CertPath) of
+	{Valid, UserState} when (Valid == valid) orelse (Valid == valid_peer) ->
 	    case cert_status_check(OtpCert, SslState, VerifyResult, CertPath, LogLevel) of
 		valid ->
 		    {Valid, {SslState, UserState}};
@@ -2040,14 +2061,22 @@ apply_user_fun(Fun, OtpCert, VerifyResult0, UserState0, SslState, CertPath, LogL
 	{fail, _} = Fail ->
 	    Fail
     end;
-apply_user_fun(Fun, OtpCert, ExtensionOrError, UserState0, SslState, _CertPath, _LogLevel) ->
-    case Fun(OtpCert, ExtensionOrError, UserState0) of
-	{Valid, UserState} when (Valid == valid) or (Valid == valid_peer)->
+apply_user_fun(Fun, OtpCert, ExtensionOrError, UserState0, SslState, CertPath, _LogLevel) ->
+    case apply_fun(Fun, OtpCert, ExtensionOrError, UserState0, CertPath) of
+	{Valid, UserState} when (Valid == valid) orelse (Valid == valid_peer)->
 	    {Valid, {SslState, UserState}};
 	{fail, _} = Fail ->
 	    Fail;
 	{unknown, UserState} ->
 	    {unknown, {SslState, UserState}}
+    end.
+
+apply_fun(Fun, OtpCert, ExtensionOrError, UserState, CertPath) ->
+    if is_function(Fun, 4) ->
+            #cert{der=DerCert} = lists:keyfind(OtpCert, #cert.otp, CertPath),
+            Fun(OtpCert, DerCert, ExtensionOrError, UserState);
+       is_function(Fun, 3) ->
+            Fun(OtpCert, ExtensionOrError, UserState)
     end.
 
 maybe_check_hostname(OtpCert, valid_peer, SslState) ->
@@ -2085,11 +2114,10 @@ path_validation_alert(Reason) ->
 
 
 digitally_signed(Version, Msg, HashAlgo, PrivateKey, SignAlgo) ->
-    try do_digitally_signed(Version, Msg, HashAlgo, PrivateKey, SignAlgo) of
-	Signature ->
-	    Signature
+    try do_digitally_signed(Version, Msg, HashAlgo, PrivateKey, SignAlgo)
     catch
-	error:badkey->
+	error:Reason:ST ->
+            ?SSL_LOG(info, sign_error, [{error, Reason}, {stacktrace, ST}]),
 	    throw(?ALERT_REC(?FATAL, ?HANDSHAKE_FAILURE, bad_key(PrivateKey)))
     end.
 
@@ -2272,7 +2300,8 @@ encrypted_premaster_secret(Secret, RSAPublicKey) ->
 						      rsa_pkcs1_padding}]),
 	#encrypted_premaster_secret{premaster_secret = PreMasterSecret}
     catch
-        _:_->
+        _:Reason:ST->
+            ?SSL_LOG(debug, encrypt_error, [{reason, Reason}, {stacktrace, ST}]),
             throw(?ALERT_REC(?FATAL, ?HANDSHAKE_FAILURE, premaster_encryption_failed))
     end.
 
@@ -3096,18 +3125,10 @@ decode_sign_alg({3,3}, SignSchemeList) ->
                                   {true, {Hash, Sign}};
                               {Hash, rsa_pss_pss = Sign, _} ->
                                   {true,{Hash, Sign}};
-                              {sha1, rsa_pkcs1, _} ->
-                                  {true,{sha, rsa}};
                               {Hash, rsa_pkcs1, _} ->
                                   {true,{Hash, rsa}};
-                              {sha1, ecdsa, _} ->
-                                  {true,{sha, ecdsa}};
-                              {sha512,ecdsa, _} ->
-                                  {true,{sha512, ecdsa}};
-                              {sha384,ecdsa, _} ->
-                                  {true,{sha384, ecdsa}};
-                              {sha256,ecdsa, _}->
-                                  {true,{sha256, ecdsa}};
+                              {Hash, ecdsa, _} ->
+                                  {true,{Hash, ecdsa}};
                               _ ->
                                   false
                           end;
@@ -3491,21 +3512,6 @@ is_acceptable_cert_type(Sign, Types) ->
 is_supported_sign(SignAlgo, _, HashSigns, []) ->
     ssl_cipher:is_supported_sign(SignAlgo, HashSigns);
 %% {'SignatureAlgorithm',{1,2,840,113549,1,1,11},'NULL'}
-is_supported_sign({Hash, Sign}, 'NULL', _, SignatureSchemes) ->
-    Fun = fun (Scheme, Acc) ->
-                  {H0, S0, _} = ssl_cipher:scheme_to_components(Scheme),
-                  S1 = case S0 of
-                             rsa_pkcs1 -> rsa;
-                             S -> S
-                         end,
-                  H1 = case H0 of
-                             sha1 -> sha;
-                             H -> H
-                         end,
-                  Acc orelse (Sign =:= S1 andalso
-                              Hash =:= H1)
-          end,
-    lists:foldl(Fun, false, SignatureSchemes);
 %% TODO: Implement validation for the curve used in the signature
 %% RFC 3279 - 2.2.3 ECDSA Signature Algorithm
 %% When the ecdsa-with-SHA1 algorithm identifier appears as the
@@ -3517,20 +3523,15 @@ is_supported_sign({Hash, Sign}, 'NULL', _, SignatureSchemes) ->
 %% the certificate of the issuer SHALL apply to the verification of the
 %% signature.
 is_supported_sign({Hash, Sign}, _Param, _, SignatureSchemes) ->
-    Fun = fun (Scheme, Acc) ->
-                  {H0, S0, _} = ssl_cipher:scheme_to_components(Scheme),
+    Fun = fun (Scheme) ->
+                  {H, S0, _} = ssl_cipher:scheme_to_components(Scheme),
                   S1 = case S0 of
                              rsa_pkcs1 -> rsa;
                              S -> S
                          end,
-                  H1 = case H0 of
-                             sha1 -> sha;
-                             H -> H
-                         end,
-                  Acc orelse (Sign  =:= S1 andalso
-                              Hash  =:= H1)
+                  (Sign  =:= S1) andalso (Hash  =:= H)
           end,
-    lists:foldl(Fun, false, SignatureSchemes).
+    lists:any(Fun, SignatureSchemes).
 
 
 %% SupportedSignatureAlgorithms SIGNATURE-ALGORITHM-CLASS ::= {
