@@ -1,5 +1,5 @@
 diff --git a/lib/crypto/c_src/ec.c b/lib/crypto/c_src/ec.c
-index 124582c4..0418b3bf 100644
+index 124582c4..7e0b6bb5 100644
 --- a/lib/crypto/c_src/ec.c
 +++ b/lib/crypto/c_src/ec.c
 @@ -400,20 +400,29 @@ ERL_NIF_TERM ec_generate_key_nif(ErlNifEnv* env, int argc, const ERL_NIF_TERM ar
@@ -23,7 +23,9 @@ index 124582c4..0418b3bf 100644
 -        assign_goto(*ret, err, EXCP_ERROR(env, "Couldn't get EC key"));
 +    /* Get the curve and private key */
 +    (void) EVP_PKEY_get_group_name(peer_pkey, NULL, 0, &gname_len);
-+
+ 
+-    if ((group = EC_GROUP_dup(EC_KEY_get0_group(ec_key))) == NULL)
+-        assign_goto(*ret, err, EXCP_ERROR(env, "Couldn't get EC_GROUP"));
 +    if (!OPENSSL_malloc(gname_len + 1))
 +        assign_goto(ret, err, EXCP_ERROR(env, "Can't allocate group name string"));
 +
@@ -32,9 +34,7 @@ index 124582c4..0418b3bf 100644
 +
 +    if ((nid = OBJ_ln2nid(gname)) == NID_undef)
 +        assign_goto(ret, err, EXCP_ERROR(env, "Couldn't get group nid"));
- 
--    if ((group = EC_GROUP_dup(EC_KEY_get0_group(ec_key))) == NULL)
--        assign_goto(*ret, err, EXCP_ERROR(env, "Couldn't get EC_GROUP"));
++
 +    if ((group = EC_GROUP_new_by_curve_name(nid)) == NULL)
 +        assign_goto(ret, err, EXCP_ERROR(env, "Couldn't create group"));
  

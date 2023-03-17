@@ -14,7 +14,7 @@ diff --git a/lib/crypto/c_src/engine.c b/lib/crypto/c_src/engine.c
 index 1244a277a983..4cbfc74c4e71 100644
 --- a/lib/crypto/c_src/engine.c
 +++ b/lib/crypto/c_src/engine.c
-@@ -513,7 +513,11 @@ ERL_NIF_TERM engine_load_dynamic_nif(ErlNifEnv* env, int argc, const ERL_NIF_TER
+@@ -470,7 +470,11 @@ ERL_NIF_TERM engine_load_dynamic_nif(ErlNifEnv* env, int argc, const ERL_NIF_TER
  #ifdef HAS_ENGINE_SUPPORT
      ASSERT(argc == 0);
  
