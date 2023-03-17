@@ -1,0 +1,23 @@
+From 66c39d763afc3e7fda1a4acfc7ca4ea958a2cad2 Mon Sep 17 00:00:00 2001
+From: "Tyler J. Stachecki" <stachecki.tyler@gmail.com>
+Date: Mon, 26 Dec 2022 12:35:07 -0500
+Subject: [PATCH] lib/crypto: autoconf: Add missing ',' in an AC_IF
+
+Signed-off-by: Tyler J. Stachecki <stachecki.tyler@gmail.com>
+---
+ lib/crypto/configure.ac | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/lib/crypto/configure.ac b/lib/crypto/configure.ac
+index 3f595ad480ef..ece627002808 100644
+--- a/lib/crypto/configure.ac
++++ b/lib/crypto/configure.ac
+@@ -821,7 +821,7 @@ AS_CASE(["$with_ssl_rpath"],
+                       AS_IF([test "$with_ssl_rpath" = yes],
+                             [AC_MSG_ERROR([runtime library path requested by user, but cannot be set on this platform])])
+                       AC_MSG_RESULT([])
+-                  ]
++                  ],
+                   [test "$SSL_DYNAMIC_ONLY" != "yes"],
+                   [
+                       AS_IF([test "$with_ssl_rpath" = yes],

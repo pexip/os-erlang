@@ -1,3 +1,9 @@
+erlang (1:25.2.3+dfsg-1pexip2) pexip; urgency=medium
+
+  * Fix autoconf version check
+
+ -- Huw Jones <huw@pexip.com>  Fri, 17 Mar 2023 14:13:46 +0000
+
 erlang (1:25.2.3+dfsg-1pexip1) pexip; urgency=medium
 
   * New upstream version
