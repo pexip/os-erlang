@@ -1,3 +1,9 @@
+erlang (1:25.2.3+dfsg-1pexip4) pexip; urgency=medium
+
+  * Drop monotonic clock change
+
+ -- John-Mark Bell <jmb@pexip.com>  Wed, 15 Nov 2023 13:23:03 +0000
+
 erlang (1:25.2.3+dfsg-1pexip3) pexip; urgency=medium
 
   * Fix monotonic clock usage
