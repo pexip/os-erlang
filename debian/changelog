@@ -1,3 +1,9 @@
+erlang (1:25.2.3+dfsg-1pexip5) pexip-bookworm; urgency=medium
+
+  * Initial bookworm build
+
+ -- Mark Hymers <mark.hymers@pexip.com>  Thu, 16 Nov 2023 09:58:34 +0000
+
 erlang (1:25.2.3+dfsg-1pexip4) pexip; urgency=medium
 
   * Drop monotonic clock change
