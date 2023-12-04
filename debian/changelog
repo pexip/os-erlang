@@ -1,3 +1,9 @@
+erlang (1:25.2.3+dfsg-1pexip4.v33) pexip-v33; urgency=medium
+
+  * Rebuild in v33 environment to match libc6 from v33.
+
+ -- Mark Hymers <mark.hymers@pexip.com>  Mon, 04 Dec 2023 11:33:59 +0000
+
 erlang (1:25.2.3+dfsg-1pexip4) pexip; urgency=medium
 
   * Drop monotonic clock change
