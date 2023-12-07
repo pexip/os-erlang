@@ -1,3 +1,9 @@
+erlang (1:25.2.3+dfsg-1pexip4.v34) pexip; urgency=medium
+
+  * Rebuild in v34 environment to sit between v33 and v35 erlang versions.
+
+ -- Mark Hymers <mark.hymers@pexip.com>  Thu, 07 Dec 2023 11:08:16 +0000
+
 erlang (1:25.2.3+dfsg-1pexip4.v33) pexip-v33; urgency=medium
 
   * Rebuild in v33 environment to match libc6 from v33.
