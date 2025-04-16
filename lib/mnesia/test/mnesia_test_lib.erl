@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 1996-2021. All Rights Reserved.
+%% Copyright Ericsson AB 1996-2025. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -44,7 +44,7 @@
 %%% specified in the Config, the test case is skipped. If there
 %%% was enough node names in the Config, X of them are selected
 %%% and if some of them happens to be down they are restarted
-%%% via the slave module. When all nodes are up and running a
+%%% via the peer module. When all nodes are up and running a
 %%% disk resident schema is created on all nodes and Mnesia is
 %%% started a on all nodes. This means that all test cases may
 %%% assume that Mnesia is up and running on all acquired nodes.
@@ -97,14 +97,13 @@
 	 select_nodes/4,
 	 init_nodes/3,
 	 error/4,
-	 slave_start_link/0,
-	 slave_start_link/1,
-	 slave_sup/0,
+	 node_sup/0,
 
 	 start_mnesia/1,
 	 start_mnesia/2,
 	 start_appls/2,
 	 start_appls/3,
+	 start_ext_test_server/0,
 	 start_wait/2,
 	 storage_type/2,
 	 stop_mnesia/1,
@@ -132,7 +131,8 @@
 	 struct/1,
 	 init_per_testcase/2,
 	 end_per_testcase/2,
-	 kill_tc/2
+	 kill_tc/2,
+	 get_ext_test_server_name/0
 	]).
 
 -include("mnesia_test_lib.hrl").
@@ -236,26 +236,14 @@ mk_nodes(N, Nodes) when N > 0 ->
 mk_node(N, Name, Host) ->
     list_to_atom(lists:concat([Name ++ integer_to_list(N) ++ "@" ++ Host])).
 
-slave_start_link() ->
-    slave_start_link(node()).
+node_start_link(Host, Name) ->
+    node_start_link(Host, Name, 10).
 
-slave_start_link(Node) ->
-    [Local, Host] = node_to_name_and_host(Node),
-    Count = erlang:unique_integer([positive]),
-    List = [Local, "_", Count],
-    Name = list_to_atom(lists:concat(List)),
-    slave_start_link(list_to_atom(Host), Name).
-
-slave_start_link(Host, Name) ->
-    slave_start_link(Host, Name, 10).
-
-slave_start_link(Host, Name, Retries) ->
+node_start_link(Host, Name, Retries) ->
     Debug = atom_to_list(mnesia:system_info(debug)),
-    Args = "-mnesia debug " ++ Debug ++
-	" -pa " ++
-	filename:dirname(code:which(?MODULE)) ++
-	" -pa " ++
-	filename:dirname(code:which(mnesia)),
+    Args = ["-mnesia", "debug", Debug,
+            "-pa", filename:dirname(code:which(?MODULE)),
+            "-pa", filename:dirname(code:which(mnesia))],
     case starter(Host, Name, Args) of
 	{ok, NewNode} ->
 	    ?match(pong, net_adm:ping(NewNode)),
@@ -264,22 +252,23 @@ slave_start_link(Host, Name, Retries) ->
 	    ok = rpc:call(NewNode, file, set_cwd, [Cwd]),
 	    true = rpc:call(NewNode, code, set_path, [Path]),
 	    ok = rpc:call(NewNode, error_logger, tty, [false]),
-	    spawn_link(NewNode, ?MODULE, slave_sup, []),
+	    spawn_link(NewNode, ?MODULE, node_sup, []),
 	    rpc:multicall([node() | nodes()], global, sync, []),
 	    {ok, NewNode};
 	{error, Reason} when Retries == 0->
 	    {error, Reason};
 	{error, Reason} ->
-	    io:format("Could not start slavenode ~p ~p retrying~n",
+	    io:format("Could not start node ~p ~p retrying~n",
 		      [{Host, Name, Args}, Reason]),
 	    timer:sleep(500),
-	    slave_start_link(Host, Name, Retries - 1)
+	    node_start_link(Host, Name, Retries - 1)
     end.
 
 starter(Host, Name, Args) ->
-    slave:start(Host, Name, Args).
+    {ok, _, Node} = peer:start(#{host => Host, name => Name, args => Args}),
+    {ok, Node}.
 
-slave_sup() ->
+node_sup() ->
     process_flag(trap_exit, true),
     receive
 	{'EXIT', _, _} ->
@@ -694,6 +683,10 @@ do_prepare([{start_appls, Appls} | Actions], Selected, All, Config, File, Line) 
     do_prepare(Actions, Selected, All, Config, File, Line);
 do_prepare([{reload_appls, Appls} | Actions], Selected, All, Config, File, Line) ->
     reload_appls(Appls, Selected),
+    do_prepare(Actions, Selected, All, Config, File, Line);
+do_prepare([start_ext_test_server | Actions], Selected, All, Config, File, Line) ->
+    Expected = lists:duplicate(length(Selected), ok),
+    {Expected, []} = rpc:multicall(Selected, ?MODULE, start_ext_test_server, []),
     do_prepare(Actions, Selected, All, Config, File, Line).
 
 set_kill_timer(Config) ->
@@ -759,7 +752,7 @@ init_nodes([Node | Nodes], File, Line) ->
 	    [Node | init_nodes(Nodes, File, Line)];
 	pang ->
 	    [Name, Host] = node_to_name_and_host(Node),
-	    case slave_start_link(Host, Name) of
+	    case node_start_link(Host, Name) of
 		{ok, Node1} ->
 		    Path = code:get_path(),
 		    true = rpc:call(Node1, code, set_path, [Path]),
@@ -807,6 +800,20 @@ start_appls([Appl | Appls], Nodes, Config, Tabs) ->
     Bad ++ start_appls(Appls, Nodes, Config, Tabs);
 start_appls([], _Nodes, _Config, _Tabs) ->
     [].
+
+start_ext_test_server() ->
+    case global:whereis_name(get_ext_test_server_name()) of
+        Pid when is_pid(Pid) ->
+            gen_server:stop({global, get_ext_test_server_name()});
+        _ ->
+            ignore
+    end,
+    {ok, _} = gen_server:start({global, get_ext_test_server_name()}, ext_test_server,
+                                    [self()],
+                                    [{timeout, infinity}
+                                     %%, {debug, [trace]}
+                                    ]),
+    ok.
 
 remote_start(mnesia, Config, Nodes) ->
     case diskless(Config) of
@@ -1044,9 +1051,10 @@ verify_replica_location(Tab, DiscOnly0, Ram0, Disc0, AliveNodes0) ->
     timer:sleep(100),
 
     S1 = ?match(AliveNodes, lists:sort(mnesia:system_info(running_db_nodes))),
-    S2 = ?match(DiscOnly, lists:sort(mnesia:table_info(Tab, disc_only_copies))),
+    S2 = ?match(DiscOnly, lists:sort(mnesia:table_info(Tab, disc_only_copies) ++
+                    mnesia:table_info(Tab, ext_disc_only_copies))),
     S3 = ?match(Ram, lists:sort(mnesia:table_info(Tab, ram_copies) ++
-				    mnesia:table_info(Tab, ext_ets))),
+                    mnesia:table_info(Tab, ext_ram_copies))),
     S4 = ?match(Disc, lists:sort(mnesia:table_info(Tab, disc_copies))),
     S5 = ?match(Write, lists:sort(mnesia:table_info(Tab, where_to_write))),
     S6 = case lists:member(This, Read) of
@@ -1083,3 +1091,6 @@ sort({ok, L}) when is_list(L) ->
     {ok, lists:sort(L)};
 sort(W) ->
     W.
+
+get_ext_test_server_name() ->
+    list_to_atom("ext_test_server_" ++ atom_to_list(node())).

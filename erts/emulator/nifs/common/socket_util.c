@@ -1,7 +1,7 @@
 /*
  * %CopyrightBegin%
  *
- * Copyright Ericsson AB 2018-2022. All Rights Reserved.
+ * Copyright Ericsson AB 2018-2025. All Rights Reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -42,6 +42,10 @@
 
 #if !defined(__IOS__) && !defined(__WIN32__)
 #include <net/if_arp.h>
+#endif
+
+#if defined(HAVE_NET_IF_DL_H) && defined(AF_LINK)
+#include <net/if_types.h>
 #endif
 
 #include "socket_int.h"
@@ -146,12 +150,84 @@ static void make_sockaddr_dl(ErlNifEnv*    env,
 static SOCKLEN_T sa_local_length(int l, struct sockaddr_un* sa);
 #endif
 
+#if defined(HAVE_NET_IF_DL_H) && defined(AF_LINK)
+static ERL_NIF_TERM esock_encode_if_type(ErlNifEnv*   env,
+                                         unsigned int ifType);
+#endif
+
+
+/* The pre string has to be large enough (suggest 64) that
+ * the name fits.
+ * This function creates a mutex with a specific name:
+ *       <pre>[<file descriptor>]
+ * For example: esock.w[10]
+ *
+ * But this is only done if ESOCK_VERBOSE_MTX_NAMES is defined.
+ * Otherwise it will just be the pre string.
+ */
+extern
+ErlNifMutex* esock_mutex_create(const char* pre, char* buf, SOCKET sock)
+{
+#if defined(ESOCK_VERBOSE_MTX_NAMES)
+    /*
+    ESOCK_PRINTF("esock_mutex_create -> create name with"
+                 "\r\n   pre:  %s"
+                 "\r\n   sock: %d"
+                 "\r\n", pre, sock);
+    */
+    sprintf(buf, "%s[" SOCKET_FORMAT_STR "]", pre, sock);
+#else
+    /*
+    ESOCK_PRINTF("esock_mutex_create -> create name with"
+                 "\r\n   pre: %s"
+                 "\r\n", pre);
+    */
+    VOID(sock);
+    sprintf(buf, "%s", pre);
+#endif
+
+    /*
+    ESOCK_PRINTF("esock_mutex_create -> create mtx with name: %s"
+                 "\r\n", buf);
+    */
+
+    return enif_mutex_create(buf);
+}
+
+
+
+/* *** esock_get_uint_from_map ***
+ *
+ * Simple utility function used to extract a unsigned int value from a map.
+ * If it fails to extract the value (for whatever reason) the default
+ * value is used.
+ */
+
+extern
+unsigned int esock_get_uint_from_map(ErlNifEnv*   env,
+                                     ERL_NIF_TERM map,
+                                     ERL_NIF_TERM key,
+                                     unsigned int def)
+{
+    ERL_NIF_TERM eval;
+    unsigned int val;
+
+    if (!GET_MAP_VAL(env, map, key, &eval)) {
+        return def;
+    } else {
+        if (GET_UINT(env, eval, &val))
+            return val;
+        else
+            return def;
+    }
+}
+
 
 /* *** esock_get_bool_from_map ***
  *
  * Simple utility function used to extract a boolean value from a map.
  * If it fails to extract the value (for whatever reason) the default
- * value is returned.
+ * value is used.
  */
 
 extern
@@ -160,14 +236,14 @@ BOOLEAN_T esock_get_bool_from_map(ErlNifEnv*   env,
                                   ERL_NIF_TERM key,
                                   BOOLEAN_T    def)
 {
-    ERL_NIF_TERM val;
+    ERL_NIF_TERM eval;
 
-    if (!GET_MAP_VAL(env, map, key, &val)) {
+    if (!GET_MAP_VAL(env, map, key, &eval)) {
         return def;
     } else {
-        if (COMPARE(val, esock_atom_true) == 0)
+        if (COMPARE(eval, esock_atom_true) == 0)
             return TRUE;
-        else if (COMPARE(val, esock_atom_false) == 0)
+        else if (COMPARE(eval, esock_atom_false) == 0)
             return FALSE;
         else
             return def;
@@ -437,12 +513,18 @@ void esock_encode_sockaddr(ErlNifEnv*    env,
   switch (family) {
   case AF_INET:
       len = SALEN(addrLen, sizeof(struct sockaddr_in));
+      UDBG( ("SUTIL", "esock_encode_sockaddr -> 'inet' family addr: "
+             "\r\n   len: %d"
+             "\r\n", len) );
       esock_encode_sockaddr_in(env, &sockAddrP->in4, len, eSockAddr);
       break;
 
 #if defined(HAVE_IN6) && defined(AF_INET6)
   case AF_INET6:
       len = SALEN(addrLen, sizeof(struct sockaddr_in6));      
+      UDBG( ("SUTIL", "esock_encode_sockaddr -> 'inet6' family addr: "
+             "\r\n   len: %d"
+             "\r\n", len) );
       esock_encode_sockaddr_in6(env, &sockAddrP->in6, len, eSockAddr);
       break;
 #endif
@@ -450,6 +532,9 @@ void esock_encode_sockaddr(ErlNifEnv*    env,
 #ifdef HAS_AF_LOCAL
   case AF_LOCAL:
       len = sa_local_length(addrLen, &sockAddrP->un);
+      UDBG( ("SUTIL", "esock_encode_sockaddr -> 'local' family addr: "
+             "\r\n   len: %d"
+             "\r\n", len) );
       esock_encode_sockaddr_un(env, &sockAddrP->un, len, eSockAddr);
       break;
 #endif
@@ -457,6 +542,9 @@ void esock_encode_sockaddr(ErlNifEnv*    env,
 #ifdef AF_UNSPEC
   case AF_UNSPEC:
       len = SALEN(addrLen, 0);
+      UDBG( ("SUTIL", "esock_encode_sockaddr -> 'unspec' family addr: "
+             "\r\n   len: %d"
+             "\r\n", len) );
       esock_encode_sockaddr_native(env,
                                    &sockAddrP->sa, len,
                                    esock_atom_unspec,
@@ -467,6 +555,9 @@ void esock_encode_sockaddr(ErlNifEnv*    env,
 #if defined(HAVE_NETPACKET_PACKET_H)
   case AF_PACKET:
       len = SALEN(addrLen, sizeof(struct sockaddr_ll));      
+      UDBG( ("SUTIL", "esock_encode_sockaddr -> 'packet' family addr: "
+             "\r\n   len: %d"
+             "\r\n", len) );
       esock_encode_sockaddr_ll(env, &sockAddrP->ll, len, eSockAddr);
       break;
 #endif
@@ -474,6 +565,9 @@ void esock_encode_sockaddr(ErlNifEnv*    env,
 #if defined(AF_IMPLINK)
   case AF_IMPLINK:
       len = SALEN(addrLen, 0);
+      UDBG( ("SUTIL", "esock_encode_sockaddr -> 'implink' family addr: "
+             "\r\n   len: %d"
+             "\r\n", len) );
       esock_encode_sockaddr_native(env,
                                    &sockAddrP->sa, len,
                                    esock_atom_implink,
@@ -484,6 +578,9 @@ void esock_encode_sockaddr(ErlNifEnv*    env,
 #if defined(AF_PUP)
   case AF_PUP:
       len = SALEN(addrLen, 0);
+      UDBG( ("SUTIL", "esock_encode_sockaddr -> 'pup' family addr: "
+             "\r\n   len: %d"
+             "\r\n", len) );
       esock_encode_sockaddr_native(env,
                                    &sockAddrP->sa, len,
                                    esock_atom_pup,
@@ -494,6 +591,9 @@ void esock_encode_sockaddr(ErlNifEnv*    env,
 #if defined(AF_CHAOS)
   case AF_CHAOS:
       len = SALEN(addrLen, 0);
+      UDBG( ("SUTIL", "esock_encode_sockaddr -> 'chaos' family addr: "
+             "\r\n   len: %d"
+             "\r\n", len) );
       esock_encode_sockaddr_native(env,
                                    &sockAddrP->sa, len,
                                    esock_atom_chaos,
@@ -559,12 +659,18 @@ void esock_encode_sockaddr(ErlNifEnv*    env,
                   (CHARP(sockAddrP->dl.sdl_data) - CHARP(sockAddrP)) +
                   sockAddrP->dl.sdl_nlen + sockAddrP->dl.sdl_alen);
 #endif
+      UDBG( ("SUTIL", "esock_encode_sockaddr -> 'link' family addr: "
+             "\r\n   len: %d"
+             "\r\n", len) );
       esock_encode_sockaddr_dl(env, &sockAddrP->dl, len, eSockAddr);
     break;
 #endif
 
   default:
       len = SALEN(addrLen, 0);
+      UDBG( ("SUTIL", "esock_encode_sockaddr -> default (native) family addr: "
+             "\r\n   len: %d"
+             "\r\n", len) );
       esock_encode_sockaddr_native(env,
                                    &sockAddrP->sa, len,
                                    MKI(env, family),
@@ -597,77 +703,165 @@ void esock_encode_hwsockaddr(ErlNifEnv*       env,
 			     SOCKLEN_T        addrLen,
 			     ERL_NIF_TERM*    eSockAddr)
 {
-  ERL_NIF_TERM efamily;
-  int          family;
+    ERL_NIF_TERM efamily;
+    int          family;
 
-  // Sanity check
-  if (addrLen < (char *)&sockAddrP->sa_data - (char *)sockAddrP) {
-    // We got crap, cannot even know the address family
-    esock_encode_sockaddr_broken(env, sockAddrP, addrLen, eSockAddr);
-    return;
-  }
-  family = sockAddrP->sa_family;
+    // Sanity check
+    if (addrLen < (char *)&sockAddrP->sa_data - (char *)sockAddrP) {
+        // We got crap, cannot even know the address family
+        esock_encode_sockaddr_broken(env, sockAddrP, addrLen, eSockAddr);
+        return;
+    }
+    family = sockAddrP->sa_family;
 
-  UDBG( ("SUTIL", "esock_encode_hwsockaddr -> entry with"
-	 "\r\n   family:  %d"
-	 "\r\n   addrLen: %d"
-	 "\r\n", family, addrLen) );
+    UDBG( ("SUTIL", "esock_encode_hwsockaddr -> entry with"
+           "\r\n   family:  %d"
+           "\r\n   addrLen: %d"
+           "\r\n", family, addrLen) );
 
-  switch (family) {
+    switch (family) {
 #if defined(ARPHRD_NETROM)
-  case ARPHRD_NETROM:
-    efamily = esock_atom_netrom;
-    break;
+    case ARPHRD_NETROM:
+        efamily = esock_atom_netrom;
+        break;
 #endif
 
 #if defined(ARPHRD_ETHER)
-  case ARPHRD_ETHER:
-    efamily = esock_atom_ether;
-    break;
+    case ARPHRD_ETHER:
+        efamily = esock_atom_ether;
+        break;
 #endif
 
 #if defined(ARPHRD_IEEE802)
-  case ARPHRD_IEEE802:
-    efamily = esock_atom_ieee802;
-    break;
+    case ARPHRD_IEEE802:
+        efamily = esock_atom_ieee802;
+        break;
 #endif
 
 #if defined(ARPHRD_DLCI)
-  case ARPHRD_DLCI:
-    efamily = esock_atom_dlci;
-    break;
+    case ARPHRD_DLCI:
+        efamily = esock_atom_dlci;
+        break;
 #endif
 
 #if defined(ARPHRD_FRELAY)
-  case ARPHRD_FRELAY:
-    efamily = esock_atom_frelay;
-    break;
+    case ARPHRD_FRELAY:
+        efamily = esock_atom_frelay;
+        break;
 #endif
 
 #if defined(ARPHRD_IEEE1394)
-  case ARPHRD_IEEE1394:
-    efamily = esock_atom_ieee1394;
-    break;
+    case ARPHRD_IEEE1394:
+        efamily = esock_atom_ieee1394;
+        break;
 #endif
 
 #if defined(ARPHRD_LOOPBACK)
-  case ARPHRD_LOOPBACK:
-    efamily = esock_atom_loopback;
-    break;
+    case ARPHRD_LOOPBACK:
+        efamily = esock_atom_loopback;
+        break;
+#endif
+
+#if defined(ARPHRD_RAWIP)
+    case ARPHRD_RAWIP:
+        efamily = esock_atom_rawip;
+        break;
 #endif
 
 #if defined(ARPHRD_NONE)
-  case ARPHRD_NONE:
-    efamily = esock_atom_none;
-    break;
+    case ARPHRD_NONE:
+        efamily = esock_atom_none;
+        break;
 #endif
 
-  default:
-    efamily = MKI(env, family);
-    break;
-  }
+    default:
+        efamily = MKI(env, family);
+        break;
+    }
 
-  esock_encode_sockaddr_native(env, sockAddrP, addrLen, efamily, eSockAddr);
+    esock_encode_sockaddr_native(env, sockAddrP, addrLen, efamily, eSockAddr);
+}
+
+
+
+extern
+BOOLEAN_T esock_decode_hwsockaddr(ErlNifEnv*    env,
+                                  ERL_NIF_TERM  eSockAddr,
+                                  ESockAddress* sockAddrP,
+                                  SOCKLEN_T*    addrLen)
+{
+    ERL_NIF_TERM efamily;
+    int          family = -1;
+
+    if (!IS_MAP(env, eSockAddr))
+        return FALSE;
+
+    if (!GET_MAP_VAL(env, eSockAddr, esock_atom_family, &efamily))
+        return FALSE;
+
+    /* This is a bit ugly, but if-defing this properly is
+     * a bit messy so for now...
+     */
+#if defined(ARPHRD_NETROM)
+    if (IS_IDENTICAL(efamily, esock_atom_netrom)) {
+        family = ARPHRD_NETROM;
+    }
+#endif
+    
+#if defined(ARPHRD_ETHER)
+    if (IS_IDENTICAL(efamily, esock_atom_ether)) {
+        family = ARPHRD_ETHER;
+    }
+#endif
+
+#if defined(ARPHRD_IEEE802)
+    if (IS_IDENTICAL(efamily, esock_atom_ieee802)) {
+        family = ARPHRD_IEEE802;
+    }
+#endif
+
+#if defined(ARPHRD_DLCI)
+    if (IS_IDENTICAL(efamily, esock_atom_dlci)) {
+        family = ARPHRD_DLCI;
+    }
+#endif
+
+#if defined(ARPHRD_FRELAY)
+    if (IS_IDENTICAL(efamily, esock_atom_frelay)) {
+        family = ARPHRD_FRELAY;
+    }
+#endif
+
+#if defined(ARPHRD_IEEE1394)
+    if (IS_IDENTICAL(efamily, esock_atom_ieee1394)) {
+        family = ARPHRD_IEEE1394;
+    }
+#endif
+
+#if defined(ARPHRD_LOOPBACK)
+    if (IS_IDENTICAL(efamily, esock_atom_loopback)) {
+        family = ARPHRD_LOOPBACK;
+    }
+#endif
+
+#if defined(ARPHRD_RAWIP)
+    if (IS_IDENTICAL(efamily, esock_atom_rawip)) {
+        family = ARPHRD_RAWIP;
+    }
+#endif
+
+#if defined(ARPHRD_NONE)
+    if (IS_IDENTICAL(efamily, esock_atom_none)) {
+        family = ARPHRD_NONE;
+    }
+#endif
+
+    if (family == -1)
+	return FALSE;
+
+    return esock_decode_sockaddr_native(env, eSockAddr,
+                                        sockAddrP, family, addrLen);
+
 }
 
 
@@ -757,10 +951,16 @@ void esock_encode_sockaddr_in(ErlNifEnv*          env,
 {
     ERL_NIF_TERM ePort, eAddr;
     int          port;
+    /* The size of the actual data part, excluding padding */
+    SOCKLEN_T    minSz = sizeof(struct sockaddr_in) -
+        sizeof(sockAddrP->sin_zero);
 
-    UDBG( ("SUTIL", "esock_encode_sockaddr_in -> entry\r\n") );
+    UDBG( ("SUTIL", "esock_encode_sockaddr_in -> entry with"
+           "\r\n   addrLen:           %d"
+           "\r\n   required min size: %d"
+           "\r\n", addrLen, minSz) );
 
-    if (addrLen >= sizeof(struct sockaddr_in)) {
+    if (addrLen >= minSz) {
 
         /* The port */
         port  = ntohs(sockAddrP->sin_port);
@@ -776,7 +976,7 @@ void esock_encode_sockaddr_in(ErlNifEnv*          env,
         UDBG( ("SUTIL", "esock_encode_sockaddr_in -> wrong size: "
                "\r\n   addrLen:   %d"
                "\r\n   addr size: %d"
-               "\r\n", addrLen, sizeof(struct sockaddr_in)) );
+               "\r\n", addrLen, minSz) );
         esock_encode_sockaddr_native(env, (struct sockaddr *)sockAddrP,
                                      addrLen, esock_atom_inet, eSockAddr);
     }
@@ -1013,10 +1213,11 @@ void esock_encode_sockaddr_un(ErlNifEnv*          env,
     size_t       n, m;
 
     UDBG( ("SUTIL", "esock_encode_sockaddr_un -> entry with"
-           "\r\n.  addrLen: %d"
+           "\r\n   addrLen: %d"
            "\r\n", addrLen) );
 
     n = sockAddrP->sun_path - (char *)sockAddrP; // offsetof
+
     if (addrLen >= n) {
         n = addrLen - n; // sun_path length
         if (255 < n) {
@@ -1028,6 +1229,7 @@ void esock_encode_sockaddr_un(ErlNifEnv*          env,
             unsigned char *path;
 
             m = esock_strnlen(sockAddrP->sun_path, n);
+
 #ifdef __linux__
             /* Assume that the address is a zero terminated string,
              * except when the first byte is \0 i.e the string length is 0,
@@ -1039,6 +1241,8 @@ void esock_encode_sockaddr_un(ErlNifEnv*          env,
                 m = n;
             }
 #endif
+
+            UDBG( ("SUTIL", "esock_encode_sockaddr_un -> m: %d\r\n", m) );
 
             /* And finally build the 'path' attribute */
             path = enif_make_new_binary(env, m, &ePath);
@@ -1064,11 +1268,14 @@ void esock_encode_sockaddr_un(ErlNifEnv*          env,
  * (beside the mandatory family attribute, which is "inherited" from
  * the "sockaddr" type):
  *
- *    protocol: integer() (should be an atom really)
+ *    protocol: protocol()
  *    ifindex:  integer()
- *    hatype:   integer() (should be an atom really)
- *    pkttype:  integer() (should be an atom really)
- *    addr:     list()    (should be something useful...)
+ *    hatype:   hatype()
+ *    pkttype:  pkttype()
+ *    addr:     binary()
+ *
+ * Or if the address length is not enough, its encoded as a "native"
+ * packet (with type 'packet').
  *
  */
 
@@ -1145,32 +1352,46 @@ void esock_encode_sockaddr_dl(ErlNifEnv*          env,
 {
     ERL_NIF_TERM eindex, etype, enlen, ealen, eslen, edata;
     SOCKLEN_T    dlen;
+    SOCKLEN_T    ndsz = sizeof(struct sockaddr_dl)-sizeof(sockAddrP->sdl_data);
 
     UDBG( ("SUTIL", "esock_encode_sockaddr_dl -> entry with"
-           "\r\n.  addrLen: %d"
-           "\r\n", addrLen) );
+           "\r\n   addrLen:              %d"
+           "\r\n   non-data fields size: %d"
+           "\r\n", addrLen, ndsz) );
 
-    /* There is a minumum length (defined by the size of the data field) */
-    if (addrLen >= sizeof(struct sockaddr_dl)) {
+    /* Make sure the data field actually contains something */
+    if (addrLen >= ndsz) {
 
         /* index - if != 0, system given index for interface */
+        UDBG( ("SUTIL", "esock_encode_sockaddr_dl -> index: %d"
+               "\r\n", sockAddrP->sdl_index) );
         eindex = MKUI(env, sockAddrP->sdl_index);
 
         /* type -  interface type */
-        etype = MKUI(env, sockAddrP->sdl_type);
+        UDBG( ("SUTIL", "esock_encode_sockaddr_dl -> type: %d"
+               "\r\n", sockAddrP->sdl_type) );
+        etype = esock_encode_if_type(env, sockAddrP->sdl_type);
 
         /* nlen - interface name length, no trailing 0 reqd. */
+        UDBG( ("SUTIL", "esock_encode_sockaddr_dl -> nlen: %d"
+               "\r\n", sockAddrP->sdl_nlen) );
         enlen = MKUI(env, sockAddrP->sdl_nlen);
 
         /* alen - link level address length */
+        UDBG( ("SUTIL", "esock_encode_sockaddr_dl -> alen: %d"
+               "\r\n", sockAddrP->sdl_alen) );
         ealen = MKUI(env, sockAddrP->sdl_alen);
 
-        /* slen - ink layer selector length */
+        /* slen - link layer selector length */
+        UDBG( ("SUTIL", "esock_encode_sockaddr_dl -> slen: %d"
+               "\r\n", sockAddrP->sdl_slen) );
         eslen = MKUI(env, sockAddrP->sdl_slen);
 
         /* data - minimum work area, can be larger;    *
          *        contains both if name and ll address */
         dlen  = addrLen - (CHARP(sockAddrP->sdl_data) - CHARP(sockAddrP));
+        UDBG( ("SUTIL", "esock_encode_sockaddr_dl -> data len: %d"
+               "\r\n", dlen) );
         edata = esock_make_new_binary(env, &sockAddrP->sdl_data, dlen);
 
         make_sockaddr_dl(env,
@@ -1182,6 +1403,114 @@ void esock_encode_sockaddr_dl(ErlNifEnv*          env,
                                      addrLen, esock_atom_link, eSockAddr);
     }
 }
+
+
+static
+ERL_NIF_TERM esock_encode_if_type(ErlNifEnv*   env,
+                                  unsigned int ifType)
+{
+    ERL_NIF_TERM eIfType;
+
+    switch (ifType) {
+#if defined(IFT_OTHER)
+    case IFT_OTHER:
+        eIfType = esock_atom_other;
+        break;
+#endif
+
+#if defined(IFT_HDH1822)
+    case IFT_HDH1822:
+        eIfType = esock_atom_hdh1822;
+        break;
+#endif
+
+#if defined(IFT_X25DDN)
+    case IFT_X25DDN:
+        eIfType = esock_atom_x25ddn;
+        break;
+#endif
+
+#if defined(IFT_X25)
+    case IFT_X25:
+        eIfType = esock_atom_x25;
+        break;
+#endif
+
+#if defined(IFT_ETHER)
+    case IFT_ETHER:
+        eIfType = esock_atom_ether;
+        break;
+#endif
+
+#if defined(IFT_PPP)
+    case IFT_PPP:
+        eIfType = esock_atom_ppp;
+        break;
+#endif
+
+#if defined(IFT_LOOP)
+    case IFT_LOOP:
+        eIfType = esock_atom_loop;
+        break;
+#endif
+
+#if defined(IFT_IPV4)
+    case IFT_IPV4:
+        eIfType = esock_atom_ipv4;
+        break;
+#endif
+
+#if defined(IFT_IPV6)
+    case IFT_IPV6:
+        eIfType = esock_atom_ipv6;
+        break;
+#endif
+
+#if defined(IFT_6TO4)
+    case IFT_6TO4:
+        eIfType = esock_atom_6to4;
+        break;
+#endif
+
+#if defined(IFT_GIF)
+    case IFT_GIF:
+        eIfType = esock_atom_gif;
+        break;
+#endif
+
+#if defined(IFT_FAITH)
+    case IFT_FAITH:
+        eIfType = esock_atom_faith;
+        break;
+#endif
+
+#if defined(IFT_STF)
+    case IFT_STF:
+        eIfType = esock_atom_stf;
+        break;
+#endif
+
+#if defined(IFT_BRIDGE)
+    case IFT_BRIDGE:
+        eIfType = esock_atom_bridge;
+        break;
+#endif
+
+#if defined(IFT_CELLULAR)
+    case IFT_CELLULAR:
+        eIfType = esock_atom_cellular;
+        break;
+#endif
+
+    default:
+        eIfType = MKUI(env, ifType);
+        break;
+    }
+
+    return eIfType;
+}
+
+
 #endif
 
 
@@ -2259,15 +2588,15 @@ ERL_NIF_TERM esock_encode_bool(BOOLEAN_T val)
 
 /* *** esock_decode_level ***
  *
- * Decode option or cmsg level - 'socket' or protocol number.
+ * Decode option or cmsg level - 'socket' or level number.
  *
  */
 extern
-BOOLEAN_T esock_decode_level(ErlNifEnv* env, ERL_NIF_TERM eVal, int *val)
+BOOLEAN_T esock_decode_level(ErlNifEnv* env, ERL_NIF_TERM elevel, int *level)
 {
-    if (COMPARE(esock_atom_socket, eVal) == 0)
-        *val = SOL_SOCKET;
-    else if (! GET_INT(env, eVal, val))
+    if (COMPARE(esock_atom_socket, elevel) == 0)
+        *level = SOL_SOCKET;
+    else if (! GET_INT(env, elevel, level))
         return FALSE;
 
     return TRUE;
@@ -2302,6 +2631,160 @@ ERL_NIF_TERM esock_make_ok2(ErlNifEnv* env, ERL_NIF_TERM any)
 }
 
 
+/* Takes an 'errno' value and converts it to a term.
+ *
+ * If the errno can be translated using erl_errno_id,
+ * then we use that value otherwise we use the errno
+ * integer value converted to a term.
+ * Unless there is a specific error code that can be
+ * handled specially.
+ */
+extern
+ERL_NIF_TERM esock_errno_to_term(ErlNifEnv* env, int err)
+{
+    switch (err) {
+#if defined(NO_ERROR)
+    case NO_ERROR:
+        return MKA(env, "no_error");
+        break;
+#endif
+
+#if defined(WSA_IO_PENDING)
+    case WSA_IO_PENDING:
+        return MKA(env, "io_pending");
+        break;
+#endif
+
+#if defined(WSA_IO_INCOMPLETE)
+    case WSA_IO_INCOMPLETE:
+        return MKA(env, "io_incomplete");
+        break;
+#endif
+
+#if defined(WSA_OPERATION_ABORTED)
+    case WSA_OPERATION_ABORTED:
+        return MKA(env, "operation_aborted");
+        break;
+#endif
+
+#if defined(WSA_INVALID_PARAMETER)
+    case WSA_INVALID_PARAMETER:
+        return MKA(env, "invalid_parameter");
+        break;
+#endif
+
+#if defined(WSAENOTSOCK)
+    case WSAENOTSOCK:
+        return MKA(env, "enotsock");
+        break;
+#endif
+
+#if defined(ERROR_INVALID_NETNAME)
+    case ERROR_INVALID_NETNAME:
+        return MKA(env, "invalid_netname");
+        break;
+#endif
+
+#if defined(ERROR_NETNAME_DELETED)
+    case ERROR_NETNAME_DELETED:
+        return MKA(env, "netname_deleted");
+        break;
+#endif
+
+#if defined(ERROR_TOO_MANY_CMDS)
+        /* The network command limit has been reached */
+    case ERROR_TOO_MANY_CMDS:
+        return MKA(env, "too_many_cmds");
+        break;
+#endif        
+
+#if defined(ERROR_DUP_NAME)
+        /*  Not connected because a duplicate name exists on the network */
+    case ERROR_DUP_NAME:
+        return MKA(env, "duplicate_name");
+        break;
+#endif        
+
+#if defined(ERROR_MORE_DATA)
+        /*
+         * https://stackoverflow.com/questions/31883438/sockets-using-getqueuedcompletionstatus-and-error-more-data
+         */
+    case ERROR_MORE_DATA:
+        return MKA(env, "more_data");
+        break;
+#endif
+
+#if defined(ERROR_NOT_FOUND)
+    case ERROR_NOT_FOUND:
+        return MKA(env, "not_found");
+        break;
+#endif
+
+#if defined(ERROR_NETWORK_UNREACHABLE)
+    case ERROR_NETWORK_UNREACHABLE:
+        return MKA(env, "network_unreachable");
+        break;
+#endif
+
+#if defined(ERROR_PORT_UNREACHABLE)
+    case ERROR_PORT_UNREACHABLE:
+        return MKA(env, "port_unreachable");
+        break;
+#endif        
+
+    default:
+        {
+            char* str = erl_errno_id(err);
+            if ( strcmp(str, "unknown") == 0 )
+                return MKI(env, err);
+            else
+                return MKA(env, str);
+        }
+        break;
+    }
+
+    /* This is just in case of programming error.
+     * We should not get this far!
+     */
+    return MKI(env, err);
+}
+
+
+
+/* *** esock_make_extra_error_info_term ***
+ * This is used primarily for debugging.
+ * Is supposed to be called via the 'MKEEI' macro.
+ */
+extern
+ERL_NIF_TERM esock_make_extra_error_info_term(ErlNifEnv*   env,
+                                              const char*  file,
+                                              const char*  function,
+                                              const int    line,
+                                              ERL_NIF_TERM rawinfo,
+                                              ERL_NIF_TERM info)
+{
+    ERL_NIF_TERM keys[] = {MKA(env, "file"),
+                           MKA(env, "function"),
+                           MKA(env, "line"),
+                           MKA(env, "raw_info"),
+                           MKA(env, "info")};
+    ERL_NIF_TERM vals[] = {MKS(env, file),
+                           MKS(env, function),
+                           MKI(env, line),
+                           rawinfo,
+                           info};
+    unsigned int numKeys = NUM(keys);
+    unsigned int numVals = NUM(vals);
+    ERL_NIF_TERM map;
+
+    ESOCK_ASSERT( numKeys == numVals );
+    ESOCK_ASSERT( MKMA(env, keys, vals, numKeys, &map) );
+
+    return map;
+}
+
+
+                                              
 /* Create an error two (2) tuple in the form:
  *
  *          {error, Reason}
@@ -2313,6 +2796,18 @@ extern
 ERL_NIF_TERM esock_make_error(ErlNifEnv* env, ERL_NIF_TERM reason)
 {
     return MKT2(env, esock_atom_error, reason);
+}
+
+
+
+/* Create an error two (2) tuple in the form:
+ *
+ *          {error, closed}
+ */
+extern
+ERL_NIF_TERM esock_make_error_closed(ErlNifEnv* env)
+{
+    return esock_make_error(env, esock_atom_closed);
 }
 
 
@@ -2348,14 +2843,17 @@ ERL_NIF_TERM esock_make_error_errno(ErlNifEnv* env, int err)
 
 /* Create an error two (2) tuple in the form:
  *
- *          {error, {invalid, What}}}
+ *          {error, {Tag, Reason}}
+ *
+ * Both 'Tag' and 'Reason' are already in the form of an
+ * ERL_NIF_TERM so all we have to do is create "the" tuple.
  */
 extern
-ERL_NIF_TERM esock_make_error_invalid(ErlNifEnv* env, ERL_NIF_TERM what)
+ERL_NIF_TERM esock_make_error_t2r(ErlNifEnv*   env,
+                                  ERL_NIF_TERM tag,
+                                  ERL_NIF_TERM reason)
 {
-    return MKT2(env,
-                esock_atom_error,
-                MKT2(env, esock_atom_invalid, what));
+    return esock_make_error(env, MKT2(env, tag, reason));
 }
 
 
@@ -2364,14 +2862,27 @@ ERL_NIF_TERM esock_make_error_invalid(ErlNifEnv* env, ERL_NIF_TERM what)
  *
  *          {error, {invalid, {integer_range, I}}}
  *
- * The second element (i) is already in the form of an
+ * The second arg (i) is already in the form of an
  * ERL_NIF_TERM so all we have to do is create the tuple.
  */
 extern
 ERL_NIF_TERM esock_make_error_integer_range(ErlNifEnv* env, ERL_NIF_TERM i)
 {
-    return
-        esock_make_invalid(env, MKT2(env, esock_atom_integer_range, i));
+    ERL_NIF_TERM intRange = MKT2(env, esock_atom_integer_range, i);
+
+    return esock_make_error_invalid(env, intRange);
+}
+
+
+
+/* Create an error two (2) tuple in the form:
+ *
+ *          {error, {invalid, What}}}
+ */
+extern
+ERL_NIF_TERM esock_make_error_invalid(ErlNifEnv* env, ERL_NIF_TERM what)
+{
+    return esock_make_error_t2r(env, esock_atom_invalid, what);
 }
 
 
@@ -2427,11 +2938,16 @@ esock_abort(const char* expr,
                  const char* file,
                  int         line)
 {
+#if 0
     fflush(stdout);
     fprintf(stderr, "%s:%d:%s() Assertion failed: %s\n",
             file, line, func, expr);
     fflush(stderr);
     abort();
+#else
+    erts_exit(ERTS_DUMP_EXIT, "%s:%d:%s() Assertion failed: %s\n",
+              file, line, func, expr);
+#endif
 }
 
 
@@ -2457,45 +2973,53 @@ ERL_NIF_TERM esock_self(ErlNifEnv* env)
 
 
 
-/* *** esock_warning_msg ***
+/*
+ * We should really include self in the printout,
+ * so we can se which process are executing the code.
+ * But then I must change the API....something for later.
  *
- * Temporary function for issuing warning messages.
- *
+ * esock_info_msg
+ * esock_warning_msg
+ * esock_error_msg
  */
-extern
-void esock_warning_msg( const char* format, ... )
-{
-  va_list         args;
-  char            f[512 + sizeof(format)]; // This has to suffice...
-  char            stamp[64]; // Just in case...
-  int             res;
 
-  /*
-   * We should really include self in the printout,
-   * so we can se which process are executing the code.
-   * But then I must change the API....something for later.
-   */
+#define MSG_FUNCS                            \
+    MSG_FUNC_DECL(info,    INFO)             \
+    MSG_FUNC_DECL(warning, WARNING)          \
+    MSG_FUNC_DECL(error,   ERROR)
 
-  // 2018-06-29 12:13:21.232089
-  // 29-Jun-2018::13:47:25.097097
+#define MSG_FUNC_DECL(FN, MC)                                  \
+    extern                                                     \
+    void esock_##FN##_msg( const char* format, ... )           \
+    {                                                          \
+       va_list         args;                                   \
+       char            f[512 + sizeof(format)];                \
+       char            stamp[64];                              \
+       int             res;                                    \
+                                                               \
+       if (esock_timestamp_str(stamp, sizeof(stamp))) {        \
+          res = enif_snprintf(f, sizeof(f),                    \
+                              "=" #MC " MSG==== %s ===\r\n%s", \
+                              stamp, format);                  \
+       } else {                                                \
+          res = enif_snprintf(f,                               \
+                              sizeof(f),                       \
+                              "=" #MC " MSG==== %s", format);  \
+       }                                                       \
+                                                               \
+       if (res > 0) {                                          \
+           va_start (args, format);                            \
+           enif_vfprintf (stdout, f, args);                    \
+           va_end (args);                                      \
+           fflush(stdout);                                     \
+       }                                                       \
+                                                               \
+       return;                                                 \
+    }                                                          \
 
-  if (esock_timestamp_str(stamp, sizeof(stamp))) {
-      res = enif_snprintf(f, sizeof(f),
-                          "=WARNING MSG==== %s ===\r\n%s",
-                          stamp, format);
-  } else {
-      res = enif_snprintf(f, sizeof(f), "=WARNING MSG==== %s", format);
-  }
-
-  if (res > 0) {
-      va_start (args, format);
-      enif_vfprintf (stdout, f, args);
-      va_end (args);
-      fflush(stdout);
-  }
-
-  return;
-}
+MSG_FUNCS
+#undef MSG_FUNC_DECL
+#undef MSG_FUNCS
 
 
 /* *** esock_timestamp ***
@@ -2507,7 +3031,7 @@ void esock_warning_msg( const char* format, ... )
  */
 
 extern
-ErlNifTime esock_timestamp()
+ErlNifTime esock_timestamp(void)
 {
     ErlNifTime monTime = enif_monotonic_time(ERL_NIF_USEC);
     ErlNifTime offTime = enif_time_offset(ERL_NIF_USEC);

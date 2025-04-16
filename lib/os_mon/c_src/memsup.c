@@ -1,7 +1,7 @@
 /*
  * %CopyrightBegin%
  * 
- * Copyright Ericsson AB 1996-2021. All Rights Reserved.
+ * Copyright Ericsson AB 1996-2024. All Rights Reserved.
  * 
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -446,9 +446,10 @@ get_extended_mem_apple(memory_ext *me) {
     }
 
     me->free = vm_stat.free_count * mach_page_size;
+    me->available = (vm_stat.inactive_count + vm_stat.free_count) * mach_page_size;
     me->total = total_memory_size;
     me->pagesize = 1;
-    me->flag = F_MEM_TOTAL | F_MEM_FREE;
+    me->flag = F_MEM_TOTAL | F_MEM_FREE | F_MEM_AVAIL;
 }
 #endif
 
@@ -508,7 +509,11 @@ get_basic_mem(unsigned long *tot, unsigned long *used, unsigned long *pagesize){
     }
     *tot      = me.total;
     *pagesize = me.pagesize;
-    *used     = me.total - me.free;
+    if (me.flag & F_MEM_AVAIL) {
+        *used = me.total - me.available;
+    } else {
+        *used = me.total - me.free;
+    }
 #elif defined(BSD4_4)
     struct vmtotal vt;
     long pgsz;
@@ -535,9 +540,9 @@ fail:
 #elif defined(__APPLE__)
     {
         memory_ext me;
-        me.free = 0;
+        me.available = 0;
         get_extended_mem_apple(&me);
-        *used = me.total - me.free;
+        *used = me.total - me.available;
         *tot = total_memory_size;
         *pagesize = 1;
     }
@@ -609,6 +614,8 @@ message_loop(int erlin_fd)
 		    case SHOW_SYSTEM_MEM:
 			extended_show_mem();
 			break;
+		    case EXIT:
+			return;
 		    default:	/* ignore all other messages */
 			break;
 		    }

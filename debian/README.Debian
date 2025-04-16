@@ -10,8 +10,7 @@ mailto:pkg-erlang-devel@alioth-lists.debian.net (theh mailing list)
 ----------------
 
 Note, that if you want to get Erlang documentation, you'll have to
-install erlang-manpages (for manual pages) and/or erlang-doc
-(for docs in HTML and PDF).
+install erlang-doc (for docs in HTML).
 
 ----------------
 

@@ -1,7 +1,7 @@
 ;;
 ;; %CopyrightBegin%
 ;;
-;; Copyright Ericsson AB 2010-2020. All Rights Reserved.
+;; Copyright Ericsson AB 2010-2024. All Rights Reserved.
 ;;
 ;; Licensed under the Apache License, Version 2.0 (the "License");
 ;; you may not use this file except in compliance with the License.
@@ -70,6 +70,8 @@
      erlang-skel-ct-test-suite-s erlang-skel-header)
     ("Large Common Test suite" "ct-test-suite-l"
      erlang-skel-ct-test-suite-l erlang-skel-header)
+    ("Common Test Hook" "ct-hook"
+     erlang-skel-ct-hook erlang-skel-header)
     ("Erlang TS test suite" "ts-test-suite"
      erlang-skel-ts-test-suite erlang-skel-header)
   )
@@ -178,7 +180,7 @@ Please see the function `tempo-define-template'.")
   "*The skeleton template to generate a version control attribute.
 The default is to insert nothing.  Example of usage:
 
-    (setq erlang-skel-vc '(& \"-rcs(\\\"$\Id: $ \\\").\") n)
+    (setq erlang-skel-vc \\='(& \"-rcs(\\\"$\Id: $ \\\").\") n)
 
 Please see the function `tempo-define-template'.")
 
@@ -212,7 +214,7 @@ Look in the module `time-stamp' for a battery of functions.")
           (user-full-name)  n))
   "*The template for a copyright line in the header, normally empty.
 This variable should be bound to a `tempo' template, for example:
-  '(& \"%%% Copyright (C) 2000, Yoyodyne, Inc.\" n)
+  \\='(& \"%%% Copyright (C) 2000, Yoyodyne, Inc.\" n)
 Please see the function `tempo-define-template'.")
 
 (defvar erlang-skel-created-comment
@@ -1845,6 +1847,107 @@ Please see the function `tempo-define-template'.")
  "*The template of a library module.
  Please see the function `tempo-define-template'.")
 
+(defvar erlang-skel-ct-hook
+  '((erlang-skel-include erlang-skel-normal-header)
+    "%% Mandatory callbacks" n
+    "-export([init/2])." n
+    n
+    "%% Optional callbacks" n
+    "-export([id/1])." n
+    n
+    "-export([pre_init_per_suite/3])." n
+    "-export([post_init_per_suite/4])." n
+    n
+    "-export([pre_end_per_suite/3])." n
+    "-export([post_end_per_suite/4])." n
+    n
+    "-export([pre_init_per_group/4])." n
+    "-export([post_init_per_group/5])." n
+    n
+    "-export([pre_end_per_group/4])." n
+    "-export([post_end_per_group/5])." n
+    n
+    "-export([pre_init_per_testcase/4])." n
+    "-export([post_init_per_testcase/5])." n
+    n
+    "-export([pre_end_per_testcase/4])." n
+    "-export([post_end_per_testcase/5])." n
+    n
+    "-export([on_tc_fail/4])." n
+    "-export([on_tc_skip/4])." n
+    n
+    "-export([terminate/1])." n
+    n
+    "%% The hook state is threaded through all callbacks," n
+    "%% but can be anything the hook needs, replace as desired." n
+    "-record(state, { cases=0, suites=0, groups=0, skips=0, fails=0 })." n
+    n
+    "%% Return a unique id for this CTH." n
+    "id(Opts) ->" n
+    "    %% A reference is the default implementation, this can be removed" n
+    "    %% or some value can be read from Opts instead." n
+    "    erlang:make_ref()." n
+    n
+    "%% Always called before any other callback function, once per installed hook." n
+    "init(Id, Opts) ->" n
+    "    {ok, #state{}}." n
+    n
+    "pre_init_per_suite(Suite, Config, State) ->" n
+    "    {Config, State}." n
+    n
+    "post_init_per_suite(Suite, Config, Return, State) ->" n
+    "    {Return, State}." n
+    n
+    "pre_end_per_suite(Suite, Config, State) ->" n
+    "    {Config, State}." n
+    n
+    "post_end_per_suite(Suite, Config, Return, State) ->" n
+    "    {Return, State#state{suites = State#state.suites + 1}}." n
+    n
+    "pre_init_per_group(Suite, Group, Config, State) ->" n
+    "    {Config, State}." n
+    n
+    "post_init_per_group(Suite, Group, Config, Return, State) ->" n
+    "    {Return, State}." n
+    n
+    "pre_end_per_group(Suite, Group, Config, State) ->" n
+    "    {Config, State}." n
+    n
+    "post_end_per_group(Suite, Group, Config, Return, State) ->" n
+    "    {Return, State#state{groups = State#state.groups + 1}}." n
+    n
+    "pre_init_per_testcase(Suite, TC, Config, State) ->" n
+    "    {Config, State}." n
+    n
+    "%% Called after each init_per_testcase (immediately before the test case)." n
+    "post_init_per_testcase(Suite, TC, Config, Return, State) ->" n
+    "    {Return, State}." n
+    n
+    "%% Called before each end_per_testcase (immediately after the test case)." n
+    "pre_end_per_testcase(Suite, TC, Config, State) ->" n
+    "    {Config, State}." n
+    n
+    "post_end_per_testcase(Suite, TC, Config, Return, State) ->" n
+    "    {Return, State#state{cases = State#state.cases + 1}}." n
+    n
+    "%% Called after post_init_per_suite, post_end_per_suite, post_init_per_group," n
+    "%% post_end_per_group and post_end_per_testcase if the suite, group or test case failed." n
+    "on_tc_fail(Suite, TC, Reason, State) ->" n
+    "    State#state{fails = State#state.fails + 1}." n
+    n
+    "%% Called when a test case is skipped by either user action" n
+    "%% or due to an init function failing." n
+    "on_tc_skip(Suite, TC, Reason, State) ->" n
+    "    State#state{skips = State#state.skips + 1}." n
+    n
+    "%% Called when the scope of the CTH is done" n
+    "terminate(State) ->" n
+    "    logger:notice(\"~s is done: ~p~n\", [?MODULE, State])." n
+    n
+    )
+ "*The template of a library module.
+ Please see the function `tempo-define-template'.")
+
 ;; Skeleton code:
 
 ;; This code is based on the package `tempo' which is part of modern
@@ -1923,7 +2026,7 @@ package not be present, this function does nothing."
 
 Example of use, assuming that `erlang-skel-func' is defined:
 
- (defvar foo-skeleton '(\"%%% New function:\"
+ (defvar foo-skeleton \\='(\"%%% New function:\"
                         (erlang-skel-include erlang-skel-func)))
 
 Technically, this function returns the `tempo' attribute`(l ...)' which

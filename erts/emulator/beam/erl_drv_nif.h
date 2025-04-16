@@ -1,7 +1,7 @@
 /*
  * %CopyrightBegin%
  *
- * Copyright Ericsson AB 2010-2022. All Rights Reserved.
+ * Copyright Ericsson AB 2010-2024. All Rights Reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -182,7 +182,7 @@ typedef struct {
  * D: Has 1-to-1 Deallocator function with ptr argument. ((malloc(DTOR,PTRPOS)))
  */
 
-#ifdef __has_attribute
+#if defined(__has_attribute) && !defined(__WIN32__)
 #  if __has_attribute(warn_unused_result)
 #    undef  ERL_NAPI_ATTR_WUR
 #    define ERL_NAPI_ATTR_WUR __attribute__((warn_unused_result))

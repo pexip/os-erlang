@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2008-2022. All Rights Reserved.
+%% Copyright Ericsson AB 2008-2025. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -88,7 +88,8 @@
          daemon_replace_options_simple/1,
          daemon_replace_options_algs/1,
          daemon_replace_options_algs_connect/1,
-         daemon_replace_options_algs_conf_file/1
+         daemon_replace_options_algs_conf_file/1,
+         daemon_replace_options_not_found/1
 	]).
 
 %%% Common test callbacks
@@ -110,7 +111,7 @@
 
 suite() ->
     [{ct_hooks,[ts_install_cth]},
-     {timetrap,{seconds,60}}].
+     {timetrap,{seconds,15}}].
 
 all() -> 
     [connectfun_disconnectfun_server,
@@ -159,6 +160,7 @@ all() ->
      daemon_replace_options_algs,
      daemon_replace_options_algs_connect,
      daemon_replace_options_algs_conf_file,
+     daemon_replace_options_not_found,
      {group, hardening_tests}
     ].
 
@@ -1514,7 +1516,7 @@ max_sessions(Config, ParallelLogin, Connect0) when is_function(Connect0,2) ->
 	    [_|_] = Connections,
 
 	    %% N w try one more than allowed:
-	    ct:pal("Info Report expected here (if not disabled) ...",[]),
+	    ct:log("Info Report expected here (if not disabled) ...",[]),
 	    try Connect(Host,Port)
 	    of
 		_ConnectionRef1 ->
@@ -1563,7 +1565,7 @@ try_to_connect(Connect, Host, Port, Pid, Tref, N) ->
 
 %%--------------------------------------------------------------------
 max_sessions_drops_tcp_connects() ->
-    [{timetrap,{minutes,20}}].
+    [{timetrap,{minutes,2}}].
 
 max_sessions_drops_tcp_connects(Config) ->
     MaxSessions = 20,
@@ -2031,6 +2033,14 @@ daemon_replace_options_algs_conf_file(Config) ->
         [] ->
             {skip, "No non-default kex"}
     end.
+
+%%--------------------------------------------------------------------
+daemon_replace_options_not_found(_Config) ->
+    %% when the daemon doesn't exist the error should be the same
+    %% in daemon_info and daemon_replace_options
+    %% which is {error, bad_daemon_ref}
+    Error = ssh:daemon_info(self()),
+    Error = ssh:daemon_replace_options(self(), []).
 
 %%--------------------------------------------------------------------
 %% Internal functions ------------------------------------------------

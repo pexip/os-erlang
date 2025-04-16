@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %% 
-%% Copyright Ericsson AB 1996-2022. All Rights Reserved.
+%% Copyright Ericsson AB 1996-2024. All Rights Reserved.
 %% 
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -18,6 +18,7 @@
 %% %CopyrightEnd%
 %%
 -module(snmp_generic_mnesia).
+-moduledoc false.
 
 -export([variable_get/1, variable_set/2, variable_inc/2]).
 -export([table_func/2, table_func/4, 
@@ -185,8 +186,8 @@ make_row2(RowList, 1) -> RowList;
 make_row2([_OtherIndex | RowList], N) ->
     make_row2(RowList, N-1).
 
-make_row_list(Row) ->
-    make_row_list(size(Row), Row, []).
+make_row_list(Row) when is_tuple(Row) ->
+    make_row_list(tuple_size(Row), Row, []).
 make_row_list(N, Row, Acc) when N > 2 ->
     make_row_list(N-1, Row, [element(N, Row) | Acc]);
 make_row_list(2, Row, Acc) ->

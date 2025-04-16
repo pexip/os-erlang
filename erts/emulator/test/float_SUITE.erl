@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %% 
-%% Copyright Ericsson AB 1997-2022. All Rights Reserved.
+%% Copyright Ericsson AB 1997-2023. All Rights Reserved.
 %% 
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -71,10 +71,22 @@ negative_zero(Config) when is_list(Config) ->
 
 do_negative_zero(Op, Ops) ->
     Res = <<(my_apply(erlang, Op, Ops))/float>>,
+
+    %% Test the canonical op against its mixed-type instruction
     Res = <<(case {Op, Ops} of
                  {'-', [A]} -> -A;
                  {'*', [A, B]} -> A * B
              end)/float>>,
+
+    %% Test the canonical op against its type-specific instructions, if
+    %% applicable
+    Res = <<(case {Op, Ops} of
+                {'-', [C]} when is_float(C) -> -C;
+                {'-', [C]} -> -C;
+                {'*', [C, D]} when is_float(C), is_float(D) -> C * D;
+                {'*', [C, D]} -> C * D
+            end)/float>>,
+
     Res.
 
 %% Forces floating point exceptions and tests that subsequent, legal,
@@ -366,7 +378,7 @@ op_add(A, B) ->
     R = unify(catch A + B, Info),
     R = unify(my_apply(erlang,'+',[A,B]), Info),
     case R of
-        _ when A + B =:= element(1,R) -> ok;
+        _ when A + B == element(1,R) -> ok;
         {{'EXIT',badarith}, Info} -> ok
     end.
 
@@ -375,7 +387,7 @@ op_sub(A, B) ->
     R = unify(catch A - B, Info),
     R = unify(my_apply(erlang,'-',[A,B]), Info),
     case R of
-        _ when A - B =:= element(1,R) -> ok;
+        _ when A - B == element(1,R) -> ok;
         {{'EXIT',badarith}, Info} -> ok
     end.
 
@@ -384,7 +396,7 @@ op_mul(A, B) ->
     R = unify(catch A * B, Info),
     R = unify(my_apply(erlang,'*',[A,B]), Info),
     case R of
-        _ when A * B =:= element(1,R) -> ok;
+        _ when A * B == element(1,R) -> ok;
         {{'EXIT',badarith}, Info} -> ok
     end.
 
@@ -393,7 +405,7 @@ op_div(A, B) ->
     R = unify(catch A / B, Info),
     R = unify(my_apply(erlang,'/',[A,B]), Info),
     case R of
-        _ when A / B =:= element(1,R) -> ok;
+        _ when A / B == element(1,R) -> ok;
         {{'EXIT',badarith}, Info} -> ok
     end.
 

@@ -1,3 +1,237 @@
+erlang (1:27.3.3+dfsg-1) unstable; urgency=medium
+
+  * New upstream release.
+
+ -- Sergei Golovan <sgolovan@debian.org>  Wed, 16 Apr 2025 17:20:18 +0300
+
+erlang (1:27.3.2+dfsg-1) unstable; urgency=medium
+
+  * New upstream release.
+  * Reorganize debian/rules to respect "parallel=N" when passed
+    in DEB_BUILD_OPTIONS.
+
+ -- Sergei Golovan <sgolovan@debian.org>  Sun, 06 Apr 2025 15:14:29 +0300
+
+erlang (1:27.3.1+dfsg-1) unstable; urgency=medium
+
+  * New upstream release.
+  * Fix CVE-2025-30211 in erlang-ssh application, where a maliciously
+    formed KEX init message could result with high memory usage (closes:
+    #1101713).
+
+ -- Sergei Golovan <sgolovan@debian.org>  Tue, 01 Apr 2025 08:28:34 +0300
+
+erlang (1:27.3+dfsg-1) unstable; urgency=medium
+
+  * New upstream release.
+  * Refresh patches.
+  * Bump standards version to 4.7.2.
+
+ -- Sergei Golovan <sgolovan@debian.org>  Tue, 11 Mar 2025 11:30:48 +0300
+
+erlang (1:27.2.4+dfsg-1) unstable; urgency=medium
+
+  * New upstream release.
+
+ -- Sergei Golovan <sgolovan@debian.org>  Thu, 20 Feb 2025 18:40:49 +0300
+
+erlang (1:27.2.3+dfsg-1) unstable; urgency=medium
+
+  * New upstream release.
+
+ -- Sergei Golovan <sgolovan@debian.org>  Wed, 19 Feb 2025 19:45:14 +0300
+
+erlang (1:27.2.2+dfsg-1) unstable; urgency=medium
+
+  * New upstream release.
+
+ -- Sergei Golovan <sgolovan@debian.org>  Mon, 10 Feb 2025 11:38:21 +0300
+
+erlang (1:27.2.1+dfsg-2) unstable; urgency=medium
+
+  * Disable support for timestamps for year 2038 and above for hurd-i386.
+  * Define _GNU_SOURCE for hurd-i386 and hurd-amd64.
+
+ -- Sergei Golovan <sgolovan@debian.org>  Thu, 06 Feb 2025 15:36:38 +0300
+
+erlang (1:27.2.1+dfsg-1) unstable; urgency=medium
+
+  * New upstream release.
+  * Drop no longer supported configure options from debian/rules.
+
+ -- Sergei Golovan <sgolovan@debian.org>  Fri, 24 Jan 2025 13:38:58 +0300
+
+erlang (1:27.2+dfsg-2) unstable; urgency=medium
+
+  * Fix FTBFS with ex-doc running on elixir 1.18 (closes: #1093329).
+
+ -- Sergei Golovan <sgolovan@debian.org>  Sat, 18 Jan 2025 19:45:12 +0300
+
+erlang (1:27.2+dfsg-1) unstable; urgency=medium
+
+  * New upstream release.
+  * Refresh patches.
+  * Fix FTBFS with ex-doc running on newer elixir (closes: #1090217).
+
+ -- Sergei Golovan <sgolovan@debian.org>  Fri, 10 Jan 2025 20:41:54 +0300
+
+erlang (1:27.1.2+dfsg-1) unstable; urgency=medium
+
+  * New upstream release.
+  * Refresh patches.
+  * Drop link of typer to /usr/bin to avoid clashing with the typer package
+    (closes: #1074166).
+
+ -- Sergei Golovan <sgolovan@debian.org>  Tue, 03 Dec 2024 15:10:38 +0300
+
+erlang (1:27.0.1+dfsg-3) experimental; urgency=medium
+
+  * Correct the fix from 1:27.0.1+dfsg-2 for other architectures.
+
+ -- Sergei Golovan <sgolovan@debian.org>  Thu, 29 Aug 2024 13:53:40 +0300
+
+erlang (1:27.0.1+dfsg-2) experimental; urgency=medium
+
+  * Fix FTBFS with GCC 14 on i386.
+
+ -- Sergei Golovan <sgolovan@debian.org>  Thu, 29 Aug 2024 12:19:23 +0300
+
+erlang (1:27.0.1+dfsg-1) experimental; urgency=medium
+
+  * New upstream release.
+  * Refresh patches.
+
+ -- Sergei Golovan <sgolovan@debian.org>  Thu, 11 Jul 2024 09:24:05 +0300
+
+erlang (1:27.0+dfsg-1) experimental; urgency=medium
+
+  * New upstream release.
+  * Refresh patches.
+  * Remove no longer necessary patch which fixed FTBFS on s390x.
+  * Use system-wide libraries from the libjs-jquery and libjs-jquery-ui
+    packages for jinterface documentation.
+  * Do not compress Markdown docs.
+  * Fix description of erlang-doc package by removing mentions of PDF
+    format.
+  * Drop link from /usr/share/man to /usr/lib/erlang/man because Erlang
+    no longer ships documentation in man format.
+  * Add a patch which replaces external Javascript resource by a local one.
+
+ -- Sergei Golovan <sgolovan@debian.org>  Fri, 24 May 2024 19:38:03 +0300
+
+erlang (1:27.0~rc3+dfsg-4) experimental; urgency=medium
+
+  * Remove an obsolete patch which enabled building Erlang with GCJ as
+    a Java compiler.
+  * Drop using non-standard ${erlang-base} substvar because the erlang-hipe
+    package is dropped long time ago.
+  * Clean debian/rules.
+  * Actually move typer to the erlang-dialyzer package.
+  * Enable building docs except for <nodoc> build profile.
+  * Package edoc.1 and cdv.1 manpages.
+
+ -- Sergei Golovan <sgolovan@debian.org>  Thu, 16 May 2024 11:24:58 +0300
+
+erlang (1:27.0~rc3+dfsg-3) experimental; urgency=medium
+
+  * Add a patch by John Högberg which makes Erlang 27 build on s390x.
+
+ -- Sergei Golovan <sgolovan@debian.org>  Mon, 22 Apr 2024 14:55:07 +0300
+
+erlang (1:27.0~rc3+dfsg-2) experimental; urgency=medium
+
+  * Move ronn from build-depends-indep to build-depends because it is used
+    to build manpages which go into arcitecture-dependent packages.
+
+ -- Sergei Golovan <sgolovan@debian.org>  Sat, 20 Apr 2024 19:27:50 +0300
+
+erlang (1:27.0~rc3+dfsg-1) experimental; urgency=medium
+
+  * New upstream release candidate.
+  * Refresh patches.
+  * Upload to experimental.
+  * Bump standards version to 4.7.0.
+  * Temporarily disable building HTML documentation until elixir-ex-doc is
+    entered Debian.
+
+ -- Sergei Golovan <sgolovan@debian.org>  Sat, 20 Apr 2024 17:57:44 +0300
+
+erlang (1:27.0~rc2+dfsg-1) experimental; urgency=medium
+
+  * New upstream release candidate.
+  * Refresh patches.
+  * Bump required autoconf version in build dependencies to 2.72.
+  * Upload to experimental.
+
+ -- Sergei Golovan <sgolovan@debian.org>  Sun, 24 Mar 2024 12:30:21 +0300
+
+erlang (1:27.0~rc1+dfsg-1) experimental; urgency=medium
+
+  * New upstream release candidate.
+  * Upload to experimental.
+  * Fix interdependencies for the binary packages.
+  * Refresh patches, remove no longer necessary ones.
+  * Remove erlang-erl-docgen package because it has been dropped upstream.
+  * Remove erlang-manpages package because upstream no longer supports
+    creating documentation in the form of manpages.
+  * Fix placing examples from the sasl library to erlang-examples.
+  * Drop doc-base indices.
+  * Move typer to the erlang-dialyzer package.
+  * Add links for observer's cdv crashdump viewer and edoc's edoc
+    documentation generator to /usr/bin.
+
+ -- Sergei Golovan <sgolovan@debian.org>  Sun, 03 Mar 2024 14:31:29 +0300
+
+erlang (1:26.2.1+dfsg-1) experimental; urgency=medium
+
+  * New upstream release.
+  * Upload to experimental.
+
+ -- Sergei Golovan <sgolovan@debian.org>  Fri, 22 Dec 2023 15:35:54 +0300
+
+erlang (1:26.1.2+dfsg-1) experimental; urgency=medium
+
+  * New upstream release.
+  * Upload to experimental.
+
+ -- Sergei Golovan <sgolovan@debian.org>  Sun, 15 Oct 2023 17:51:39 +0300
+
+erlang (1:26.0.2+dfsg-1) experimental; urgency=medium
+
+  * New upstream release.
+  * Upload to experimental.
+
+ -- Sergei Golovan <sgolovan@debian.org>  Tue, 11 Jul 2023 12:25:40 +0300
+
+erlang (1:26.0.1+dfsg-1) experimental; urgency=medium
+
+  * New upstream release.
+  * Upload to experimental.
+
+ -- Sergei Golovan <sgolovan@debian.org>  Thu, 08 Jun 2023 16:51:45 +0300
+
+erlang (1:26.0+dfsg-1) experimental; urgency=medium
+
+  * New upstream release.
+  * Refresh patches.
+  * Upload to experimental.
+
+ -- Sergei Golovan <sgolovan@debian.org>  Tue, 16 May 2023 19:00:41 +0300
+
+erlang (1:26.0~rc3+dfsg-1) experimental; urgency=medium
+
+  * New upstream release candidate.
+  * Upload to experimental.
+
+ -- Sergei Golovan <sgolovan@debian.org>  Fri, 14 Apr 2023 11:19:40 +0300
+
+erlang (1:26.0~rc2+dfsg-1) experimental; urgency=medium
+
+  * New upstream release candidate.
+  * Upload to experimental.
+
+ -- Sergei Golovan <sgolovan@debian.org>  Wed, 22 Mar 2023 21:24:10 +0300
+
 erlang (1:25.2.3+dfsg-1) unstable; urgency=medium
 
   * New upstream release.

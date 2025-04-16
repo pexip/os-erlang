@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2002-2022. All Rights Reserved.
+%% Copyright Ericsson AB 2002-2024. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -61,6 +61,7 @@
 -define(HAS_SUPPORT_IPV6(),  ?LIB:has_support_ipv6()).
 
 -define(PCALL(F, T, D),      ?LIB:proxy_call(F, T, D)).
+-define(PCALL(F, T, PT, D),  ?LIB:proxy_call(F, T, PT, D)).
 
 
 %% - Time macros -
@@ -128,7 +129,8 @@
 -define(P(C),               ?LIB:p(?MODULE, C)).
 
 %% Takes a format call (such as io:format) and produces a printable string
--define(F(F, A),            ?LIB:f(F, A)).
+-define(F(_FS_, _AS_),      ?LIB:f((_FS_), (_AS_))).
+-define(F(_FS_),            ?F((_FS_), [])).
 
 -ifdef(snmp_debug).
 -define(DBG(F,A),      ?IPRINT(F, A)).

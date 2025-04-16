@@ -20,6 +20,7 @@
 %% @author Kostis Sagonas <kostis@it.uu.se>
 
 -module(erl_bif_types).
+-moduledoc false.
 
 -define(BITS, 128). %This is only in bsl to convert answer to pos_inf/neg_inf.
 -export([type/3, type/4, type/5, arg_types/3,
@@ -67,10 +68,10 @@
 		    t_is_cons/2,
 		    t_is_float/2,
 		    t_is_fun/2,
+		    t_is_impossible/1,
 		    t_is_integer/2,
 		    t_is_nil/1, t_is_nil/2,
 		    t_is_none/1,
-		    t_is_none_or_unit/1,
 		    t_is_number/2,
 		    t_is_pid/2,
 		    t_is_port/2,
@@ -917,8 +918,10 @@ type(erlang, system_info, 1, Xs, Opaques) ->
 		     t_internal_cpu_topology();
 		   ['loaded'] ->
 		     t_binary();
-		   ['logical_processors'] ->
-		     t_non_neg_fixnum();
+		   [P] when P == 'logical_processors'
+		        orelse P == 'logical_processors_available'
+		        orelse P == 'logical_processors_online' ->
+		     t_sup([t_non_neg_fixnum(),t_atom('unknown')]);
 		   ['machine'] ->
 		     t_string();
 		   ['multi_scheduling'] ->
@@ -1680,7 +1683,7 @@ list_replace(1, E, [_X | Xs]) ->
   [E | Xs].
 
 any_is_none_or_unit(Ts) ->
-  lists:any(fun erl_types:t_is_none_or_unit/1, Ts).
+  lists:any(fun erl_types:t_is_impossible/1, Ts).
 
 check_guard([X], Test, Type, Opaques) ->
   check_guard_single(X, Test, Type, Opaques).
@@ -2565,7 +2568,7 @@ check_fun_application(Fun, Args, Opaques) ->
     true ->
       case t_fun_args(Fun, Opaques) of
 	unknown ->
-	  case t_is_none_or_unit(t_fun_range(Fun, Opaques)) of
+	  case t_is_impossible(t_fun_range(Fun, Opaques)) of
 	    true -> error;
 	    false -> ok
 	  end;
@@ -2573,7 +2576,7 @@ check_fun_application(Fun, Args, Opaques) ->
 	  case any_is_none_or_unit(inf_lists(FunDom, Args, Opaques)) of
 	    true -> error;
 	    false ->
-	      case t_is_none_or_unit(t_fun_range(Fun, Opaques)) of
+	      case t_is_impossible(t_fun_range(Fun, Opaques)) of
 		true -> error;
 		false -> ok
 	      end

@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2010-2022. All Rights Reserved.
+%% Copyright Ericsson AB 2010-2024. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -30,9 +30,18 @@
          run/1]).
 
 %% common_test wrapping
--export([suite/0,
+-export([
+         %% Framework functions
+         suite/0,
          all/0,
-         parallel/1]).
+         init_per_suite/1,
+         end_per_suite/1,
+         init_per_testcase/2,
+         end_per_testcase/2,
+        
+         %% The test cases
+         parallel/1
+        ]).
 
 %% testcases
 -export([send_ok/1,
@@ -80,6 +89,7 @@
          send_destination_4/1,
          send_destination_5/1,
          send_destination_6/1,
+         send_destination_7/1,
          send_bad_option_1/1,
          send_bad_option_2/1,
          send_bad_filter_1/1,
@@ -109,17 +119,23 @@
 -include("diameter.hrl").
 -include("diameter_gen_base_rfc3588.hrl").
 -include("diameter_gen_base_accounting.hrl").
+-include("diameter_util.hrl").
+
+
 %% The listening transports use RFC 3588 dictionaries, the client
 %% transports use either 3588 or 6733. (So can't use the record
 %% definitions in the latter case.)
 
 %% ===========================================================================
 
--define(util, diameter_util).
-
 -define(A, list_to_atom).
 -define(L, atom_to_list).
 -define(B, iolist_to_binary).
+
+-define(TRL(F),    ?TRL(F, [])).
+-define(TRL(F, A), ?LOG("DTR", F, A)).
+
+%% ===========================================================================
 
 %% Don't use is_record/2 since dictionary hrl's aren't included.
 %% (Since they define conflicting records with the same names.)
@@ -145,7 +161,7 @@
 -define(RFCS, [rfc3588, rfc6733, rfc4005]).
 
 %% Which transport protocol to use.
--define(TRANSPORTS, [sctp || ?util:have_sctp()] ++ [tcp]).
+-define(TRANSPORTS, [sctp || ?HAVE_SCTP()] ++ [tcp]).
 
 -record(group, {transport,
                 strings,
@@ -247,8 +263,43 @@ suite() ->
 all() ->
     [parallel].
 
+init_per_suite(Config) ->
+    ?TRL("init_per_suite -> entry with"
+         "~n   Config: ~p", [Config]),
+    ?DUTIL:init_per_suite(Config).
+
+end_per_suite(Config) ->
+    ?TRL("end_per_suite -> entry with"
+         "~n   Config: ~p", [Config]),
+    ?DUTIL:end_per_suite(Config).
+
+
+%% This test case can take a *long* time, so if the machine is too slow, skip
+init_per_testcase(parallel = Case, Config) when is_list(Config) ->
+    ?TRL("init_per_testcase(~w) -> check factor", [Case]),
+    Key = dia_factor,
+    case lists:keysearch(Key, 1, Config) of
+        {value, {Key, Factor}} when (Factor > 10) ->
+            ?TRL("init_per_testcase(~w) -> Too slow (~w) => SKIP",
+                 [Case, Factor]),
+            {skip, {machine_too_slow, Factor}};
+        _ ->
+            ?TRL("init_per_testcase(~w) -> run test", [Case]),
+            Config
+    end;
+init_per_testcase(Case, Config) ->
+    ?TRL("init_per_testcase(~w) -> entry", [Case]),
+    Config.
+
+
+end_per_testcase(Case, Config) when is_list(Config) ->
+    ?TRL("end_per_testcase(~w) -> entry", [Case]),
+    Config.
+
+
 parallel(_Config) ->
     run().
+
 
 %% ===========================================================================
 
@@ -263,15 +314,16 @@ parallel(_Config) ->
 %% configuration results in sufficient coverage over time.
 
 run() ->
-    Svc = ?util:unique_string(),
-    run(#group{transport = ?util:choose(?TRANSPORTS),
+    %% ok = logger:set_primary_config(level, debug),
+    Svc = ?UNIQUE_STRING(),
+    run(#group{transport = ?CHOOSE(?TRANSPORTS),
                strings = bool(),
-               encoding = ?util:choose(?ENCODINGS),
+               encoding = ?CHOOSE(?ENCODINGS),
                client_service = [$C | Svc],
-               client_dict = appdict(?util:choose(?RFCS)),
+               client_dict = appdict(?CHOOSE(?RFCS)),
                client_sender = bool(),
                server_service = [$S | Svc],
-               server_decoding = ?util:choose(?DECODINGS),
+               server_decoding = ?CHOOSE(?DECODINGS),
                server_sender = true,  %% avoid deadlock
                server_throttle = bool()}).
 
@@ -279,9 +331,10 @@ run() ->
 
 run(#group{} = Cfg) ->
     _ = result_codes(Cfg),
-    io:format("config: ~p~n", [Cfg]),
+    ?TRL("config:"
+         "~n   ~p", [Cfg]),
     try
-        ?util:run([{[fun traffic/1, Cfg], 60000}])
+        ?RUN([{[fun traffic/1, Cfg], 60000}])
     after
         code:delete(nas4005),
         code:purge(nas4005),
@@ -291,13 +344,66 @@ run(#group{} = Cfg) ->
 %% traffic/1
 
 traffic(#group{} = Cfg) ->
+    ?TRL("~w -> compile and load", [?FUNCTION_NAME]),
     _ = compile_and_load(),
+    ?TRL("~w -> start diameter", [?FUNCTION_NAME]),
     ok = diameter:start(),
+    ?TRL("~w -> start server", [?FUNCTION_NAME]),
     LRef = server(Cfg),
+    ?TRL("~w -> start client", [?FUNCTION_NAME]),
     ok = client(Cfg, LRef),
+    ?TRL("~w -> send", [?FUNCTION_NAME]),
     [] = send(Cfg),
+    ?TRL("~w -> print service(s) info", [?FUNCTION_NAME]),
+    print_services_info(),
+    ?TRL("~w -> stop service(s)", [?FUNCTION_NAME]),
     ok = stop_services(Cfg),
-    [] = ets:tab2list(diameter_request).
+    ?TRL("~w -> verify (no remaining) requests", [?FUNCTION_NAME]),
+    [] = ets:tab2list(diameter_request),
+    ?TRL("~w -> done", [?FUNCTION_NAME]),
+    ok.
+
+
+print_services_info() ->
+    print_services_info(diameter:services()).
+
+print_services_info([]) ->
+    io:format("~n", []);
+print_services_info([Service | Services]) ->
+    io:format("~n   Service: ~s"
+              "~n      Config:"
+              "~n         ~p"
+              "~n      Which Connections:"
+              "~n         ~p"
+              "~n      Which Connections/Service:"
+              "~n         ~p"
+              "~n      Which Watchdogs:"
+              "~n         ~p"
+              "~n      Which Watchdogs/Service:"
+              "~n         ~p"
+              "~n      Which Transports:"
+              "~n         ~p"
+              "~n      Which Transports/Service:"
+              "~n         ~p"
+              "~n      Peers Info:"
+              "~n         ~p"
+              "~n      Transport Info:"
+              "~n         ~p"
+              "~n      All info:"
+              "~n         ~p",
+              [Service,
+               diameter_config:lookup(Service),
+               diameter:which_connections(),
+               diameter:which_connections(Service),
+               diameter:which_watchdogs(),
+               diameter:which_watchdogs(Service),
+               diameter:which_transports(),
+               diameter:which_transports(Service),
+               diameter:service_info(Service, peers),
+               diameter:service_info(Service, transport),
+               diameter:service_info(Service, all)]),
+    print_services_info(Services).
+
 
 %% start_service/2
 
@@ -340,6 +446,10 @@ wait(MRef) ->
 %% server/1
 
 server(Config) ->
+
+    logger:debug("entry with"
+                 "~n   Config: ~p", [Config]),
+
     #group{transport = T,
            client_sender = CS,
            server_service = SN,
@@ -349,20 +459,25 @@ server(Config) ->
         = Grp
         = group(Config),
     ok = start_service(SN, [{traffic_counters, bool()},
-                            {decode_format, SD}
+                            {decode_format, SD},
+                            {bins_info, bins_info()}
                             | ?SERVICE(SN, Grp)]),
     Cfg = [{sender, SS},
            {message_cb, ST andalso {?MODULE, message, [0]}}]
-        ++ [{packet, ?util:choose([false, raw])} || T == sctp andalso CS]
+        ++ [{packet, ?CHOOSE([false, raw])} || T == sctp andalso CS]
         ++ [{unordered, unordered()} || T == sctp],
     Opts = [{capabilities_cb, fun capx/2},
             {pool_size, 8}
            | server_apps()],
-    _LRef = ?util:listen(SN, [T | Cfg], Opts).
+    _LRef = ?LISTEN(SN, [T | Cfg], Opts).
 
 %% client/1
 
 client(Config, LRef) ->
+
+    logger:debug("entry with"
+                 "~n   Config: ~p", [Config]),
+
     #group{transport = T,
            encoding = E,
            client_service = CN,
@@ -372,9 +487,10 @@ client(Config, LRef) ->
     ok = start_service(CN, [{traffic_counters, bool()},
                             {sequence, ?CLIENT_MASK},
                             {decode_format, map},
-                            {strict_arities, decode}
+                            {strict_arities, decode},
+                            {bins_info, bins_info()}
                             | ?SERVICE(CN, Grp)]),
-    _ = [?util:connect(CN, [T | C], LRef, O)
+    _ = [?CONNECT(CN, [T | C], LRef, O)
          || C <- [[{sender, CS} | client_opts(T)]],
             D <- ?DECODINGS,  %% for multiple candidate peers
             R <- ?RFCS,
@@ -387,8 +503,15 @@ client(Config, LRef) ->
 bool() ->
     0.5 =< rand:uniform().
 
+bins_info() ->
+    %% Three possibilities: true | false | non_neg_integer()
+    %% We choose a low range, 42, only because our test does not
+    %% actually stress the system, so no point in picking a large
+    %% number.
+    ?CHOOSE([true, false, rand:uniform(42)]).
+
 unordered() ->
-    ?util:choose([true, false, 1, 2]).
+    ?CHOOSE([true, false, 1, 2]).
 
 client_opts(tcp) ->
     [];
@@ -584,8 +707,8 @@ send_arbitrary(Config) ->
 %% Send Proxy-Info in an ASR that the peer answers with 3xxx, and
 %% ensure that the AVP is returned.
 send_proxy_info(Config) ->
-    H0 = ?B(?util:unique_string()),
-    S0 = ?B(?util:unique_string()),
+    H0 = ?B(?UNIQUE_STRING()),
+    S0 = ?B(?UNIQUE_STRING()),
     Req = ['ASR', {'Proxy-Info', #{'Proxy-Host'  => H0,
                                    'Proxy-State' => S0}}],
     ['answer-message' | #{'Result-Code' := 3999,
@@ -889,6 +1012,25 @@ send_destination_6(Config) ->
     ?answer_message(?UNABLE_TO_DELIVER)
         = call(Config, Req).
 
+%% Send unknown host in diameter_packet with filtering and expect error.
+send_destination_7(Config) ->
+    #group{client_service = CN,
+           client_dict = Dict0}
+        = group(Config),
+    Name = proplists:get_value(testcase, Config),
+    Svc = ?UNIQUE_STRING(),
+    SN = [$S | Svc],
+    Req =
+        #diameter_packet{msg = ['STR' |
+                                #{'Termination-Cause' => ?LOGOUT,
+                                  'Destination-Host' => [?HOST(SN, ?REALM)]}]},
+    {error, no_connection} =
+        diameter:call(CN,
+                      Dict0,
+                      Req,
+                      [{extra, [Name, diameter_lib:now()]},
+                       {filter, {all, [host, realm]}}]).
+
 %% Specify an invalid option and expect failure.
 send_bad_option_1(Config) ->
     send_bad_option(Config, x).
@@ -1173,7 +1315,6 @@ id(Id, {Pid, _Caps}, SvcName) ->
     lists:member({id, Id}, Opts).
 
 %% prepare_request/6-7
-
 prepare_request(_Pkt, [$C|_], {_Ref, _Caps}, _, send_discard, _) ->
     {discard, unprepared};
 

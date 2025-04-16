@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %% 
-%% Copyright Ericsson AB 1997-2021. All Rights Reserved.
+%% Copyright Ericsson AB 1997-2025. All Rights Reserved.
 %% 
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -18,6 +18,7 @@
 %% %CopyrightEnd%
 %%
 -module(inet6_tcp).
+-moduledoc false.
 
 -export([connect/3, connect/4, listen/2, accept/1, accept/2, close/1]).
 -export([send/2, send/3, recv/2, recv/3, unrecv/2]).
@@ -121,6 +122,13 @@ connect(Address, Port, Opts, Timeout)
 do_connect(#{addr := {A,B,C,D,E,F,G,H},
              port := Port} = SockAddr, Opts, Time)
   when ?ip6(A,B,C,D,E,F,G,H) andalso ?port(Port) ->
+    do_connect2(SockAddr, Opts, Time);
+do_connect(#{addr := Addr,
+             port := Port} = SockAddr, Opts, Time)
+  when (Addr =:= loopback) andalso ?port(Port) ->
+    do_connect2(SockAddr, Opts, Time).
+
+do_connect2(SockAddr, Opts, Time) ->
     case inet:connect_options(Opts, ?MODULE) of
 	{error, Reason} -> exit(Reason);
 	{ok,

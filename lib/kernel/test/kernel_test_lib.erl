@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %% 
-%% Copyright Ericsson AB 2020-2022. All Rights Reserved.
+%% Copyright Ericsson AB 2020-2025. All Rights Reserved.
 %% 
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -31,7 +31,8 @@
          inet_backend_opts/1,
          explicit_inet_backend/0,
          test_inet_backends/0,
-         which_inet_backend/1]).
+         which_inet_backend/1,
+         config_inet_backend/2]).
 -export([start_node/2, start_node/3,
          stop_node/1]).
 -export([f/2,
@@ -39,14 +40,22 @@
          formated_timestamp/0]).
 -export([good_hosts/1,
          lookup/3]).
--export([os_cmd/1, os_cmd/2]).
+-export([
+         os_cmd/1, os_cmd/2,
+         mq/0, mq/1,
+         ts/0, ts/1
+        ]).
 
 -export([
          proxy_call/3,
 
+         ensure_not_dog_slow/2,
+
          %% Generic 'has support' test function(s)
+         is_socket_supported/0,
          has_support_ipv4/0,
          has_support_ipv6/0,
+	 has_support_unix_domain_socket/0,
 
          which_local_host_info/1, which_local_host_info/2,
          which_local_addr/1, which_link_local_addr/1,
@@ -60,6 +69,9 @@
 -export([analyze_and_print_host_info/0]).
 
 -include("kernel_test_lib.hrl").
+
+-define(DBG(F, A), dbg(F, A)).
+-define(DBG(F),    ?DBG(F, [])).
 
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -111,10 +123,23 @@ init_per_suite(AllowSkip, Config) when is_boolean(AllowSkip) ->
                     SKIP
             end;
 
-        {Factor, _HostInfo} when (AllowSkip =:= false) andalso
+        {Factor, HostInfo} when (AllowSkip =:= false) andalso
                                  is_integer(Factor) ->
-            [{kernel_factor, Factor} | Config]
-
+            print("try start (global) system monitor"),
+            case kernel_test_global_sys_monitor:start() of
+                {ok, _} ->
+                    print("(global) system monitor started"),
+                    case lists:keysearch(label, 1, HostInfo) of
+                        {value, Label} ->
+                            [{kernel_factor, Factor}, Label | Config];
+                        false ->
+                            [{kernel_factor, Factor} | Config]
+                    end;
+                {error, Reason} ->
+                    print("Failed start (global) system monitor:"
+                          "~n      ~p", [Reason]),
+                    [{kernel_factor, Factor} | Config]
+            end
     catch
         throw:{skip, _} = SKIP ->
             SKIP
@@ -1727,9 +1752,9 @@ analyze_and_print_solaris_host_info(Version) ->
             IS ->
                 IS
         end,
-    PtrConf = [list_to_tuple([string:trim(S) || S <- Items]) || Items <- [string:tokens(S, [$:]) || S <- string:tokens(os:cmd("prtconf"), [$\n])], length(Items) > 1],
+    PrtConf = [list_to_tuple([string:trim(S) || S <- Items]) || Items <- [string:tokens(S, [$:]) || S <- string:tokens(os:cmd("prtconf"), [$\n])], length(Items) > 1],
     SysConf =
-        case lists:keysearch("System Configuration", 1, PtrConf) of
+        case lists:keysearch("System Configuration", 1, PrtConf) of
             {value, {_, SC}} ->
                 SC;
             _ ->
@@ -1767,7 +1792,7 @@ analyze_and_print_solaris_host_info(Version) ->
                 "-"
         end,
     MemSz =
-        case lists:keysearch("Memory size", 1, PtrConf) of
+        case lists:keysearch("Memory size", 1, PrtConf) of
             {value, {_, MS}} ->
                 MS;
             _ ->
@@ -1785,35 +1810,36 @@ analyze_and_print_solaris_host_info(Version) ->
                        NumPhysCPU, NumVCPU,
                        SysConf, MemSz,
                        str_num_schedulers()]),
-    io:format("TS Scale Factor:         ~w~n"
-              "TS Extra Platform Label: ~s~n",
-              [timetrap_scale_factor(), Label]),
-    MemFactor =
+    AddMemFactor =
         try string:tokens(MemSz, [$ ]) of
             [SzStr, "Mega" ++ _] ->
                 try list_to_integer(SzStr) of
-                    Sz when Sz > 8192 ->
+                    Sz when Sz > 16384 ->
                         0;
-                    Sz when Sz > 4096 ->
+                    Sz when Sz > 8192 ->
                         1;
+                    Sz when Sz > 4096 ->
+                        4;
                     Sz when Sz > 2048 ->
-                        2;
+                        8;
                     _ -> 
-                        5
+                        12
                 catch
                     _:_:_ ->
                         10
                 end;
             [SzStr, "Giga" ++ _] ->
                 try list_to_integer(SzStr) of
-                    Sz when Sz > 8 ->
+                    Sz when Sz > 16 ->
                         0;
-                    Sz when Sz > 4 ->
+                    Sz when Sz > 8 ->
                         1;
+                    Sz when Sz > 4 ->
+                        4;
                     Sz when Sz > 2 ->
-                        2;
+                        8;
                     _ -> 
-                        5
+                        12
                 catch
                     _:_:_ ->
                         10
@@ -1824,19 +1850,36 @@ analyze_and_print_solaris_host_info(Version) ->
             _:_:_ ->
                 10
         end,
-    {try erlang:system_info(schedulers) of
-         1 ->
-             10;
-         2 ->
-             5;
-         N when (N =< 6) ->
-             2;
-         _ ->
-             1
-     catch
-         _:_:_ ->
-             10
-     end + MemFactor + AddLabelFactor, []}.    
+    %% We don't really have enough info about the CPU to calculate the
+    %% base factor based on that, so we just use the number of schedulers.
+    BaseFactor =
+        try erlang:system_info(schedulers) of
+            1 ->
+                12;
+            2 ->
+                8;
+            N when (N =:= 3) orelse (N =:= 4) ->
+	        4;
+            N when (N =< 6) ->
+                3;
+            _ ->
+                2
+        catch
+            _:_:_ ->
+               12
+        end,
+    TSScaleFactor = ts_scale_factor(),
+    io:format("Factor calc:"
+              "~n      Base Factor:             ~w"
+              "~n      Label Factor:            ~w"
+              "~n      Mem Factor:              ~w"
+              "~n      TS Scale Factor:         ~w"
+              "~n      TS Extra Platform Label: ~s"
+              "~n~n",
+              [BaseFactor, AddLabelFactor, AddMemFactor,
+	       TSScaleFactor, Label]),
+    {BaseFactor + AddMemFactor + AddLabelFactor + TSScaleFactor,
+     [{label, Label}]}.    
 
 analyze_and_print_win_host_info(Version) ->
     Label          = ts_extra_platform_label(),
@@ -1878,12 +1921,14 @@ analyze_and_print_win_host_info(Version) ->
         try
             begin
                 %% "Normally" this looks like this: "16,123 MB"
-                %% But sometimes the "," is replaced by a 255 char
-                %% which I assume must be some unicode screwup...
+                %% But sometimes the "," is replaced by a
+		%% 255 or 160 char, which I assume must be some
+		%% unicode screwup...
                 %% Anyway, filter out both of them!
                 TotPhysMem1 = lists:delete($,, TotPhysMem),
                 TotPhysMem2 = lists:delete(255, TotPhysMem1),
-                [MStr, MUnit|_] = string:tokens(TotPhysMem2, [$\ ]),
+                TotPhysMem3 = lists:delete(160, TotPhysMem2),
+                [MStr, MUnit|_] = string:tokens(TotPhysMem3, [$\ ]),
                 case string:to_lower(MUnit) of
                     "gb" ->
                         try list_to_integer(MStr) of
@@ -2325,6 +2370,7 @@ set_tc_name(N) when is_list(N) ->
 tc_begin(TC) ->
     OldVal = process_flag(trap_exit, true),
     put(old_trap_exit, OldVal),
+    put(sname, tc),
     set_tc_name(TC),
     tc_print("begin ***",
              "~n----------------------------------------------------~n", "").
@@ -2401,7 +2447,8 @@ tc_try(Case, TCCond, Pre, TC, Post)
                             %% We always check the system events
                             %% before we accept a failure.
                             %% We do *not* run the Post here because it might
-                            %% generate sys events itself...
+                            %% generate sys events itself...wait until after
+                            %% events has been checked.
                             case kernel_test_global_sys_monitor:events() of
                                 [] ->
                                     tc_print("test case failed: try post"),
@@ -2547,6 +2594,16 @@ os_cmd(Cmd, Timeout) when is_integer(Timeout) andalso (Timeout > 0) ->
     proxy_call(fun() -> {ok, os:cmd(Cmd)} end, Timeout, {error, timeout}).
 
 
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+mq() ->
+    mq(self()).
+
+mq(Pid) when is_pid(Pid) ->
+    {messages, MQ} = process_info(Pid, messages),
+    MQ.
+
+             
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
 socket_type(Config) ->
@@ -2580,16 +2637,16 @@ open(Config, Port, Opts) ->
 
 
 inet_backend_opts(Config) when is_list(Config) ->
-    case lists:keysearch(socket_create_opts, 1, Config) of
-        {value, {socket_create_opts, InetBackendOpts}} ->
+    case lists:keyfind(socket_create_opts, 1, Config) of
+        {_, InetBackendOpts} ->
             InetBackendOpts;
         false ->
             []
     end.
 
 is_socket_backend(Config) when is_list(Config) ->
-    case lists:keysearch(socket_create_opts, 1, Config) of
-        {value, {socket_create_opts, [{inet_backend, socket}]}} ->
+    case lists:keyfind(socket_create_opts, 1, Config) of
+        {_, [{inet_backend, socket}]} ->
             true;
         _ ->
             false
@@ -2599,8 +2656,8 @@ is_socket_backend(Config) when is_list(Config) ->
 explicit_inet_backend() ->
     case application:get_all_env(kernel) of
         Env when is_list(Env) ->
-            case lists:keysearch(inet_backend, 1, Env) of
-                {value, {inet_backend, _}} ->
+            case lists:keyfind(inet_backend, 1, Env) of
+                {_, _} ->
                     true;
                 _ ->
                     false
@@ -2613,8 +2670,8 @@ explicit_inet_backend() ->
 test_inet_backends() ->
     case application:get_all_env(kernel) of
         Env when is_list(Env) ->
-            case lists:keysearch(test_inet_backends, 1, Env) of
-                {value, {test_inet_backends, true}} ->
+            case lists:keyfind(test_inet_backends, 1, Env) of
+                {_, true} ->
                     true;
                 _ ->
                     false
@@ -2624,13 +2681,21 @@ test_inet_backends() ->
     end.
 
 which_inet_backend(Config) ->
-    case lists:keysearch(socket_create_opts, 1, Config) of
-        {value, {socket_create_opts, [{inet_backend, Backend}]}} ->
+    case lists:keyfind(socket_create_opts, 1, Config) of
+        {_, [{inet_backend, Backend}]} ->
             Backend;
         _ ->
             default
     end.
-    
+
+config_inet_backend(Config, Backend) ->
+    if
+        Backend =:= default ->
+            [];
+        Backend =:= socket;
+        Backend =:= inet ->
+            [{socket_create_opts, [{inet_backend, Backend}]}]
+    end ++ lists:keydelete(socket_create_opts, 1, Config).
 
 
 proxy_call(F, Timeout, Default)
@@ -2646,6 +2711,16 @@ proxy_call(F, Timeout, Default)
     end.
 
 
+
+ensure_not_dog_slow(Config, Limit) ->
+    Key = kernel_factor,
+    case lists:keysearch(Key, 1, Config) of
+        {value, {Key, Value}} when (Value > Limit) ->
+            skip({factor_limit, Value, Limit});
+        _ ->
+            ok
+    end.
+            
 
 %% This is an extremely simple check...
 has_support_ipv4() ->
@@ -2664,11 +2739,23 @@ has_support_ipv6() ->
             skip("IPv6 Not Supported")
     end.
 
+is_socket_supported() ->
+    try socket:info() of
+        #{} ->
+            true
+    catch
+        error : notsup ->
+            false;
+        error : undef ->
+            false
+    end.
 
+has_support_unix_domain_socket() ->
+    socket:is_supported(local).
 
 %% This gets the local "proper" address
 %% (not {127, ...} or {169,254, ...} or {0, ...} or {16#fe80, ...})
-%% We should really implement this using the (new) net module,
+%% We should really implement this using the ("new") net module,
 %% but until that gets the necessary functionality...
 which_local_addr(Domain) ->
     case which_local_host_info(false, Domain) of
@@ -2698,9 +2785,15 @@ which_local_host_info(Domain) ->
 
 
 which_local_host_info(LinkLocal, Domain)
-  when is_boolean(LinkLocal) andalso ((Domain =:= inet) orelse (Domain =:= inet6)) ->
+  when is_boolean(LinkLocal) andalso
+       ((Domain =:= inet) orelse (Domain =:= inet6)) ->
+    ?DBG("~w -> entry with"
+         "~n   LinkLocal: ~p"
+         "~n   Domain:    ~p", [?FUNCTION_NAME, LinkLocal, Domain]),
     case inet:getifaddrs() of
         {ok, IFL} ->
+            ?DBG("~w -> "
+                 "~n   IFL: ~p", [?FUNCTION_NAME, IFL]),
             which_local_host_info(LinkLocal, Domain, IFL, []);
         {error, _} = ERROR ->
             ERROR
@@ -2753,17 +2846,29 @@ which_local_host_info(LinkLocal, Domain, [{"stf" ++ _, _}|IFL], Acc) ->
 which_local_host_info(LinkLocal, Domain, [{"XHCZ" ++ _, _}|IFL], Acc) ->
     which_local_host_info(LinkLocal, Domain, IFL, Acc);
 which_local_host_info(LinkLocal, Domain, [{Name, IFO}|IFL], Acc) ->
+    ?DBG("~w -> entry with"
+         "~n   LinkLocal: ~p"
+         "~n   Domain:    ~p"
+         "~n   Name:      ~p"
+         "~n   IFO:       ~p",
+         [?FUNCTION_NAME, LinkLocal, Domain, Name, IFO]),    
     case if_is_running_and_not_loopback(IFO) of
         true ->
+            ?DBG("~w -> running and not loopback", [?FUNCTION_NAME]),    
             try which_local_host_info2(LinkLocal, Domain, IFO) of
                 Info ->
+                    ?DBG("~w -> "
+                         "~n   Info: ~p", [?FUNCTION_NAME, Info]),
                     which_local_host_info(LinkLocal, Domain, IFL,
                                           [Info#{name => Name}|Acc])
             catch
-                throw:_:_ ->
+                throw:_E:_ ->
+                    ?DBG("~w -> catch"
+                         "~n   E: ~p", [?FUNCTION_NAME, _E]),
                     which_local_host_info(LinkLocal, Domain, IFL, Acc)
             end;
         false ->
+            ?DBG("~w -> not running or is loopback", [?FUNCTION_NAME]),    
             which_local_host_info(LinkLocal, Domain, IFL, Acc)
     end;
 which_local_host_info(LinkLocal, Domain, [_|IFL], Acc) ->
@@ -2779,6 +2884,8 @@ if_is_running_and_not_loopback(If) ->
 
 
 which_local_host_info2(LinkLocal, inet = _Domain, IFO) ->
+    ?DBG("~w(~w, ~w) -> entry with"
+         "~n   IFO: ~p", [?FUNCTION_NAME, LinkLocal, _Domain, IFO]),    
     Addr      = which_local_host_info3(
                   addr,  IFO,
                   fun({A, _, _, _}) when (A =:= 127) -> false;
@@ -2787,27 +2894,84 @@ which_local_host_info2(LinkLocal, inet = _Domain, IFO) ->
                      ({_, _, _, _}) -> not LinkLocal;
                      (_) -> false
                   end),
-    NetMask   = which_local_host_info3(netmask,  IFO,
-                                       fun({_, _, _, _}) -> true;
-                                          (_) -> false
-                                       end),
-    BroadAddr = which_local_host_info3(broadaddr,  IFO,
-                                       fun({_, _, _, _}) -> true;
-                                          (_) -> false
-                                       end),
-    Flags     = which_local_host_info3(flags, IFO, fun(_) -> true end),
+    NetMask   = try which_local_host_info3(netmask,  IFO,
+					   fun({_, _, _, _}) -> true;
+					      (_) -> false
+					   end)
+		catch
+		    throw:{error, no_address} ->
+			undefined
+		end,
+    BroadAddr = try which_local_host_info3(broadaddr,  IFO,
+					   fun({_, _, _, _}) -> true;
+					      (_) -> false
+					   end)
+		catch
+		    throw:{error, no_address} ->
+			undefined
+		end,
+    Flags     = try which_local_host_info3(flags, IFO, fun(_) -> true end)
+		catch
+		    throw:{error, no_address} ->
+			[]
+		end,
     #{flags     => Flags,
       addr      => Addr,
       broadaddr => BroadAddr,
       netmask   => NetMask};
 which_local_host_info2(LinkLocal, inet6 = _Domain, IFO) ->
+    ?DBG("~w(~w, ~w) -> entry with"
+         "~n   IFO: ~p", [?FUNCTION_NAME, LinkLocal, _Domain, IFO]),    
     Addr    = which_local_host_info3(addr,  IFO,
-                                     fun({A, _, _, _, _, _, _, _}) 
-                                           when (A =:= 0) -> false;
-                                        ({A, _, _, _, _, _, _, _})
-                                           when (A =:= 16#fe80) -> LinkLocal;
-                                        ({_, _, _, _, _, _, _, _}) -> not LinkLocal;
-                                        (_) -> false
+                                     fun({A, _, _, _, _, _, _, _} = _Address) 
+                                           when (A =:= 0) ->
+                                             ?DBG("~w:fun(1) -> no match: "
+                                                  "~n   Address: ~p",
+                                                  [?FUNCTION_NAME, _Address]),
+                                             false;
+                                        ({A, _, _, _, _, _, _, _} = _Address)
+                                           when (A =:= 16#fe80) ->
+                                             if
+                                                 LinkLocal ->
+                                                     ?DBG("~w:fun(2) -> "
+                                                          "link local address "
+                                                          "accepted: "
+                                                          "~n   ~p",
+                                                          [?FUNCTION_NAME,
+                                                           _Address]);
+                                                 true ->
+                                                     ?DBG("~w:fun(2) -> "
+                                                          "link local address "
+                                                          "rejected: "
+                                                          "~n   ~p",
+                                                          [?FUNCTION_NAME,
+                                                           _Address])
+                                             end,
+                                             LinkLocal;
+                                        ({_, _, _, _, _, _, _, _} = _Address) ->
+                                             if
+                                                 (not LinkLocal) ->
+                                                     ?DBG("~w:fun(3) -> "
+                                                          "'normal'"
+                                                          "local address "
+                                                          "accepted: "
+                                                          "~n   ~p",
+                                                          [?FUNCTION_NAME,
+                                                           _Address]);
+                                                 true ->
+                                                     ?DBG("~w:fun(3) -> "
+                                                          "'normal' address "
+                                                          "rejected: "
+                                                          "~n   ~p",
+                                                          [?FUNCTION_NAME,
+                                                           _Address])
+                                             end,
+                                             not LinkLocal;
+                                        (_Address) ->
+                                             ?DBG("~w:fun(4) -> no match: "
+                                                  "~n   Address: ~p",
+                                                  [?FUNCTION_NAME, _Address]),
+                                             false
                                      end),
     NetMask = which_local_host_info3(netmask,  IFO,
                                        fun({_, _, _, _, _, _, _, _}) -> true;
@@ -2819,15 +2983,22 @@ which_local_host_info2(LinkLocal, inet6 = _Domain, IFO) ->
       netmask => NetMask}.
 
 which_local_host_info3(_Key, [], _) ->
+    ?DBG("~w -> no address", [?FUNCTION_NAME]),    
     throw({error, no_address});
 which_local_host_info3(Key, [{Key, Val}|IFO], Check) ->
+    ?DBG("~w -> entry with"
+         "~n   Key: ~p"
+         "~n   Val: ~p", [?FUNCTION_NAME, Key, Val]),    
     case Check(Val) of
         true ->
+            ?DBG("~w -> validated", [?FUNCTION_NAME]),    
             Val;
         false ->
+            ?DBG("~w -> not validated", [?FUNCTION_NAME]),    
             which_local_host_info3(Key, IFO, Check)
     end;
 which_local_host_info3(Key, [_|IFO], Check) ->
+    ?DBG("~w -> key (~w) not found - continue", [?FUNCTION_NAME, Key]),    
     which_local_host_info3(Key, IFO, Check).
 
 
@@ -2839,6 +3010,19 @@ not_yet_implemented() ->
 
 skip(Reason) ->
     throw({skip, Reason}).
+
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+ts() ->
+    ts(ms).
+
+ts(s) ->
+    erlang:system_time(second);
+ts(ms) ->
+    erlang:system_time(millisecond);
+ts(us) ->
+    erlang:system_time(microsecond).
 
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -2860,4 +3044,17 @@ print(F) ->
     print(F, []).
 
 print(F, A) ->
-    io:format("~s ~p " ++ F ++ "~n", [formated_timestamp(), self() | A]).
+    print("", F, A).
+
+print(Prefix, F, A) ->
+    io:format("~s[~s , ~p] " ++ F ++ "~n",
+              [Prefix, formated_timestamp(), self() | A]).
+
+dbg(F, A) ->
+    dbg(get(debug), F, A).
+
+dbg(true, F, A) ->
+    print("DEBUG", F, A);
+dbg(_, _, _) ->
+    ok.
+

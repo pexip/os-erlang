@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2003-2016. All Rights Reserved.
+%% Copyright Ericsson AB 2003-2024. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -948,7 +948,6 @@ funs(Config) when is_list(Config) ->
     error_check("apply(timer, sleep, [1]).", got_it, none, EFH),
     error_check("begin F = fun(T) -> timer:sleep(T) end,F(1) end.",
                       got_it, none, EFH),
-    error_check("fun c/1.", undef),
     error_check("fun a:b/0().", undef),
 
     MaxArgs = 20,

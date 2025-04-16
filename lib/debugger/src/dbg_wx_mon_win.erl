@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2008-2019. All Rights Reserved.
+%% Copyright Ericsson AB 2008-2024. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -20,6 +20,7 @@
 
 %%
 -module(dbg_wx_mon_win).
+-moduledoc false.
 
 %% External exports
 -export([init/0]).
@@ -557,7 +558,7 @@ handle_event(#wx{obj=ListBox, event=#wxMouse{type=right_down, x=X,y=Y}},
 	Row ->	    
 	    ModS = wxListBox:getString(ListBox,Row),
 	    io:format("Re-loading/interpreting: ~s~n", [ModS]),
-	    int:i(list_to_atom(ModS)),
+	    _ = int:i(list_to_atom(ModS)),
 	    ignore
     end;
 

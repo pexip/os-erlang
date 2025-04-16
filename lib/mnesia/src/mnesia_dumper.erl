@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 1996-2022. All Rights Reserved.
+%% Copyright Ericsson AB 1996-2024. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -20,6 +20,7 @@
 
 %%
 -module(mnesia_dumper).
+-moduledoc false.
 
 %% The InitBy arg may be one of the following:
 %% scan_decisions     Initial scan for decisions
@@ -612,6 +613,7 @@ insert_op(Tid, _, {op, change_table_copy_type, N, FromS, ToS, TabDef}, InPlace, 
 				    Cs#cstruct.type],
 			    mnesia_monitor:mktab(Tab, Args),
 			    ok = load_from_logfile(ToS, Tab, Logtmp),
+			    ok = mnesia_log:ets2dcd(Tab),
 			    file:delete(Logtmp);
 			disc_only_copies ->
 			    %% ok = ensure_rename(Dmp, Dat),
@@ -711,7 +713,6 @@ insert_op(Tid, _, {op, restore_recreate, TabDef}, InPlace, InitBy) ->
 		end,
     %% Delete all possibly existing files and tables
     disc_delete_table(Tab, Storage),
-    disc_delete_indecies(Tab, Cs, Storage),
     case InitBy of
 	startup ->
 	    ignore;

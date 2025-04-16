@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 1997-2022. All Rights Reserved.
+%% Copyright Ericsson AB 1997-2023. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -63,6 +63,7 @@
          bad_dist_ext_control/1,
          bad_dist_ext_connection_id/1,
          bad_dist_ext_size/1,
+         bad_dist_ext_spawn_request_arg_list/1,
 	 start_epmd_false/1, no_epmd/1, epmd_module/1,
          bad_dist_fragments/1,
          exit_dist_fragments/1,
@@ -81,7 +82,12 @@
          huge_iovec/1,
          is_alive/1,
          dyn_node_name_monitor_node/1,
-         dyn_node_name_monitor/1]).
+         dyn_node_name_monitor/1,
+         async_dist_flag/1,
+         async_dist_port_dctrlr/1,
+         async_dist_proc_dctrlr/1,
+         creation_selection/1,
+         creation_selection_test/1]).
 
 %% Internal exports.
 -export([sender/3, receiver2/2, dummy_waiter/0, dead_process/0,
@@ -114,7 +120,8 @@ all() ->
      dist_entry_refc_race,
      start_epmd_false, no_epmd, epmd_module, system_limit,
      hopefull_data_encoding, hopefull_export_fun_bug,
-     huge_iovec, is_alive, dyn_node_name_monitor_node, dyn_node_name_monitor].
+     huge_iovec, is_alive, dyn_node_name_monitor_node, dyn_node_name_monitor,
+     {group, async_dist}, creation_selection].
 
 groups() ->
     [{bulk_send, [], [bulk_send_small, bulk_send_big, bulk_send_bigbig]},
@@ -128,12 +135,17 @@ groups() ->
      {bad_dist_ext, [],
       [bad_dist_ext_receive, bad_dist_ext_process_info,
        bad_dist_ext_size,
-       bad_dist_ext_control, bad_dist_ext_connection_id]},
+       bad_dist_ext_control, bad_dist_ext_connection_id,
+       bad_dist_ext_spawn_request_arg_list]},
      {message_latency, [],
       [message_latency_large_message,
        message_latency_large_link_exit,
        message_latency_large_monitor_exit,
-       message_latency_large_exit2]}
+       message_latency_large_exit2]},
+     {async_dist, [],
+      [async_dist_flag,
+       async_dist_port_dctrlr,
+       async_dist_proc_dctrlr]}
     ].
 
 init_per_suite(Config) ->
@@ -512,9 +524,6 @@ nodes2(Config) when is_list(Config) ->
     end,
     ok.
 
-id(X) ->
-    X.
-
 %% Test optimistic distribution flags toward pending connections (DFLAG_DIST_HOPEFULLY)
 optimistic_dflags(Config) when is_list(Config) ->
     {ok, PeerSender, _Sender} = ?CT_PEER(#{connection => 0, args => ["-setcookie", "NONE"]}),
@@ -870,9 +879,12 @@ make_busy(Node, Time) when is_integer(Time) ->
     receive after Own -> ok end,
     until(fun () ->
                   case {DCtrl, process_info(Pid, status)} of
-                      {DPrt, {status, suspended}} when is_port(DPrt) -> true;
-                      {DPid, {status, waiting}} when is_pid(DPid) -> true;
-                      _ -> false
+                      {DPrt, {status, waiting}} when is_port(DPrt) ->
+                          verify_busy(DPrt);
+                      {DPid, {status, waiting}} when is_pid(DPid) ->
+                          true;
+                      _ ->
+                          false
                   end
           end),
     %% then dist entry
@@ -888,6 +900,28 @@ make_busy(Node, Opts, Data) ->
 unmake_busy(Pid) ->
     unlink(Pid),
     exit(Pid, bang).
+
+verify_busy(Port) ->
+    Parent = self(),
+    Pid =
+        spawn_link(
+          fun() ->
+                  port_command(Port, "Just some data"),
+                  Error = {not_busy, Port},
+                  exit(Parent, Error),
+                  error(Error)
+          end),
+    receive after 30 -> ok end,
+    case process_info(Pid, status) of
+        {status, suspended} ->
+            unlink(Pid),
+            exit(Pid, kill),
+            true;
+        {status, _} = WrongStatus ->
+            unlink(Pid),
+            exit(Pid, WrongStatus),
+            error(WrongStatus)
+    end.
 
 do_busy_test(Node, Fun) ->
     Busy = make_busy(Node, 1000),
@@ -1128,7 +1162,7 @@ roundtrip(Term) ->
     exit(Term).
 
 %% Test that the smallest external term [] aka NIL can be sent to
-%% another node node and back again.
+%% another node and back again.
 nil_roundtrip(Config) when is_list(Config) ->
     process_flag(trap_exit, true),
     {ok, Peer, Node} = ?CT_PEER(),
@@ -1937,6 +1971,8 @@ test_system_limit(Config) when is_list(Config) ->
 -define(DOP_PAYLOAD_EXIT2_TT, 27).
 -define(DOP_PAYLOAD_MONITOR_P_EXIT, 28).
 
+-define(DOP_SPAWN_REQUEST, 29).
+
 start_monitor(Offender,P) ->
     Parent = self(),
     Q = spawn(Offender,
@@ -2505,6 +2541,53 @@ bad_dist_ext_size(Config) when is_list(Config) ->
     peer_stop(OffenderPeer, Offender),
     peer_stop(VictimPeer, Victim).
 
+bad_dist_ext_spawn_request_arg_list(Config) when is_list(Config) ->
+    {ok, OffenderPeer, Offender} = ?CT_PEER(["-connect_all", "false"]),
+    {ok, VictimPeer, Victim} = ?CT_PEER(["-connect_all", "false"]),
+    Parent = self(),
+    start_node_monitors([Offender,Victim]),
+    SuccessfulSpawn = make_ref(),
+    BrokenSpawn = make_ref(),
+    P = spawn_link(
+          Offender,
+          fun () ->
+                  ReqId1 = make_ref(),
+                  dctrl_dop_spawn_request(Victim, ReqId1, self(), group_leader(),
+                                          {erlang, send, 2}, [],
+                                          dmsg_ext([self(), SuccessfulSpawn])),
+                  receive SuccessfulSpawn -> Parent ! SuccessfulSpawn end,
+                  receive BrokenSpawn -> ok end,
+                  ReqId2 = make_ref(),
+                  dctrl_dop_spawn_request(Victim, ReqId2, self(), group_leader(),
+                                          {erlang, send, 2}, [],
+                                          dmsg_bad_atom_cache_ref()),
+                  Parent ! BrokenSpawn,
+                  receive after infinity -> ok end
+          end),
+    receive SuccessfulSpawn -> ok end,
+    verify_up(Offender, Victim),
+    P ! BrokenSpawn,
+    receive BrokenSpawn -> ok end,
+    verify_down(Offender, connection_closed, Victim, killed),
+    [] = erpc:call(
+           Victim,
+           fun () ->
+                   lists:filter(
+                     fun (Proc) ->
+                             case process_info(Proc, current_function) of
+                                 {current_function,
+                                  {erts_internal, dist_spawn_init, 1}} ->
+                                     true;
+                                 _ ->
+                                     false
+                             end
+                     end,
+                     processes())
+           end),
+    unlink(P),
+    peer:stop(OffenderPeer),
+    peer:stop(VictimPeer),
+    ok.
 
 bad_dist_struct_check_msgs([]) ->
     receive
@@ -2546,7 +2629,19 @@ ensure_dctrl(Node) ->
     end.
 
 dctrl_send(DPrt, Data) when is_port(DPrt) ->
-    port_command(DPrt, Data);
+    try prim_inet:send(DPrt, Data) of
+        ok ->
+            ok;
+        Result ->
+            io:format("~w/2: ~p~n", [?FUNCTION_NAME, Result]),
+            Result
+    catch
+        Class: Reason: Stacktrace ->
+            io:format(
+              "~w/2: ~p: ~p: ~p ~n",
+              [?FUNCTION_NAME, Class, Reason, Stacktrace]),
+            erlang:raise(Class, Reason, Stacktrace)
+    end;
 dctrl_send(DPid, Data) when is_pid(DPid) ->
     Ref = make_ref(),
     DPid ! {send, self(), Ref, Data},
@@ -2567,6 +2662,15 @@ dctrl_dop_send(To, Msg) ->
                [dmsg_hdr(),
                 dmsg_ext({?DOP_SEND, ?COOKIE, To}),
                 dmsg_ext(Msg)]).
+
+dctrl_dop_spawn_request(Node, ReqId, From, GL, MFA, OptList, ArgListExt) ->
+    %% {29, ReqId, From, GroupLeader, {Module, Function, Arity}, OptList}
+    %%
+    %% Followed by ArgList.
+    dctrl_send(ensure_dctrl(Node),
+               [dmsg_hdr(),
+                dmsg_ext({?DOP_SPAWN_REQUEST, ReqId, From, GL, MFA, OptList}),
+                ArgListExt]).
 
 send_bad_structure(Offender,Victim,Bad,WhereToPutSelf) ->
     send_bad_structure(Offender,Victim,Bad,WhereToPutSelf,[]).
@@ -3239,7 +3343,7 @@ is_alive_tester(Node) ->
             ok
     end.
 
-dyn_node_name_monitor_node(Config) ->
+dyn_node_name_monitor_node(_Config) ->
     %% Test that monitor_node() does not fail when erlang:is_alive() return true
     %% but we have not yet gotten a name...
     Args = ["-setcookie", atom_to_list(erlang:get_cookie()),
@@ -3277,7 +3381,7 @@ dyn_node_name_monitor_node_test(StartOpts, TestNode) ->
     ok.
 
 
-dyn_node_name_monitor(Config) ->
+dyn_node_name_monitor(_Config) ->
     %% Test that monitor() does not fail when erlang:is_alive() return true
     %% but we have not yet gotten a name...
     Args = ["-setcookie", atom_to_list(erlang:get_cookie()),
@@ -3320,12 +3424,396 @@ dyn_node_name_monitor_test(StartOpts, TestNode) ->
     end,
     ok.
 
+async_dist_flag(Config) when is_list(Config) ->
+    {ok, Peer1, Node1} = ?CT_PEER(),
+    async_dist_flag_test(Node1, false),
+    peer:stop(Peer1),
+    {ok, Peer2, Node2} = ?CT_PEER(["+pad", "false"]),
+    async_dist_flag_test(Node2, false),
+    peer:stop(Peer2),
+    {ok, Peer3, Node3} = ?CT_PEER(["+pad", "true", "+pad", "false"]),
+    async_dist_flag_test(Node3, false),
+    peer:stop(Peer3),
+
+    {ok, Peer4, Node4} = ?CT_PEER(["+pad", "true"]),
+    async_dist_flag_test(Node4, true),
+    peer:stop(Peer4),
+    {ok, Peer5, Node5} = ?CT_PEER(["+pad", "false", "+pad", "true"]),
+    async_dist_flag_test(Node5, true),
+    peer:stop(Peer5),
+
+    ok.
+
+async_dist_flag_test(Node, Default) when is_atom(Node), is_boolean(Default) ->
+    Tester = self(),
+    NotDefault = not Default,
+
+    Default = erpc:call(Node, erlang, system_info, [async_dist]),
+
+    {P1, M1} = spawn_opt(Node, fun () ->
+                                       receive after infinity -> ok end
+                               end, [link, monitor]),
+    {P2, M2} = spawn_opt(Node, fun () ->
+                                       receive after infinity -> ok end
+                               end, [link, monitor, {async_dist, false}]),
+    {P3, M3} = spawn_opt(Node, fun () ->
+                                       receive after infinity -> ok end
+                               end, [link, monitor, {async_dist, true}]),
+    {async_dist, Default} = erpc:call(Node, erlang, process_info, [P1, async_dist]),
+    {async_dist, false} = erpc:call(Node, erlang, process_info, [P2, async_dist]),
+    {async_dist, true} = erpc:call(Node, erlang, process_info, [P3, async_dist]),
+
+    R4 = make_ref(),
+    {P4, M4} = spawn_opt(Node, fun () ->
+                                       Default = process_flag(async_dist, NotDefault),
+                                       Tester ! R4,
+                                       receive after infinity -> ok end
+                               end, [link, monitor]),
+
+    R5 = make_ref(),
+    {P5, M5} = spawn_opt(Node, fun () ->
+                                       false = process_flag(async_dist, true),
+                                       Tester ! R5,
+                                       receive after infinity -> ok end
+                               end, [link, monitor, {async_dist, false}]),
+    R6 = make_ref(),
+    {P6, M6} = spawn_opt(Node, fun () ->
+                                       true = process_flag(async_dist, false),
+                                       Tester ! R6,
+                                       receive after infinity -> ok end
+                               end, [link, monitor, {async_dist, true}]),
+    receive R4 -> ok end,
+    {async_dist, NotDefault} = erpc:call(Node, erlang, process_info, [P4, async_dist]),
+    receive R5 -> ok end,
+    {async_dist, true} = erpc:call(Node, erlang, process_info, [P5, async_dist]),
+    receive R6 -> ok end,
+    {async_dist, false} = erpc:call(Node, erlang, process_info, [P6, async_dist]),
+
+
+    R7 = make_ref(),
+    {P7, M7} = spawn_opt(Node, fun () ->
+                                       Default = process_flag(async_dist, NotDefault),
+                                       NotDefault = process_flag(async_dist, NotDefault),
+                                       NotDefault = process_flag(async_dist, NotDefault),
+                                       NotDefault = process_flag(async_dist, Default),
+                                       Default = process_flag(async_dist, Default),
+                                       Default = process_flag(async_dist, Default),
+                                       Tester ! R7,
+                                       receive after infinity -> ok end
+                               end, [link, monitor]),
+    receive R7 -> ok end,
+
+    unlink(P1),
+    exit(P1, bang),
+    unlink(P2),
+    exit(P2, bang),
+    unlink(P3),
+    exit(P3, bang),
+    unlink(P4),
+    exit(P4, bang),
+    unlink(P5),
+    exit(P5, bang),
+    unlink(P6),
+    exit(P6, bang),
+    unlink(P7),
+    exit(P7, bang),
+
+    receive {'DOWN', M1, process, P1, bang} -> ok end,
+    receive {'DOWN', M2, process, P2, bang} -> ok end,
+    receive {'DOWN', M3, process, P3, bang} -> ok end,
+    receive {'DOWN', M4, process, P4, bang} -> ok end,
+    receive {'DOWN', M5, process, P5, bang} -> ok end,
+    receive {'DOWN', M6, process, P6, bang} -> ok end,
+    receive {'DOWN', M7, process, P7, bang} -> ok end,
+
+    ok.
+
+async_dist_port_dctrlr(Config) when is_list(Config) ->
+    {ok, RecvPeer, RecvNode} = ?CT_PEER(),
+    ok = async_dist_test(RecvNode),
+    peer:stop(RecvPeer),
+    ok.
+
+async_dist_proc_dctrlr(Config) when is_list(Config) ->
+    {ok, SendPeer, SendNode} = ?CT_PEER(["-proto_dist", "gen_tcp"]),
+    {ok, RecvPeer, RecvNode} = ?CT_PEER(["-proto_dist", "gen_tcp"]),
+    {Pid, Mon} = spawn_monitor(SendNode,
+                               fun () ->
+                                       ok = async_dist_test(RecvNode),
+                                       exit(test_success)
+                               end),
+    receive
+        {'DOWN', Mon, process, Pid, Reason} ->
+            test_success = Reason
+    end,
+    peer:stop(SendPeer),
+    peer:stop(RecvPeer),
+    ok.
+
+async_dist_test(Node) ->
+    Scale = case round(test_server:timetrap_scale_factor()/3) of
+                S when S < 1 -> 1;
+                S -> S
+            end,
+    _ = process_flag(async_dist, false),
+    Tester = self(),
+    AliveReceiver1 = spawn_link(Node, fun () ->
+                                              register(alive_receiver_1, self()),
+                                              Tester ! {registered, self()},
+                                              receive after infinity -> ok end
+                                      end),
+    receive {registered, AliveReceiver1} -> ok end,
+    AliveReceiver2 = spawn(Node, fun () -> receive after infinity -> ok end end),
+    {AliveReceiver3, AR3Mon} = spawn_monitor(Node,
+                                             fun () ->
+                                                     receive after infinity -> ok end
+                                             end),
+    {DeadReceiver, DRMon} = spawn_monitor(Node, fun () -> ok end),
+    receive
+        {'DOWN', DRMon, process, DeadReceiver, DRReason} ->
+            normal = DRReason
+    end,
+    Data = lists:duplicate($x, 256),
+    GoNuts = fun GN () ->
+                     DeadReceiver ! hello,
+                     GN()
+             end,
+    erpc:call(Node, erts_debug, set_internal_state, [available_internal_state, true]),
+    erpc:cast(Node, erts_debug, set_internal_state, [block, 4000*Scale]),
+    DistBufFiller = spawn_link(fun () ->
+                                       process_flag(async_dist, false),
+                                       receive go_nuts -> ok end,
+                                       GoNuts()
+                               end),
+    BDMon = spawn_link(fun SysMon () ->
+                               receive
+                                   {monitor, Pid, busy_dist_port, _} ->
+                                       Tester ! {busy_dist_port, Pid}
+                               end,
+                               SysMon()
+                       end),
+    _ = erlang:system_monitor(BDMon, [busy_dist_port]),
+    DistBufFiller ! go_nuts,
+
+    %% Busy dist entry may release after it has triggered even
+    %% though noone is consuming anything at the receiving end.
+    %% Continue banging until we stop getting new busy_dist_port...
+    WaitFilled = fun WF (Tmo) ->
+                         receive
+                             {busy_dist_port, DistBufFiller} ->
+                                 WF(1000*Scale)
+                         after
+                             Tmo ->
+                                 ok
+                         end
+                 end,
+    WaitFilled(infinity),
+
+    BusyDistChecker = spawn_link(fun () ->
+                                         process_flag(async_dist, false),
+                                         DeadReceiver ! hello,
+                                         exit(unexpected_return_from_bang)
+                                 end),
+    receive {busy_dist_port, BusyDistChecker} -> ok end,
+    {async_dist, false} = process_info(self(), async_dist),
+    {async_dist, false} = process_info(BusyDistChecker, async_dist),
+    false = process_flag(async_dist, true),
+    {async_dist, true} = process_info(self(), async_dist),
+
+    Start = erlang:monotonic_time(millisecond),
+    M1 = erlang:monitor(process, AliveReceiver1),
+    true = is_reference(M1),
+    M2 = erlang:monitor(process, AliveReceiver2),
+    true = is_reference(M2),
+    {pid, Data} = AliveReceiver1 ! {pid, Data},
+    {reg_name, Data} = {alive_receiver_1, Node} ! {reg_name, Data},
+    true = erlang:demonitor(M1),
+    true = link(AliveReceiver2),
+    true = unlink(AliveReceiver1),
+    RId = spawn_request(Node, fun () -> receive bye -> ok end end, [link, monitor]),
+    true = is_reference(RId),
+    erlang:group_leader(self(), AliveReceiver2),
+    AR3XReason = make_ref(),
+    true = exit(AliveReceiver3, AR3XReason),
+    End = erlang:monotonic_time(millisecond),
+
+    %% These signals should have been buffered immediately. Make sure
+    %% it did not take a long time...
+    true = 500*Scale >= End - Start,
+
+    receive after 500*Scale -> ok end,
+
+    unlink(BusyDistChecker),
+    exit(BusyDistChecker, bang),
+    false = is_process_alive(BusyDistChecker),
+
+    unlink(DistBufFiller),
+    exit(DistBufFiller, bang),
+    false = is_process_alive(DistBufFiller),
+
+    %% Verify that the signals eventually get trough when the other
+    %% node continue to work...
+    {links, []}
+        = erpc:call(Node, erlang, process_info, [AliveReceiver1, links]),
+    {links, [Tester]}
+        = erpc:call(Node, erlang, process_info, [AliveReceiver2, links]),
+    {monitored_by, []}
+        = erpc:call(Node, erlang, process_info, [AliveReceiver1, monitored_by]),
+    {monitored_by, [Tester]}
+        = erpc:call(Node, erlang, process_info, [AliveReceiver2, monitored_by]),
+    {messages, [{pid, Data}, {reg_name, Data}]}
+        = erpc:call(Node, erlang, process_info, [AliveReceiver1, messages]),
+    {group_leader, Tester}
+        = erpc:call(Node, erlang, process_info, [AliveReceiver2, group_leader]),
+
+    Spawned = receive
+                  {spawn_reply, RId, SpawnRes, Pid} ->
+                      ok = SpawnRes,
+                      true = is_pid(Pid),
+                      Pid
+              end,
+    {links, [Tester]}
+        = erpc:call(Node, erlang, process_info, [Spawned, links]),
+    {monitored_by, [Tester]}
+        = erpc:call(Node, erlang, process_info, [Spawned, monitored_by]),
+
+    receive
+        {'DOWN', AR3Mon, process, AliveReceiver3, ActualAR3XReason} ->
+            AR3XReason = ActualAR3XReason
+    end,
+
+    unlink(AliveReceiver2),
+    unlink(Spawned),
+
+    true = process_flag(async_dist, false),
+    {async_dist, false} = process_info(self(), async_dist),
+
+    ok.
+
+creation_selection(Config) when is_list(Config) ->
+    register(creation_selection_test_supervisor, self()),
+    Name = atom_to_list(?FUNCTION_NAME) ++ "-"
+        ++ integer_to_list(erlang:system_time()),
+    Host = hostname(),
+    Cmd = lists:append(
+            [ct:get_progname(),
+             " -noshell",
+             " -setcookie ", atom_to_list(erlang:get_cookie()),
+             " -pa ", filename:dirname(code:which(?MODULE)),
+             " -s ", atom_to_list(?MODULE), " ",
+             " creation_selection_test ", atom_to_list(node()), " ",
+             atom_to_list(net_kernel:longnames()), " ", Name, " ", Host]),
+    ct:pal("Node command: ~p~n", [Cmd]),
+    Port = open_port({spawn, Cmd}, [exit_status]),
+    Node = list_to_atom(lists:append([Name, "@", Host])),
+    ok = receive_creation_selection_info(Port, Node).
+
+receive_creation_selection_info(Port, Node) ->
+    receive
+        {creation_selection_test, Node, Creations, InvalidCreation,
+         ClashResolvedCreation} = Msg ->
+            ct:log("Test result: ~p~n", [Msg]),
+            %% Verify that creation values are created as expected. The
+            %% list of creations is in reverse start order...
+            MaxC = (1 bsl 32) - 1,
+            MinC = 4,
+            StartOrderCreations = lists:reverse(Creations),
+            InvalidCreation = lists:foldl(fun (C, C) when is_integer(C),
+                                                          MinC =< C,
+                                                          C =< MaxC ->
+                                                  %% Return next expected
+                                                  %% creation...
+                                                  if C == MaxC -> MinC;
+                                                     true -> C+1
+                                                  end
+                                          end,
+                                          hd(StartOrderCreations),
+                                          StartOrderCreations),
+            false = lists:member(ClashResolvedCreation, [InvalidCreation
+                                                        | Creations]),
+            receive
+                {Port, {exit_status, 0}} ->
+                    Port ! {self(), close},
+                    ok;
+                {Port, {exit_status, EStat}} ->
+                    ct:fail({"node exited abnormally: ", EStat})
+            end;
+        {Port, {exit_status, EStat}} ->
+            ct:fail({"node prematurely exited: ", EStat});
+        {Port, {data, Data}} ->
+            ct:log("~ts", [Data]),
+            receive_creation_selection_info(Port, Node)
+    end,
+    ok.
+
+creation_selection_test([TestSupNode, LongNames, Name, Host]) ->
+    try
+        StartArgs = [Name,
+                     case LongNames of
+                         true -> longnames;
+                         false -> shortnames
+                     end],
+        Node = list_to_atom(lists:append([atom_to_list(Name),
+                                          "@", atom_to_list(Host)])),
+        GoDistributed = fun (F) ->
+                                {ok, _} = net_kernel:start(StartArgs),
+                                Node = node(),
+                                Creation = erlang:system_info(creation),
+                                _ = F(Creation),
+                                net_kernel:stop(),
+                                Creation
+                        end,
+        %% We start multiple times to verify that the creation values
+        %% we get from epmd are delivered in sequence. This is a
+        %% must for the test case such as it is written now, but can be
+        %% changed. If changed, this test case must be updated...
+        {Creations,
+         LastCreation} = lists:foldl(fun (_, {Cs, _LC}) ->
+                                             CFun = fun (X) -> X end,
+                                             C = GoDistributed(CFun),
+                                             {[C|Cs], C}
+                                     end, {[], 0}, lists:seq(1, 5)),
+        %% We create a pid with the creation that epmd will offer us the next
+        %% time we start the distribution and then start the distribution
+        %% once more. The node should avoid this creation, since this would
+        %% cause external identifiers in the system with same
+        %% nodename/creation pair as used by the local node, which in turn
+        %% would cause these identifers not to work as expected. That is, the
+        %% node should silently reject this creation and chose another one when
+        %% starting the distribution.
+        InvalidCreation = LastCreation+1,
+        Pid = erts_test_utils:mk_ext_pid({Node, InvalidCreation}, 4711, 0),
+        true = erts_debug:size(Pid) > 0, %% External pid
+        ResultFun = fun (ClashResolvedCreation) ->
+                            pong = net_adm:ping(TestSupNode),
+                            Msg = {creation_selection_test, node(), Creations,
+                                   InvalidCreation, ClashResolvedCreation},
+                            {creation_selection_test_supervisor, TestSupNode}
+                                ! Msg,
+                            %% Wait a bit so the message have time to get
+                            %% through before we take down the distribution...
+                            receive after 500 -> ok end
+                    end,
+        _ = GoDistributed(ResultFun),
+        %% Ensure Pid is not garbage collected before starting the
+        %% distribution...
+        _ = id(Pid),
+        erlang:halt(0)
+    catch
+        Class:Reason:StackTrace ->
+            erlang:display({Class, Reason, StackTrace}),
+            erlang:halt(17)
+    end.
+
 %%% Utilities
+
+id(X) ->
+    X.
 
 wait_until(Fun) ->
     wait_until(Fun, 24*60*60*1000).
 
-wait_until(Fun, Timeout) when Timeout < 0 ->
+wait_until(_Fun, Timeout) when Timeout < 0 ->
     timeout;
 wait_until(Fun, Timeout) ->
     case catch Fun() of
@@ -3496,8 +3984,8 @@ forever(Fun) ->
     Fun(),
     forever(Fun).
 
-abort(Why) ->
-    set_internal_state(abort, Why).
+%% abort(Why) ->
+%%     set_internal_state(abort, Why).
 
 
 start_busy_dist_port_tracer() ->

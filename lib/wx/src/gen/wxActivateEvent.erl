@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2008-2020. All Rights Reserved.
+%% Copyright Ericsson AB 2008-2024. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -19,6 +19,21 @@
 %% This file is generated DO NOT EDIT
 
 -module(wxActivateEvent).
+-moduledoc """
+An activate event is sent when a window or application is being activated or deactivated.
+
+See: [Overview events](https://docs.wxwidgets.org/3.2/overview_events.html#overview_events)
+
+This class is derived, and can use functions, from:
+
+* `m:wxEvent`
+
+wxWidgets docs: [wxActivateEvent](https://docs.wxwidgets.org/3.2/classwx_activate_event.html)
+
+## Events
+
+Use `wxEvtHandler:connect/3` with `wxActivateEventType` to subscribe to events of this type.
+""".
 -include("wxe.hrl").
 -export([getActive/1]).
 
@@ -30,11 +45,11 @@
 -include("wx.hrl").
 -type wxActivateEventType() :: 'activate' | 'activate_app' | 'hibernate'.
 -export_type([wxActivateEvent/0, wxActivate/0, wxActivateEventType/0]).
-%% @hidden
+-doc false.
 parent_class(wxEvent) -> true;
 parent_class(_Class) -> erlang:error({badtype, ?MODULE}).
 
-%% @doc See <a href="http://www.wxwidgets.org/manuals/2.8.12/wx_wxactivateevent.html#wxactivateeventgetactive">external documentation</a>.
+-doc "Returns true if the application or window is being activated, false otherwise.".
 -spec getActive(This) -> boolean() when
 	This::wxActivateEvent().
 getActive(#wx_ref{type=ThisT}=This) ->
@@ -43,21 +58,21 @@ getActive(#wx_ref{type=ThisT}=This) ->
   wxe_util:rec(?wxActivateEvent_GetActive).
 
  %% From wxEvent
-%% @hidden
+-doc false.
 stopPropagation(This) -> wxEvent:stopPropagation(This).
-%% @hidden
+-doc false.
 skip(This, Options) -> wxEvent:skip(This, Options).
-%% @hidden
+-doc false.
 skip(This) -> wxEvent:skip(This).
-%% @hidden
+-doc false.
 shouldPropagate(This) -> wxEvent:shouldPropagate(This).
-%% @hidden
+-doc false.
 resumePropagation(This,PropagationLevel) -> wxEvent:resumePropagation(This,PropagationLevel).
-%% @hidden
+-doc false.
 isCommandEvent(This) -> wxEvent:isCommandEvent(This).
-%% @hidden
+-doc false.
 getTimestamp(This) -> wxEvent:getTimestamp(This).
-%% @hidden
+-doc false.
 getSkipped(This) -> wxEvent:getSkipped(This).
-%% @hidden
+-doc false.
 getId(This) -> wxEvent:getId(This).

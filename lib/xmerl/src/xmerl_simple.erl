@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %% 
-%% Copyright Ericsson AB 2003-2016. All Rights Reserved.
+%% Copyright Ericsson AB 2003-2025. All Rights Reserved.
 %% 
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -23,6 +23,7 @@
 
 
 -module(xmerl_simple).
+-moduledoc false.
 
 -export([file/2,
 	 string/2]).
@@ -50,11 +51,12 @@ scanner_options(Opts) ->
 		     {close_fun, fun close/1}]).
 
 scanner_options([H|T], Opts) ->
-    case catch keyreplace(H, 1, Opts) of
-	false ->
-	    scanner_options(T, [H|Opts]);
-	NewOpts ->
+    try keyreplace(H, 1, Opts) of
+        NewOpts ->
 	    scanner_options(T, NewOpts)
+    catch
+	throw:false ->
+	    scanner_options(T, [H|Opts])
     end;
 scanner_options([], Opts) ->
     Opts.

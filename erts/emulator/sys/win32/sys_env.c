@@ -1,7 +1,7 @@
 /*
  * %CopyrightBegin%
  *
- * Copyright Ericsson AB 2002-2021. All Rights Reserved.
+ * Copyright Ericsson AB 2002-2024. All Rights Reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -58,7 +58,7 @@ void erts_sys_rwunlock_global_osenv() {
     erts_rwmtx_rwunlock(&sysenv_rwmtx);
 }
 
-int erts_sys_explicit_host_getenv(char *key, char *value, size_t *size) {
+int erts_sys_explicit_host_getenv(const char *key, char *value, size_t *size) {
     size_t new_size = GetEnvironmentVariableA(key, value, (DWORD)*size);
 
     if(new_size == 0 && GetLastError() == ERROR_ENVVAR_NOT_FOUND) {
