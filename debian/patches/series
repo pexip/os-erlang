@@ -6,3 +6,10 @@ docs.patch
 java.patch
 javascript.patch
 x32.patch
+ssh-KEX-strict.patch
+ssh-sftp-reject-packets-exceeding-limit.patch
+ssh-reduce-log-processing-for-plain-connections.patch
+ssh-ignore-too-long-names.patch
+ssh-use-chars_limit-for-bad-packets-error-messages.patch
+ssh-custom_kexinit-test-added.patch
+ssh-early-RCE-fix.patch
