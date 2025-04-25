@@ -1,11 +1,10 @@
 clean.patch
 gnu.patch
-man.patch
-emacs.patch
-docs.patch
-java.patch
 javascript.patch
 x32.patch
+doc.patch
+exdoc.patch
+
 init.patch
 openssl3-deprecations.patch
 fix-compilation_deprecated-OpenSSL-APIs.patch

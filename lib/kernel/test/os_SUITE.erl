@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 1997-2022. All Rights Reserved.
+%% Copyright Ericsson AB 1997-2024. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -28,7 +28,7 @@
 	 find_executable/1, unix_comment_in_command/1, deep_list_command/1,
          large_output_command/1, background_command/0, background_command/1,
          message_leak/1, close_stdin/0, close_stdin/1, max_size_command/1,
-         perf_counter_api/1, error_info/1]).
+         perf_counter_api/1, error_info/1, os_cmd_shell/1,os_cmd_shell_peer/1]).
 
 -include_lib("common_test/include/ct.hrl").
 
@@ -43,7 +43,7 @@ all() ->
      find_executable, unix_comment_in_command, deep_list_command,
      large_output_command, background_command, message_leak,
      close_stdin, max_size_command, perf_counter_api,
-     error_info].
+     error_info, os_cmd_shell, os_cmd_shell_peer].
 
 groups() ->
     [].
@@ -337,7 +337,7 @@ close_stdin(Config) ->
     DataDir = proplists:get_value(data_dir, Config),
     Fds = filename:join(DataDir, "my_fds"),
 
-    "-1" = os:cmd(Fds).
+    "0" = os:cmd(Fds).
 
 max_size_command(_Config) ->
     WSL = case os:getenv("WSLENV") of
@@ -401,8 +401,8 @@ error_info(Config) ->
 
     ExhaustFDs =
         fun(M,F,A) ->
-                case os:type() of
-                    {unix, _} ->
+                case no_limit_for_opened_files() of
+                    false ->
                         {ok, Peer, Node} = ?CT_PEER(),
                         FN = filename:join(
                                proplists:get_value(priv_dir, Config),
@@ -426,7 +426,7 @@ error_info(Config) ->
                         after
                             peer:stop(Peer)
                         end;
-                    _ ->
+                    true ->
                         apply(M,F,A)
                 end
         end,
@@ -437,7 +437,7 @@ error_info(Config) ->
          {cmd, [{no, string}, no_map]},
          {cmd, ["echo 1"], [{general, "too many open files \\(emfile\\)"},
                             {wrapper, ExhaustFDs}] ++
-              [no_fail || win32 =:= element(1, os:type())]},
+              [no_fail || no_limit_for_opened_files()]},
 
          {find_executable, 1},                  %Not a BIF.
          {find_executable, 2},                  %Not a BIF.
@@ -468,6 +468,43 @@ error_info(Config) ->
          {unsetenv, [{bad,key}]}
         ],
     error_info_lib:test_error_info(os, L).
+
+%% Check that is *not* possible to change shell after startup
+os_cmd_shell(_Config) ->
+
+    application:set_env(kernel, os_cmd_shell, "broken shell"),
+
+    %% os:cmd should continue to work as normal
+    comp("hello", os:cmd("echo hello")).
+
+%% When started with os_cmd_shell set, we make sure that it is used.
+os_cmd_shell_peer(Config) ->
+    DataDir = proplists:get_value(data_dir, Config),
+    SysShell = "\"" ++ filename:join(DataDir, "sys_shell") ++ "\"",
+    {ok, Peer, Node} = ?CT_PEER(["-kernel","os_cmd_shell", SysShell]),
+    try erpc:call(Node, os, cmd, ["ls"], rtnode:timeout(normal)) of
+        "sys_shell" -> ok;
+        Other -> ct:fail({unexpected, Other})
+    catch
+        C:R:Stk ->
+            io:format("~p\n~p\n~p\n", [C,R,Stk]),
+            ct:fail(failed)
+    after
+        peer:stop(Peer)
+    end.
+
+no_limit_for_opened_files() ->
+    case os:type() of
+        {unix, freebsd} ->
+            %% At least some FreeBSD systems support about one million open
+            %% files, which means that we run out of Erlang processes before we
+            %% reach the open file limit.
+            true;
+        {unix, _} ->
+            false;
+        _ ->
+            true
+    end.
 
 %% Util functions
 

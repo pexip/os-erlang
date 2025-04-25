@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2003-2022. All Rights Reserved.
+%% Copyright Ericsson AB 2003-2024. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -19,13 +19,6 @@
 %%
 
 -module(maybe_SUITE).
--include_lib("common_test/include/ct.hrl").
-
-%% Note: also require the feature to be set during runtime as long as
-%% the feature is experimental.  This is currently done in ../Makefile
-%% by overriding the test target.  Ugly and very non local.
--feature(maybe_expr, enable).
-
 -export([all/0, groups/0, init_per_suite/1, end_per_suite/1]).
 -export([basic/1, nested/1]).
 
@@ -89,6 +82,8 @@ basic(_Config) ->
                else
                    E2 -> E2
                end,
+
+    <<0>> = basic_4(id({<<0>>})),
 
     ok.
 
@@ -206,6 +201,11 @@ basic_3b(V0, M) ->
             {ok,V1,V2,V3}
         end,
     {wrapped,Result}.
+
+basic_4({X}) ->
+    maybe 
+        <<_:(ok)>> ?= X
+    end.
 
 nested(_Config) ->
     {outer_fail,not_ok} = nested_1(0, #{0 => not_ok}),

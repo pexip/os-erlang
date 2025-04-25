@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2012-2021. All Rights Reserved.
+%% Copyright Ericsson AB 2012-2023. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -88,7 +88,7 @@ init_per_suite(Config) ->
 	init_ssl(Config),
 	[{iter, 10}, {server_node, Node}, {server_host, Host} | Config]
     catch E:R:ST ->
-            ct:pal("~p:~p:~p",[E,R,ST]),
+            ct:log("~p:~p:~p",[E,R,ST]),
 	    {skipped, "Benchmark machines only"}
     end.
 
@@ -306,7 +306,7 @@ run_test(Client, File, Config) ->
     Pid ! go,
     receive
 	{Pid,{{tps, Tps}, {mbps, MBps}}} ->
-	    ct:pal("Tps: ~p  Bps~p", [Tps, MBps]),
+	    ct:log("Tps: ~p  Bps~p", [Tps, MBps]),
 	    {ok, {Tps, MBps}}
     end.
 
@@ -425,7 +425,7 @@ wget_client(Config) ->
 wget_client([KeepAlive, WgetFile, _URL, Protocol, ProtocolOpts, _], _) ->
     process_flag(trap_exit, true),
     Cmd = wget_N(KeepAlive, WgetFile, Protocol, ProtocolOpts),
-    %%ct:pal("Wget cmd: ~p", [Cmd]),
+    %%ct:log("Wget cmd: ~p", [Cmd]),
     Port = open_port({spawn, Cmd}, [stderr_to_stdout]), 
     wait_for_wget(Port).
 
@@ -449,7 +449,7 @@ start_web_server(Group, Config) when Group == https_inets;
 				     Group == https_inets_keep_alive ->
     Opts = proplists:get_value(server_verification_opts, cert_opts(Config)),
     ReuseSessions = ?config(reuse_sessions, Config),
-    SSLConfHttpd = [{socket_type, {essl,
+    SSLConfHttpd = [{socket_type, {ssl,
 				   [{nodelay, true}, {reuse_sessions, ReuseSessions} | Opts]}}],
     start_inets("https", SSLConfHttpd, Config);
 
@@ -634,7 +634,7 @@ do_handle_request(CB, S, Name, Opts, KeepAlive) when is_list(Name) ->
     send_file(CB, S, Fdesc);
 do_handle_request(CB, S, {gen, Data}, Opts, KeepAlive) ->
     Version = proplists:get_value(http_version, Opts),
-    Length = size(Data),
+    Length = byte_size(Data),
     Response = response_status_line_and_headers(Version, "Content-Length:" 
 						++ integer_to_list(Length) ++ ?CRLF, keep_alive(KeepAlive)), 
     CB:send(S, Response),
@@ -643,7 +643,7 @@ do_handle_request(CB, S, {gen, Data}, Opts, KeepAlive) ->
 send_file(CB, S, {gen, Data})  ->
     CB:send(S, Data);
     %% ChunkSize = 64*1024,
-    %% case size(Data) of
+    %% case byte_size(Data) of
     %% 	N when N > ChunkSize ->
     %% 	    <<Chunk:N/binary, Rest/binary>> = Data,
     %% 	    %%{Chunk, Rest} = lists:split(N, Data),

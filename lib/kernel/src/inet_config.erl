@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 1997-2022. All Rights Reserved.
+%% Copyright Ericsson AB 1997-2024. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -18,6 +18,7 @@
 %% %CopyrightEnd%
 %%
 -module(inet_config).
+-moduledoc false.
 
 -include("inet_config.hrl").
 -include("inet.hrl").
@@ -425,17 +426,15 @@ valid_type(win32) ->             true;
 valid_type(_) ->                 false.
 
 read_inetrc() ->
-   case application:get_env(inetrc) of
-       {ok,File} ->
-	   try_get_rc(File);
-       _ ->
-	   case os:getenv("ERL_INETRC") of
-	       false ->
-		   {nofile,[]};
-	       File ->
-		   try_get_rc(File)
-	   end
-   end.
+    File = case application:get_env(inetrc) of
+               {ok, Value} when is_list(Value) -> Value;
+               {ok, Value} when is_atom(Value) -> atom_to_list(Value);
+               undefined -> os:getenv("ERL_INETRC")
+           end,
+    case is_list(File) of
+        true -> try_get_rc(File);
+        false -> {nofile,[]}
+    end.
 
 try_get_rc(File) ->
     case get_rc(File) of
@@ -458,12 +457,8 @@ get_rc(File) ->
 	    error
     end.
 
-%% XXX Check if we really need to prim load the stuff
 get_file(File) ->
-    case erl_prim_loader:get_file(File) of
-	{ok,Bin,_} -> {ok,Bin};
-	Error -> Error
-    end.
+    erl_prim_loader:read_file(File).
 
 error(Fmt, Args) ->
     error_logger:error_msg("inet_config: " ++ Fmt, Args).

@@ -1,6 +1,5 @@
 
-  [;1m-spec map_get(Key, Map) -> Value[0m
-  [;1m                 when Map :: map(), Key :: any(), Value :: any().[0m
+[;1m  map_get(Key, Map)[0m
 
 [;;4mSince[0m:
   OTP 21.0
@@ -17,5 +16,3 @@
       Map = #{42 => value_two,1337 => "value one","a" => 1},
       map_get(Key,Map).
     "value one"
-
-  Allowed in guard tests.

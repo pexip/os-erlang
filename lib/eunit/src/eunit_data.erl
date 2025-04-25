@@ -25,6 +25,7 @@
 %% @doc Interpretation of symbolic test representation
 
 -module(eunit_data).
+-moduledoc false.
 
 -include("eunit.hrl").
 -include("eunit_internal.hrl").
@@ -404,10 +405,10 @@ parse({S, T1} = T, Options) when is_list(S) ->
     end;
 parse({S, T1}, Options) when is_binary(S) ->
     group(#group{tests = T1, options = Options, desc = S});
-parse(T, Options) when is_tuple(T), size(T) > 2, is_list(element(1, T)) ->
+parse(T, Options) when tuple_size(T) > 2, is_list(element(1, T)) ->
     [S | Es] = tuple_to_list(T),
     parse({S, list_to_tuple(Es)}, Options);
-parse(T, Options) when is_tuple(T), size(T) > 2, is_binary(element(1, T)) ->
+parse(T, Options) when tuple_size(T) > 2, is_binary(element(1, T)) ->
     [S | Es] = tuple_to_list(T),
     parse({S, list_to_tuple(Es)}, Options);
 parse(M, Options) when is_atom(M) ->

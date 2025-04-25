@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 1996-2022. All Rights Reserved.
+%% Copyright Ericsson AB 1996-2025. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -162,7 +162,7 @@ dirty_write_disc_only(Config) when is_list(Config) ->
     dirty_write(Config, disc_only_copies).
 
 dirty_write_xets(Config) when is_list(Config) ->
-    dirty_write(Config, ext_ets).
+    dirty_write(Config, ext_ram_copies).
 
 dirty_write(Config, Storage) ->
     [Node1] = Nodes = ?acquire_nodes(1, Config), 
@@ -196,7 +196,7 @@ dirty_read_disc_only(Config) when is_list(Config) ->
     dirty_read(Config, disc_only_copies).
 
 dirty_read_xets(Config) when is_list(Config) ->
-    dirty_read(Config, ext_ets).
+    dirty_read(Config, ext_ram_copies).
 
 dirty_read(Config, Storage) ->
     [Node1] = Nodes = ?acquire_nodes(1, Config), 
@@ -242,7 +242,7 @@ dirty_update_counter_disc_only(Config) when is_list(Config) ->
     dirty_update_counter(Config, disc_only_copies).
 
 dirty_update_counter_xets(Config) when is_list(Config) ->
-    dirty_update_counter(Config, ext_ets).
+    dirty_update_counter(Config, ext_ram_copies).
 
 dirty_update_counter(Config, Storage) ->
     [Node1] = Nodes = ?acquire_nodes(1, Config), 
@@ -255,7 +255,7 @@ dirty_update_counter(Config, Storage) ->
     ?match({'EXIT', _},  mnesia:dirty_update_counter({Tab}, 3)), 
     ?match({'EXIT', _},  mnesia:dirty_update_counter({foo, 1}, 3)), 
     ?match(5,  mnesia:dirty_update_counter({Tab, 1}, 3)), 
-    ?match([{Tab, 1, 5}],  mnesia:dirty_read({Tab, 1})), 
+    ?match([{Tab, 1, 5}],  mnesia:dirty_read({Tab, 1})),
 
     ?match({atomic, 8},  mnesia:transaction(fun() ->
 	   mnesia:dirty_update_counter({Tab, 1}, 3) end)), 
@@ -287,7 +287,7 @@ dirty_delete_disc_only(Config) when is_list(Config) ->
     dirty_delete(Config, disc_only_copies).
 
 dirty_delete_xets(Config) when is_list(Config) ->
-    dirty_delete(Config, ext_ets).
+    dirty_delete(Config, ext_ram_copies).
 
 dirty_delete(Config, Storage) ->
     [Node1] = Nodes = ?acquire_nodes(1, Config), 
@@ -327,7 +327,7 @@ dirty_delete_object_disc_only(Config) when is_list(Config) ->
     dirty_delete_object(Config, disc_only_copies).
 
 dirty_delete_object_xets(Config) when is_list(Config) ->
-    dirty_delete_object(Config, ext_ets).
+    dirty_delete_object(Config, ext_ram_copies).
 
 dirty_delete_object(Config, Storage) ->
     [Node1] = Nodes = ?acquire_nodes(1, Config), 
@@ -373,7 +373,7 @@ dirty_match_object_disc_only(Config) when is_list(Config) ->
     dirty_match_object(Config, disc_only_copies).
 
 dirty_match_object_xets(Config) when is_list(Config) ->
-    dirty_match_object(Config, ext_ets).
+    dirty_match_object(Config, ext_ram_copies).
 
 dirty_match_object(Config, Storage) ->
     [Node1] = Nodes = ?acquire_nodes(1, Config), 
@@ -412,7 +412,7 @@ dirty_index_match_object_disc_only(Config) when is_list(Config) ->
     dirty_index_match_object(Config, disc_only_copies).
 
 dirty_index_match_object_xets(Config) when is_list(Config) ->
-    dirty_index_match_object(Config, ext_ets).
+    dirty_index_match_object(Config, ext_ram_copies).
 
 dirty_index_match_object(Config, Storage) ->
     [Node1] = Nodes = ?acquire_nodes(1, Config), 
@@ -452,7 +452,7 @@ dirty_index_read_disc_only(Config) when is_list(Config) ->
     dirty_index_read(Config, disc_only_copies).
 
 dirty_index_read_xets(Config) when is_list(Config) ->
-    dirty_index_read(Config, ext_ets).
+    dirty_index_read(Config, ext_ram_copies).
 
 dirty_index_read(Config, Storage) ->
     [Node1] = Nodes = ?acquire_nodes(1, Config), 
@@ -516,7 +516,7 @@ dirty_index_update_set_disc_only(Config) when is_list(Config) ->
     dirty_index_update_set(Config, disc_only_copies).
 
 dirty_index_update_set_xets(Config) when is_list(Config) ->
-    dirty_index_update_set(Config, ext_ets).
+    dirty_index_update_set(Config, ext_ram_copies).
 
 dirty_index_update_set(Config, Storage) ->
     [Node1] = Nodes = ?acquire_nodes(1, Config),
@@ -611,7 +611,7 @@ dirty_index_update_bag_disc_only(Config)when is_list(Config) ->
     dirty_index_update_bag(Config, disc_only_copies).
 
 dirty_index_update_bag_xets(Config) when is_list(Config) ->
-    dirty_index_update_bag(Config, ext_ets).
+    dirty_index_update_bag(Config, ext_ram_copies).
 
 dirty_index_update_bag(Config, Storage) ->
     [Node1] = Nodes = ?acquire_nodes(1, Config), 
@@ -732,7 +732,7 @@ dirty_iter_disc_only(Config) when is_list(Config) ->
     dirty_iter(Config, disc_only_copies).
 
 dirty_iter_xets(Config) when is_list(Config) ->
-    dirty_iter(Config, ext_ets).
+    dirty_iter(Config, ext_ram_copies).
 
 dirty_iter(Config, Storage) ->
     [Node1] = Nodes = ?acquire_nodes(1, Config), 
@@ -844,12 +844,12 @@ del_table(CallFrom, DelNode, [Node1, Node2, Node3]) ->
     Pid3 = spawn_link(Node3, ?MODULE, update_trans, [Tab, 3, 0]),
 
 
-    dbg:tracer(process, {fun(Msg,_) -> tracer(Msg) end, void}),          
+    %% dbg:tracer(process, {fun(Msg,_) -> tracer(Msg) end, void}),
     %%    dbg:n(Node2),
     %%    dbg:n(Node3),
     %% dbg:tp('_', []),     
     %% dbg:tpl(dets, [timestamp]), 
-    dbg:p(Pid1, [m,c,timestamp]),  
+    %% dbg:p(Pid1, [m,c,timestamp]),  
     
     ?match({atomic, ok}, 
 	   rpc:call(CallFrom, mnesia, del_table_copy, [Tab, DelNode])),
@@ -872,17 +872,6 @@ del_table(CallFrom, DelNode, [Node1, Node2, Node3]) ->
     verify_oids(Tab, Node1, Node2, Node3, R1, R2, R3),
     ?verify_mnesia([Node1, Node2, Node3], []).
     
-tracer({trace_ts, _, send, Msg, Pid, {_,S,Ms}}) ->
-    io:format("~p:~p ~p >> ~w ~n",[S,Ms,Pid,Msg]);
-tracer({trace_ts, _, 'receive', Msg, {_,S,Ms}}) ->
-    io:format("~p:~p << ~w ~n",[S,Ms,Msg]);
-
-
-tracer(Msg) ->
-    io:format("UMsg ~p ~n",[Msg]),
-    ok.
-
-
 
 add_table_copy_1(suite) -> [];
 add_table_copy_1(Config) when is_list(Config) ->
@@ -928,6 +917,22 @@ add_table(CallFrom, AddNode, [Node1, Node2, Node3], Def) ->
     Pid3 ! {self(), quit}, R3 = receive {Pid3, Res3} -> Res3 after 5000 -> error end,
     verify_oids(Tab, Node1, Node2, Node3, R1, R2, R3),
     ?verify_mnesia([Node1, Node2, Node3], []).
+
+
+tracer({trace_ts, From, send, Msg, To, {_,S,Ms}}) ->
+    io:format("~p:~p ~p(~p) >>~p ~w ~n",[S,Ms,From,node(From),To,Msg]);
+tracer({trace_ts, Pid, 'receive', Msg, {_,S,Ms}}) ->
+    io:format("~p:~p ~p(~p) << ~w ~n",[S,Ms,Pid,node(Pid),Msg]);
+
+tracer({trace_ts, Pid, call, MFA, ST, {_,S,Ms}}) ->
+    io:format("~p:~p ~p(~p) ~w ~w ~n",[S,Ms,Pid,node(Pid),MFA, ST]);
+tracer({trace_ts, Pid, return_from, MFA, Ret, {_,S,Ms}}) ->
+    io:format("~p:~p ~p(~p) ~w => ~w ~n",[S,Ms,Pid,node(Pid),MFA,Ret]);
+
+tracer(Msg) ->
+    io:format("UMsg ~p ~n",[Msg]),
+    ok.
+
 
 move_table_copy_1(suite) -> [];
 move_table_copy_1(Config) when is_list(Config) ->

@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2008-2022. All Rights Reserved.
+%% Copyright Ericsson AB 2008-2024. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -21,6 +21,7 @@
 %% zip functions that are used by code_server
 
 -module(prim_zip).
+-moduledoc false.
 
 %% unzipping piecemeal
 -export([
@@ -532,7 +533,7 @@ dos_date_time_to_datetime(DosDate, DosTime) ->
     <<Hour:5, Min:6, Sec:5>> = <<DosTime:16>>,
     <<YearFrom1980:7, Month:4, Day:5>> = <<DosDate:16>>,
     {{YearFrom1980+1980, Month, Day},
-     {Hour, Min, Sec}}.
+     {Hour, Min, Sec * 2}}.
 
 cd_file_header_from_bin(<<VersionMadeBy:16/little,
 			 VersionNeeded:16/little,

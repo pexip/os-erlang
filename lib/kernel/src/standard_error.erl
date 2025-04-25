@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2009-2020. All Rights Reserved.
+%% Copyright Ericsson AB 2009-2024. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -18,7 +18,10 @@
 %% %CopyrightEnd%
 %%
 -module(standard_error).
+-moduledoc false.
 -behaviour(supervisor_bridge).
+
+-include_lib("kernel/include/logger.hrl").
 
 %% Basic standard i/o server for user interface port.
 -export([start_link/0, init/1, terminate/2]).
@@ -66,19 +69,22 @@ server(PortName,PortSettings) ->
 
 run(P) ->
     put(encoding, latin1),
+    put(onlcr, false),
+    put(log, none),
     server_loop(P).
 
 server_loop(Port) ->
     receive
-	{io_request,From,ReplyAs,Request} when is_pid(From) ->
-	    _ = do_io_request(Request, From, ReplyAs, Port),
-	    server_loop(Port);
-	{'EXIT',Port,badsig} ->			% Ignore badsig errors
-	    server_loop(Port);
-	{'EXIT',Port,What} ->			% Port has exited
-	    exit(What);
-	_Other ->				% Ignore other messages
-	    server_loop(Port)
+        {io_request,From,ReplyAs,Request} = IoReq when is_pid(From) ->
+            group:log_io_request(IoReq, get(log), ?MODULE),
+            _ = do_io_request(Request, From, ReplyAs, Port),
+            server_loop(Port);
+        {'EXIT',Port,badsig} ->         % Ignore badsig errors
+            server_loop(Port);
+        {'EXIT',Port,What} ->           % Port has exited
+            exit(What);
+        _Other ->               % Ignore other messages
+            server_loop(Port)
     end.
 
 get_fd_geometry(Port) ->
@@ -161,7 +167,7 @@ io_request({get_geometry,rows},Port) ->
 io_request(getopts, _Port) ->
     getopts();
 io_request({setopts,Opts}, _Port) when is_list(Opts) ->
-    setopts(Opts);
+    do_setopts(Opts);
 io_request({requests,Reqs}, Port) ->
     io_requests(Reqs, {ok,ok}, Port);
 io_request(R, _Port) ->                      %Unknown request
@@ -203,20 +209,35 @@ put_chars(Chars, Port) when is_binary(Chars) ->
     {ok,ok}.
 
 %% setopts
-setopts(Opts0) ->
+do_setopts(Opts0) ->
     Opts = expand_encoding(Opts0),
     case check_valid_opts(Opts) of
         true ->
-            do_setopts(Opts);
+            lists:foreach(
+              fun({encoding, Enc}) ->
+                      put(encoding, Enc);
+                 ({onlcr, Bool}) ->
+                      put(onlcr, Bool);
+                 ({log, Bool}) ->
+                      put(log, Bool)
+              end, Opts),
+            {ok, ok};
         false ->
             {error,{error,enotsup}}
     end.
 
 check_valid_opts([]) ->
     true;
-check_valid_opts([{encoding,Valid}|T]) when Valid =:= unicode;
-                                            Valid =:= utf8; Valid =:= latin1 ->
+check_valid_opts([{encoding,Valid}|T]) when Valid =:= unicode; Valid =:= utf8;
+                                            Valid =:= latin1 ->
     check_valid_opts(T);
+check_valid_opts([{onlcr,Bool}|T]) when is_boolean(Bool) ->
+    check_valid_opts(T);
+check_valid_opts([{log,Flag}|T]) ->
+    case lists:member(Flag, [none, output, input, all]) of
+        true -> check_valid_opts(T);
+        false -> false
+    end;
 check_valid_opts(_) ->
     false.
 
@@ -226,27 +247,22 @@ expand_encoding([latin1 | T]) ->
     [{encoding,latin1} | expand_encoding(T)];
 expand_encoding([unicode | T]) ->
     [{encoding,unicode} | expand_encoding(T)];
+expand_encoding([utf8 | T]) ->
+    [{encoding,unicode} | expand_encoding(T)];
+expand_encoding([{encoding,utf8} | T]) ->
+    [{encoding,unicode} | expand_encoding(T)];
 expand_encoding([H|T]) ->
     [H|expand_encoding(T)].
 
-do_setopts(Opts) ->
-    case proplists:get_value(encoding, Opts) of
-        Valid when Valid =:= unicode; Valid =:= utf8 ->
-            put(encoding, unicode);
-        latin1 ->
-            put(encoding, latin1);
-        undefined ->
-            ok
-    end,
-    {ok,ok}.
-
 getopts() ->
     Uni = {encoding,get(encoding)},
-    {ok,[Uni]}.
+    Onlcr = {onlcr, get(onlcr)},
+    Log = {log, get(log)},
+    {ok,[Uni, Onlcr, Log]}.
 
 wrap_characters_to_binary(Chars,From,To) ->
-    TrNl = (whereis(user_drv) =/= undefined),
-    Limit = case To of 
+    TrNl = get(onlcr),
+    Limit = case To of
 		latin1 ->
 		    255;
 		_Else ->

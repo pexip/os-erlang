@@ -1,7 +1,7 @@
 /*
  * %CopyrightBegin%
  *
- * Copyright Ericsson AB 2011-2022. All Rights Reserved.
+ * Copyright Ericsson AB 2011-2023. All Rights Reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -320,20 +320,19 @@ tmp_thr_prgr_data(ErtsSchedulerData *esdp)
     ErtsThrPrgrData *tpd = perhaps_thr_prgr_data(esdp);
 
     if (!tpd) {
+
+#ifdef ERTS_ENABLE_LOCK_COUNT
+        /* We may land here as a result of unmanaged_delay being called from
+         * the lock counting module, which in turn might be called from within
+         * the allocator, so we use plain malloc to avoid deadlocks. */
+        tpd = malloc(sizeof(ErtsThrPrgrData));
+#else
         /*
          * We only allocate the part up to the wakeup_request field which is
          * the first field only used by registered threads
          */
         size_t alloc_size = offsetof(ErtsThrPrgrData, wakeup_request);
-
-        /* We may land here as a result of unmanaged_delay being called from
-         * the lock counting module, which in turn might be called from within
-         * the allocator, so we use plain malloc to avoid deadlocks. */
-        tpd =
-#ifdef ERTS_ENABLE_LOCK_COUNT
-            malloc(alloc_size);
-#else
-            erts_alloc(ERTS_ALC_T_T_THR_PRGR_DATA, alloc_size);
+        tpd = erts_alloc(ERTS_ALC_T_T_THR_PRGR_DATA, alloc_size);
 #endif
 
         init_tmp_thr_prgr_data(tpd);
@@ -863,6 +862,12 @@ update(ErtsThrPrgrData *tpd)
 int
 erts_thr_progress_update(ErtsThrPrgrData *tpd)
 {
+#ifdef DEBUG
+    /* If we've run any code that requires a code barrier, it must have been
+     * scheduled prior to this point. */
+    erts_debug_check_code_barrier();
+#endif
+
     return update(tpd);
 }
 
@@ -927,10 +932,18 @@ erts_thr_progress_finalize_wait(ErtsThrPrgrData *tpd)
 	    break;
 	current = val;
     }
-    if (block_count_inc())
-	block_thread(tpd);
-    if (update(tpd))
-	leader_update(tpd);
+
+    if (block_count_inc()) {
+        block_thread(tpd);
+    } else {
+        /* Issue a code barrier if one was requested while thread progress was
+         * blocked. */
+        erts_code_ix_finalize_wait();
+    }
+
+    if (update(tpd)) {
+        leader_update(tpd);
+    }
 }
 
 void
@@ -1308,6 +1321,10 @@ block_thread(ErtsThrPrgrData *tpd)
 	}
 
     } while (block_count_inc());
+
+    /* Issue a code barrier if one was requested while thread progress was
+     * blocked. */
+    erts_code_ix_finalize_wait();
 
     cbp->finalize_wait(cbp->arg);
 

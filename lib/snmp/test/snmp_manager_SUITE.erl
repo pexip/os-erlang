@@ -1,7 +1,7 @@
 %% 
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2003-2022. All Rights Reserved.
+%% Copyright Ericsson AB 2003-2025. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -1218,11 +1218,19 @@ simulate_crash(NumKills, _) ->
 %%======================================================================
 
 notify_started01(Config) when is_list(Config) ->
-    ?TC_TRY(notify_started01,
-            fun() -> do_notify_started01(Config) end).
+    Cond = fun() -> ok end,
+    Pre  = fun() -> ok end,
+    TC   = fun(_) -> do_notify_started01(Config) end,
+    Post = fun(_) ->
+                   ?IPRINT("[post] ensure snmpm not running"),
+                   ?ENSURE_NOT_RUNNING(snmpm_supervisor,
+                                       fun() -> snmpm:stop() end,
+                                       1000)
+           end,
+    ?TC_TRY(?FUNCTION_NAME, Cond, Pre, TC, Post).
 
 do_notify_started01(Config) ->
-    ?IPRINT("starting with Config: "
+    ?IPRINT("[tc] starting with Config: "
             "~n      ~p", [Config]),
 
     SCO     = ?config(socket_create_opts, Config),
@@ -1236,11 +1244,11 @@ do_notify_started01(Config) ->
 	    {note_store, [{verbosity, silence}]},
 	    {config,     [{verbosity, log}, {dir, ConfDir}, {db_dir, DbDir}]}],
 
-    ?IPRINT("request start notification (1)"),
+    ?IPRINT("[tc] request start notification (1)"),
     Pid1 = snmpm:notify_started(10000),
     receive
 	{snmpm_start_timeout, Pid1} ->
-	    ?IPRINT("received expected start timeout"),
+	    ?IPRINT("[tc] received expected start timeout"),
 	    ok;
 	Any1 ->
 	    ?FAIL({unexpected_message, Any1})
@@ -1248,25 +1256,41 @@ do_notify_started01(Config) ->
 	    ?FAIL({unexpected_timeout, Pid1})
     end,
 
-    ?IPRINT("request start notification (2)"),
+    ?IPRINT("[tc] request start notification (2)"),
     Pid2 = snmpm:notify_started(10000),
 
-    ?IPRINT("start the snmpm starter"),
-    Pid = snmpm_starter(Opts, 5000),
+    ?IPRINT("[tc] start the snmpm starter"),
+    StarterPid = snmpm_starter(Opts, 5000),
 
-    ?IPRINT("await the start notification"),
+    ?IPRINT("[tc] await the start notification"),
     Ref = 
 	receive
 	    {snmpm_started, Pid2} ->
-		?IPRINT("received started message -> create the monitor"),
+		?IPRINT("[tc] received start notification message -> "
+                        "create the monitor"),
 		snmpm:monitor();
+            {snmpm_start_timeout, StarterPid} ->
+                ?EPRINT("[tc] Start Timeout: "
+                        "~n   Starter Process (~p) Info: ~p",
+                        [StarterPid, (catch erlang:process_info(StarterPid))]),
+                ?FAIL(start_timeout);
 	    Any2 ->
+                ?EPRINT("[tc] Unexpected Message: "
+                        "~n   Notify Process Info:  ~p"
+                        "~n   Starter Process info: ~p",
+                        [(catch erlang:process_info(Pid2)),
+                         (catch erlang:process_info(StarterPid))]),
 		?FAIL({unexpected_message, Any2})
 	after 15000 ->
-		?FAIL({unexpected_timeout, Pid2})
+                ?EPRINT("[tc] Unexpected Start Timeout: "
+                        "~n   Notify Process Info:  ~p"
+                        "~n   Starter Process info: ~p",
+                        [(catch erlang:process_info(Pid2)),
+                         (catch erlang:process_info(StarterPid))]),
+		?FAIL(unexpected_start_timeout)
 	end,
 
-    ?IPRINT("[~p] make sure it has not already crashed...", [Ref]),
+    ?IPRINT("[tc] make sure it (~p) has not already crashed...", [Ref]),
     receive
 	{'DOWN', Ref, process, Obj1, Reason1} ->
 	    ?FAIL({unexpected_down, Obj1, Reason1})
@@ -1274,13 +1298,14 @@ do_notify_started01(Config) ->
 	    ok
     end,
 
-    ?IPRINT("stop the manager"),
-    Pid ! {stop, self()}, %ok = snmpm:stop(),
+    ?IPRINT("[tc] stop the manager (send stop to starter process ~p)",
+            [StarterPid]),
+    StarterPid ! {stop, self()}, %ok = snmpm:stop(),
 
-    ?IPRINT("await the down-message"),
+    ?IPRINT("[tc] await the down-message"),
     receive
 	{'DOWN', Ref, process, Obj2, Reason2} ->
-	    ?IPRINT("received expected down-message: "
+	    ?IPRINT("[tc] received expected down-message: "
                     "~n   Obj2:    ~p"
                     "~n   Reason2: ~p", 
                     [Obj2, Reason2]),
@@ -1289,27 +1314,34 @@ do_notify_started01(Config) ->
 	    ?FAIL(down_timeout)
     end,
 
-    ?IPRINT("end"),
+    ?IPRINT("[tc] end"),
     ok.
 
 
 snmpm_starter(Opts, To) ->
     Parent = self(),
     spawn(
-      fun() -> 
-	      ?SLEEP(To), 
-	      ok = snmpm:start(Opts),
+      fun() ->
+              ?IPRINT("[snmpm-starter] wait ~w msec", [To]),
+	      ?SLEEP(To),
+              ?IPRINT("[snmpm-starter] try start snmpm"),
+	      ok = ?PCALL(fun() -> snmpm:start(Opts) end,
+                          To, 1000, {error, timeout}),
+              ?IPRINT("[snmpm-starter] snmpm started - await stop command"),
 	      receive
 		  {stop, Parent} ->
+                      ?IPRINT("[snmpm-starter] received stop command"),
 		      snmpm:stop()
-	      end
+	      end,
+              ?IPRINT("[snmpm-starter] done"),
+              ok
       end).
 
 
 %%======================================================================
 
 notify_started02(Config) when is_list(Config) ->
-    ?TC_TRY(notify_started02,
+    ?TC_TRY(?FUNCTION_NAME,
             fun() -> notify_started02_cond(Config) end,
             fun() -> do_notify_started02(Config) end).
 
@@ -1335,6 +1367,8 @@ do_notify_started02(Config) ->
     ?IPRINT("starting with Config: "
             "~n      ~p", [Config]),
 
+    Factor  = ?config(snmp_factor,        Config),
+
     SCO     = ?config(socket_create_opts, Config),
     ConfDir = ?config(manager_conf_dir,   Config),
     DbDir   = ?config(manager_db_dir,     Config),
@@ -1342,9 +1376,12 @@ do_notify_started02(Config) ->
     write_manager_conf(ConfDir),
 
     Opts = [{server,     [{verbosity, log}]},
-	    {net_if,     [{verbosity, silence}, {options, SCO}]},
+	    {net_if,     [{verbosity, silence},
+                          {options,   SCO}]},
 	    {note_store, [{verbosity, silence}]},
-	    {config,     [{verbosity, debug}, {dir, ConfDir}, {db_dir, DbDir}]}],
+	    {config,     [{verbosity, debug},
+                          {dir,       ConfDir},
+                          {db_dir,    DbDir}]}],
 
     ?IPRINT("start snmpm client process"),
     NumIterations = 5,
@@ -1359,7 +1396,7 @@ do_notify_started02(Config) ->
     ApproxStartTime =
         case ns02_client_await_approx_runtime(Pid1) of
             {ok, T} ->
-                T;
+                ?LIB:ftime(T, Factor);
             {error, Reason} ->
                 %% Attempt cleanup just in case
                 exit(Pid1, kill),
@@ -1385,13 +1422,14 @@ do_notify_started02(Config) ->
 	    ?FAIL({client, Reason1});
 	{'EXIT', Pid1, Reason1} ->
 	    ?FAIL({client, Reason1})
-    after ApproxStartTime + 10000 ->
+    after ApproxStartTime + 15000 ->
             exit(Pid1, kill),
             exit(Pid2, kill),
 	    ?FAIL(timeout)
     end,
-	
-    ?IPRINT("await snmpm starter process exit"),
+
+    Timeout2 = ?LIB:ftime(5000, Factor),
+    ?IPRINT("await (~w msec) snmpm starter process exit", [Timeout2]),
     receive 
 	{'EXIT', Pid2, normal} ->
 	    ok;
@@ -1400,7 +1438,7 @@ do_notify_started02(Config) ->
 	    ?SKIP(SkipReason2);
 	{'EXIT', Pid2, Reason2} ->
 	    ?FAIL({ctrl, Reason2})
-    after 5000 ->
+    after Timeout2 ->
             exit(Pid2, kill),
 	    ?FAIL(timeout)
     end,
@@ -1515,7 +1553,7 @@ ns02_ctrl_loop(Opts, N) ->
     end,
     ?SLEEP(2000),
     ?IPRINT("stop manager"),
-    ?SLEEP(100), % Give the verbosity to take effect...
+    ?SLEEP(100), % Give the verbosity time to take effect...
     TS3 = erlang:system_time(millisecond),
     case snmpm:stop(5000) of
         ok ->
@@ -1836,9 +1874,9 @@ do_usm_priv_aes(AuthAlg, Config) ->
       ],
 
     ?IPRINT("register user, usm-user and agent"),
-    snmpm:register_user(SecName, snmpm_user_default, nil),
-    snmpm:register_usm_user(EngineID, SecName, Credentials),
-    snmpm:register_agent(SecName, "v3_agent", AgentConfig),
+    ok = snmpm:register_user(SecName, snmpm_user_default, nil),
+    ok = snmpm:register_usm_user(EngineID, SecName, Credentials),
+    ok = snmpm:register_agent(SecName, "v3_agent", AgentConfig),
 
     PduType   = 'get-request',
     ScopedPDU =
@@ -2219,31 +2257,64 @@ do_register_agent2([{_ManagerPeer, ManagerNode}], Config) ->
     ?IPRINT("manager info: ~p~n", [mgr_info(ManagerNode)]),
 
     ?IPRINT("register agent(s)"),
-    TargetName1 = "agent1", 
+    TargetName1 = "agent1",
+    EngineID1   = "agentEngineId-1",
     ok = mgr_register_agent(ManagerNode, user_alfa, TargetName1,
-				  [{address,   LocalHost},
-				   {port,      5001},
-				   {engine_id, "agentEngineId-1"}]),
+                            [{address,   LocalHost},
+                             {port,      5001},
+                             {engine_id, EngineID1}]),
     TargetName2 = "agent2", 
+    EngineID2   = "agentEngineId-2",
     ok = mgr_register_agent(ManagerNode, user_alfa, TargetName2,
-				  [{address,   LocalHost},
-				   {port,      5002},
-				   {engine_id, "agentEngineId-2"}]),
+                            [{address,   LocalHost},
+                             {port,      5002},
+                             {engine_id, EngineID2}]),
     TargetName3 = "agent3", 
+    EngineID3   = "agentEngineId-3",
     ok = mgr_register_agent(ManagerNode, user_beta, TargetName3,
-				  [{address,   LocalHost},
-				   {port,      5003},
-				   {engine_id, "agentEngineId-3"}]),
+                            [{address,   LocalHost},
+                             {port,      5003},
+                             {engine_id, EngineID3}]),
     TargetName4 = "agent4", 
+    EngineID4   = "agentEngineId-4",
     ok = mgr_register_agent(ManagerNode, user_beta, TargetName4,
-				  [{address,   LocalHost},
-				   {port,      5004},
-				   {engine_id, "agentEngineId-4"}]),
+                            [{address,   LocalHost},
+                             {port,      5004},
+                             {engine_id, EngineID4}]),
 
     ?IPRINT("verify all agent(s): expect 4"),
     case mgr_which_agents(ManagerNode) of
 	Agents1 when length(Agents1) =:= 4 ->
-	    ?IPRINT("all agents: ~p~n", [Agents1]),
+            UnknownEngineID = "agentEngineId-X",
+	    ?IPRINT("all agents: "
+                    "~n   ~p"
+                    "~nwhen"
+                    "~n   Which Agents (from EngineID 1; ~p):"
+                    "~n      ~p (~p)"
+                    "~n   Which Agents (from EngineID 2; ~p):"
+                    "~n      ~p (~p)"
+                    "~n   Which Agents (from EngineID 3; ~p):"
+                    "~n      ~p (~p)"
+                    "~n   Which Agents (from EngineID 4; ~p):"
+                    "~n      ~p (~p)"
+                    "~n   Which Agents (from unknown engine; ~p):"
+                    "~n      ~p (~p)"
+                    "~n", [Agents1,
+                           EngineID1,
+                           mgr_which_agents(ManagerNode, engine_id, EngineID1),
+                           mgr_is_known_engine_id(ManagerNode, EngineID1),
+                           EngineID2,
+                           mgr_which_agents(ManagerNode, engine_id, EngineID2),
+                           mgr_is_known_engine_id(ManagerNode, EngineID2),
+                           EngineID3,
+                           mgr_which_agents(ManagerNode, engine_id, EngineID3),
+                           mgr_is_known_engine_id(ManagerNode, EngineID3),
+                           EngineID4,
+                           mgr_which_agents(ManagerNode, engine_id, EngineID4),
+                           mgr_is_known_engine_id(ManagerNode, EngineID4),
+                           UnknownEngineID,
+                           mgr_which_agents(ManagerNode, engine_id, UnknownEngineID),
+                           mgr_is_known_engine_id(ManagerNode, UnknownEngineID)]),
 	    ok;
 	Agents1 ->
 	    ?FAIL({agent_registration_failure, Agents1})
@@ -5133,7 +5204,9 @@ init_manager(Case, AutoInform, Config) ->
 		       _ ->
 			   user
 		   end,
-	    Conf = [{manager_node, Node}, {manager_peer, Peer}, {irb, IRB} | Config],
+	    Conf = [{manager_node, Node},
+                    {manager_peer, Peer},
+                    {irb, IRB} | Config],
 	    Vsns = [v1,v2,v3], 
 	    start_manager(Node, Vsns, Conf)
 	end
@@ -5190,7 +5263,9 @@ init_v3_manager(Case, Config) ->
 	    ok = write_manager_config(transport, Config),
 
 	    IRB  = auto,
-	    Conf = [{manager_node, Node}, {manager_peer, Peer}, {irb, IRB} | Config],
+	    Conf = [{manager_node, Node},
+                    {manager_peer, Peer},
+                    {irb, IRB} | Config],
 	    Vsns = [v3], 
 	    start_manager(Node, Vsns, Conf)
 	end
@@ -5594,6 +5669,12 @@ mgr_which_agents(Node) ->
 mgr_which_agents(Node, Id) ->
     rcall(Node, snmpm, which_agents, [Id]).
 
+mgr_which_agents(Node, Key, Id) ->
+    rcall(Node, snmpm, which_agents, [Key, Id]).
+
+mgr_is_known_engine_id(Node, EngineId) ->
+    rcall(Node, snmpm_config, is_known_engine_id, [EngineId]).
+
 
 %% -- Misc crypto wrapper functions --
 
@@ -5731,6 +5812,8 @@ fin_mgr_user(Conf) ->
     Conf.
 
 init_mgr_user_data1(Conf) ->
+    ?DBG("init_mgr_user_data1 -> entry with"
+	 "~n   Conf: ~p", [Conf]),
     Node = ?config(manager_node, Conf),
     TargetName = ?config(manager_agent_target_name, Conf),
     IpFamily   = ?config(ipfamily, Conf),
@@ -5739,11 +5822,11 @@ init_mgr_user_data1(Conf) ->
     ok =
 	case IpFamily of
 	    inet ->
-		mgr_user_register_agent(
-		  Node, TargetName,
-		  [{address,   Ip},
-		   {port,      Port},
-		   {engine_id, "agentEngine"}]);
+                mgr_user_register_agent(
+                  Node, TargetName,
+                  [{address,   Ip},
+                   {port,      Port},
+                   {engine_id, "agentEngine"}]);
 	    inet6 ->
 		mgr_user_register_agent(
 		  Node, TargetName,
@@ -5783,9 +5866,9 @@ init_mgr_user_data2(Conf) ->
 	    inet ->
 		mgr_user_register_agent(
 		  Node, TargetName,
-		  [{address,   Ip},
-		   {port,      Port},
-		   {engine_id, "agentEngine"}]);
+                  [{address,   Ip},
+                   {port,      Port},
+                   {engine_id, "agentEngine"}]);
 	    inet6 ->
 		mgr_user_register_agent(
 		  Node, TargetName,
@@ -6119,32 +6202,47 @@ write_manager_config(Config) ->
 write_manager_config(DomainType, Config) ->
     Dir = ?config(manager_conf_dir, Config),
     Ip  = tuple_to_list(?config(ip, Config)),
-    %% Note that Addr and Port are actually only Addr and Port
-    %% when DomainType is default.
-    %% In all other cases the Addr is TransportDomain and 
-    %% port is {Addr, Port}...
-    {Addr, Port} =
-	case ?config(ipfamily, Config) of
-	    inet when (DomainType =:= default) ->
-		{Ip, ?MGR_PORT};
-	    inet ->
-		{transportDomainUdpIpv4, {Ip, ?MGR_PORT}};
-	    inet6 ->
-		{transportDomainUdpIpv6, {Ip, ?MGR_PORT}}
-	end,
-    snmp_config:write_manager_snmp_files(
-      Dir, Addr, Port, ?MGR_MMS, ?MGR_ENGINE_ID, [], [], []).
+    case ?config(ipfamily, Config) of
+        inet when (DomainType =:= default) ->
+            snmp_config:write_manager_snmp_files(
+              Dir, Ip, ?MGR_PORT, ?MGR_MMS, ?MGR_ENGINE_ID);
+        inet ->
+            TDomain    = transportDomainUdpIpv4,
+            TAddr      = {Ip, ?MGR_PORT},
+            Transport  = {TDomain, TAddr},
+            Transports = [Transport],
+            snmp_config:write_manager_snmp_files(
+              Dir, Transports, ?MGR_MMS, ?MGR_ENGINE_ID);
+        inet6 ->
+            TDomain    = transportDomainUdpIpv6,
+            TAddr      = {Ip, ?MGR_PORT},
+            Transport  = {TDomain, TAddr},
+            Transports = [Transport],
+            snmp_config:write_manager_snmp_files(
+              Dir, Transports, ?MGR_MMS, ?MGR_ENGINE_ID)
+    end.
 
 write_manager_conf(Dir) ->
-    Port = "5000",
-    MMS  = "484",
+    LocalHost = snmp_test_lib:localhost(), 
+    TDomain   =
+        if
+            is_tuple(LocalHost) ->
+                if
+                    tuple_size(LocalHost) =:= 4 ->
+                        transportDomainUdpIpv4;
+                    tuple_size(LocalHost) =:= 8 ->
+                        transportDomainUdpIpv6
+                end
+        end,
+    Port = 5000,
+    MMS  = 484,
     EngineID = "\"mgrEngine\"",
     Str = lists:flatten(
             io_lib:format("%% Minimum manager config file\n"
-                          "{port,             ~s}.\n"
-                          "{max_message_size, ~s}.\n"
+                          "{transports,       [{~w, {~w, ~w}}]}.\n"
+                          "{max_message_size, ~w}.\n"
                           "{engine_id,        ~s}.\n",
-                          [Port, MMS, EngineID])),
+                          [TDomain, LocalHost, Port, MMS, EngineID])),
     write_manager_conf(Dir, Str).
 
 write_manager_conf(Dir, Str) ->

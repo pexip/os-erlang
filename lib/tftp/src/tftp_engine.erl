@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %% 
-%% Copyright Ericsson AB 2005-2021. All Rights Reserved.
+%% Copyright Ericsson AB 2005-2024. All Rights Reserved.
 %% 
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -22,6 +22,7 @@
 %%-------------------------------------------------------------------
 
 -module(tftp_engine).
+-moduledoc false.
 
 %%%-------------------------------------------------------------------
 %%% Interface
@@ -73,6 +74,14 @@
 %%% Info
 %%%-------------------------------------------------------------------
 
+-spec info(Procs) -> [{Pid, Result}] when
+    Procs   :: daemons | servers,
+    Pid     :: pid(),
+    Result  :: term();
+          (Pid) -> Result when
+    Pid     :: pid(),
+    Result  :: term().
+
 info(daemons) ->
     Daemons = supervisor:which_children(tftp_sup),
     [{Pid, info(Pid)} || {_, Pid, _, _} <- Daemons];
@@ -81,6 +90,18 @@ info(servers) ->
                          {server, Pid}   <- DeamonInfo];
 info(ToPid) when is_pid(ToPid) ->
     call(info, ToPid, timer:seconds(10)).
+
+-spec change_config(Procs, Options) -> [{Pid, Result}] when
+    Procs   :: daemons | servers,
+    Options :: [tftp:option()],
+    Pid     :: pid(),
+    Result  :: ok | {error, Reason},
+    Reason  :: term();
+                   (Pid, Options) -> Result when
+    Pid     :: pid(),
+    Options :: [tftp:option()],
+    Result  :: ok | {error, Reason},
+    Reason  :: term().
 
 change_config(daemons, Options) ->
     Daemons = supervisor:which_children(tftp_sup),
@@ -625,7 +646,7 @@ common_read(Config, Callback, Req, LocalAccess, ExpectedBlockNo, ActualBlockNo, 
     end;
 common_read(Config, Callback, Req, LocalAccess, ExpectedBlockNo, ActualBlockNo, Prepared) 
   when ActualBlockNo =< ExpectedBlockNo, is_record(Prepared, prepared) ->
-    %% error_logger:error_msg("TFTP READ ~s: Expected block ~p but got block ~p - IGNORED\n",
+    %% logger:error("TFTP READ ~s: Expected block ~p but got block ~p - IGNORED\n",
     %%                     [Req#tftp_msg_req.filename, ExpectedBlockNo, ActualBlockNo]),
     case Prepared of
         #prepared{status = more, prev_data = Data} when is_binary(Data) ->
@@ -686,7 +707,7 @@ common_write(Config, Callback, Req, LocalAccess, ExpectedBlockNo, ActualBlockNo,
     common_ack(Config, Callback, Req, LocalAccess, ExpectedBlockNo - 1, Prepared);
 common_write(Config, Callback, Req, LocalAccess, ExpectedBlockNo, ActualBlockNo, Data, Prepared)
   when ActualBlockNo =< ExpectedBlockNo, is_binary(Data), is_record(Prepared, prepared) ->
-    %% error_logger:error_msg("TFTP WRITE ~s: Expected block ~p but got block ~p - IGNORED\n",
+    %% logger:error("TFTP WRITE ~s: Expected block ~p but got block ~p - IGNORED\n",
     %% [Req#tftp_msg_req.filename, ExpectedBlockNo, ActualBlockNo]),
     Reply = #tftp_msg_ack{block_no = ExpectedBlockNo},
     {Config2, Callback2, TransferRes} = 
@@ -714,7 +735,9 @@ pre_terminate(Config, Req, Result) ->
     if
         Req#tftp_msg_req.local_filename =/= undefined,
         Config#config.parent_pid =/= undefined ->
-            proc_lib:init_ack(Result),
+            %% Ugly trick relying on that we will exit soon;
+            %% the parent will wait for us to exit before returning Result
+            _ = catch proc_lib:init_fail(Result, {throw, ok}),
             unlink(Config#config.parent_pid),
             Config#config{parent_pid = undefined, polite_ack = true};
         true ->
@@ -739,7 +762,9 @@ terminate(Config, Req, Result) ->
         Req#tftp_msg_req.local_filename =/= undefined  ->
             %% Client
             close_port(Config, client, Req),
-            proc_lib:init_ack(Result2),
+            %% Ugly trick relying on that we will exit soon;
+            %% the parent will wait for us to exit before returning Result
+            _ = catch proc_lib:init_fail(Result2, {throw, ok}),
             unlink(Config#config.parent_pid),
             exit(normal);
         true ->
@@ -1001,7 +1026,7 @@ do_callback(read = Fun, Config, Callback, Req)
     NextBlockNo = Callback#callback.block_no + 1,
     case catch safe_apply(Callback#callback.module, Fun, Args) of
         {more, Bin, NewState} when is_binary(Bin) ->
-            Count = Callback#callback.count + size(Bin),
+            Count = Callback#callback.count + byte_size(Bin),
             Callback2 = Callback#callback{state    = NewState, 
                                           block_no = NextBlockNo,
                                           count    = Count},
@@ -1035,7 +1060,7 @@ do_callback({write = Fun, Bin}, Config, Callback, Req)
     NextBlockNo = Callback#callback.block_no + 1,
     case catch safe_apply(Callback#callback.module, Fun, Args) of
         {more, NewState} ->
-            Count = Callback#callback.count + size(Bin),
+            Count = Callback#callback.count + byte_size(Bin),
             Callback2 = Callback#callback{state    = NewState, 
                                           block_no = NextBlockNo,
                                           count    = Count},
@@ -1112,9 +1137,9 @@ do_callback({abort, Error}, _Config, undefined, _Req) when is_record(Error, tftp
 
 peer_info(#config{udp_host = Host, udp_port = Port}) ->
     if
-        is_tuple(Host), size(Host) =:= 4 ->
+        tuple_size(Host) =:= 4 ->
             {inet, tftp_lib:host_to_string(Host), Port};
-        is_tuple(Host), size(Host) =:= 8 ->
+        tuple_size(Host) =:= 8 ->
             {inet6, tftp_lib:host_to_string(Host), Port};
         true ->
             {undefined, Host, Port}
@@ -1336,7 +1361,7 @@ print_debug_info(#config{debug_level = Level} = Config, Who, Where, Data) ->
     end.
 
 do_print_debug_info(Config, Who, Where, #tftp_msg_data{data = Bin} = Msg) when is_binary(Bin) ->
-    Msg2 = Msg#tftp_msg_data{data = {bytes, size(Bin)}},
+    Msg2 = Msg#tftp_msg_data{data = {bytes, byte_size(Bin)}},
     do_print_debug_info(Config, Who, Where, Msg2);
 do_print_debug_info(Config, Who, Where, #tftp_msg_req{local_filename = Filename} = Msg) when is_binary(Filename) ->
     Msg2 = Msg#tftp_msg_req{local_filename = binary},

@@ -27,6 +27,7 @@
 	xmerl_validate,
 	xmerl_xlate,
 	xmerl_xml,
+	xmerl_xml_indent,
 	xmerl_xpath,
 	xmerl_xpath_lib,
 	xmerl_xpath_parse,
@@ -40,5 +41,5 @@
   {registered, []},
   {env, []},
   {applications, [kernel, stdlib]},
-  {runtime_dependencies, ["stdlib-2.5","kernel-3.0","erts-6.0"]}
+  {runtime_dependencies, ["stdlib-2.5","kernel-8.4","erts-6.0"]}
   ]}.

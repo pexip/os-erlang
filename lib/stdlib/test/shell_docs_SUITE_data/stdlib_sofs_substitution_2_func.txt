@@ -1,9 +1,5 @@
 
-  [;1m-spec substitution(SetFun, Set1) -> Set2[0m
-  [;1m                      when[0m
-  [;1m                          SetFun :: set_fun(),[0m
-  [;1m                          Set1 :: a_set(),[0m
-  [;1m                          Set2 :: a_set().[0m
+[;1m  substitution(SetFun, Set1)[0m
 
   Returns a function, the domain of which is [;;4mSet1[0m. The value of an
   element of the domain is the result of applying [;;4mSetFun[0m to the
@@ -26,7 +22,7 @@
     [{a,a},{b,b},{c,c}]
 
   Let [;;4mSetOfSets[0m be a set of sets and [;;4mBinRel[0m a binary relation.
-  The function that maps each element [;;4mSet[0m of [;;4mSetOfSets[0m onto the 
+  The function that maps each element [;;4mSet[0m of [;;4mSetOfSets[0m onto the
   image of [;;4mSet[0m under [;;4mBinRel[0m is returned by the following
   function:
 

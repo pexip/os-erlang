@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2013-2020. All Rights Reserved.
+%% Copyright Ericsson AB 2013-2024. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -25,6 +25,7 @@
 %%
 
 -module(diameter_traffic).
+-moduledoc false.
 
 -dialyzer(no_improper_lists).
 
@@ -1782,6 +1783,12 @@ resend_request(_, Req, _, _) ->  %% no alternate peer
 pick_peer(SvcName,
           App,
           #request{packet = #diameter_packet{msg = Msg}},
+          CallOpts) ->
+    pick_peer(SvcName, App, Msg, CallOpts#options{extra = []});
+
+pick_peer(SvcName,
+          App,
+          #diameter_packet{msg = Msg},
           CallOpts) ->
     pick_peer(SvcName, App, Msg, CallOpts#options{extra = []});
 

@@ -36,7 +36,7 @@
 	     ssh_sftpd,
 	     ssh_sftpd_file,
 	     ssh_sftpd_file_api,
-	     ssh_subsystem_sup,
+	     ssh_connection_sup,
              ssh_tcpip_forward_client,
              ssh_tcpip_forward_srv,
              ssh_tcpip_forward_acceptor_sup,
@@ -51,7 +51,7 @@
                            ssh_acceptor,
                            ssh_channel_sup,
                            ssh_connection_handler,
-                           ssh_subsystem_sup,
+                           ssh_connection_sup,
                            ssh_system_sup
                           ]},
          {default_filter, rm} %% rm | filter
@@ -59,9 +59,9 @@
   {mod, {ssh_app, []}},
   {runtime_dependencies, [
 			  "crypto-5.0",
-			  "erts-11.0",
-			  "kernel-6.0",
+			  "erts-14.0",
+			  "kernel-9.0",
 			  "public_key-1.6.1",
-                          "stdlib-3.15",
+                          "stdlib-6.0","stdlib-5.0",
                           "runtime_tools-1.15.1"
 			 ]}]}.

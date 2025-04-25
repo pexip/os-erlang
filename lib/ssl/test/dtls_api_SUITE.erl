@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2019-2022. All Rights Reserved.
+%% Copyright Ericsson AB 2019-2024. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -40,6 +40,8 @@
          dtls_listen_close/1,
          dtls_listen_reopen/0,
          dtls_listen_reopen/1,
+         dtls_listen_both_family/0,
+         dtls_listen_both_family/1,
          dtls_listen_two_sockets_1/0,
          dtls_listen_two_sockets_1/1,
          dtls_listen_two_sockets_2/0,
@@ -52,9 +54,11 @@
          dtls_listen_two_sockets_5/1,
          dtls_listen_two_sockets_6/0,
          dtls_listen_two_sockets_6/1,
-         client_restarts/0, client_restarts/1
+         client_restarts/0, client_restarts/1,
+         client_restarts_multiple_acceptors/1
         ]).
 
+-include("ssl_test_lib.hrl").
 -include_lib("ssl/src/ssl_internal.hrl").
 
 %%--------------------------------------------------------------------
@@ -78,13 +82,15 @@ api_tests() ->
      dtls_listen_owner_dies,
      dtls_listen_close,
      dtls_listen_reopen,
+     dtls_listen_both_family,
      dtls_listen_two_sockets_1,
      dtls_listen_two_sockets_2,
      dtls_listen_two_sockets_3,
      dtls_listen_two_sockets_4,
      dtls_listen_two_sockets_5,
      dtls_listen_two_sockets_6,
-     client_restarts
+     client_restarts,
+     client_restarts_multiple_acceptors
     ].
 
 init_per_suite(Config0) ->
@@ -136,7 +142,7 @@ end_per_testcase(_TestCase, Config) ->
 %%--------------------------------------------------------------------
 
 dtls_listen_owner_dies() ->
-    [{doc, "Test that you can start new DTLS 'listner' if old owner dies"}].
+    [{doc, "Test that you can start new DTLS 'listener' if old owner dies"}].
 
 dtls_listen_owner_dies(Config) when is_list(Config) ->    
     ClientOpts = ssl_test_lib:ssl_options(client_rsa_opts, Config),
@@ -144,52 +150,58 @@ dtls_listen_owner_dies(Config) when is_list(Config) ->
     {_, ServerNode, Hostname} = ssl_test_lib:run_where(Config),
 
     Port = ssl_test_lib:inet_port(ServerNode),
-    Test = self(),
-    Pid = spawn(fun() -> {ok, _} =
-                             ssl:listen(Port, [{protocol, dtls} | ServerOpts]),
-                         {error, _} = ssl:listen(Port, [{protocol, dtls} | ServerOpts]),
-                         Test ! {self(), listened}
-                end),
+    {Pid, Ref} = spawn_monitor(fun() -> {ok, _} =
+                                            ssl:listen(Port, [{protocol, dtls} | ServerOpts]),
+                                        [_] = listener_and_ports(),
+                                        {error, _} = ssl:listen(Port, [{protocol, dtls} | ServerOpts])
+                               end),
     receive
-        {Pid, listened} ->
+        {'DOWN', Ref, _, Pid, _} ->
             ok
     end,
+    [] = listener_and_ports(),   %% Verify that ports are cleaned up after listener owner dies
     {ok, LSocket} = ssl:listen(Port, [{protocol, dtls} | ServerOpts]),
-    spawn(fun() -> 
+    [_] = listener_and_ports(),
+    spawn(fun() ->
                   {ok, ASocket} = ssl:transport_accept(LSocket),
                   {ok, Socket} = ssl:handshake(ASocket),
-                   receive 
-                       {ssl, Socket, "from client"} ->
-                           ssl:send(Socket, "from server"),
-                           ssl:close(Socket)
-                   end
+                  receive
+                      {ssl, Socket, "from client"} ->
+                          ssl:send(Socket, "from server"),
+                          ssl:close(Socket)
+                  end
           end),
     {ok, Client} = ssl:connect(Hostname, Port, ClientOpts),
 
     ssl:send(Client, "from client"),
-    receive 
+    receive
         {ssl, Client, "from server"} ->
             ssl:close(Client)
     end.
 
-
 dtls_listen_close() ->
-    [{doc, "Test that you close a DTLS 'listner' socket"}].
+    [{doc, "Test that you close a DTLS 'listener' socket"}].
 
-dtls_listen_close(Config) when is_list(Config) ->    
+dtls_listen_close(Config) when is_list(Config) ->
     ServerOpts = ssl_test_lib:ssl_options(server_rsa_opts, Config),
     {_, ServerNode, _Hostname} = ssl_test_lib:run_where(Config),
 
     Port = ssl_test_lib:inet_port(ServerNode),
     {ok, ListenSocket} = ssl:listen(Port, [{protocol, dtls} | ServerOpts]),
-    ok = ssl:close(ListenSocket).
-
+    [_] = listener_and_ports(),
+    ok = ssl:close(ListenSocket),
+    [] = listener_and_ports(),
+    {ok, ListenSocket2} = ssl:listen(Port, [{protocol, dtls} | ServerOpts]),
+    [_] = listener_and_ports(),
+    ok = ssl:close(ListenSocket2, 500),
+    [] = listener_and_ports(),
+    ok.
 
 dtls_listen_reopen() ->
     [{doc, "Test that you close a DTLS 'listner' socket and open a new one for the same port"}].
 
 dtls_listen_reopen(Config) when is_list(Config) -> 
-    ClientOpts = ssl_test_lib:ssl_options(client_rsa_opts, Config),
+    ClientOpts = ssl_test_lib:ssl_options(client_rsa_verify_opts, Config),
     ServerOpts = ssl_test_lib:ssl_options(server_rsa_opts, Config),
     {_, ServerNode, Hostname} = ssl_test_lib:run_where(Config),
 
@@ -226,6 +238,35 @@ dtls_listen_reopen(Config) when is_list(Config) ->
     receive
         {ssl, Client2, "from server 2"} ->
             ssl:close(Client2)
+    end.
+
+dtls_listen_both_family() ->
+    [].
+%%    [{require, ipv6_hosts}].
+dtls_listen_both_family(Config) ->
+    {ok, Hostname0} = inet:gethostname(),
+
+    TestIPV6 = case ct:get_config(ipv6_hosts) of
+                  Hosts when is_list(Hosts) ->
+                      lists:member(list_to_atom(Hostname0), Hosts);
+                  undefined ->
+                      ct:log("Local tests (ipv6 probably works)", []),
+                      true
+              end,
+    case TestIPV6 of
+        true ->
+            {_, ServerNode, _Hostname} = ssl_test_lib:run_where(Config),
+            Port = ssl_test_lib:inet_port(ServerNode),
+            {ok, ListenSocket} = ssl:listen(Port, [{protocol, dtls}]),
+            [_] = listener_and_ports(),
+
+            {ok, ListenSocketIpV6} = ssl:listen(Port, [{protocol, dtls}, inet6, {ipv6_v6only,true}]),
+            [_,_] = listener_and_ports(),
+
+            ok = ssl:close(ListenSocket),
+            ok = ssl:close(ListenSocketIpV6);
+        false ->
+            {skip, "Host does not support IPv6"}
     end.
 
 dtls_listen_two_sockets_1() ->
@@ -304,6 +345,14 @@ dtls_listen_two_sockets_6(_Config) when is_list(_Config) ->
     ssl:close(S1),
     ok.
 
+listener_and_ports() ->
+    timer:sleep(200), %% Allow some time to start och delete dead children
+    Pids = [Pid || {_, Pid, _, _} <- supervisor:which_children(dtls_listener_sup)],
+    PidPorts = [{element(2, erlang:port_info(P, connected)), P}
+                || P <- erlang:ports(), {name, "udp_inet"} == erlang:port_info(P, name)],
+    PidWithoutPort = [Pid || Pid <- Pids, not lists:keymember(Pid, 1, PidPorts)],
+    PidPorts ++ PidWithoutPort.
+
 replay_window() ->
     [{doc, "Whitebox test of replay window"}].
 replay_window(_Config) ->
@@ -354,59 +403,159 @@ client_restarts() ->
     [{doc, "Test re-connection "}].
 
 client_restarts(Config) ->
-    ClientOpts = ssl_test_lib:ssl_options(client_rsa_opts, Config),
+    ClientOpts0 = ssl_test_lib:ssl_options(client_rsa_verify_opts, Config),
     ServerOpts = ssl_test_lib:ssl_options(server_rsa_verify_opts, Config),
     {ClientNode, ServerNode, Hostname} = ssl_test_lib:run_where(Config),
 
+    ClientOpts = [{verify, verify_none},{reuse_sessions, save} | ClientOpts0],
     Server =
 	ssl_test_lib:start_server([{node, ServerNode}, {port, 0},
 				   {from, self()},
                                    {mfa, {ssl_test_lib, no_result, []}},
-				   {options, ServerOpts}]),
+				   {options, [{verify, verify_none}|ServerOpts]}]),
     Port = ssl_test_lib:inet_port(Server),
     Client0 = ssl_test_lib:start_client([{node, ClientNode},
                                          {port, Port}, {host, Hostname},
                                          {mfa, {ssl_test_lib, no_result, []}},
                                          {from, self()},
-                                         {options, [{reuse_sessions, save} | ClientOpts]}]),
+                                         {options, ClientOpts}]),
+
+    ssl_test_lib:send(Client0, Msg1 = "from client 0"),
+    ssl_test_lib:send(Server, Msg2 = "from server to client 0"),
+
+    Server ! {active_receive, Msg1},
+    Client0 ! {active_receive, Msg2},
+
+    Msgs = lists:sort([{Server, Msg1}, {Client0, Msg2}]),
+    Msgs = lists:sort(flush()),
+
     ReConnect =  %% Whitebox re-connect test
         fun({sslsocket, {gen_udp,_,dtls_gen_connection}, [Pid]} = Socket, ssl) ->
-                ct:log("~p Client Socket: ~p ~n", [self(), Socket]),
-                {ok, {{Address,CPort},UDPSocket}=IntSocket} = gen_statem:call(Pid, {downgrade, self()}),
-
-                ct:log("Info: ~p~n", [inet:info(UDPSocket)]),
+                ?CT_LOG("Client Socket: ~p ~n", [Socket]),
+                {ok, IntSocket} = gen_statem:call(Pid, {downgrade, self()}),
+                {{Address,CPort},UDPSocket}=IntSocket,
+                ?CT_LOG("Info: ~p~n", [inet:info(UDPSocket)]),
 
                 {ok, #config{transport_info = CbInfo, connection_cb = ConnectionCb,
-                             ssl = SslOpts0}} = ssl:handle_options(ClientOpts, client, Address),
+                             ssl = SslOpts0}} =
+                    ssl:handle_options(ClientOpts, client, Address),
                 SslOpts = {SslOpts0, #socket_options{}, undefined},
 
                 ct:sleep(250),
-                ct:log("Client second connect: ~p ~p~n", [Socket, CbInfo]),
-                Res = ssl_gen_statem:connect(ConnectionCb, Address, CPort, IntSocket, SslOpts, self(), CbInfo, infinity),
-                {Res, Pid}
+                ?CT_LOG("Client second connect: ~p ~p~n", [Socket, CbInfo]),
+                {ok, NewSocket} = ssl_gen_statem:connect(ConnectionCb, Address, CPort, IntSocket,
+                                                         SslOpts, self(), CbInfo, infinity),
+                {replace, NewSocket}
         end,
 
     Client0 ! {apply, self(), ReConnect},
     receive
-        {apply_res, {Res, _Prev}} ->
-            ct:log("Apply res: ~p~n", [Res]),
+        {apply_res, {replace, Res}} ->
+            ?CT_LOG("Apply res: ~p~n", [Res]),
             ok;
-        Msg ->
-            ct:log("Unhandled: ~p~n", [Msg]),
-            ct:fail({wrong_msg, Msg})
+        ErrMsg ->
+            ?CT_LOG("Unhandled: ~p~n", [ErrMsg]),
+            ct:fail({wrong_msg, ErrMsg})
     end,
 
-    receive
-        Msg2 ->
-            ct:log("Unhandled: ~p~n", [Msg2]),
-            ct:fail({wrong_msg, Msg2})
-    after 200 ->
-            ct:log("Nothing received~n", [])
-    end,
+    ssl_test_lib:send(Client0, Msg1 = "from client 0"),
+    ssl_test_lib:send(Server, Msg2 = "from server to client 0"),
+
+    Server ! {active_receive, Msg1},
+    Client0 ! {active_receive, Msg2},
+
+    Msgs = lists:sort(flush()),
 
     ssl_test_lib:close(Server),
     ssl_test_lib:close(Client0),
+    ok.
 
+
+flush() ->
+    receive Msg -> [Msg|flush()]
+    after 500 -> []
+    end.
+
+client_restarts_multiple_acceptors(Config) ->
+    %% Can also be tested with openssl by connecting a client and hit
+    %% Ctrl-C to kill openssl process, so that the connection is not
+    %% closed.
+    %% Then do a new openssl connect with the same client port.
+
+    ClientOpts0 = ssl_test_lib:ssl_options(client_rsa_verify_opts, Config),
+    ServerOpts = ssl_test_lib:ssl_options(server_rsa_verify_opts, Config),
+    {ClientNode, ServerNode, Hostname} = ssl_test_lib:run_where(Config),
+
+    ClientOpts = [{verify, verify_none},{reuse_sessions, save} | ClientOpts0],
+    Server =
+	ssl_test_lib:start_server([{node, ServerNode}, {port, 0},
+				   {from, self()},
+                                   {mfa, {ssl_test_lib, no_result, []}},
+                                   {accepters, 2},
+				   {options, [{verify, verify_none}|ServerOpts]}]),
+    Port = ssl_test_lib:inet_port(Server),
+    Client0 = ssl_test_lib:start_client([{node, ClientNode},
+                                         {port, Port}, {host, Hostname},
+                                         {mfa, {ssl_test_lib, no_result, []}},
+                                         {from, self()},
+                                         {options, ClientOpts}]),
+
+    Server2 = receive {accepter, 2, Server2Pid} -> Server2Pid
+              after 5000 -> ct:fail(msg_timeout)
+              end,
+
+    ssl_test_lib:send(Client0, Msg1 = "from client 0"),
+    ssl_test_lib:send(Server, Msg2 = "from server to client 0"),
+
+    Server ! {active_receive, Msg1},
+    Client0 ! {active_receive, Msg2},
+
+    Msgs = lists:sort([{Server, Msg1}, {Client0, Msg2}]),
+    Msgs = lists:sort(flush()),
+
+    ReConnect =  %% Whitebox re-connect test
+        fun({sslsocket, {gen_udp,_,dtls_gen_connection}, [Pid]} = Socket, ssl) ->
+                ?CT_LOG("Client Socket: ~p ~n", [Socket]),
+                {ok, IntSocket} = gen_statem:call(Pid, {downgrade, self()}),
+                {{Address,CPort},UDPSocket}=IntSocket,
+                ?CT_LOG("Info: ~p~n", [inet:info(UDPSocket)]),
+
+                {ok, #config{transport_info = CbInfo, connection_cb = ConnectionCb,
+                             ssl = SslOpts0}} =
+                    ssl:handle_options(ClientOpts, client, Address),
+                SslOpts = {SslOpts0, #socket_options{}, undefined},
+
+                ct:sleep(250),
+                ?CT_LOG("Client second connect: ~p ~p~n", [Socket, CbInfo]),
+                {ok, NewSocket} = ssl_gen_statem:connect(ConnectionCb, Address, CPort, IntSocket,
+                                                         SslOpts, self(), CbInfo, infinity),
+                {replace, NewSocket}
+        end,
+
+    Client0 ! {apply, self(), ReConnect},
+    receive
+        {apply_res, {replace, Res}} ->
+            ?CT_LOG("Apply res: ~p~n", [Res]),
+            ok;
+        ErrMsg ->
+            ?CT_LOG("Unhandled: ~p~n", [ErrMsg]),
+            ct:fail({wrong_msg, ErrMsg})
+    end,
+
+    ok = ssl_test_lib:send(Client0, Msg3 = "from client 2"),
+    ok = ssl_test_lib:send(Server2, Msg4 = "from server 2 to client 2"),
+    {error, closed} = ssl_test_lib:send(Server,  "Should be closed"),
+
+    Msgs2 = lists:sort([{Server2, Msg3}, {Client0, Msg4}]),
+
+    Server2 ! {active_receive, Msg3},
+    Client0 ! {active_receive, Msg4},
+
+    Msgs2 = lists:sort(flush()),
+
+    ssl_test_lib:close(Server),
+    ssl_test_lib:close(Server2),
+    ssl_test_lib:close(Client0),
     ok.
 
 %%--------------------------------------------------------------------

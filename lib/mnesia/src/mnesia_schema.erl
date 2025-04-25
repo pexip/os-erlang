@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 1996-2022. All Rights Reserved.
+%% Copyright Ericsson AB 1996-2025. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -27,6 +27,7 @@
 %% used by mnesia:start() to initialize the entire schema.
 
 -module(mnesia_schema).
+-moduledoc false.
 
 -export([
          add_backend_type/2,
@@ -1186,7 +1187,7 @@ assert_correct_cstruct(Cs) when is_record(Cs, cstruct) ->
     verify(true, mnesia_snmp_hook:check_ustruct(Snmp),
 	   {badarg, Tab, {snmp, Snmp}}),
 
-    CheckProp = fun(Prop) when is_tuple(Prop), size(Prop) >= 1 -> ok;
+    CheckProp = fun(Prop) when tuple_size(Prop) >= 1 -> ok;
 		   (Prop) ->
 			mnesia:abort({bad_type, Tab,
 				      {user_properties, [Prop]}})
@@ -2126,7 +2127,7 @@ make_change_table_majority(Tab, Majority) ->
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
-write_table_property(Tab, Prop) when is_tuple(Prop), size(Prop) >= 1 ->
+write_table_property(Tab, Prop) when tuple_size(Prop) >= 1 ->
     schema_transaction(fun() -> do_write_table_property(Tab, Prop) end);
 write_table_property(Tab, Prop) ->
     {aborted, {bad_type, Tab, Prop}}.
@@ -2466,13 +2467,15 @@ prepare_op(Tid, {op, add_table_copy, Storage, Node, TabDef}, _WaitFor) ->
 		_  ->
 		    ok
 	    end,
-            mnesia_lib:verbose("~w:~w Adding table~n",[?MODULE,?LINE]),
 
 	    case mnesia_controller:get_network_copy(Tid, Tab, Cs) of
 		{loaded, ok} ->
                     %% Tables are created by mnesia_loader get_network code
                     insert_cstruct(Tid, Cs, true),
+                    mnesia_controller:i_have_tab(Tab, Cs),
 		    {true, optional};
+                {not_loaded, {not_active, schema, Node}} ->
+                    mnesia:abort({node_not_running, Node});
 		{not_loaded, ErrReason} ->
 		    Reason = {system_limit, Tab, {Node, ErrReason}},
 		    mnesia:abort(Reason)
@@ -2809,7 +2812,7 @@ transform_objs(Fun, Tab, RecName, Key, A, Storage, Type, Acc) ->
 transform_obj(Tab, RecName, Key, Fun, [Obj|Rest], NewArity, Type, Ws, Ds) ->
     NewObj = Fun(Obj),
     if
-        size(NewObj) /= NewArity ->
+        tuple_size(NewObj) /= NewArity ->
             exit({"Bad arity", Obj, NewObj});
 	NewObj == Obj ->
 	    transform_obj(Tab, RecName, Key, Fun, Rest, NewArity, Type, Ws, Ds);
@@ -3671,7 +3674,13 @@ change_storage_type(N, disc_copies, Cs) ->
     Cs#cstruct{disc_copies = mnesia_lib:uniq(Nodes)};
 change_storage_type(N, disc_only_copies, Cs) ->
     Nodes = [N | Cs#cstruct.disc_only_copies],
-    Cs#cstruct{disc_only_copies = mnesia_lib:uniq(Nodes)}.
+    Cs#cstruct{disc_only_copies = mnesia_lib:uniq(Nodes)};
+change_storage_type(N, {ext, Alias, Mod}, Cs) ->
+    Key = {Alias, Mod},
+    {_, Nodes0} = lists:keyfind(Key, 1, Cs#cstruct.external_copies),
+    Nodes = mnesia_lib:uniq([N | Nodes0]),
+    ExternalCopies = lists:keyreplace(Key, 1, Cs#cstruct.external_copies, {Key, Nodes}),
+    Cs#cstruct{external_copies = ExternalCopies}.
 
 %% BUGBUG: Verify match of frag info; equalit demanded for all but add_node
 

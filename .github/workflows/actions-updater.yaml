@@ -1,0 +1,31 @@
+name: GitHub Actions Version Updater
+
+# Controls when the action will run.
+on:
+  workflow_dispatch:
+  schedule:
+    # Automatically run on every Sunday
+    - cron:  '0 0 * * 0'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Generate token
+        id: generate_token
+        uses: actions/create-github-app-token@3ff1caaa28b64c9cc276ce0a02e2ff584f3900c5 # ratchet:actions/create-github-app-token@v2.0.2
+        with:
+          app-id: ${{ secrets.APP_ID }}
+          private-key: ${{ secrets.APP_PEM }}
+
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # ratchet:actions/checkout@v4.2.2
+        with:
+          token: ${{ steps.generate_token.outputs.token }}
+
+      - name: Run GitHub Actions Version Updater
+        uses: saadmk11/github-actions-version-updater@64be81ba69383f81f2be476703ea6570c4c8686e # ratchet:saadmk11/github-actions-version-updater@v0.8.1
+        with:
+          token: ${{ steps.generate_token.outputs.token }}
+          pull_request_branch: "github/actions-update"
+          extra_workflow_locations: ".github/actions/build-base-image"

@@ -1,7 +1,7 @@
 #
 # %CopyrightBegin%
 # 
-# Copyright Ericsson AB 1996-2022. All Rights Reserved.
+# Copyright Ericsson AB 1996-2024. All Rights Reserved.
 # 
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -54,7 +54,9 @@ MODULES= \
 	mnesia_cost \
 	mnesia_dbn_meters \
 	ext_test \
-	mnesia_index_plugin_test
+	ext_test_server \
+	mnesia_index_plugin_test \
+	mnesia_external_backend_test
 
 DocExamplesDir := ../doc/src/
 
@@ -75,7 +77,7 @@ ExampleModules = \
 
 ERL_FILES= $(MODULES:%=%.erl) $(DocExampleModules:%=$(DocExamplesDir)/%.erl) $(ExampleModules:%=$(ExamplesDir)/%.erl)
 
-HRL_FILES= mnesia_test_lib.hrl $(DocExamplesHrl:%=$(DocExamplesDir)/%)
+HRL_FILES= mnesia_test_lib.hrl ext_test_server.hrl $(DocExamplesHrl:%=$(DocExamplesDir)/%)
 
 TARGET_FILES= \
 	$(MODULES:%=$(EBIN)/%.$(EMULATOR)) $(DocExampleModules:%=$(EBIN)/%.$(EMULATOR)) $(ExampleModules:%=$(EBIN)/%.$(EMULATOR))

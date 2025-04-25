@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2018-2022. All Rights Reserved.
+%% Copyright Ericsson AB 2018-2025. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -19,6 +19,7 @@
 %%
 
 -module(prim_socket).
+-moduledoc false.
 
 -compile(no_native).
 
@@ -35,7 +36,7 @@
     connect/1, connect/3,
     listen/2,
     accept/2,
-    send/4, sendto/4, sendto/5, sendmsg/4, sendmsg/5,
+    send/4, sendto/4, sendto/5, sendmsg/4, sendmsg/5, sendv/3,
     sendfile/4, sendfile/5, sendfile_deferred_close/1,
     recv/4, recvfrom/4, recvmsg/5,
     close/1, finalize_close/1,
@@ -47,11 +48,12 @@
     cancel/3
    ]).
 
--export([enc_sockaddr/1, p_get/1]).
+-export([enc_sockaddr/1, p_get/1, rest_iov/2]).
 
 -nifs([nif_info/0, nif_info/1, nif_supports/0, nif_supports/1, nif_command/1,
        nif_open/2, nif_open/4, nif_bind/2, nif_connect/1, nif_connect/3,
-       nif_listen/2, nif_accept/2, nif_send/4, nif_sendto/5, nif_sendmsg/5,
+       nif_listen/2, nif_accept/2,
+       nif_send/4, nif_sendto/5, nif_sendmsg/5, nif_sendv/3,
        nif_sendfile/5, nif_sendfile/4, nif_sendfile/1, nif_recv/4,
        nif_recvfrom/4, nif_recvmsg/5, nif_close/1, nif_shutdown/2,
        nif_setopt/5, nif_getopt/3, nif_getopt/4, nif_sockname/1,
@@ -328,7 +330,15 @@ is_supported_option(_Option, undefined) ->
     false.
 
 is_supported(Key1) ->
-    get_is_supported(Key1, nif_supports()).
+    case Key1 of
+        ioctl_requests -> true;
+        ioctl_flags    -> true;
+        protocols      -> true;
+        options        -> true;
+        msg_flags      -> true;
+        _ ->
+            get_is_supported(Key1, nif_supports())
+    end.
 
 is_supported(ioctl_requests = Tab, Name) when is_atom(Name) ->
     p_get_is_supported(Tab, Name, fun (_) -> true end);
@@ -512,6 +522,10 @@ send(SockRef, Bin, EFlags, SendRef) when is_integer(EFlags) ->
         {select, Written} ->
             <<_:Written/binary, RestBin/binary>> = Bin,
             {select, RestBin, EFlags};
+
+        completion = C ->
+            C;
+
         {error, _Reason} = Result ->
             Result
     end;
@@ -558,11 +572,13 @@ sendto(SockRef, Bin, To, Flags, SendRef) ->
                         sockaddr ->
                             {error, {invalid, {Cause, To}}}
                     end;
+
                 ok ->
                     ok;
                 {ok, Written} ->
                     <<_:Written/binary, RestBin/binary>> = Bin,
                     {ok, RestBin};
+
                 select ->
                     Cont = {To, ETo, EFlags},
                     {select, Cont};
@@ -570,6 +586,10 @@ sendto(SockRef, Bin, To, Flags, SendRef) ->
                     <<_:Written/binary, RestBin/binary>> = Bin,
                     Cont = {To, ETo, EFlags},
                     {select, RestBin, Cont};
+
+                completion = C->
+                    C;
+
                 {error, _Reason} = Result ->
                     Result
             end
@@ -621,6 +641,7 @@ sendmsg_result(
             sendmsg_result(
               SockRef, RestIOV, Cont, SendRef, true,
               nif_sendmsg(SockRef, EMsg, EFlags, SendRef, RestIOV));
+
         select ->
             if
                 HasWritten ->
@@ -631,6 +652,10 @@ sendmsg_result(
         {select, Written} ->
             RestIOV = rest_iov(Written, IOV),
             {select, RestIOV, Cont};
+
+        completion = C ->
+            C;
+
         {error, Reason} = Error->
             if
                 HasWritten ->
@@ -671,6 +696,60 @@ invalid_iov([H|IOV], N) ->
     end;
 invalid_iov(_, N) ->
     {improper_list, N}.
+
+
+sendv(SockRef, IOV, SendRef) ->
+    sendv_result(
+      SockRef, IOV, SendRef, false,
+      nif_sendv(SockRef, IOV, SendRef)).
+
+sendv_result(SockRef, IOV, SendRef, HasWritten, Result) ->
+    case Result of
+        ok ->
+            ok;
+
+        {ok, Written} ->
+            RestIOV = rest_iov(Written, IOV),
+            {ok, RestIOV};
+
+        {iov, Written} ->
+            RestIOV = rest_iov(Written, IOV),
+            sendv_result(
+              SockRef, RestIOV, SendRef, true,
+              nif_sendv(SockRef, RestIOV, SendRef));
+
+        select ->
+            if
+                HasWritten ->
+                    %% Cont is not used for sendv
+                    {select, IOV, undefined};
+                true ->
+                    select
+            end;
+        {select, Written} ->
+            RestIOV = rest_iov(Written, IOV),
+            %% Cont is not used for sendv
+            {select, RestIOV, undefined};
+
+        %% We may have previously been able to send part of
+        %% the message: Depends on how long the I/O vector is!
+        %% A vector of length > IOV_MAX *will* result in a partial
+        %% send (and a return of '{iov, Written}').
+        %% On Windows, IOV_MAX can be as low 16, so there is a
+        %% good chance this will happen (unless the user has
+        %% already pruned the I/O vector).
+        completion = C ->
+            if
+                HasWritten ->
+                    {C, IOV, undefined};
+                true ->
+                    {C, undefined}
+            end;
+
+        {error, _Reason} = Result ->
+            Result
+    end.
+
 
 sendfile(SockRef, Offset, Count, SendRef) ->
     nif_sendfile(SockRef, SendRef, Offset, Count).
@@ -1161,6 +1240,7 @@ nif_accept(_SockRef, _Ref) -> erlang:nif_error(notsup).
 nif_send(_SockRef, _Bin, _Flags, _SendRef) -> erlang:nif_error(notsup).
 nif_sendto(_SockRef, _Bin, _Dest, _Flags, _SendRef) -> erlang:nif_error(notsup).
 nif_sendmsg(_SockRef, _Msg, _Flags, _SendRef, _IOV) -> erlang:nif_error(notsup).
+nif_sendv(_SockRef, _IOVec, _SendRef) -> erlang:nif_error(notsup).
 
 nif_sendfile(_SockRef, _SendRef, _Offset, _Count, _InFileRef) ->
     erlang:nif_error(notsup).

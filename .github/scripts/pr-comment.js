@@ -1,3 +1,21 @@
+// %CopyrightBegin%
+//
+// Copyright Ericsson AB 2024. All Rights Reserved.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+//
+// %CopyrightEnd%
+
 module.exports = async({ github, context, state, pr_number }) => {
 
     console.log(`Workflow: ${JSON.stringify(context.payload.workflow_run,null,2)}`);
@@ -74,13 +92,14 @@ module.exports = async({ github, context, state, pr_number }) => {
 
     console.log(`ct_body: ${ct_body}`);
 
+    const repoURL = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}`
     const body = `${ct_body}
 
 <!-- marker -->
 
-To speed up review, make sure that you have read [Contributing to Erlang/OTP](/${context.repo.owner}/${context.repo.repo}/blob/master/CONTRIBUTING.md) and that all [checks](/${context.repo.owner}/${context.repo.repo}/pull/${pr_number}/checks) pass.
+To speed up review, make sure that you have read [Contributing to Erlang/OTP](${repoURL}/blob/master/CONTRIBUTING.md) and that all [checks](${repoURL}/pull/${pr_number}/checks) pass.
 
-See the [TESTING](/${context.repo.owner}/${context.repo.repo}/blob/master/HOWTO/TESTING.md) and [DEVELOPMENT](/${context.repo.owner}/${context.repo.repo}/blob/master/HOWTO/DEVELOPMENT.md) HowTo guides for details about how to run test locally.
+See the [TESTING](${repoURL}/blob/master/HOWTO/TESTING.md) and [DEVELOPMENT](${repoURL}/blob/master/HOWTO/DEVELOPMENT.md) HowTo guides for details about how to run test locally.
 
 ## Artifacts
 * ` + (ct_logs ? `[Complete CT logs](https://erlang.github.io/prs/${pr_number}/ct_logs/index.html) ([Download Logs](${nightlyURL(ct_logs)}))` : "No CT logs found") + `

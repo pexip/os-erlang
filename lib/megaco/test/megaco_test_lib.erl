@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %% 
-%% Copyright Ericsson AB 1999-2022. All Rights Reserved.
+%% Copyright Ericsson AB 1999-2024. All Rights Reserved.
 %% 
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -64,11 +64,15 @@
          stop_node/3,
          ping/1, ping/2,
 
+	 which_inet_backend/1,
          is_socket_backend/1,
          inet_backend_opts/1,
          explicit_inet_backend/0, test_inet_backends/0,
          open/3,
-         listen/3, connect/3
+         listen/3, connect/3,
+
+         megaco_trace/2,
+         enable_trace/3
 
         ]).
 -export([init_per_suite/1,    end_per_suite/1,
@@ -498,7 +502,7 @@ init_per_suite(Config) ->
                     {skip, "Unstable host and/or os (or combo thererof)"};
                 false ->
                     maybe_start_global_sys_monitor(Config),
-                    [{megaco_factor, Factor} | Config]
+                    maybe_disable_trace([{megaco_factor, Factor} | Config])
             catch
                 throw:{skip, _} = SKIP ->
                     SKIP
@@ -506,6 +510,18 @@ init_per_suite(Config) ->
     catch
         throw:{skip, _} = SKIP ->
             SKIP
+    end.
+
+
+%% For tace to work, we need the 'et' app.
+%% Specifically, we need the et_selector module,
+%% so check if that module can be found!
+maybe_disable_trace(Config) ->
+    case code:ensure_loaded(et_selector) of
+        {error, _} ->
+            [{megaco_trace, disable} | Config];
+        _ ->
+            Config
     end.
 
 maybe_skip(_HostInfo) ->
@@ -893,6 +909,8 @@ linux_distro_str_to_distro_id("Fedora" ++ _) ->
     fedora;
 linux_distro_str_to_distro_id("Linux Mint" ++ _) ->
     linux_mint;
+linux_distro_str_to_distro_id("LMDE" ++ _) ->
+    linux_mint;
 linux_distro_str_to_distro_id("MontaVista" ++ _) ->
     montavista;
 linux_distro_str_to_distro_id("openSUSE" ++ _) ->
@@ -1180,7 +1198,8 @@ analyze_and_print_linux_host_info(Version) ->
                           "~n   Num Online Schedulers: ~s"
                           "~n", [CPU, str_num_schedulers()]),
                 num_schedulers_to_factor();
-            _ ->
+            _X ->
+		io:format("CPU: ~p~n", [_X]),
                 5
         end,
     AddLabelFactor = label2factor(Label),
@@ -3101,6 +3120,40 @@ stop_node(Node) ->
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
+%% ----------------------------------------------------------------
+%% Generates a 'megaco_trace' tuple based on Config and a default
+%% value.
+%%
+
+megaco_trace(Config, Default) ->
+    Key = megaco_trace,
+    case lists:keysearch(Key, 1, Config) of
+        {value, {Key, Value}} ->
+            p("default megaco-trace ~w", [Value]),
+            {Key, Value};
+        _ ->
+            {Key, Default}
+    end.
+
+
+%% ----------------------------------------------------------------
+%% Conditionally enable megaco trace at Level and for Destination.
+%%
+
+enable_trace(Config, Level, Destination) ->
+    Key = megaco_trace,
+    case lists:keysearch(Key, 1, Config) of
+        {value, {Key, disable}} ->
+            p("megaco-trace disabled => skip enabling trace at: ~w; ~w",
+              [Level, Destination]),
+            ok;
+        _ ->
+            megaco:enable_trace(Level, Destination)
+    end.
+    
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
 timetrap_scale_factor() ->
     case (catch test_server:timetrap_scale_factor()) of
 	{'EXIT', _} ->
@@ -3149,26 +3202,24 @@ explicit_inet_backend() ->
             false
     end.
 
+%% We cannot use application:get_all_env(megaco) since that only "works"
+%% when the application has been started and this function may be called
+%% well before that happens.
 test_inet_backends() ->
     case init:get_argument(megaco) of
-        {ok, SnmpArgs} when is_list(SnmpArgs) ->
-            test_inet_backends(SnmpArgs, atom_to_list(?FUNCTION_NAME));
-        error ->
+        {ok, Args} when is_list(Args) ->
+            test_inet_backends(Args);
+        _ ->
             false
     end.
 
-test_inet_backends([], _) ->
+test_inet_backends([]) ->
     false;
-test_inet_backends([[Key, Val] | _], Key) ->
-    case list_to_atom(string:to_lower(Val)) of
-        Bool when is_boolean(Bool) ->
-            Bool;
-        _ ->
-            false
-    end;
-test_inet_backends([_|Args], Key) ->
-    test_inet_backends(Args, Key).
-
+test_inet_backends([["test_inet_backends","true"]|_]) ->
+    true;
+test_inet_backends([_|Args]) ->
+    test_inet_backends(Args).
+           
 
 inet_backend_opts(Config) when is_list(Config) ->
     case lists:keysearch(socket_create_opts, 1, Config) of
@@ -3178,13 +3229,16 @@ inet_backend_opts(Config) when is_list(Config) ->
             []
     end.
 
-is_socket_backend(Config) when is_list(Config) ->
+which_inet_backend(Config) ->
     case lists:keysearch(socket_create_opts, 1, Config) of
-        {value, {socket_create_opts, [{inet_backend, socket}]}} ->
-            true;
+        {value, {socket_create_opts, [{inet_backend, Backend}]}} ->
+            Backend;
         _ ->
-            false
+            default
     end.
+    
+is_socket_backend(Config) when is_list(Config) ->
+    (which_inet_backend(Config) =:= socket).
 
 
 open(Config, Pid, Opts)
