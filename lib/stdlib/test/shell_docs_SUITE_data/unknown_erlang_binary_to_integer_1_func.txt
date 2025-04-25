@@ -1,11 +1,12 @@
 
-  [;1m-spec binary_to_integer(Binary) -> integer() when Binary :: binary().[0m
+[;1m  binary_to_integer(Binary)[0m
 
 [;;4mSince[0m:
   OTP R16B
 
-  Returns an integer whose text representation is [;;4mBinary[0m, for
-  example:
+  Returns an integer whose text representation is [;;4mBinary[0m.
+
+  For example:
 
     > binary_to_integer(<<"123">>).
     123

@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2004-2023. All Rights Reserved.
+%% Copyright Ericsson AB 2004-2024. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -23,6 +23,7 @@
 %%% Description: SSH transport protocol
 
 -module(ssh_transport).
+-moduledoc false.
 
 -include_lib("public_key/include/public_key.hrl").
 -include_lib("kernel/include/inet.hrl").
@@ -42,7 +43,7 @@
 	 key_exchange_init_msg/1,
 	 key_init/3, new_keys_message/1,
          ext_info_message/1,
-	 handle_kexinit_msg/3, handle_kexdh_init/2,
+	 handle_kexinit_msg/4, handle_kexdh_init/2,
 	 handle_kex_dh_gex_group/2, handle_kex_dh_gex_init/2, handle_kex_dh_gex_reply/2,
 	 handle_new_keys/2, handle_kex_dh_gex_request/2,
 	 handle_kexdh_reply/2, 
@@ -202,18 +203,16 @@ supported_algorithms() -> [{K,supported_algorithms(K)} || K <- algo_classes()].
 supported_algorithms(kex) ->
     select_crypto_supported(
       [
-       {'ecdh-sha2-nistp384',                   [{public_keys,ecdh}, {curves,secp384r1}, {hashs,sha384}]},
+       {'curve25519-sha256',                    [{public_keys,ecdh}, {curves,x25519}, {hashs,sha256}]},
+       {'curve25519-sha256@libssh.org',         [{public_keys,ecdh}, {curves,x25519}, {hashs,sha256}]},
+       {'curve448-sha512',                      [{public_keys,ecdh}, {curves,x448},   {hashs,sha512}]},
        {'ecdh-sha2-nistp521',                   [{public_keys,ecdh}, {curves,secp521r1}, {hashs,sha512}]},
+       {'ecdh-sha2-nistp384',                   [{public_keys,ecdh}, {curves,secp384r1}, {hashs,sha384}]},
        {'ecdh-sha2-nistp256',                   [{public_keys,ecdh}, {curves,secp256r1}, {hashs,sha256}]},
        {'diffie-hellman-group-exchange-sha256', [{public_keys,dh},   {hashs,sha256}]},
        {'diffie-hellman-group16-sha512',        [{public_keys,dh},   {hashs,sha512}]}, % In OpenSSH 7.3.p1
        {'diffie-hellman-group18-sha512',        [{public_keys,dh},   {hashs,sha512}]}, % In OpenSSH 7.3.p1
        {'diffie-hellman-group14-sha256',        [{public_keys,dh},   {hashs,sha256}]}, % In OpenSSH 7.3.p1
-       %% https://tools.ietf.org/html/draft-ietf-curdle-ssh-curves
-       %% Secure Shell (SSH) Key Exchange Method using Curve25519 and Curve448
-       {'curve25519-sha256',                    [{public_keys,ecdh}, {curves,x25519}, {hashs,sha256}]},
-       {'curve25519-sha256@libssh.org',         [{public_keys,ecdh}, {curves,x25519}, {hashs,sha256}]},
-       {'curve448-sha512',                      [{public_keys,ecdh}, {curves,x448},   {hashs,sha512}]},
        {'diffie-hellman-group14-sha1',          [{public_keys,dh},   {hashs,sha}]},
        {'diffie-hellman-group-exchange-sha1',   [{public_keys,dh},   {hashs,sha}]},
        {'diffie-hellman-group1-sha1',           [{public_keys,dh},   {hashs,sha}]}
@@ -221,13 +220,13 @@ supported_algorithms(kex) ->
 supported_algorithms(public_key) ->
     select_crypto_supported(
       [
-       {'ecdsa-sha2-nistp384',  [{public_keys,ecdsa}, {hashs,sha384}, {curves,secp384r1}]},
-       {'ecdsa-sha2-nistp521',  [{public_keys,ecdsa}, {hashs,sha512}, {curves,secp521r1}]},
-       {'ecdsa-sha2-nistp256',  [{public_keys,ecdsa}, {hashs,sha256}, {curves,secp256r1}]},
        {'ssh-ed25519',          [{public_keys,eddsa}, {curves,ed25519}                    ]},
        {'ssh-ed448',            [{public_keys,eddsa}, {curves,ed448}                      ]},
-       {'rsa-sha2-256',         [{public_keys,rsa},   {hashs,sha256}                      ]},
+       {'ecdsa-sha2-nistp521',  [{public_keys,ecdsa}, {hashs,sha512}, {curves,secp521r1}]},
+       {'ecdsa-sha2-nistp384',  [{public_keys,ecdsa}, {hashs,sha384}, {curves,secp384r1}]},
+       {'ecdsa-sha2-nistp256',  [{public_keys,ecdsa}, {hashs,sha256}, {curves,secp256r1}]},
        {'rsa-sha2-512',         [{public_keys,rsa},   {hashs,sha512}                      ]},
+       {'rsa-sha2-256',         [{public_keys,rsa},   {hashs,sha256}                      ]},
        {'ssh-rsa',              [{public_keys,rsa},   {hashs,sha}                         ]},
        {'ssh-dss',              [{public_keys,dss},   {hashs,sha}                         ]} % Gone in OpenSSH 7.3.p1
       ]);
@@ -236,7 +235,6 @@ supported_algorithms(cipher) ->
     same(
       select_crypto_supported(
 	[
-         {'chacha20-poly1305@openssh.com', [{ciphers,chacha20}, {macs,poly1305}]},
          {'aes256-gcm@openssh.com', [{ciphers,aes_256_gcm}]},
          {'aes256-ctr',       [{ciphers,aes_256_ctr}]},
          {'aes192-ctr',       [{ciphers,aes_192_ctr}]},
@@ -244,6 +242,7 @@ supported_algorithms(cipher) ->
 	 {'aes128-ctr',       [{ciphers,aes_128_ctr}]},
 	 {'AEAD_AES_256_GCM', [{ciphers,aes_256_gcm}]},
 	 {'AEAD_AES_128_GCM', [{ciphers,aes_128_gcm}]},
+         {'chacha20-poly1305@openssh.com', [{ciphers,chacha20}, {macs,poly1305}]},
 	 {'aes256-cbc',       [{ciphers,aes_256_cbc}]},
 	 {'aes192-cbc',       [{ciphers,aes_192_cbc}]},
 	 {'aes128-cbc',       [{ciphers,aes_128_cbc}]},
@@ -253,15 +252,15 @@ supported_algorithms(cipher) ->
 supported_algorithms(mac) ->
     same(
       select_crypto_supported(
-	[{'hmac-sha2-256-etm@openssh.com', [{macs,hmac}, {hashs,sha256}]},
-         {'hmac-sha2-512-etm@openssh.com', [{macs,hmac}, {hashs,sha256}]},
-         {'hmac-sha2-256',    [{macs,hmac}, {hashs,sha256}]},
+	[{'hmac-sha2-512-etm@openssh.com', [{macs,hmac}, {hashs,sha256}]},
+         {'hmac-sha2-256-etm@openssh.com', [{macs,hmac}, {hashs,sha256}]},
 	 {'hmac-sha2-512',    [{macs,hmac}, {hashs,sha512}]},
+         {'hmac-sha2-256',    [{macs,hmac}, {hashs,sha256}]},
          {'hmac-sha1-etm@openssh.com', [{macs,hmac}, {hashs,sha256}]},
 	 {'hmac-sha1',        [{macs,hmac}, {hashs,sha}]},
 	 {'hmac-sha1-96',     [{macs,hmac}, {hashs,sha}]},
-	 {'AEAD_AES_128_GCM', [{ciphers,aes_128_gcm}]},
-	 {'AEAD_AES_256_GCM', [{ciphers,aes_256_gcm}]}
+         {'AEAD_AES_256_GCM', [{ciphers,aes_256_gcm}]},
+	 {'AEAD_AES_128_GCM', [{ciphers,aes_128_gcm}]}
 	]
        ));
 supported_algorithms(compression) ->
@@ -359,7 +358,8 @@ kexinit_message(Role, Random, Algs, HostKeyAlgs, Opts) ->
     #ssh_msg_kexinit{
 		  cookie = Random,
 		  kex_algorithms = to_strings( get_algs(kex,Algs) )
-                                   ++ kex_ext_info(Role,Opts),
+                                   ++ kex_ext_info(Role,Opts)
+                                   ++ kex_strict_alg(Role),
 		  server_host_key_algorithms = HostKeyAlgs,
 		  encryption_algorithms_client_to_server = c2s(cipher,Algs),
 		  encryption_algorithms_server_to_client = s2c(cipher,Algs),
@@ -388,10 +388,12 @@ new_keys_message(Ssh0) ->
 
 
 handle_kexinit_msg(#ssh_msg_kexinit{} = CounterPart, #ssh_msg_kexinit{} = Own,
-                   #ssh{role = client} = Ssh) ->
+                   #ssh{role = client} = Ssh, ReNeg) ->
     try
-        {ok, Algorithms} = select_algorithm(client, Own, CounterPart, Ssh#ssh.opts),
+        {ok, Algorithms} =
+            select_algorithm(client, Own, CounterPart, Ssh, ReNeg),
         true = verify_algorithm(Algorithms),
+        true = verify_kexinit_is_first_msg(Algorithms, Ssh, ReNeg),
         Algorithms
     of
 	Algos ->
@@ -404,10 +406,12 @@ handle_kexinit_msg(#ssh_msg_kexinit{} = CounterPart, #ssh_msg_kexinit{} = Own,
         end;
 
 handle_kexinit_msg(#ssh_msg_kexinit{} = CounterPart, #ssh_msg_kexinit{} = Own,
-                   #ssh{role = server} = Ssh) ->
+                   #ssh{role = server} = Ssh, ReNeg) ->
     try
-        {ok, Algorithms} = select_algorithm(server, CounterPart, Own, Ssh#ssh.opts),
+        {ok, Algorithms} =
+            select_algorithm(server, CounterPart, Own, Ssh, ReNeg),
         true = verify_algorithm(Algorithms),
+        true = verify_kexinit_is_first_msg(Algorithms, Ssh, ReNeg),
         Algorithms
     of
 	Algos ->
@@ -487,6 +491,21 @@ verify_algorithm(#alg{kex = Kex}) ->
         true -> true;
         false -> {false, "kex"}
     end.
+
+verify_kexinit_is_first_msg(#alg{kex_strict_negotiated = false}, _, _) ->
+    true;
+verify_kexinit_is_first_msg(#alg{kex_strict_negotiated = true}, _, renegotiate) ->
+    true;
+verify_kexinit_is_first_msg(#alg{kex_strict_negotiated = true},
+                            #ssh{send_sequence = 1, recv_sequence = 1},
+                            init) ->
+    true;
+verify_kexinit_is_first_msg(#alg{kex_strict_negotiated = true},
+                            #ssh{send_sequence = SendSequence,
+                                 recv_sequence = RecvSequence}, init) ->
+    error_logger:warning_report(
+      lists:concat(["KEX strict violation (", SendSequence, ", ", RecvSequence, ")."])),
+    {false, "kex_strict"}.
 
 %%%----------------------------------------------------------------
 %%%
@@ -867,6 +886,9 @@ handle_new_keys(#ssh_msg_newkeys{}, Ssh0) ->
                        )
     end. 
 
+%%%----------------------------------------------------------------
+kex_strict_alg(client) -> [?kex_strict_c];
+kex_strict_alg(server) -> [?kex_strict_s].
 
 %%%----------------------------------------------------------------
 kex_ext_info(Role, Opts) ->
@@ -1057,7 +1079,34 @@ known_host_key(#ssh{opts = Opts, peer = {PeerName,{IP,Port}}} = Ssh,
 %%
 %%   The first algorithm in each list MUST be the preferred (guessed)
 %%   algorithm.  Each string MUST contain at least one algorithm name.
-select_algorithm(Role, Client, Server, Opts) ->
+select_algorithm(Role, Client, Server,
+                 #ssh{opts = Opts,
+                         kex_strict_negotiated = KexStrictNegotiated0},
+                 ReNeg) ->
+    KexStrictNegotiated =
+        case ReNeg of
+            %% KEX strict negotiated once per connection
+            init ->
+                Result =
+                    case Role of
+                        server ->
+                            lists:member(?kex_strict_c,
+                                         Client#ssh_msg_kexinit.kex_algorithms);
+                        client ->
+                            lists:member(?kex_strict_s,
+                                         Server#ssh_msg_kexinit.kex_algorithms)
+                    end,
+                case Result of
+                    true ->
+                        logger:debug(lists:concat([Role, " will use strict KEX ordering"]));
+                    _ ->
+                        ok
+                end,
+                Result;
+            _ ->
+                KexStrictNegotiated0
+        end,
+
     {Encrypt0, Decrypt0} = select_encrypt_decrypt(Role, Client, Server),
     {SendMac0, RecvMac0} = select_send_recv_mac(Role, Client, Server),
 
@@ -1108,7 +1157,8 @@ select_algorithm(Role, Client, Server, Opts) ->
               c_lng = C_Lng,
               s_lng = S_Lng,
               send_ext_info = SendExtInfo,
-              recv_ext_info = RecvExtInfo
+              recv_ext_info = RecvExtInfo,
+              kex_strict_negotiated = KexStrictNegotiated
              }}.
 
 
@@ -1206,7 +1256,8 @@ alg_setup(snd, SSH) ->
 	    c_lng = ALG#alg.c_lng,
 	    s_lng = ALG#alg.s_lng,
             send_ext_info = ALG#alg.send_ext_info,
-            recv_ext_info = ALG#alg.recv_ext_info
+            recv_ext_info = ALG#alg.recv_ext_info,
+            kex_strict_negotiated = ALG#alg.kex_strict_negotiated
 	   };
 
 alg_setup(rcv, SSH) ->
@@ -1218,22 +1269,23 @@ alg_setup(rcv, SSH) ->
 	    c_lng = ALG#alg.c_lng,
 	    s_lng = ALG#alg.s_lng,
             send_ext_info = ALG#alg.send_ext_info,
-            recv_ext_info = ALG#alg.recv_ext_info
+            recv_ext_info = ALG#alg.recv_ext_info,
+            kex_strict_negotiated = ALG#alg.kex_strict_negotiated
 	   }.
 
-
-alg_init(snd, SSH0) ->
+alg_init(Dir = snd, SSH0) ->
     {ok,SSH1} = send_mac_init(SSH0),
     {ok,SSH2} = encrypt_init(SSH1),
     {ok,SSH3} = compress_init(SSH2),
-    SSH3;
+    {ok,SSH4} = maybe_reset_sequence(Dir, SSH3),
+    SSH4;
 
-alg_init(rcv, SSH0) ->
+alg_init(Dir = rcv, SSH0) ->
     {ok,SSH1} = recv_mac_init(SSH0),
     {ok,SSH2} = decrypt_init(SSH1),
     {ok,SSH3} = decompress_init(SSH2),
-    SSH3.
-
+    {ok,SSH4} = maybe_reset_sequence(Dir, SSH3),
+    SSH4.
 
 alg_final(snd, SSH0) ->
     {ok,SSH1} = send_mac_final(SSH0),
@@ -1310,9 +1362,9 @@ pack(common, rfc4253, PlainText, DeltaLenTst,
      #ssh{send_sequence = SeqNum,
           send_mac = MacAlg,
           send_mac_key = MacKey} = Ssh0) ->
-    PadLen = padding_length(4+1+size(PlainText), Ssh0),
+    PadLen = padding_length(4+1+byte_size(PlainText), Ssh0),
     Pad =  ssh_bits:random(PadLen),
-    TextLen = 1 + size(PlainText) + PadLen + DeltaLenTst,
+    TextLen = 1 + byte_size(PlainText) + PadLen + DeltaLenTst,
     PlainPkt = <<?UINT32(TextLen),?BYTE(PadLen), PlainText/binary, Pad/binary>>,
     {Ssh1, CipherPkt} = encrypt(Ssh0, PlainPkt),
     MAC0 = mac(MacAlg, MacKey, SeqNum, PlainPkt),
@@ -1323,9 +1375,9 @@ pack(common, enc_then_mac, PlainText, DeltaLenTst,
      #ssh{send_sequence = SeqNum,
           send_mac = MacAlg,
           send_mac_key = MacKey} = Ssh0) ->
-    PadLen = padding_length(1+size(PlainText), Ssh0),
+    PadLen = padding_length(1+byte_size(PlainText), Ssh0),
     Pad =  ssh_bits:random(PadLen),
-    PlainLen = 1 + size(PlainText) + PadLen + DeltaLenTst,
+    PlainLen = 1 + byte_size(PlainText) + PadLen + DeltaLenTst,
     PlainPkt = <<?BYTE(PadLen), PlainText/binary, Pad/binary>>,
     {Ssh1, CipherPkt} = encrypt(Ssh0, PlainPkt),
     EncPacketPkt = <<?UINT32(PlainLen), CipherPkt/binary>>,
@@ -1333,9 +1385,9 @@ pack(common, enc_then_mac, PlainText, DeltaLenTst,
     {<<?UINT32(PlainLen), CipherPkt/binary, MAC0/binary>>, Ssh1};
 
 pack(aead, _, PlainText, DeltaLenTst, Ssh0) ->
-    PadLen = padding_length(1+size(PlainText), Ssh0),
+    PadLen = padding_length(1+byte_size(PlainText), Ssh0),
     Pad =  ssh_bits:random(PadLen),
-    PlainLen = 1 + size(PlainText) + PadLen + DeltaLenTst,
+    PlainLen = 1 + byte_size(PlainText) + PadLen + DeltaLenTst,
     PlainPkt = <<?BYTE(PadLen), PlainText/binary, Pad/binary>>,
     {Ssh1, {CipherPkt,MAC0}} = encrypt(Ssh0, <<?UINT32(PlainLen),PlainPkt/binary>>),
     {<<CipherPkt/binary,MAC0/binary>>, Ssh1}.
@@ -1362,7 +1414,7 @@ handle_packet_part(<<>>, Encrypted0, AEAD0, undefined, #ssh{decrypt = CryptoAlg,
     end;
 
 handle_packet_part(DecryptedPfx, EncryptedBuffer, AEAD, TotalNeeded, Ssh0) 
-  when (size(DecryptedPfx)+size(EncryptedBuffer)) < TotalNeeded ->
+  when (byte_size(DecryptedPfx)+byte_size(EncryptedBuffer)) < TotalNeeded ->
     %% need more bytes to finalize the packet
     {get_more, DecryptedPfx, EncryptedBuffer, AEAD, TotalNeeded, Ssh0};
 
@@ -1381,7 +1433,7 @@ handle_packet_part(DecryptedPfx, EncryptedBuffer, AEAD, TotalNeeded, #ssh{decryp
 %%%----------------
 unpack(common, rfc4253, DecryptedPfx, EncryptedBuffer, _AEAD, TotalNeeded,
        #ssh{recv_mac_size = MacSize} = Ssh0) ->
-    MoreNeeded = TotalNeeded - size(DecryptedPfx) - MacSize,
+    MoreNeeded = TotalNeeded - byte_size(DecryptedPfx) - MacSize,
     <<EncryptedSfx:MoreNeeded/binary, Mac:MacSize/binary, NextPacketBytes/binary>> = EncryptedBuffer,
     {Ssh1, DecryptedSfx} = decrypt(Ssh0, EncryptedSfx),
     PlainPkt = <<DecryptedPfx/binary, DecryptedSfx/binary>>,
@@ -1398,7 +1450,7 @@ unpack(common, enc_then_mac, <<?UINT32(PlainLen)>>, EncryptedBuffer, _AEAD, _Tot
     case is_valid_mac(MAC0, <<?UINT32(PlainLen),Payload/binary>>, Ssh0) of
         true ->
             {Ssh1, <<?BYTE(PaddingLen), PlainRest/binary>>} = decrypt(Ssh0, Payload),
-            CompressedPlainTextLen = size(PlainRest) - PaddingLen,
+            CompressedPlainTextLen = byte_size(PlainRest) - PaddingLen,
             <<CompressedPlainText:CompressedPlainTextLen/binary, _Padding/binary>> = PlainRest,
             {ok, CompressedPlainText, NextPacketBytes, Ssh1};
         false ->
@@ -1408,7 +1460,7 @@ unpack(common, enc_then_mac, <<?UINT32(PlainLen)>>, EncryptedBuffer, _AEAD, _Tot
 unpack(aead, _, DecryptedPfx, EncryptedBuffer, AEAD, TotalNeeded, 
        #ssh{recv_mac_size = MacSize} = Ssh0) ->
     %% enough bytes to decode the packet.
-    MoreNeeded = TotalNeeded - size(DecryptedPfx) - MacSize,
+    MoreNeeded = TotalNeeded - byte_size(DecryptedPfx) - MacSize,
     <<EncryptedSfx:MoreNeeded/binary, Mac:MacSize/binary, NextPacketBytes/binary>> = EncryptedBuffer,
     case decrypt(Ssh0, {AEAD,EncryptedSfx,Mac}) of
         {Ssh1, error} ->
@@ -1420,7 +1472,7 @@ unpack(aead, _, DecryptedPfx, EncryptedBuffer, AEAD, TotalNeeded,
 
 %%%----------------------------------------------------------------
 get_length(common, rfc4253, EncryptedBuffer, #ssh{decrypt_block_size = BlockSize} = Ssh0) ->
-    case size(EncryptedBuffer) >= erlang:max(8, BlockSize) of
+    case byte_size(EncryptedBuffer) >= erlang:max(8, BlockSize) of
 	true ->
 	    <<EncBlock:BlockSize/binary, EncryptedRest/binary>> = EncryptedBuffer,
 	    {Ssh, 
@@ -1440,7 +1492,7 @@ get_length(common, enc_then_mac, EncryptedBuffer, Ssh) ->
     end;
 
 get_length(aead, _, EncryptedBuffer, Ssh) ->
-    case {size(EncryptedBuffer) >= 4, Ssh#ssh.decrypt} of
+    case {byte_size(EncryptedBuffer) >= 4, Ssh#ssh.decrypt} of
        {true, 'chacha20-poly1305@openssh.com'} ->
             <<EncryptedLen:4/binary, EncryptedRest/binary>> = EncryptedBuffer,
             {Ssh1,  PacketLenBin} = decrypt(Ssh, {length,EncryptedLen}),
@@ -1535,7 +1587,7 @@ do_verify(PlainText, HashAlg, Sig, {#'ECPoint'{},_} = Key, _) when HashAlg =/= u
 do_verify(PlainText, HashAlg, Sig, #'RSAPublicKey'{}=Key, #ssh{role = server,
                                                                c_version = "SSH-2.0-OpenSSH_7."++_})
   when HashAlg == sha256; HashAlg == sha512 ->
-    %% Public key signing bug in in OpenSSH >= 7.2
+    %% Public key signing bug in OpenSSH >= 7.2
     public_key:verify(PlainText, HashAlg, Sig, Key)
         orelse public_key:verify(PlainText, sha, Sig, Key);
 
@@ -2198,6 +2250,14 @@ crypto_name_supported(Tag, CryptoName, Supported) ->
 
 same(Algs) ->  [{client2server,Algs}, {server2client,Algs}].
 
+maybe_reset_sequence(snd, Ssh = #ssh{kex_strict_negotiated = true}) ->
+    {ok, Ssh#ssh{send_sequence = 0}};
+maybe_reset_sequence(rcv, Ssh = #ssh{kex_strict_negotiated = true}) ->
+    {ok, Ssh#ssh{recv_sequence = 0}};
+maybe_reset_sequence(_Dir, Ssh) ->
+    {ok, Ssh}.
+
+
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %%
 %% Other utils
@@ -2224,14 +2284,14 @@ ssh_dbg_flags(raw_messages) -> ssh_dbg_flags(hello);
 ssh_dbg_flags(ssh_messages) -> ssh_dbg_flags(hello).
 
 
-ssh_dbg_on(alg) -> dbg:tpl(?MODULE,select_algorithm,4,x);
+ssh_dbg_on(alg) -> dbg:tpl(?MODULE,select_algorithm,5,x);
 ssh_dbg_on(hello) -> dbg:tp(?MODULE,hello_version_msg,1,x),
                      dbg:tp(?MODULE,handle_hello_version,1,x);
 ssh_dbg_on(raw_messages) -> ssh_dbg_on(hello);
 ssh_dbg_on(ssh_messages) -> ssh_dbg_on(hello).
 
 
-ssh_dbg_off(alg) -> dbg:ctpl(?MODULE,select_algorithm,4);
+ssh_dbg_off(alg) -> dbg:ctpl(?MODULE,select_algorithm,5);
 ssh_dbg_off(hello) -> dbg:ctpg(?MODULE,hello_version_msg,1),
                       dbg:ctpg(?MODULE,handle_hello_version,1);
 ssh_dbg_off(raw_messages) -> ssh_dbg_off(hello);
@@ -2254,9 +2314,9 @@ ssh_dbg_format(hello, {call,{?MODULE,handle_hello_version,[Hello]}}) ->
 ssh_dbg_format(hello, {return_from,{?MODULE,handle_hello_version,1},_Ret}) ->
     skip;
 
-ssh_dbg_format(alg, {call,{?MODULE,select_algorithm,[_,_,_,_]}}) ->
+ssh_dbg_format(alg, {call,{?MODULE,select_algorithm,[_,_,_,_,_]}}) ->
     skip;
-ssh_dbg_format(alg, {return_from,{?MODULE,select_algorithm,4},{ok,Alg}}) ->
+ssh_dbg_format(alg, {return_from,{?MODULE,select_algorithm,5},{ok,Alg}}) ->
     ["Negotiated algorithms:\n",
      wr_record(Alg)
     ];

@@ -1,7 +1,7 @@
 /*
  * %CopyrightBegin%
  *
- * Copyright Ericsson AB 2010-2022. All Rights Reserved.
+ * Copyright Ericsson AB 2010-2025. All Rights Reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -98,18 +98,23 @@ extern ERL_NIF_TERM atom_rsa;
 extern ERL_NIF_TERM atom_dss;
 extern ERL_NIF_TERM atom_ecdsa;
 
-#ifdef HAVE_EDDH
+#ifdef HAVE_X25519
 extern ERL_NIF_TERM atom_x25519;
-extern ERL_NIF_TERM atom_x448;
+#endif
+
+#ifdef HAVE_ED25519
 extern ERL_NIF_TERM atom_ed25519;
+#endif
+
+#ifdef HAVE_X448
+extern ERL_NIF_TERM atom_x448;
+#endif
+
+#ifdef HAVE_ED448
 extern ERL_NIF_TERM atom_ed448;
 #endif
 
 extern ERL_NIF_TERM atom_eddsa;
-#ifdef HAVE_EDDSA
-extern ERL_NIF_TERM atom_ed25519;
-extern ERL_NIF_TERM atom_ed448;
-#endif
 
 extern ERL_NIF_TERM atom_rsa_mgf1_md;
 extern ERL_NIF_TERM atom_rsa_oaep_label;

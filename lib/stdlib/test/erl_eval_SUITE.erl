@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %% 
-%% Copyright Ericsson AB 1998-2022. All Rights Reserved.
+%% Copyright Ericsson AB 1998-2025. All Rights Reserved.
 %% 
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -18,7 +18,6 @@
 %% %CopyrightEnd%
 
 -module(erl_eval_SUITE).
--feature(maybe_expr, enable).
 -export([all/0, suite/0,groups/0,init_per_suite/1, end_per_suite/1, 
 	 init_per_testcase/2, end_per_testcase/2,
 	 init_per_group/2,end_per_group/2]).
@@ -55,7 +54,10 @@
          otp_14708/1,
          otp_16545/1,
          otp_16865/1,
-         eep49/1]).
+         eep49/1,
+         binary_and_map_aliases/1,
+         eep58/1,
+         binary_skip/1]).
 
 %%
 %% Define to run outside of test server
@@ -67,6 +69,7 @@
 -export([count_down/2, count_down_fun/0, do_apply/2, 
          local_func/3, local_func_value/2]).
 -export([simple/0]).
+-export([my_div/2]).
 
 -ifdef(STANDALONE).
 -define(config(A,B),config(A,B)).
@@ -96,7 +99,7 @@ all() ->
      otp_8133, otp_10622, otp_13228, otp_14826,
      funs, custom_stacktrace, try_catch, eval_expr_5, zero_width,
      eep37, eep43, otp_15035, otp_16439, otp_14708, otp_16545, otp_16865,
-     eep49].
+     eep49, binary_and_map_aliases, eep58, binary_skip].
 
 groups() -> 
     [].
@@ -1216,8 +1219,6 @@ custom_stacktrace(Config) when is_list(Config) ->
     backtrace_check("#unknown.index.", {undef_record,unknown},
                     [erl_eval, mystack(1)], none, EFH),
 
-    backtrace_check("fun foo/2.", undef,
-                    [{erl_eval, foo, 2}, erl_eval, mystack(1)], none, EFH),
     backtrace_check("foo(1, 2).", undef,
                     [{erl_eval, foo, 2}, erl_eval, mystack(1)], none, EFH),
 
@@ -1368,7 +1369,6 @@ funs(Config) when is_list(Config) ->
     error_check("begin F = fun(T) -> timer:sleep(T) end,F(1) end.",
                       got_it, none, AnnEFH),
 
-    error_check("fun c/1.", undef),
     error_check("fun a:b/0().", undef),
 
     MaxArgs = 20,
@@ -1386,7 +1386,35 @@ funs(Config) when is_list(Config) ->
     %% Test that {M,F} is not accepted as a fun.
     error_check("{" ?MODULE_STRING ",module_info}().",
 		{badfun,{?MODULE,module_info}}),
+
+    %% Test defining and calling a fun based on an auto-imported BIF.
+    check(fun() ->
+                  F = fun is_binary/1,
+                  true = F(<<>>),
+                  false = F(a)
+          end,
+          ~S"""
+           F = fun is_binary/1,
+           true = F(<<>>),
+           false = F(a).
+           """,
+          false, ['F'], lfh(), none),
+
+    %% Test defining and calling a local fun defined in the shell.
+    check(fun() ->
+                  D = fun my_div/2,
+                  3 = D(15, 5)
+          end,
+          ~S"""
+           D = fun my_div/2,
+           3 = D(15, 5).
+           """,
+          3, ['D'], lfh(), efh()),
+
     ok.
+
+my_div(A, B) ->
+    A div B.
 
 run_many_args({S, As}) ->
     apply(eval_string(S), As) =:= As.
@@ -1767,7 +1795,12 @@ eep43(Config) when is_list(Config) ->
 	  "    (fun(#{X := value}) -> true end)(#{X => value}) "
 	  "end.",
 	  true),
-
+    check(fun() -> #{A => B || {A, B} <- [{1, 2}, {1, 3}]} end,
+          "#{A => B || {A, B} <- [{1, 2}, {1, 3}]}.",
+	  #{1 => 3}),
+    check(fun() -> #{A => B || X <- [1, 5], {A, B} <- [{X, X+1}, {X, X+3}]} end,
+          "#{A => B || X <- [1, 5], {A, B} <- [{X, X+1}, {X, X+3}]}.",
+	  #{1 => 4,5 => 8}),
     error_check("[camembert]#{}.", {badmap,[camembert]}),
     error_check("[camembert]#{nonexisting:=v}.", {badmap,[camembert]}),
     error_check("#{} = 1.", {badmatch,1}),
@@ -1969,6 +2002,76 @@ eep49(Config) when is_list(Config) ->
           error),
     error_check("maybe ok ?= simply_wrong else {error,_} -> error end.",
                 {else_clause,simply_wrong}),
+    ok.
+
+%% GH-6348/OTP-18297: Lift restrictions for matching of binaries and maps.
+binary_and_map_aliases(Config) when is_list(Config) ->
+    check(fun() ->
+                  <<A:16>> = <<B:8,C:8>> = <<16#cafe:16>>,
+                  {A,B,C}
+          end,
+          "begin <<A:16>> = <<B:8,C:8>> = <<16#cafe:16>>, {A,B,C} end.",
+          {16#cafe,16#ca,16#fe}),
+    check(fun() ->
+                  <<A:8/bits,B:24/bits>> =
+                      <<C:16,D:16>> =
+                      <<E:8,F:8,G:8,H:8>> =
+                      <<16#abcdef57:32>>,
+                  {A,B,C,D,E,F,G,H}
+          end,
+          "begin <<A:8/bits,B:24/bits>> =
+                 <<C:16,D:16>> =
+                 <<E:8,F:8,G:8,H:8>> =
+                 <<16#abcdef57:32>>,
+                 {A,B,C,D,E,F,G,H}
+           end.",
+          {<<16#ab>>,<<16#cdef57:24>>, 16#abcd,16#ef57, 16#ab,16#cd,16#ef,16#57}),
+    check(fun() ->
+                  #{K := V} = #{k := K} = #{k => my_key, my_key => 42},
+                  V
+          end,
+          "begin #{K := V} = #{k := K} = #{k => my_key, my_key => 42}, V end.",
+          42),
+    ok.
+
+%% EEP 58: Map comprehensions.
+eep58(Config) when is_list(Config) ->
+    check(fun() -> X = 32, #{X => X*X || X <- [1,2,3]} end,
+	  "begin X = 32, #{X => X*X || X <- [1,2,3]} end.",
+	  #{1 => 1, 2 => 4, 3 => 9}),
+    check(fun() ->
+                  K = V = none,
+                  #{K => V*V || K := V <- #{1 => 1, 2 => 2, 3 => 3}}
+          end,
+          "begin K = V = none, #{K => V*V || K := V <- #{1 => 1, 2 => 2, 3 => 3}} end.",
+	  #{1 => 1, 2 => 4, 3 => 9}),
+    check(fun() ->
+                  #{K => V*V || K := V <- maps:iterator(#{1 => 1, 2 => 2, 3 => 3})}
+          end,
+          "#{K => V*V || K := V <- maps:iterator(#{1 => 1, 2 => 2, 3 => 3})}.",
+	  #{1 => 1, 2 => 4, 3 => 9}),
+    check(fun() -> << <<K:8,V:24>> || K := V <- #{42 => 7777} >> end,
+          "<< <<K:8,V:24>> || K := V <- #{42 => 7777} >>.",
+	  <<42:8,7777:24>>),
+    check(fun() -> [X || X := X <- #{a => 1, b => b}] end,
+          "[X || X := X <- #{a => 1, b => b}].",
+	  [b]),
+
+    error_check("[K+V || K := V <- a].", {bad_generator,a}),
+    error_check("[K+V || K := V <- [-1|#{}]].", {bad_generator,[-1|#{}]}),
+
+    ok.
+
+binary_skip(Config) when is_list(Config) ->
+    check(fun() -> X = 32, [X || <<X:64/float>> <= <<-1:64, 0:64, 0:64, 0:64>>] end,
+	  "begin X = 32, [X || <<X:64/float>> <= <<-1:64, 0:64, 0:64, 0:64>>] end.",
+	  [+0.0,+0.0,+0.0]),
+    check(fun() -> X = 32, [X || <<X:64/float>> <= <<0:64, -1:64, 0:64, 0:64>>] end,
+	  "begin X = 32, [X || <<X:64/float>> <= <<0:64, -1:64, 0:64, 0:64>>] end.",
+	  [+0.0,+0.0,+0.0]),
+    check(fun() -> [a || <<0:64/float>> <= <<0:64, 1:64, 0:64, 0:64>> ] end,
+	  "begin [a || <<0:64/float>> <= <<0:64, 1:64, 0:64, 0:64>> ] end.",
+	  [a,a,a]),
     ok.
 
 %% Check the string in different contexts: as is; in fun; from compiled code.

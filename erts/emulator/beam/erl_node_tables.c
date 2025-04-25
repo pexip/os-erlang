@@ -1,7 +1,7 @@
 /*
  * %CopyrightBegin%
  *
- * Copyright Ericsson AB 2001-2022. All Rights Reserved.
+ * Copyright Ericsson AB 2001-2023. All Rights Reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -191,6 +191,8 @@ dist_table_alloc(void *dep_tmpl)
     erts_mtx_init(&dep->qlock, "dist_entry_out_queue", sysname,
         ERTS_LOCK_FLAGS_CATEGORY_DISTRIBUTION);
     erts_atomic32_init_nob(&dep->qflgs, 0);
+    erts_atomic32_init_nob(&dep->notify, 0);
+    erts_atomic_init_nob(&dep->total_qsize, 0);
     erts_atomic_init_nob(&dep->qsize, 0);
     erts_atomic64_init_nob(&dep->in, 0);
     erts_atomic64_init_nob(&dep->out, 0);
@@ -729,8 +731,6 @@ erts_set_dist_entry_pending(DistEntry *dep)
 void
 erts_set_dist_entry_connected(DistEntry *dep, Eterm cid, Uint64 flags)
 {
-    erts_aint32_t set_qflgs;
-
     ASSERT(dep->mld);
 
     ERTS_LC_ASSERT(erts_lc_is_de_rwlocked(dep));
@@ -767,9 +767,6 @@ erts_set_dist_entry_connected(DistEntry *dep, Eterm cid, Uint64 flags)
 
     erts_atomic64_set_nob(&dep->in, 0);
     erts_atomic64_set_nob(&dep->out, 0);
-    set_qflgs = (is_internal_port(cid) ?
-                 ERTS_DE_QFLG_PORT_CTRL : ERTS_DE_QFLG_PROC_CTRL);
-    erts_atomic32_read_bor_nob(&dep->qflgs, set_qflgs);
 
     if(flags & DFLAG_PUBLISHED) {
 	dep->next = erts_visible_dist_entries;
@@ -888,6 +885,18 @@ erts_node_table_info(fmtfn_t to, void *to_arg)
 	erts_rwmtx_runlock(&erts_node_table_rwmtx);
 }
 
+ErlNode *erts_find_node(Eterm sysname, Uint32 creation)
+{
+    ErlNode *res;
+    ErlNode ne;
+    ne.sysname = sysname;
+    ne.creation = creation;
+
+    erts_rwmtx_rlock(&erts_node_table_rwmtx);
+    res = hash_get(&erts_node_table, (void *) &ne);
+    erts_rwmtx_runlock(&erts_node_table_rwmtx);
+    return res;
+}
 
 ErlNode *erts_find_or_insert_node(Eterm sysname, Uint32 creation, Eterm book)
 {
@@ -1518,7 +1527,7 @@ static void
 insert_offheap(ErlOffHeap *oh, int type, Eterm id)
 {
     union erl_off_heap_ptr u;
-    struct erts_tmp_aligned_offheap tmp;
+    union erts_tmp_aligned_offheap tmp;
     struct insert_offheap2_arg a;
     a.type = BIN_REF;
 
@@ -1560,8 +1569,8 @@ insert_offheap(ErlOffHeap *oh, int type, Eterm id)
                     insert_dist_entry(ctx->dep, type, id, 0);
             }
 	    break;
-	case REFC_BINARY_SUBTAG:
-	case FUN_SUBTAG:
+	case BIN_REF_SUBTAG:
+	case FUN_REF_SUBTAG:
 	    break; /* No need to */
 	default:
 	    ASSERT(is_external_header(u.hdr->thing_word));
@@ -2008,6 +2017,7 @@ erts_node_bookkeep(ErlNode *np, Eterm term, int what, char *f, int l)
 static void
 setup_reference_table(void)
 {
+    ErtsTraceSession *s_p;
     DistEntry *dep;
     HashInfo hi;
     int i, max;
@@ -2104,34 +2114,30 @@ setup_reference_table(void)
 			      0);
     }
 
-    { /* Add binaries stored elsewhere ... */
-	ErlOffHeap oh;
-	ProcBin pb[2];
-	int i = 0;
-	Binary *default_match_spec;
-	Binary *default_meta_match_spec;
 
-	oh.first = NULL;
-	/* Only the ProcBin members thing_word, val and next will be inspected
-	   (by insert_offheap()) */
+    /*
+     * Insert on_load tracing match specs
+     */
+    for(s_p = &erts_trace_session_0; s_p; s_p = s_p->next) {
+        ErlOffHeap oh;
+        BinRef bin_ref[2];
+        int i = 0;
+
+        oh.first = NULL;
+        /* Only the BinRef members thing_word, val and next will be inspected
+           (by insert_offheap()) */
 #undef  ADD_BINARY
-#define ADD_BINARY(Bin)				 	     \
-	if ((Bin)) {					     \
-	    pb[i].thing_word = REFC_BINARY_SUBTAG;           \
-	    pb[i].val = (Bin);				     \
-	    pb[i].next = oh.first;		             \
-	    oh.first = (struct erl_off_heap_header*) &pb[i]; \
-	    i++;				             \
-	}
+#define ADD_BINARY(Bin)                                                       \
+        if ((Bin)) {                                                          \
+            bin_ref[i].thing_word = BIN_REF_SUBTAG;                       \
+            bin_ref[i].val = (Bin);                                           \
+            bin_ref[i].next = oh.first;                                       \
+            oh.first = (struct erl_off_heap_header*) &bin_ref[i];             \
+            i++;                                                              \
+        }
 
-	erts_get_default_trace_pattern(NULL,
-				       &default_match_spec,
-				       &default_meta_match_spec,
-				       NULL,
-				       NULL);
-
-	ADD_BINARY(default_match_spec);
-	ADD_BINARY(default_meta_match_spec);
+	ADD_BINARY(s_p->on_load_match_spec);
+	ADD_BINARY(s_p->on_load_meta_match_spec);
 
 	insert_offheap(&oh, BIN_REF, AM_match_spec);
 #undef  ADD_BINARY

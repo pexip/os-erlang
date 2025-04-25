@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2011-2018. All Rights Reserved.
+%% Copyright Ericsson AB 2011-2024. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -17,6 +17,7 @@
 %%
 %% %CopyrightEnd%
 -module(cdv_mem_cb).
+-moduledoc false.
 
 -export([get_info/0]).
 
@@ -83,5 +84,5 @@ fix_alloc([]) ->
     [].
 
 alloc_columns(Columns) ->
-    [{"",   ?wxLIST_FORMAT_LEFT,  180} |
+    [{"", ?wxLIST_FORMAT_LEFT, 240} |
      [{Column, ?wxLIST_FORMAT_RIGHT, 140} || Column <- Columns]].

@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2020-2021. All Rights Reserved.
+%% Copyright Ericsson AB 2020-2024. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -17,26 +17,37 @@
 %%
 %% %CopyrightEnd%
 %%
+
 -module(shell_docs_SUITE).
+-moduledoc false.
+
 -export([all/0, suite/0, groups/0, init_per_suite/1, end_per_suite/1,
    init_per_group/2, end_per_group/2]).
 
--export([render/1, render_smoke/1, links/1, normalize/1, render_prop/1,
-         render_non_native/1]).
+-export([render/1, links/1, normalize/1, render_prop/1,render_non_native/1]).
+-export([render_function/1, render_type/1, render_callback/1]).
 
 -export([render_all/1, update_render/0, update_render/1]).
+
+-export([execute/3]).
 
 -include_lib("kernel/include/eep48.hrl").
 -include_lib("stdlib/include/assert.hrl").
 
 suite() ->
-    [{timetrap,{minutes,20}}].
+    [{timetrap,{minutes,30}}].
 
 all() ->
-    [render_smoke, render, render_non_native, links, normalize, {group, prop}].
+    [ {group, render},
+      {group, prop},
+      {group, render_smoke}
+    ].
 
 groups() ->
-    [{prop,[],[render_prop]}].
+    [ {prop,[],[render_prop]},
+      {render, [], [render, render_non_native, links, normalize]},
+      {render_smoke, [], [render_function, render_type, render_callback]}
+    ].
 
 %% Include a spec here in order to test that specs of undocumented functions
 %% is rendered correctly.
@@ -79,7 +90,6 @@ render(Config) ->
 
     lists:foreach(
       fun(Module) ->
-              {ok, [D]} = file:consult(filename:join(DataDir, atom_to_list(Module) ++ ".docs_v1")),
               maps:map(
                 fun(FName, Current) ->
                         case file:read_file(filename:join(DataDir,FName)) of
@@ -95,7 +105,7 @@ render(Config) ->
                                 %% available on windows.
                                 ok
                         end
-                end, render_module(Module, D))
+                end, render_module(Module, DataDir))
       end, ?RENDER_MODULES).
 
 update_render() ->
@@ -106,71 +116,223 @@ update_render(DataDir) ->
     lists:foreach(
       fun(Module) ->
               case code:get_doc(Module) of
-                  {ok, D} ->
+                  {ok, Docs} ->
+                      NewEntries =
+                          case beam_lib:chunks(find_path(Module),[abstract_code]) of
+                              {ok,{Module,[{abstract_code,{raw_abstract_v1,AST}}]}} ->
+                                  lists:map(fun({{Type, F, A}, Anno, Sig, #{} = Doc, Meta} = E) ->
+
+                                                    case lists:search(
+                                                           fun({attribute, _, spec, {FA, _}}) when Type =:= function ->
+                                                                   FA =:= {F,A};
+                                                              ({attribute, _, What, {Name, _, Args}}) when What =:= Type; What =:= opaque andalso Type =:= type ->
+                                                                   {Name,length(Args)} =:= {F,A};
+                                                              (_) ->
+                                                                   false
+                                                           end, AST) of
+                                                        {value, Signature} ->
+                                                            {{Type, F, A}, Anno, Sig, Doc, Meta#{ specification => [Signature] }};
+                                                        _ -> throw({did_not_find, E})
+                                                    end;
+                                               (E) -> E
+
+                                            end, Docs#docs_v1.docs);
+                              {ok,{shell_docs_SUITE,[{abstract_code,no_abstract_code}]}} ->
+                                  Docs#docs_v1.docs
+                          end,
+
                       ok = file:write_file(
                              filename:join(DataDir, atom_to_list(Module) ++ ".docs_v1"),
-                             io_lib:format("~w.",[D])),
-                      maps:map(
-                        fun(FName, Output) ->
-                                ok = file:write_file(filename:join(DataDir, FName), Output)
-                        end, render_module(Module, D));
-                  E ->
-                      io:format("Error processing: ~p ~p",[Module, E])
-              end
+                             io_lib:format("~w.",[Docs#docs_v1{ docs = NewEntries }]));
+                  {error, _} ->
+                      ok
+              end,
+              maps:map(
+                fun(FName, Output) ->
+                        ok = file:write_file(filename:join(DataDir, FName), Output)
+                end, render_module(Module, DataDir))
       end, ?RENDER_MODULES).
 
-render_smoke(_Config) ->
+find_path(Module) ->
+    maybe
+        preloaded ?= code:which(Module),
+        PreloadedPath = filename:join(code:lib_dir(erts),"ebin"),
+        filename:join(PreloadedPath, atom_to_list(Module) ++ ".beam")
+    else
+        Other -> Other
+    end.
+
+handle_error({error,_}) ->
+  ok;
+handle_error(Doc) ->
+  unicode:characters_to_binary(Doc).
+
+only_if_smp(Func) ->
+    only_if_smp(4, Func).
+only_if_smp(Schedulers, Func) ->
+    case erlang:system_info(schedulers_online) of
+      N when N < Schedulers -> {skip,"Too few schedulers online"};
+      _ -> Func()
+    end.
+
+%%
+%% Render function
+%%
+%% This function tests that OTP code base can print its documentation
+%% in the shell. It is a time consuming operation that can take
+%% up-to 40 - 50 min if run in a single processor (1 scheduler config) machine.
+%%
+%% Skip the test case when running in a machine with not enough SMP.
+%%
+%% OBS. render_type/render_callback have shorter times and do not need
+%%      to be skipped, regardless of the number of available schedulers.
+%% 
+render_function(_Config) ->
+  only_if_smp(fun render_function_do/0).
+
+render_function_do() ->
     docsmap(
-      fun(Mod, #docs_v1{ docs = Docs } = D) ->
-              lists:foreach(
+      fun(Mod, D) ->
+              DHTML = markdown_to_shelldoc(D),
+              Exports = try Mod:module_info(exports)
+                        catch _:undef -> []
+                        end, %% nif file not available on this platform
+              pmap(
                 fun(Config) ->
                         try
-                            E = fun({error,_}) ->
-                                        ok;
-                                   (Doc) ->
-                                        unicode:characters_to_binary(Doc)
-                                end,
-                            E(shell_docs:render(Mod, D, Config)),
-                            E(shell_docs:render_type(Mod, D, Config)),
-                            E(shell_docs:render_callback(Mod, D, Config)),
-                            Exports = try Mod:module_info(exports)
-                                      catch _:undef -> []
-                                      end, %% nif file not available on this platform
-
+                            handle_error(shell_docs:render(Mod, D, Config)),
                             [try
-                                 E(shell_docs:render(Mod, F, A, D, Config))
+                                 handle_error(shell_docs:render(Mod, F, A, DHTML, Config))
                              catch _E:R:ST ->
                                      io:format("Failed to render ~p:~p/~p~n~p:~p~n~p~n",
                                                [Mod,F,A,R,ST,shell_docs:get_doc(Mod,F,A)]),
                                      erlang:raise(error,R,ST)
-                             end || {F,A} <- Exports],
-                            [try
-                                 E(shell_docs:render_type(Mod, T, A, D, Config))
-                             catch _E:R:ST ->
-                                     io:format("Failed to render type ~p:~p/~p~n~p:~p~n~p~n",
-                                               [Mod,T,A,R,ST,shell_docs:get_type_doc(Mod,T,A)]),
-                                     erlang:raise(error,R,ST)
-                             end || {{type,T,A},_,_,_,_} <- Docs],
-                            [try
-                                 E(shell_docs:render_callback(Mod, T, A, D, Config))
-                             catch _E:R:ST ->
-                                     io:format("Failed to render callback ~p:~p/~p~n~p:~p~n~p~n",
-                                               [Mod,T,A,R,ST,shell_docs:get_callback_doc(Mod,T,A)]),
-                                     erlang:raise(error,R,ST)
-                             end || {{callback,T,A},_,_,_,_} <- Docs]
+                             end || {F,A} <- Exports]
                         catch throw:R:ST ->
                                 io:format("Failed to render ~p~n~p:~p~n",[Mod,R,ST]),
                                 exit(R)
                         end
-                end, [#{},
-                      #{ ansi => false },
-                      #{ ansi => true },
-                      #{ columns => 5 },
-                      #{ columns => 150 },
-                      #{ encoding => unicode },
-                      #{ encoding => latin1 }])
+                end, format_configurations())
       end),
     ok.
+
+render_type(_Config) ->
+    docsmap(
+      fun(Mod, #docs_v1{ docs = Docs } = D) ->
+              DHTML = markdown_to_shelldoc(D),
+              pmap(
+                fun(Config) ->
+                        try
+                          handle_error(shell_docs:render_type(Mod, D, Config)),
+                          [try
+                             handle_error(shell_docs:render_type(Mod, T, A, DHTML, Config))
+                           catch _E:R:ST ->
+                               io:format("Failed to render type ~p:~p/~p~n~p:~p~n~p~n",
+                                         [Mod,T,A,R,ST,shell_docs:get_type_doc(Mod,T,A)]),
+                               erlang:raise(error,R,ST)
+                           end || {{type,T,A},_,_,_,_} <- Docs]
+                        catch throw:R:ST ->
+                            io:format("Failed to render ~p~n~p:~p~n",[Mod,R,ST]),
+                            exit(R)
+                        end
+                end, format_configurations())
+      end),
+  ok.
+
+render_callback(_Config) ->
+    docsmap(
+      fun(Mod, #docs_v1{ docs = Docs } = D) ->
+              DHTML = markdown_to_shelldoc(D),
+              pmap(
+                fun(Config) ->
+                        try
+                          handle_error(shell_docs:render_callback(Mod, D, Config)),
+                          [try
+                             handle_error(shell_docs:render_callback(Mod, T, A, DHTML, Config))
+                           catch _E:R:ST ->
+                               io:format("Failed to render callback ~p:~p/~p~n~p:~p~n~p~n",
+                                         [Mod,T,A,R,ST,shell_docs:get_callback_doc(Mod,T,A)]),
+                               erlang:raise(error,R,ST)
+                           end || {{callback,T,A},_,_,_,_} <- Docs]
+                        catch throw:R:ST ->
+                            io:format("Failed to render ~p~n~p:~p~n",[Mod,R,ST]),
+                            exit(R)
+                        end
+                end, format_configurations())
+      end),
+    ok.
+
+docsmap(Fun) ->
+  F = fun F({Mod,_,_}) ->
+            F(Mod);
+          F(Mod) when is_list(Mod) ->
+            F(list_to_atom(Mod));
+          F(Mod) ->
+            case code:get_doc(Mod) of
+              {error, missing} ->
+                ok;
+              {error, cover_compiled} ->
+                ok;
+              {error, E} when E =:= eperm; E =:= eacces; E =:= eio ->
+                %% This can happen in BSD's for some reason...
+                ok;
+              {error, eisdir} ->
+                %% Uhm?
+                ok;
+              {ok, Docs} ->
+                try
+                  _ = Fun(Mod, Docs),
+                  {ok, self(), Mod}
+                catch E:R:ST ->
+                    io:format("Failed to render ~p~n~p:~p:~p~n",[Mod,E,R,ST]),
+                    erlang:raise(E,R,ST)
+                end
+            end
+      end,
+  lists:foreach(F, code:all_available()),
+  ok.
+
+
+format_configurations() ->
+  [#{},
+   #{ ansi => false },
+   #{ ansi => true },
+   #{ columns => 5 },
+   #{ columns => 150 },
+   #{ encoding => unicode },
+   #{ encoding => latin1 }].
+
+markdown_to_shelldoc(#docs_v1{format = Format}=Docs) ->
+    DefaultFormat = <<"text/markdown">>,
+    DFormat = binary_to_list(DefaultFormat),
+    case Format of
+        _ when Format =:= DefaultFormat orelse Format =:= DFormat ->
+            ModuleDoc = Docs#docs_v1.module_doc,
+            Doc = Docs#docs_v1.docs,
+            Docs#docs_v1{format = ?NATIVE_FORMAT,
+                         module_doc = process_moduledoc(ModuleDoc),
+                         docs = process_doc_attr(Doc)};
+        _  ->
+            Docs
+    end.
+
+-spec process_moduledoc(Doc :: map() | none | hidden) -> map() | none | hidden.
+process_moduledoc(Doc) when Doc =:= none orelse Doc =:= hidden ->
+    Doc;
+process_moduledoc(Doc) when is_map(Doc) ->
+    maps:map(fun (_K, V) -> shell_docs_markdown:parse_md(V) end, Doc).
+
+process_doc_attr(Doc) ->
+    lists:map(fun process_doc/1, Doc).
+
+process_doc(Docs) when is_list(Docs) ->
+    lists:map(fun process_doc/1, Docs);
+process_doc({_At, _A, _S, Doc, _M}=Entry) when Doc =:= none orelse Doc =:= hidden ->
+    Entry;
+process_doc({Attributes, Anno, Signature, Doc, Metadata}) ->
+    Docs = maps:map(fun (_K, V) -> shell_docs_markdown:parse_md(V) end, Doc),
+    {Attributes, Anno, Signature, Docs, Metadata}.
+
 
 render_prop(Config) ->
 %    dbg:tracer(),dbg:p(all,c),dbg:tpl(shell_docs_prop,[]),
@@ -179,7 +341,7 @@ render_prop(Config) ->
 
 links(_Config) ->
     docsmap(
-      fun(Mod, #docs_v1{ module_doc = MDoc, docs = Docs }) ->
+      fun(Mod, #docs_v1{ module_doc = MDoc, docs = Docs, format = ?NATIVE_FORMAT }) ->
               try
                   [check_links(Mod, maps:get(<<"en">>,MDoc)) || MDoc =/= none, MDoc =/= hidden]
               catch _E1:R1:ST1 ->
@@ -193,7 +355,10 @@ links(_Config) ->
                        io:format("Failed to render ~p:~p~n~p:~p~n~p~n",
                                  [Mod,Kind,R,ST,D]),
                        erlang:raise(error,R,ST)
-               end || {Kind,_Anno,_Sig,#{ <<"en">> := D },_MD} <- Docs]
+               end || {Kind,_Anno,_Sig,#{ <<"en">> := D },_MD} <- Docs];
+         (Mod, #docs_v1{ format = Fmt }) ->
+              io:format("Skipping ~p because format is ~ts~n",
+                        [Mod, Fmt])
       end).
 
 check_links(Mod, [{a,Attr,C}|T]) ->
@@ -255,14 +420,15 @@ render_non_native(_Config) ->
         beam_language = not_erlang,
         format = <<"text/asciidoc">>,
         module_doc = #{<<"en">> => <<"This is\n\npure text">>},
-        docs= []
+        docs = []
     },
 
     <<"\n\tnot_an_erlang_module\n\n"
       "    This is\n"
       "    \n"
       "    pure text\n">> =
-        unicode:characters_to_binary(shell_docs:render(not_an_erlang_module, Docs, #{})),
+        unicode:characters_to_binary(
+          shell_docs:render(not_an_erlang_module, Docs, #{ ansi => false })),
 
     ok.
 
@@ -287,6 +453,7 @@ render_all(Dir) ->
             end).
 
 render_module(Mod, #docs_v1{ docs = Docs } = D) ->
+    put({shell_docs, nospecs}, non_existing),
     Opts = #{ ansi => true, columns => 80, encoding => unicode },
     case application:get_application(Mod) of
         {ok, App} ->
@@ -308,9 +475,17 @@ render_module(Mod, #docs_v1{ docs = Docs } = D) ->
       fun({_Type,_Anno,_Sig,none,_Meta}, Acc) ->
               Acc;
          ({{function,Name,Arity},_Anno,_Sig,_Doc,_Meta}, Acc) ->
-              FName = SMod ++ "_"++atom_to_list(Name)++"_"++integer_to_list(Arity)++"_func.txt",
-              Acc#{ sanitize(FName) =>
-                        unicode:characters_to_binary(shell_docs:render(Mod, Name, Arity, D, Opts))};
+              FAName = SMod ++ "_"++atom_to_list(Name)++"_"++integer_to_list(Arity)++"_func.txt",
+              FName = SMod ++ "_"++atom_to_list(Name)++"_func.txt",
+              FADocs = unicode:characters_to_binary(shell_docs:render(Mod, Name, Arity, D, Opts)),
+              FDocs = unicode:characters_to_binary(shell_docs:render(Mod, Name, D, Opts)),
+              case string:equal(FADocs,FDocs) of
+                  true -> 
+                      Acc#{ sanitize(FAName) => FADocs };
+                  false ->
+                      Acc#{ sanitize(FAName) => FADocs,
+                            sanitize(FName) => FDocs}
+              end;
          ({{type,Name,Arity},_Anno,_Sig,_Doc,_Meta}, Acc) ->
               FName = SMod ++ "_"++atom_to_list(Name)++"_"++integer_to_list(Arity)++"_type.txt",
               Acc#{ sanitize(FName) =>
@@ -319,7 +494,10 @@ render_module(Mod, #docs_v1{ docs = Docs } = D) ->
               FName = SMod ++ "_"++atom_to_list(Name)++"_"++integer_to_list(Arity)++"_cb.txt",
               Acc#{ sanitize(FName) =>
                         unicode:characters_to_binary(shell_docs:render_callback(Mod, Name, Arity, D, Opts))}
-      end, Files, Docs).
+      end, Files, Docs);
+render_module(Mod, Datadir) ->
+    {ok, [Docs]} = file:consult(filename:join(Datadir, atom_to_list(Mod) ++ ".docs_v1")),
+    render_module(Mod, Docs).
 
 sanitize(FName) ->
     lists:foldl(
@@ -328,30 +506,35 @@ sanitize(FName) ->
       end, FName, [{"/","slash"},{":","colon"},
                    {"\\*","star"},{"<","lt"},{">","gt"},{"=","eq"}]).
 
-docsmap(Fun) ->
-    lists:map(
-      fun F({Mod,_,_}) ->
-              F(Mod);
-          F(Mod) when is_list(Mod) ->
-              F(list_to_atom(Mod));
-          F(Mod) ->
-              case code:get_doc(Mod) of
-                  {error, missing} ->
-                      ok;
-                  {error, cover_compiled} ->
-                      ok;
-                  {error, E} when E =:= eperm; E =:= eacces; E =:= eio ->
-                      %% This can happen in BSD's for some reason...
-                      ok;
-                  {error, eisdir} ->
-                      %% Uhm?
-                      ok;
-                  {ok, Docs} ->
-                      try
-                          Fun(Mod, Docs)
-                      catch E:R:ST ->
-                              io:format("Failed to render ~p~n~p:~p:~p~n",[Mod,E,R,ST]),
-                              erlang:raise(E,R,ST)
-                      end
-              end
-      end, code:all_available()).
+%%
+%% Parallel map function.
+%%
+%% Parallel map function that discards the result of the function
+%% `F` applied to each of the items in `Ls`. It spawns as many
+%% processes as items there are in `Ls`. If the list is large,
+%% consider adding a set of working processes that round-robin on
+%% the job to do be done.
+%%
+%% - `F` is the function to perform
+%% - `Ls` the list of items to iterate on
+%%
+pmap(F, Ls) when is_function(F),
+                 is_list(Ls) ->
+  _ = lists:foreach(fun(Config) ->
+                        spawn_link(?MODULE, execute,[Config, F, self()])
+                   end, Ls),
+  ResponseCounter = length(Ls),
+  ok = sync(ResponseCounter),
+  ok.
+
+execute(Item, F, Pid) ->
+  _ = F(Item),
+  Pid ! ok.
+
+sync(0) ->
+  ok;
+sync(N) ->
+  receive
+    ok ->
+      sync(N-1)
+  end.

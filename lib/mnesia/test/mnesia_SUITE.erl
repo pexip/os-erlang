@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 1997-2021. All Rights Reserved.
+%% Copyright Ericsson AB 1997-2024. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -58,7 +58,7 @@ suite() -> [{ct_hooks,[{ts_install_cth,[{nodenames,2}]}]}].
 
 all() -> 
     [app, appup, {group, light}, {group, medium}, {group, heavy},
-     clean_up_suite].
+     clean_up_suite, {group, external}].
 
 groups() -> 
     %% The 'light' test suite runs a selected set of test suites and is
@@ -123,7 +123,8 @@ groups() ->
        {mnesia_dirty_access_test,
 	dirty_index_update_set_disc_only},
        {mnesia_evil_coverage_test,
-	create_live_table_index_disc_only}]}].
+	create_live_table_index_disc_only}]},
+     {external, [], [{mnesia_external_backend_test, all}]}].
 
 init_per_group(_GroupName, Config) ->
 	Config.
@@ -162,8 +163,8 @@ clean_up_suite(suite) ->
     [];
 clean_up_suite(Config) when is_list(Config)->
     mnesia:kill(),
-    Slaves = mnesia_test_lib:lookup_config(nodenames, Config),
-    Nodes = lists:delete(node(), Slaves),
+    NodeNames = mnesia_test_lib:lookup_config(nodenames, Config),
+    Nodes = lists:delete(node(), NodeNames),
     rpc:multicall(Nodes, erlang, halt, []),
     ok.
 

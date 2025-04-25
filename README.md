@@ -54,7 +54,7 @@ cd otp
 Checkout the branch or tag of your choice
 
 ```sh
-git checkout maint-24    # current latest stable version
+git checkout maint-26    # current latest stable version
 ```
 
 Configure, build and install
@@ -73,7 +73,10 @@ Please visit our [GitHub Issues](https://github.com/erlang/otp/issues) page for 
 
 ### Security Disclosure
 
-We take security bugs in Erlang/OTP seriously. Please disclose the issues regarding security by sending an email to **erlang-security [at] erlang [dot] org** and not by creating a public issue.
+Please do not report security vulnerabilities through public channels, like
+GitHub issues, discussions, or pull requests.
+
+Please disclose the security issues following our [SECURITY](SECURITY.md) guidelines.
 
 ## Contributing
 
@@ -97,7 +100,7 @@ Erlang/OTP is released under the [Apache License 2.0](http://www.apache.org/lice
 
 > %CopyrightBegin%
 >
-> Copyright Ericsson AB 2010-2021. All Rights Reserved.
+> Copyright Ericsson AB 2010-2024. All Rights Reserved.
 >
 > Licensed under the Apache License, Version 2.0 (the "License");
 > you may not use this file except in compliance with the License.

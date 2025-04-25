@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 1997-2021. All Rights Reserved.
+%% Copyright Ericsson AB 1997-2025. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -106,7 +106,7 @@ all() ->
      dump_log_load_regulation, {group, dump_log_thresholds},
      dump_log_update_in_place,
      event_module, backend_plugin_registration,
-     inconsistent_database, max_wait_for_decision,
+     inconsistent_database, %% max_wait_for_decision,
      send_compressed, app_test, {group, schema_config},
      unknown_config].
 
@@ -730,8 +730,8 @@ backend_plugin_registration(doc) ->
 backend_plugin_registration(Config) when is_list(Config) ->
     Nodes = ?acquire_schema(1, [{default_properties, []} | Config]),
     ?match(ok, mnesia:start()),
-    ?match({atomic,ok}, mnesia:add_backend_type(ext_ets, ext_test)),
-    ?match({atomic,ok}, mnesia:add_backend_type(ext_dets, ext_test)),
+    ?match({atomic,ok}, mnesia:add_backend_type(ext_ram_copies, ext_test)),
+    ?match({atomic,ok}, mnesia:add_backend_type(ext_disc_only_copies, ext_test)),
     ?verify_mnesia(Nodes, []),
     ?cleanup(1, Config).
 

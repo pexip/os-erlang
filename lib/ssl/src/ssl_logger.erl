@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 1999-2022. All Rights Reserved.
+%% Copyright Ericsson AB 1999-2025. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -19,11 +19,18 @@
 %%
 
 -module(ssl_logger).
+-moduledoc false.
 
 -export([log/4, 
          debug/4,
          format/2,
          format/1]).
+
+-export([keylog/3,
+         keylog_early_data/3,
+         keylog_hs/4,
+         keylog_traffic_pre_1_3/2,
+         keylog_traffic_1_3/5]).
 
 -define(DEC2HEX(X),
         if ((X) >= 0) andalso ((X) =< 9) -> (X) + $0;
@@ -34,8 +41,6 @@
 
 -include("ssl_internal.hrl").
 -include("tls_record.hrl").
--include("ssl_cipher.hrl").
--include("ssl_internal.hrl").
 -include("tls_handshake.hrl").
 -include("dtls_handshake.hrl").
 -include("tls_handshake_1_3.hrl").
@@ -57,6 +62,8 @@ log(Level, LogLevel, ReportMap, Meta) ->
             ok
     end.
 
+debug(undefined, _Direction, _Protocol, _Message) ->
+    ok;
 debug(LogLevel, Direction, Protocol, Message)
   when (Direction =:= inbound orelse Direction =:= outbound) andalso
        (Protocol =:= 'record' orelse Protocol =:= 'handshake') ->
@@ -129,9 +136,68 @@ format(#{msg:= {report, Msg}}, _Config0) ->
             []
     end.
 
+
+%%-------------------------------------------------------------------------
+%%  Keylog functions (not erlang logger related)
+%%-------------------------------------------------------------------------
+
+keylog(KeyLog, Random, Fun) ->
+    try
+        Fun(#{items => KeyLog, client_random => Random})
+    catch
+        _:function_clause:FunclauseST ->
+            [_| RestST] = FunclauseST,
+            %% Do not log arguments, our app should not cause any information leak.
+            %% What user fun does with the arguments is the users responsibility.
+            ?LOG_WARNING("user keylogging fun failed with function_clause: ~p ~n", [RestST]);
+        _:Reason:ST ->
+            ?LOG_WARNING("user keylogging fun failed : ~p ~p ~n", [Reason, ST])
+    end.
+
+keylog_early_data(ClientRand, Prf, EarlySecret) ->
+    ClientRandom = binary:decode_unsigned(ClientRand),
+    ClientEarlySecret = keylog_secret(EarlySecret, Prf),
+    [io_lib:format("CLIENT_EARLY_TRAFFIC_SECRET ~64.16.0B ",
+                   [ClientRandom]) ++ ClientEarlySecret].
+
+keylog_hs(ClientRand, Prf, ClientHSSecretBin, ServerHSSecretBin) ->
+    ClientRandom = binary:decode_unsigned(ClientRand),
+    ClientHSecret = keylog_secret(ClientHSSecretBin, Prf),
+    ServerHSecret = keylog_secret(ServerHSSecretBin, Prf),
+    [io_lib:format("CLIENT_HANDSHAKE_TRAFFIC_SECRET ~64.16.0B ",
+                   [ClientRandom]) ++ ClientHSecret,
+     io_lib:format("SERVER_HANDSHAKE_TRAFFIC_SECRET ~64.16.0B ",
+                   [ClientRandom]) ++ ServerHSecret].
+
+keylog_traffic_1_3(Role, ClientRandom, Prf, TrafficSecretBin, N) ->
+    ClientRandBin = binary:decode_unsigned(ClientRandom),
+    TrafficSecret = keylog_secret(TrafficSecretBin, Prf),
+    ClientRand = io_lib:format("~64.16.0B", [ClientRandBin]),
+    case Role of
+        client ->
+            ["CLIENT_TRAFFIC_SECRET_" ++ integer_to_list(N) ++ " "
+             ++ ClientRand ++ " " ++ TrafficSecret];
+        server ->
+            ["SERVER_TRAFFIC_SECRET_" ++ integer_to_list(N) ++ " "
+             ++ ClientRand ++ " " ++ TrafficSecret]
+    end.
+
+keylog_traffic_pre_1_3(ClientRandom, MasterSecret) ->
+    ClientRandBin = binary:decode_unsigned(ClientRandom),
+    MasterSecretBin = binary:decode_unsigned(MasterSecret),
+    [io_lib:format("CLIENT_RANDOM ~64.16.0B ~96.16.0B", [ClientRandBin, MasterSecretBin])].
+
+
 %%-------------------------------------------------------------------------
 %%  Internal functions
 %%-------------------------------------------------------------------------
+
+keylog_secret(SecretBin, sha256) ->
+    io_lib:format("~64.16.0B", [binary:decode_unsigned(SecretBin)]);
+keylog_secret(SecretBin, sha384) ->
+    io_lib:format("~96.16.0B", [binary:decode_unsigned(SecretBin)]);
+keylog_secret(SecretBin, sha512) ->
+    io_lib:format("~128.16.0B", [binary:decode_unsigned(SecretBin)]).
 
 %%-------------------------------------------------------------------------
 %% Handshake Protocol
@@ -290,19 +356,20 @@ get_server_version(Version, Extensions) ->
             Version
     end.
 
-version({3,4}) ->
+-spec version(ssl_record:ssl_version()) -> string().
+version(?TLS_1_3) ->
     "TLS 1.3";
-version({3,3}) ->
+version(?TLS_1_2) ->
     "TLS 1.2";
-version({3,2}) ->
+version(?TLS_1_1) ->
     "TLS 1.1";
-version({3,1}) ->
+version(?TLS_1_0) ->
     "TLS 1.0";
-version({3,0}) ->
+version(?SSL_3_0) ->
     "SSL 3.0";
-version({254,253}) ->
+version(?DTLS_1_2) ->
     "DTLS 1.2";
-version({254,255}) ->
+version(?DTLS_1_0) ->
     "DTLS 1.0";
 version({M,N}) ->
     io_lib:format("TLS/DTLS [0x0~B0~B]", [M,N]).

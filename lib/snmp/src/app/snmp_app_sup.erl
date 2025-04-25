@@ -1,7 +1,7 @@
 %% 
 %% %CopyrightBegin%
 %% 
-%% Copyright Ericsson AB 2003-2016. All Rights Reserved.
+%% Copyright Ericsson AB 2003-2024. All Rights Reserved.
 %% 
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -18,6 +18,7 @@
 %% %CopyrightEnd%
 %% 
 -module(snmp_app_sup).
+-moduledoc false.
 
 -include("snmp_debug.hrl").
 
@@ -64,7 +65,12 @@ start_agent(Type, Opts) ->
 	"~n   Type: ~p"
 	"~n   Opts: ~p", [Type, Opts]),
     Restart = get_restart(Opts, permanent), 
-    start_sup_child(snmpa_supervisor, Restart, [Type, Opts]).
+    case start_sup_child(snmpa_supervisor, Restart, [Type, Opts]) of
+        {ok, Pid} = OK when is_pid(Pid) ->
+            OK;
+        {error, {Reason, _ChildSpec}} ->
+            {error, Reason}
+    end.
 
 
 start_manager(Type, Opts) ->
@@ -72,7 +78,12 @@ start_manager(Type, Opts) ->
 	"~n   Type: ~p"
 	"~n   Opts: ~p", [Type, Opts]),
     Restart = get_restart(Opts, transient), 
-    start_sup_child(snmpm_supervisor, Restart, [Type, Opts]).
+    case start_sup_child(snmpm_supervisor, Restart, [Type, Opts]) of
+        {ok, Pid} = OK when is_pid(Pid) ->
+            OK;
+        {error, {Reason, _ChildSpec}} ->
+            {error, Reason}
+    end.
 
 
 %%%-------------------------------------------------------------------

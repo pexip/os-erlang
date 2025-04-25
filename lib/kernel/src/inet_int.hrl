@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %% 
-%% Copyright Ericsson AB 1997-2022. All Rights Reserved.
+%% Copyright Ericsson AB 1997-2024. All Rights Reserved.
 %% 
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -135,6 +135,9 @@
 -define(UDP_OPT_ADD_MEMBERSHIP,  14).
 -define(UDP_OPT_DROP_MEMBERSHIP, 15).
 -define(INET_OPT_IPV6_V6ONLY,    16).
+-define(INET_OPT_REUSEPORT,      17).
+-define(INET_OPT_REUSEPORT_LB,   18).
+-define(INET_OPT_EXCLUSIVEADDRUSE, 19).
 % "Local" options: codes start from 20:
 -define(INET_LOPT_BUFFER,        20).
 -define(INET_LOPT_HEADER,        21).
@@ -164,6 +167,8 @@
 -define(INET_OPT_TTL,             46).
 -define(INET_OPT_RECVTTL,         47).
 -define(TCP_OPT_NOPUSH,           48).
+-define(INET_LOPT_TCP_READ_AHEAD, 49).
+-define(INET_OPT_NON_BLOCK_SEND,  50).
 -define(INET_OPT_DEBUG,           99).
 % Specific SCTP options: separate range:
 -define(SCTP_OPT_RTOINFO,	 	100).

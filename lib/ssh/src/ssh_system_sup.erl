@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2008-2022. All Rights Reserved.
+%% Copyright Ericsson AB 2008-2025. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -26,6 +26,7 @@
 %%----------------------------------------------------------------------
 
 -module(ssh_system_sup).
+-moduledoc false.
 
 -behaviour(supervisor).
 
@@ -33,12 +34,11 @@
 
 -export([start_link/3,
          stop_listener/1,
-	 stop_system/2,
-         start_system/3,
-         start_subsystem/4,
+	 stop_system/1,
+         start_system/2,
+         start_connection/4,
 	 get_daemon_listen_address/1,
          addresses/1,
-         addresses/2,
          get_options/2,
          get_acceptor_options/1,
          replace_acceptor_options/2
@@ -51,34 +51,34 @@
 %%% API
 %%%=========================================================================
 
-start_system(Role, Address0, Options) ->
-    case find_system_sup(Role, Address0) of
+start_system(Address0, Options) ->
+    case find_system_sup(Address0) of
         {ok,{SysPid,Address}} ->
             restart_acceptor(SysPid, Address, Options);
         {error,not_found} ->
-            supervisor:start_child(sup(Role),
+            supervisor:start_child(sshd_sup,
                                    #{id       => {?MODULE,Address0},
-                                     start    => {?MODULE, start_link, [Role, Address0, Options]},
+                                     start    => {?MODULE, start_link, [server, Address0, Options]},
                                      restart  => temporary,
                                      type     => supervisor
                                     })
     end.
 
 %%%----------------------------------------------------------------
-stop_system(Role, SysSup) when is_pid(SysSup) ->
-    case lists:keyfind(SysSup, 2, supervisor:which_children(sup(Role))) of
-        {{?MODULE,Name}, SysSup, _, _} -> stop_system(Role, Name);
-        false -> undefind
+stop_system(SysSup) when is_pid(SysSup) ->
+    case lists:keyfind(SysSup, 2, supervisor:which_children(sup(server))) of
+        {{?MODULE, Id}, SysSup, _, _} -> stop_system(Id);
+        false -> ok
     end;
-stop_system(Role, Name) ->
-    supervisor:terminate_child(sup(Role), {?MODULE,Name}).
+stop_system(Id) ->
+    supervisor:terminate_child(sup(server), {?MODULE, Id}).
 
 
 %%%----------------------------------------------------------------
 stop_listener(SystemSup) when is_pid(SystemSup) ->
-    {Name, _, _, _} = lookup(ssh_acceptor_sup, SystemSup),
-    supervisor:terminate_child(SystemSup, Name),
-    supervisor:delete_child(SystemSup, Name).
+    {Id, _, _, _} = lookup(ssh_acceptor_sup, SystemSup),
+    supervisor:terminate_child(SystemSup, Id),
+    supervisor:delete_child(SystemSup, Id).
 
 %%%----------------------------------------------------------------
 get_daemon_listen_address(SystemSup) ->
@@ -94,74 +94,74 @@ get_daemon_listen_address(SystemSup) ->
     end.
 
 %%%----------------------------------------------------------------
-%%% Start the subsystem child. It is a child of the system supervisor (callback = this module)
-start_subsystem(Role, Address=#address{}, Socket, Options0) ->
-    Options = ?PUT_INTERNAL_OPT([{user_pid, self()}], Options0),
-    Id = make_ref(),
-    case get_system_sup(Role, Address, Options) of
-        {ok,SysPid} ->
-            case supervisor:start_child(SysPid,
-                                        #{id          => Id,
-                                          start       => {ssh_subsystem_sup, start_link,
-                                                          [Role,Address,Id,Socket,Options]
-                                                         },
-                                          restart     => temporary,
-                                          significant => true,
-                                          type        => supervisor
-                                         })
-            of
-                {ok,_SubSysPid} ->
-                    try
-                        receive
-                            {new_connection_ref, Id, ConnPid} ->
-                                ssh_connection_handler:takeover(ConnPid, Role, Socket, Options)
-                        after 10000 ->
+%%% Start the connection child. It is a significant child of the system
+%%% supervisor (callback = this module) for server and non-significant
+%%% child of sshc_sup for client
+start_connection(Role = client, _, Socket, Options) ->
+    do_start_connection(Role, sup(client), false, Socket, Options);
+start_connection(Role = server, Address=#address{}, Socket, Options) ->
+    case get_system_sup(Address, Options) of
+        {ok, SysPid} ->
+            do_start_connection(Role, SysPid, true, Socket, Options);
+        Others ->
+            Others
+    end.
 
-                                error(timeout)
-                        end
-                    catch
-                        error:{badmatch,{error,Error}} ->
-                            {error,Error};
-                        error:timeout ->
-                            %% The connection was started, but the takover procedure timed out,
-                            %% therefore it exists a subtree, but it is not quite ready and
-                            %% must be removed (by the supervisor above):
-                            supervisor:terminate_child(SysPid, Id),
-                            {error, connection_start_timeout}
-                    end;
-                Others ->
-                    Others
+do_start_connection(Role, SupPid, Significant, Socket, Options0) ->
+    Id = make_ref(),
+    Options = ?PUT_INTERNAL_OPT([{user_pid, self()}], Options0),
+    case supervisor:start_child(SupPid,
+                                #{id          => Id,
+                                  start       => {ssh_connection_sup, start_link,
+                                                  [Role,Id,Socket,Options]
+                                                 },
+                                  restart     => temporary,
+                                  significant => Significant,
+                                  type        => supervisor
+                                 })
+    of
+        {ok,_ConnectionSupPid} ->
+            try
+                receive
+                    {new_connection_ref, Id, ConnPid} ->
+                        ssh_connection_handler:takeover(ConnPid, Role, Socket, Options)
+                after 10000 ->
+                        error(timeout)
+                end
+            catch
+                error:{badmatch,{error,Error}} ->
+                    {error,Error};
+                error:timeout ->
+                    %% The connection was started, but the takover procedure timed out,
+                    %% therefore it exists a subtree, but it is not quite ready and
+                    %% must be removed (by the supervisor above):
+                    supervisor:terminate_child(SupPid, Id),
+                    {error, connection_start_timeout}
             end;
         Others ->
             Others
     end.
 
-
 %%%----------------------------------------------------------------
 start_link(Role, Address, Options) ->
     supervisor:start_link(?MODULE, [Role, Address, Options]).
 
-
 %%%----------------------------------------------------------------
-addresses(Role) ->
-    addresses(Role,  #address{address=any, port=any, profile=any}).
-
-addresses(Role,  #address{address=Address, port=Port, profile=Profile}) ->
-    [{SysSup,A} || {{ssh_system_sup,A},SysSup,supervisor,_} <- 
-                     supervisor:which_children(sup(Role)),
+addresses(#address{address=Address, port=Port, profile=Profile}) ->
+    [{SysSup,A} || {{ssh_system_sup,A},SysSup,supervisor,_} <-
+                     supervisor:which_children(sshd_sup),
                  Address == any orelse A#address.address == Address,
                  Port == any    orelse A#address.port == Port,
                  Profile == any orelse A#address.profile == Profile].
 
 %%%----------------------------------------------------------------
 %% SysPid is the DaemonRef
-
 get_acceptor_options(SysPid) ->
     case get_daemon_listen_address(SysPid) of
         {ok,Address} ->
             get_options(SysPid, Address);
-        {error,Error} ->
-            {error,Error}
+        {error,not_found} ->
+            {error,bad_daemon_ref}
     end.
 
 replace_acceptor_options(SysPid, NewOpts) ->
@@ -183,6 +183,7 @@ replace_acceptor_options(SysPid, NewOpts) ->
 %%%  Supervisor callback
 %%%=========================================================================
 init([Role, Address, Options]) ->
+    ssh_lib:set_label(Role, system_sup),
     SupFlags = #{strategy      => one_for_one,
                  auto_shutdown => all_significant,
                  intensity =>    0,
@@ -230,22 +231,22 @@ acceptor_sup_child_spec(SysSup, Address, Options) ->
      }.
 
 lookup(SupModule, SystemSup) ->
-    lists:keyfind([SupModule], 4,
-                  supervisor:which_children(SystemSup)).
+    lists:keyfind([SupModule], 4, supervisor:which_children(SystemSup)).
 
-get_system_sup(Role, Address0, Options) ->
-    case find_system_sup(Role, Address0) of
+get_system_sup(Address0, Options) ->
+    case find_system_sup(Address0) of
         {ok,{SysPid,_Address}} ->
             {ok,SysPid};
         {error,not_found} ->
-            start_system(Role, Address0, Options);
+            start_system(Address0, Options);
         {error,Error} ->
             {error,Error}
     end.
 
-find_system_sup(Role, Address0) ->
-    case addresses(Role, Address0) of
-        [{SysSupPid,Address}] -> {ok,{SysSupPid,Address}};
+find_system_sup(Address0) ->
+    case addresses(Address0) of
+        [{SysSupPid,Address}] ->
+            {ok,{SysSupPid,Address}};
         [] -> {error,not_found};
         [_,_|_] -> {error,ambiguous}
     end.

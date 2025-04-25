@@ -1,7 +1,7 @@
 %% 
 %% %CopyrightBegin%
 %% 
-%% Copyright Ericsson AB 2003-2021. All Rights Reserved.
+%% Copyright Ericsson AB 2003-2024. All Rights Reserved.
 %% 
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -18,6 +18,7 @@
 %% %CopyrightEnd%
 %% 
 -module(snmp_app).
+-moduledoc false.
 
 -behaviour(application).
 
@@ -38,8 +39,13 @@ start(Type, []) ->
     %% First start the (new) central supervisor,
     {ok, Pid} = snmp_app_sup:start_link(),
     Entities = entities(),
-    ok = start_entities(Type, Entities),
-    {ok, Pid}.
+    case start_entities(Type, Entities) of
+        ok ->
+            {ok, Pid};
+        Error ->
+            snmp_app_sup:stop(),
+            Error
+    end.
 
 entities() ->
     entities([agent, manager], []).
@@ -100,17 +106,15 @@ start_entities(Type, [BadEntity|Entities]) ->
 start_agent() ->
     start_agent(normal).
 
-start_agent(Type) when is_atom(Type) ->
+start_agent(Opts) when is_list(Opts) ->
+    start_agent(normal, Opts);
+start_agent(Type) ->
     case application:get_env(snmp, agent) of
 	{ok, Opts} ->
 	    start_agent(Type, Opts);
 	_ ->
 	    {error, missing_config}
-    end;
-start_agent(Opts) when is_list(Opts) ->
-    start_agent(normal, Opts);
-start_agent(BadArg) ->
-    {error, {bad_arg, BadArg}}.
+    end.
 
 start_agent(Type, Opts) ->
     ?d("start_agent -> entry", []),

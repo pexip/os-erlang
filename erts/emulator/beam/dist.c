@@ -1,7 +1,7 @@
 /*
  * %CopyrightBegin%
  *
- * Copyright Ericsson AB 1996-2022. All Rights Reserved.
+ * Copyright Ericsson AB 1996-2024. All Rights Reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -211,6 +211,37 @@ struct {
     ErlHeapFragment *bp;
 } nodedown;
 
+/*
+ * Dist entry queue flags are only modified while
+ * the dist entry queue lock is held...
+ */
+static ERTS_INLINE erts_aint32_t
+de_qflags_read(DistEntry *dep)
+{
+    return erts_atomic32_read_nob(&dep->qflgs);
+}
+
+static ERTS_INLINE erts_aint32_t
+de_qflags_read_set(DistEntry *dep, erts_aint32_t set)
+{
+    erts_aint32_t qflgs, new_qflgs;
+    ERTS_LC_ASSERT(erts_lc_mtx_is_locked(&dep->qlock));
+    new_qflgs = qflgs = erts_atomic32_read_nob(&dep->qflgs);
+    new_qflgs |= set;
+    erts_atomic32_set_nob(&dep->qflgs, new_qflgs);
+    return qflgs;
+}
+
+static ERTS_INLINE erts_aint32_t
+de_qflags_read_unset(DistEntry *dep, erts_aint32_t unset)
+{
+    erts_aint32_t qflgs, new_qflgs;
+    ERTS_LC_ASSERT(erts_lc_mtx_is_locked(&dep->qlock));
+    new_qflgs = qflgs = erts_atomic32_read_nob(&dep->qflgs);
+    new_qflgs &= ~unset;
+    erts_atomic32_set_nob(&dep->qflgs, new_qflgs);
+    return qflgs;
+}
 
 static void
 delete_cache(ErtsAtomCache *cache)
@@ -250,7 +281,7 @@ get_suspended_on_de(DistEntry *dep, erts_aint32_t unset_qflgs)
 {
     erts_aint32_t qflgs;
     ERTS_LC_ASSERT(erts_lc_mtx_is_locked(&dep->qlock));
-    qflgs = erts_atomic32_read_band_acqb(&dep->qflgs, ~unset_qflgs);
+    qflgs = de_qflags_read_unset(dep, unset_qflgs);
     qflgs &= ~unset_qflgs;
     if (qflgs & ERTS_DE_QFLG_EXIT) {
 	/* No resume when exit has been scheduled */
@@ -1010,14 +1041,14 @@ int erts_do_net_exits(DistEntry *dep, Eterm reason)
         }
 
 	if (dep->state == ERTS_DE_STATE_EXITING) {
-	    ASSERT(erts_atomic32_read_nob(&dep->qflgs) & ERTS_DE_QFLG_EXIT);
+	    ASSERT(de_qflags_read(dep) & ERTS_DE_QFLG_EXIT);
 	}
 	else {
             ASSERT(dep->state == ERTS_DE_STATE_CONNECTED);
 	    dep->state = ERTS_DE_STATE_EXITING;
 	    erts_mtx_lock(&dep->qlock);
-	    ASSERT(!(erts_atomic32_read_nob(&dep->qflgs) & ERTS_DE_QFLG_EXIT));
-	    erts_atomic32_read_bor_relb(&dep->qflgs, ERTS_DE_QFLG_EXIT);
+	    ASSERT(!(de_qflags_read(dep) & ERTS_DE_QFLG_EXIT));
+	    de_qflags_read_set(dep, ERTS_DE_QFLG_EXIT);
 	    erts_mtx_unlock(&dep->qlock);
 	}
 
@@ -1043,6 +1074,8 @@ int erts_do_net_exits(DistEntry *dep, Eterm reason)
         suspendees = get_suspended_on_de(dep, ERTS_DE_QFLGS_ALL);
 
         erts_mtx_unlock(&dep->qlock);
+
+        erts_atomic32_set_relb(&dep->notify, 0);
         erts_atomic_set_nob(&dep->dist_cmd_scheduled, 0);
         dep->send = NULL;
 
@@ -1144,7 +1177,8 @@ void init_dist(void)
 
 static ERTS_INLINE ErtsDistOutputBuf *
 alloc_dist_obufs(byte **extp, TTBEncodeContext *ctx,
-                 Uint data_size, Uint fragments, Uint vlen)
+                 Uint data_size, Uint fragments, Uint vlen,
+                 int ignore_busy)
 {
     int ix;
     ErtsDistOutputBuf *obuf;
@@ -1175,6 +1209,7 @@ alloc_dist_obufs(byte **extp, TTBEncodeContext *ctx,
     erts_refc_add(&bin->intern.refc, fragments - 1, 1);
 
     for (ix = 0; ix < fragments; ix++) {
+        obuf[ix].ignore_busy = ignore_busy;
         obuf[ix].bin = bin;
         obuf[ix].eiov = &ctx->fragment_eiovs[ix];
 #ifdef DEBUG
@@ -1220,6 +1255,81 @@ size_obuf(ErtsDistOutputBuf *obuf)
     return sz;
 }
 
+static ERTS_INLINE void
+get_obuf_sizes(ErtsDistOutputBuf *obuf, Sint *size, Sint *ignore_size)
+{
+    Sint sz = size_obuf(obuf);
+    ASSERT(sz >= 0);
+    *size = sz;
+    *ignore_size = obuf->ignore_busy ? sz : 0;
+}
+
+static ERTS_INLINE void
+add_obuf_sizes(ErtsDistOutputBuf *obuf, Sint *size, Sint *ignore_size)
+{
+    Sint sz, isz;
+    get_obuf_sizes(obuf, &sz, &isz);
+    *size += sz;
+    *ignore_size += isz;
+}
+
+static ERTS_INLINE void
+subtract_obuf_sizes(ErtsDistOutputBuf *obuf, Sint *size, Sint *ignore_size)
+{
+    Sint sz, isz;
+    get_obuf_sizes(obuf, &sz, &isz);
+    *size -= sz;
+    *ignore_size -= isz;
+}
+
+static ERTS_INLINE void
+update_qsizes(DistEntry *dep, int *empty_fillp, Sint *qsizep,
+              Sint add_total_qsize, Sint ignore_qsize)
+{
+    /*
+     * All modifications of the 'total_qsize' and 'qsize' fields are
+     * made while holding the 'qlock', so read/modify/write of each
+     * field does not need to be atomic. Readers without the lock will
+     * still see consistent updates of each 'field'.
+     */
+    erts_aint_t qsize, add_qsize;
+
+    ERTS_LC_ASSERT(erts_lc_mtx_is_locked(&dep->qlock));
+
+    if (empty_fillp)
+        *empty_fillp = 0;
+
+    if (add_total_qsize) {
+        qsize = erts_atomic_read_nob(&dep->total_qsize);
+        qsize += (erts_aint_t) add_total_qsize;
+        if (empty_fillp && qsize == add_total_qsize)
+            *empty_fillp = !0;
+        erts_atomic_set_nob(&dep->total_qsize, (erts_aint_t) qsize);
+    }
+
+    add_qsize = (erts_aint_t) (add_total_qsize - ignore_qsize);
+    if (add_qsize) {
+        qsize = erts_atomic_read_nob(&dep->qsize);
+        qsize += add_qsize;
+        if (qsizep)
+            *qsizep = qsize;
+        erts_atomic_set_nob(&dep->qsize, (erts_aint_t) qsize);
+    }
+    else if (qsizep) {
+        *qsizep = erts_atomic_read_nob(&dep->qsize);
+    }
+
+#ifdef DEBUG
+    {
+        erts_aint_t tqsize = erts_atomic_read_nob(&dep->total_qsize);
+        qsize = erts_atomic_read_nob(&dep->qsize);
+        ASSERT(tqsize >= 0);
+        ASSERT(qsize >= 0);
+        ASSERT(tqsize >= qsize);
+    }
+#endif
+}
+
 static ErtsDistOutputBuf* clear_de_out_queues(DistEntry* dep)
 {
     ErtsDistOutputBuf *obuf;
@@ -1250,21 +1360,19 @@ static ErtsDistOutputBuf* clear_de_out_queues(DistEntry* dep)
 
 static void free_de_out_queues(DistEntry* dep, ErtsDistOutputBuf *obuf)
 {
-    Sint obufsize = 0;
+    Sint obufsize = 0, ignore_obufsize = 0;
 
     while (obuf) {
 	ErtsDistOutputBuf *fobuf;
 	fobuf = obuf;
 	obuf = obuf->next;
-	obufsize += size_obuf(fobuf);
+        add_obuf_sizes(fobuf, &obufsize, &ignore_obufsize);
 	free_dist_obuf(fobuf, !0);
     }
 
     if (obufsize) {
 	erts_mtx_lock(&dep->qlock);
-        ASSERT(erts_atomic_read_nob(&dep->qsize) >= obufsize);
-        erts_atomic_add_nob(&dep->qsize,
-                            (erts_aint_t) -obufsize);
+        update_qsizes(dep, NULL, NULL, -obufsize, -ignore_obufsize);
 	erts_mtx_unlock(&dep->qlock);
     }
 }
@@ -1341,28 +1449,14 @@ erts_dsig_send_unlink(ErtsDSigSendContext *ctx, Eterm local, Eterm remote, Uint6
     Eterm big_heap[ERTS_MAX_UINT64_HEAP_SIZE];
     Eterm unlink_id;    
     Eterm ctl;
-    if (ctx->dflags & DFLAG_UNLINK_ID) {
-        if (IS_USMALL(0, id))
-            unlink_id = make_small(id);
-        else {
-            Eterm *hp = &big_heap[0];
-            unlink_id = erts_uint64_to_big(id, &hp);
-        }
-        ctl = TUPLE4(&ctx->ctl_heap[0], make_small(DOP_UNLINK_ID),
-                     unlink_id, local, remote);
-    }
+    if (IS_USMALL(0, id))
+        unlink_id = make_small(id);
     else {
-        /*
-         * A node that isn't capable of talking the new link protocol.
-         *
-         * Send an old unlink op, and send ourselves an unlink-ack. We may
-         * end up in an inconsistent state as we could before the new link
-         * protocol was introduced...
-         */
-        erts_proc_sig_send_dist_unlink_ack(ctx->dep, ctx->connection_id,
-                                           remote, local, id);
-        ctl = TUPLE3(&ctx->ctl_heap[0], make_small(DOP_UNLINK), local, remote);
+        Eterm *hp = &big_heap[0];
+        unlink_id = erts_uint64_to_big(id, &hp);
     }
+    ctl = TUPLE4(&ctx->ctl_heap[0], make_small(DOP_UNLINK_ID),
+                 unlink_id, local, remote);
     return dsig_send_ctl(ctx, ctl);
 }
 
@@ -1372,11 +1466,6 @@ erts_dsig_send_unlink_ack(ErtsDSigSendContext *ctx, Eterm local, Eterm remote, U
     Eterm big_heap[ERTS_MAX_UINT64_HEAP_SIZE];
     Eterm unlink_id;
     Eterm ctl;
-
-    if (!(ctx->dflags & DFLAG_UNLINK_ID)) {
-        /* Receiving node does not understand it, so drop it... */
-        return ERTS_DSIG_SEND_OK;
-    }
 
     if (IS_USMALL(0, id))
         unlink_id = make_small(id);
@@ -1908,7 +1997,7 @@ int erts_net_message(Port *prt,
 		     byte *hbuf,
 		     ErlDrvSizeT hlen,
                      Binary *bin,
-		     byte *buf,
+		     const byte *buf,
 		     ErlDrvSizeT len)
 {
     ErtsDistExternal ede, *edep = &ede;
@@ -2005,10 +2094,14 @@ int erts_net_message(Port *prt,
             seq->ctl_len = ctl_len;
             seq->seq_id = ede.data->seq_id;
             seq->cnt = ede.data->frag_id;
-            if (dist_seq_rbt_lookup_insert(&dep->sequences, seq) != NULL) {
+            erts_de_rlock(dep);
+            if (dep->state != ERTS_DE_STATE_CONNECTED
+                || dep->connection_id != ede.connection_id
+                || dist_seq_rbt_lookup_insert(&dep->sequences, seq) != NULL) {
                 free_message_buffer(&seq->hfrag);
-                goto data_error;
+                goto data_error_runlock;
             }
+            erts_de_runlock(dep);
 
             erts_make_dist_ext_copy(&ede, erts_get_dist_ext(&seq->hfrag));
 
@@ -2020,10 +2113,17 @@ int erts_net_message(Port *prt,
 
         /* fall through, the first fragment in the sequence was the last fragment */
     case ERTS_PREP_DIST_EXT_FRAG_CONT: {
-        DistSeqNode *seq = dist_seq_rbt_lookup(dep->sequences, ede.data->seq_id);
+        DistSeqNode *seq;
+        erts_de_rlock(dep);
+        if (dep->state != ERTS_DE_STATE_CONNECTED
+            || dep->connection_id != ede.connection_id) {
+            goto data_error_runlock;
+        }
+
+        seq = dist_seq_rbt_lookup(dep->sequences, ede.data->seq_id);
 
         if (!seq)
-            goto data_error;
+            goto data_error_runlock;
 
         /* If we did a fall-though we already did this */
         if (res == ERTS_PREP_DIST_EXT_FRAG_CONT)
@@ -2031,16 +2131,20 @@ int erts_net_message(Port *prt,
 
         /* Verify that the fragments have arrived in the correct order */
         if (seq->cnt != ede.data->frag_id)
-            goto data_error;
+            goto data_error_runlock;
 
         seq->cnt--;
 
         /* Check if this was the last fragment */
-        if (ede.data->frag_id > 1)
+        if (ede.data->frag_id > 1) {
+            erts_de_runlock(dep);
             return 0;
+        }
 
         /* Last fragment arrived, time to dispatch the signal */
+
         dist_seq_rbt_delete(&dep->sequences, seq);
+        erts_de_runlock(dep);
         ctl_len = seq->ctl_len;
 
         /* Now that we no longer need the DistSeqNode we re-use the heapfragment
@@ -2068,10 +2172,10 @@ int erts_net_message(Port *prt,
 	goto decode_error;
     }
 
-    /* Fill the unused part of the hfrag with a bignum header */
+    /* Fill the unused part of the hfrag */
     if (ede_hfrag && ede_hfrag->mem + ede_hfrag->used_size > factory.hp) {
         Uint slot = factory.hp - ede_hfrag->mem;
-        ede_hfrag->mem[slot] = make_pos_bignum_header(ede_hfrag->used_size - slot - 1);
+        erts_write_heap_filler(&ede_hfrag->mem[slot], ede_hfrag->used_size - slot);
     }
 
     if (is_not_tuple(arg) || 
@@ -2146,6 +2250,13 @@ int erts_net_message(Port *prt,
 	break;
     }
 
+    case DOP_UNLINK:
+        /*
+         * DOP_UNLINK should never be passed. The new link protocol is
+         * mandatory as of OTP 26.
+         */
+        goto invalid_message;
+        
     case DOP_UNLINK_ID: {
         Eterm *element;
         Uint64 id;
@@ -2159,14 +2270,6 @@ int erts_net_message(Port *prt,
         if (id == 0)
             goto invalid_message;
 
-        if (0) {
-        case DOP_UNLINK:
-            if (tuple_arity != 3)
-                goto invalid_message;
-            element = &tuple[2];
-            id = 0;
-        }
-        
 	from = *(element++);
 	to = *element;
 	if (is_not_external_pid(from))
@@ -2405,7 +2508,7 @@ int erts_net_message(Port *prt,
          * the atom '' (empty cookie).
 	 */
         ASSERT((type == DOP_SEND_SENDER || type == DOP_SEND_SENDER_TT)
-               ? (is_pid(tuple[2]) && (dep->dflags & DFLAG_SEND_SENDER))
+               ? is_pid(tuple[2])
                : tuple[2] == am_Empty);
 
 #ifdef ERTS_DIST_MSG_DBG
@@ -2484,11 +2587,12 @@ int erts_net_message(Port *prt,
             if (!is_external_pid(watcher))
                 goto invalid_message;
             if (erts_this_dist_entry == external_pid_dist_entry(watcher))
-                break;
+                goto monitored_process_not_alive;
             goto invalid_message;
         }
 
         if (!erts_proc_lookup(watcher)) {
+        monitored_process_not_alive:
             if (ede_hfrag != NULL) {
                 erts_free_dist_ext_copy(erts_get_dist_ext(ede_hfrag));
                 free_message_buffer(ede_hfrag);
@@ -2884,7 +2988,7 @@ int erts_net_message(Port *prt,
                  */
                 dist_pend_spawn_exit_save_child_result(result,
                                                        ref,
-                                                       dep->mld);
+                                                       ede.mld);
             }
         } else if (lnk && !link_inserted) {
             erts_proc_sig_send_link_exit_noconnection(&ldp->dist);
@@ -2928,6 +3032,9 @@ data_error:
     erts_kill_dist_connection(dep, conn_id);
     ERTS_CHK_NO_PROC_LOCKS;
     return -1;
+data_error_runlock:
+    erts_de_runlock(dep);
+    goto data_error;
 }
 
 static int dsig_send_exit(ErtsDSigSendContext *ctx, Eterm ctl, Eterm msg)
@@ -3033,11 +3140,17 @@ retry:
 	goto fail;
     }
 
-    if (no_suspend && proc) {
-	if (erts_atomic32_read_acqb(&dep->qflgs) & ERTS_DE_QFLG_BUSY) {
-	    res = ERTS_DSIG_PREP_WOULD_SUSPEND;
-	    goto fail;
-	}
+    if (!proc || (proc->flags & F_ASYNC_DIST)) {
+        ctx->ignore_busy = !0;
+    }
+    else {
+        ctx->ignore_busy = 0;
+        if (no_suspend) {
+            if (de_qflags_read(dep) & ERTS_DE_QFLG_BUSY) {
+                res = ERTS_DSIG_PREP_WOULD_SUSPEND;
+                goto fail;
+            }
+        }
     }
 
     ctx->c_p = proc;
@@ -3211,7 +3324,8 @@ erts_dsig_send(ErtsDSigSendContext *ctx)
                                          + ((ctx->fragments - 1)
                                             * ERTS_DIST_FRAGMENT_HEADER_SIZE),
                                          ctx->fragments,
-                                         ctx->vlen);
+                                         ctx->vlen,
+                                         ctx->ignore_busy);
             ctx->alloced_fragments = ctx->fragments;
 	    /* Encode internal version of dist header */
             ctx->dhdrp = ctx->extp;
@@ -3362,20 +3476,23 @@ erts_dsig_send(ErtsDSigSendContext *ctx)
                 ctx->fragments = 0;
 	    }
 	    else {
-                Sint qsize = erts_atomic_read_nob(&dep->qsize);
+                Sint qsize = (Sint) erts_atomic_read_nob(&dep->qsize);
                 erts_aint32_t qflgs;
 		ErtsProcList *plp = NULL;
                 Eterm notify_proc = NIL;
                 Sint obsz;
-                int fragments;
+                int fragments, empty_fill;
 
                 /* Calculate how many fragments to send. This depends on
                    the available space in the distr queue and the amount
                    of remaining reductions. */
                 for (fragments = 0, obsz = 0;
-                     fragments < ctx->fragments &&
-                         ((ctx->reds > 0 && (qsize + obsz) < erts_dist_buf_busy_limit) ||
-                          ctx->no_trap || ctx->no_suspend);
+                     (fragments < ctx->fragments
+                      && ((ctx->reds > 0
+                           && (ctx->ignore_busy
+                               || (qsize + obsz < erts_dist_buf_busy_limit)))
+                          || ctx->no_trap
+                          || ctx->no_suspend));
                      fragments++) {
 #ifdef DEBUG
                     int reds = 100;
@@ -3391,33 +3508,27 @@ erts_dsig_send(ErtsDSigSendContext *ctx)
                        (!ctx->no_trap && !ctx->no_suspend));
 
 		erts_mtx_lock(&dep->qlock);
-		qsize = erts_atomic_add_read_mb(&dep->qsize, (erts_aint_t) obsz);
-                ASSERT(qsize >= obsz);
-                qflgs = erts_atomic32_read_nob(&dep->qflgs);
-		if (!(qflgs & ERTS_DE_QFLG_BUSY) && qsize >= erts_dist_buf_busy_limit) {
-		    erts_atomic32_read_bor_relb(&dep->qflgs, ERTS_DE_QFLG_BUSY);
+                update_qsizes(dep, &empty_fill, &qsize, obsz,
+                              ctx->ignore_busy ? obsz : 0);
+                qflgs = de_qflags_read(dep);
+		if (!(qflgs & ERTS_DE_QFLG_BUSY)
+                    && qsize >= erts_dist_buf_busy_limit) {
+		    qflgs = de_qflags_read_set(dep, ERTS_DE_QFLG_BUSY);
                     qflgs |= ERTS_DE_QFLG_BUSY;
                 }
-                if (qsize == obsz && (qflgs & ERTS_DE_QFLG_REQ_INFO)) {
-                    /* Previously empty queue and info requested... */
-                    qflgs = erts_atomic32_read_band_mb(&dep->qflgs,
-                                                       ~ERTS_DE_QFLG_REQ_INFO);
-                    if (qflgs & ERTS_DE_QFLG_REQ_INFO) {
+                if (empty_fill && is_internal_pid(dep->cid)) {
+                    erts_aint32_t notify;
+                    notify = erts_atomic32_xchg_mb(&dep->notify,
+                                                   (erts_aint32_t) 0);
+                    if (notify) {
+                        /*
+                         * Previously empty queue and notification
+                         * requested...
+                         */
                         notify_proc = dep->cid;
                         ASSERT(is_internal_pid(notify_proc));
                     }
-                    /* else: requester will send itself the message... */
-                    qflgs &= ~ERTS_DE_QFLG_REQ_INFO;
                 }
-		if (!ctx->no_suspend && (qflgs & ERTS_DE_QFLG_BUSY)) {
-		    erts_mtx_unlock(&dep->qlock);
-
-		    plp = erts_proclist_create(ctx->c_p);
-
-		    erts_suspend(ctx->c_p, ERTS_PROC_LOCK_MAIN, NULL);
-		    suspended = 1;
-		    erts_mtx_lock(&dep->qlock);
-		}
 
                 ASSERT(fragments < 2
                        || (get_int64(&((char*)ctx->obuf->eiov->iov[1].iov_base)[10])
@@ -3435,30 +3546,41 @@ erts_dsig_send(ErtsDSigSendContext *ctx)
                     ctx->obuf = &ctx->obuf[fragments];
                 }
 
-		if (!ctx->no_suspend) {
-                    qflgs = erts_atomic32_read_nob(&dep->qflgs);
-		    if (!(qflgs & ERTS_DE_QFLG_BUSY)) {
-			if (suspended)
-			    resume = 1; /* was busy when we started, but isn't now */
-    #ifdef USE_VM_PROBES
-			if (resume && DTRACE_ENABLED(dist_port_not_busy)) {
-			    DTRACE_CHARBUF(port_str, 64);
-			    DTRACE_CHARBUF(remote_str, 64);
+		if ((qflgs & ERTS_DE_QFLG_BUSY)
+                    && !ctx->ignore_busy
+                    && !ctx->no_suspend) {
 
-			    erts_snprintf(port_str, sizeof(DTRACE_CHARBUF_NAME(port_str)),
-					  "%T", cid);
-			    erts_snprintf(remote_str, sizeof(DTRACE_CHARBUF_NAME(remote_str)),
-					  "%T", dep->sysname);
-			    DTRACE3(dist_port_not_busy, erts_this_node_sysname,
-				    port_str, remote_str);
-			}
+                    erts_mtx_unlock(&dep->qlock);
+
+                    plp = erts_proclist_create(ctx->c_p);
+
+                    erts_suspend(ctx->c_p, ERTS_PROC_LOCK_MAIN, NULL);
+                    suspended = 1;
+
+                    erts_mtx_lock(&dep->qlock);
+
+                    qflgs = de_qflags_read(dep);
+                    if (qflgs & ERTS_DE_QFLG_BUSY) {
+                        /* Enqueue suspended process on dist entry */
+                        ASSERT(plp);
+                        erts_proclist_store_last(&dep->suspended, plp);
+                    }
+                    else {
+                        resume = 1; /* was busy, but isn't now */
+    #ifdef USE_VM_PROBES
+                        if (resume && DTRACE_ENABLED(dist_port_not_busy)) {
+                            DTRACE_CHARBUF(port_str, 64);
+                            DTRACE_CHARBUF(remote_str, 64);
+
+                            erts_snprintf(port_str, sizeof(DTRACE_CHARBUF_NAME(port_str)),
+                                          "%T", cid);
+                            erts_snprintf(remote_str, sizeof(DTRACE_CHARBUF_NAME(remote_str)),
+                                          "%T", dep->sysname);
+                            DTRACE3(dist_port_not_busy, erts_this_node_sysname,
+                                    port_str, remote_str);
+                        }
     #endif
-		    }
-		    else {
-			/* Enqueue suspended process on dist entry */
-			ASSERT(plp);
-			erts_proclist_store_last(&dep->suspended, plp);
-		    }
+                    }
 		}
 
 		erts_mtx_unlock(&dep->qlock);
@@ -3676,13 +3798,64 @@ dist_port_commandv(Port *prt, ErtsDistOutputBuf *obuf)
    ? ((Sint) 1) \
    : ((((Sint) (SZ)) >> 10) & ((Sint) ERTS_PORT_REDS_MASK__)))
 
+#ifndef DEBUG
+#define ERTS_DBG_CHK_DIST_QSIZE(DEP, PRT)
+#else
+#define ERTS_DBG_CHK_DIST_QSIZE(DEP, PRT)           \
+    dbg_check_dist_qsize((DEP), (PRT))
+
+static void
+dbg_check_dist_qsize(DistEntry *dep, Port *prt)
+{
+    int ix;
+    Sint sz = 0, isz = 0, tqsz, qsz;
+    ErtsDistOutputBuf *qs[2];
+
+    ERTS_LC_ASSERT(dep && erts_lc_mtx_is_locked(&dep->qlock));
+    ASSERT(prt && erts_lc_is_port_locked(prt));
+    ERTS_LC_ASSERT((erts_atomic32_read_nob(&prt->sched.flags)
+                    & ERTS_PTS_FLG_EXIT)
+                   || prt->common.id == dep->cid);
+
+    tqsz = erts_atomic_read_nob(&dep->total_qsize);
+    qsz = erts_atomic_read_nob(&dep->qsize);
+
+    ASSERT(tqsz >= 0);
+    ASSERT(qsz >= 0);
+    ASSERT(tqsz >= qsz);
+
+    qs[0] = dep->out_queue.first;
+    qs[1] = dep->finalized_out_queue.first;
+
+    for (ix = 0; ix < sizeof(qs)/sizeof(qs[0]); ix++) {
+        ErtsDistOutputBuf *obuf = qs[ix];
+        while (obuf) {
+            add_obuf_sizes(obuf, &sz, &isz);
+            obuf = obuf->next;
+        }
+    }
+
+    ASSERT(tqsz == sz);
+    ASSERT(qsz == sz - isz);
+}
+
+#endif
+
 int
 erts_dist_command(Port *prt, int initial_reds)
 {
     Sint reds = initial_reds - ERTS_PORT_REDS_DIST_CMD_START;
     enum dist_entry_state state;
     Uint64 flags;
-    Sint qsize, obufsize = 0;
+    /*
+     * 'obufsize' and 'ignore_obufsize' contains the number of bytes removed
+     * from the queue which will be updated (in dep->total_qsize and
+     * dep->qsize) before we return from this function. Note that
+     * 'obufsize' and 'ignore_obufsize' may be negative if we added to the
+     * queue size. This may occur since finalization of a buffer may increase
+     * buffer size.
+     */
+    Sint qsize, obufsize = 0, ignore_obufsize = 0;
     ErtsDistOutputQueue oq, foq;
     DistEntry *dep = (DistEntry*) erts_prtsd_get(prt, ERTS_PRTSD_DIST_ENTRY);
     Uint (*send)(Port *prt, ErtsDistOutputBuf *obuf);
@@ -3718,6 +3891,7 @@ erts_dist_command(Port *prt, int initial_reds)
      */
 
     erts_mtx_lock(&dep->qlock);
+    ERTS_DBG_CHK_DIST_QSIZE(dep, prt);
     oq.first = dep->out_queue.first;
     oq.last = dep->out_queue.last;
     dep->out_queue.first = NULL;
@@ -3729,23 +3903,6 @@ erts_dist_command(Port *prt, int initial_reds)
     dep->finalized_out_queue.first = NULL;
     dep->finalized_out_queue.last = NULL;
 
-#ifdef DEBUG
-    {
-        Uint sz = 0;
-        ErtsDistOutputBuf *curr = oq.first;
-        while (curr) {
-            sz += size_obuf(curr);
-            curr = curr->next;
-        }
-        curr = foq.first;
-        while (curr) {
-            sz += size_obuf(curr);
-            curr = curr->next;
-        }
-        ASSERT(sz <= erts_atomic_read_nob(&dep->qsize));
-    }
-#endif
-
     sched_flags = erts_atomic32_read_nob(&prt->sched.flags);
 
     if (reds < 0)
@@ -3756,7 +3913,7 @@ erts_dist_command(Port *prt, int initial_reds)
 	do {
             Uint size;
             ErtsDistOutputBuf *fob;
-	    obufsize += size_obuf(foq.first);
+            add_obuf_sizes(foq.first, &obufsize, &ignore_obufsize);
             size = (*send)(prt, foq.first);
             erts_atomic64_inc_nob(&dep->out);
             esdp->io.out += (Uint64) size;
@@ -3784,9 +3941,9 @@ erts_dist_command(Port *prt, int initial_reds)
 	    ob = oq.first;
 	    ASSERT(ob);
 	    do {
-                obufsize += size_obuf(ob);
+                add_obuf_sizes(ob, &obufsize, &ignore_obufsize);
 		reds = erts_encode_ext_dist_header_finalize(ob, dep, flags, reds);
-                obufsize -= size_obuf(ob);
+                subtract_obuf_sizes(ob, &obufsize, &ignore_obufsize);
                 if (reds < 0)
                     break; /* finalize needs to be restarted... */
                 last_finalized  = ob;
@@ -3824,12 +3981,11 @@ erts_dist_command(Port *prt, int initial_reds)
 	int preempt = 0;
 	while (oq.first && !preempt) {
 	    ErtsDistOutputBuf *fob;
-	    Uint size, obsz;
-            obufsize += size_obuf(oq.first);
+	    Uint size;
+            add_obuf_sizes(oq.first, &obufsize, &ignore_obufsize);
             reds = erts_encode_ext_dist_header_finalize(oq.first, dep, flags, reds);
-            obsz = size_obuf(oq.first);
-            obufsize -= obsz;
             if (reds < 0) { /* finalize needs to be restarted... */
+                subtract_obuf_sizes(oq.first, &obufsize, &ignore_obufsize);
                 preempt = 1;
                 break;
             }
@@ -3838,7 +3994,6 @@ erts_dist_command(Port *prt, int initial_reds)
 	    esdp->io.out += (Uint64) size;
 	    reds -= ERTS_PORT_REDS_DIST_CMD_DATA(size);
 	    fob = oq.first;
-	    obufsize += obsz;
 	    oq.first = oq.first->next;
 	    free_dist_obuf(fob, !0);
 	    sched_flags = erts_atomic32_read_nob(&prt->sched.flags);
@@ -3869,13 +4024,12 @@ erts_dist_command(Port *prt, int initial_reds)
 	 * processes.
 	 */
 	erts_mtx_lock(&dep->qlock);
-        de_busy = !!(erts_atomic32_read_nob(&dep->qflgs) & ERTS_DE_QFLG_BUSY);
-        qsize = (Sint) erts_atomic_add_read_nob(&dep->qsize,
-                                                (erts_aint_t) -obufsize);
-	ASSERT(qsize >= 0);
-	obufsize = 0;
+        de_busy = !!(de_qflags_read(dep) & ERTS_DE_QFLG_BUSY);
+        update_qsizes(dep, NULL, &qsize, -obufsize, -ignore_obufsize);
+	obufsize = ignore_obufsize = 0;
 	if (!(sched_flags & ERTS_PTS_FLG_BUSY_PORT)
-	    && de_busy && qsize < erts_dist_buf_busy_limit) {
+	    && de_busy
+            && qsize < erts_dist_buf_busy_limit) {
 	    int resumed;
 	    ErtsProcList *suspendees = get_suspended_on_de(dep, ERTS_DE_QFLG_BUSY);
 	    erts_mtx_unlock(&dep->qlock);
@@ -3891,17 +4045,7 @@ erts_dist_command(Port *prt, int initial_reds)
 
  done:
 
-    if (obufsize != 0) {
-	erts_mtx_lock(&dep->qlock);
-#ifdef DEBUG
-        qsize = (Sint) erts_atomic_add_read_nob(&dep->qsize,
-                                                (erts_aint_t) -obufsize);
-	ASSERT(qsize >= 0);
-#else
-        erts_atomic_add_nob(&dep->qsize, (erts_aint_t) -obufsize);
-#endif
-	erts_mtx_unlock(&dep->qlock);
-    }
+    ASSERT(!ignore_obufsize || obufsize);
 
     ASSERT(!!foq.first == !!foq.last);
     ASSERT(!dep->finalized_out_queue.first);
@@ -3912,7 +4056,21 @@ erts_dist_command(Port *prt, int initial_reds)
 	dep->finalized_out_queue.last = foq.last;
     }
 
-     /* Avoid wrapping reduction counter... */
+    if (obufsize != 0) {
+	erts_mtx_lock(&dep->qlock);
+        update_qsizes(dep, NULL, NULL, -obufsize, -ignore_obufsize);
+        ERTS_DBG_CHK_DIST_QSIZE(dep, prt);
+	erts_mtx_unlock(&dep->qlock);
+    }
+#ifdef DEBUG
+    else {
+        erts_mtx_lock(&dep->qlock);
+        ERTS_DBG_CHK_DIST_QSIZE(dep, prt);
+	erts_mtx_unlock(&dep->qlock);
+    }
+#endif
+
+    /* Avoid wrapping reduction counter... */
     if (reds < INT_MIN/2)
 	reds = INT_MIN/2;
 
@@ -3942,7 +4100,7 @@ erts_dist_command(Port *prt, int initial_reds)
 	while (oq.first) {
 	    ErtsDistOutputBuf *fob = oq.first;
 	    oq.first = oq.first->next;
-	    obufsize += size_obuf(fob);
+            add_obuf_sizes(fob, &obufsize, &ignore_obufsize);
 	    free_dist_obuf(fob, !0);
 	}
 
@@ -3951,14 +4109,15 @@ erts_dist_command(Port *prt, int initial_reds)
     }
     else {
 	if (oq.first) {
+	    erts_mtx_lock(&dep->qlock);
+            update_qsizes(dep, NULL, NULL, -obufsize, -ignore_obufsize);
+	    obufsize = ignore_obufsize = 0;
+
 	    /*
-	     * Unhandle buffers need to be put back first
+	     * Unhandled buffers need to be put back first
 	     * in out_queue.
 	     */
-	    erts_mtx_lock(&dep->qlock);
-	    erts_atomic_add_nob(&dep->qsize, -obufsize);
-	    obufsize = 0;
-	    oq.last->next = dep->out_queue.first;
+            oq.last->next = dep->out_queue.first;
 	    dep->out_queue.first = oq.first;
 	    if (!dep->out_queue.last)
 		dep->out_queue.last = oq.last;
@@ -3974,7 +4133,7 @@ BIF_RETTYPE
 dist_ctrl_get_data_notification_1(BIF_ALIST_1)
 {
     DistEntry *dep = ERTS_PROC_GET_DIST_ENTRY(BIF_P);
-    erts_aint32_t qflgs;
+    erts_aint32_t notify;
     erts_aint_t qsize;
     Eterm receiver = NIL;
     Uint32 conn_id;
@@ -3987,7 +4146,7 @@ dist_ctrl_get_data_notification_1(BIF_ALIST_1)
 
     /*
      * Caller is the only one that can consume from this queue
-     * and the only one that can set the req-info flag...
+     * and the only one that can set the notify field...
      */
 
     erts_de_rlock(dep);
@@ -3999,23 +4158,21 @@ dist_ctrl_get_data_notification_1(BIF_ALIST_1)
 
     ASSERT(dep->cid == BIF_P->common.id);
 
-    qflgs = erts_atomic32_read_nob(&dep->qflgs);
+    notify = erts_atomic32_read_nob(&dep->notify);
 
-    if (!(qflgs & ERTS_DE_QFLG_REQ_INFO)) {
+    if (!notify) {
         ERTS_THR_READ_MEMORY_BARRIER;
-        qsize = erts_atomic_read_nob(&dep->qsize);
+        qsize = erts_atomic_read_nob(&dep->total_qsize);
         ASSERT(qsize >= 0);
         if (qsize > 0)
             receiver = BIF_P->common.id; /* Notify ourselves... */
-        else { /* Empty queue; set req-info flag... */
-            qflgs = erts_atomic32_read_bor_mb(&dep->qflgs,
-                                                  ERTS_DE_QFLG_REQ_INFO);
-            qsize = erts_atomic_read_nob(&dep->qsize);
+        else { /* Empty queue; set the notify field... */
+            notify = erts_atomic32_xchg_mb(&dep->notify, (erts_aint32_t) !0);
+            qsize = erts_atomic_read_nob(&dep->total_qsize);
             ASSERT(qsize >= 0);
             if (qsize > 0) {
-                qflgs = erts_atomic32_read_band_mb(&dep->qflgs,
-                                                       ~ERTS_DE_QFLG_REQ_INFO);
-                if (qflgs & ERTS_DE_QFLG_REQ_INFO)
+                notify = erts_atomic32_xchg_mb(&dep->notify, (erts_aint32_t) 0);
+                if (notify)
                     receiver = BIF_P->common.id; /* Notify ourselves... */
                 /* else: someone else will notify us... */
             }
@@ -4036,52 +4193,55 @@ BIF_RETTYPE
 dist_ctrl_put_data_2(BIF_ALIST_2)
 {
     DistEntry *dep;
-    ErlDrvSizeT size;
     Eterm input_handler;
     Uint32 conn_id;
     Binary *bin = NULL;
 
-    if (is_binary(BIF_ARG_2))
-        size = binary_size(BIF_ARG_2);
-    else if (is_nil(BIF_ARG_2))
-        size = 0;
-    else if (is_list(BIF_ARG_2))
+    if (is_list(BIF_ARG_2)) {
         BIF_TRAP2(dist_ctrl_put_data_trap,
                   BIF_P, BIF_ARG_1, BIF_ARG_2);
-    else
-        BIF_ERROR(BIF_P, BADARG);
+    }
 
     dep = erts_dhandle_to_dist_entry(BIF_ARG_1, &conn_id);
-    if (!dep)
+    if (!dep) {
         BIF_ERROR(BIF_P, BADARG);
+    }
 
-    input_handler = (Eterm) erts_atomic_read_nob(&dep->input_handler);
+    input_handler = (Eterm)erts_atomic_read_nob(&dep->input_handler);
 
-    if (input_handler != BIF_P->common.id)
+    if (input_handler != BIF_P->common.id) {
         BIF_ERROR(BIF_P, EXC_NOTSUP);
+    }
 
     erts_atomic64_inc_nob(&dep->in);
 
-    if (size != 0) {
-        byte *data, *temp_alloc = NULL;
+    if (is_bitstring(BIF_ARG_2)) {
+        ERTS_DECLARE_DUMMY(Eterm br_flags);
+        const byte *data, *temp_alloc = NULL;
+        Uint offset, size;
+        BinRef *br;
 
-        if (binary_bitoffset(BIF_ARG_2))
-            data = (byte *) erts_get_aligned_binary_bytes(BIF_ARG_2, &temp_alloc);
-        else {
-            Eterm real_bin;
-            ProcBin *proc_bin;
-            Uint offset, bitoffs, bitsize;
+        ERTS_PIN_BITSTRING(BIF_ARG_2, br_flags, br, data, offset, size);
 
-            ERTS_GET_REAL_BIN(BIF_ARG_2, real_bin, offset, bitoffs, bitsize);
-            ASSERT(bitoffs == 0);
-            data = binary_bytes(real_bin) + offset;
-            proc_bin = (ProcBin *)binary_val(real_bin);
-            if (proc_bin->thing_word == HEADER_PROC_BIN)
-                bin = proc_bin->val;
+        if (TAIL_BITS(size) != 0) {
+            BIF_ERROR(BIF_P, BADARG);
         }
 
-        if (!data)
+        if (BIT_OFFSET(offset) == 0) {
+            data = &data[BYTE_OFFSET(offset)];
+            size = BYTE_SIZE(size);
+
+            bin = br ? br->val : NULL;
+        } else {
+            ERTS_DECLARE_DUMMY(Uint dummy);
+            data = (byte *) erts_get_aligned_binary_bytes(BIF_ARG_2,
+                                                          &size,
+                                                          &temp_alloc);
+        }
+
+        if (!data) {
             BIF_ERROR(BIF_P, BADARG);
+        }
 
         erts_proc_unlock(BIF_P, ERTS_PROC_LOCK_MAIN);
 
@@ -4098,6 +4258,8 @@ dist_ctrl_put_data_2(BIF_ALIST_2)
 
         erts_free_aligned_binary_bytes(temp_alloc);
 
+    } else if (is_not_nil(BIF_ARG_2)) {
+        BIF_ERROR(BIF_P, BADARG);
     }
 
     BIF_RET(am_ok);
@@ -4203,7 +4365,7 @@ dist_get_stat_1(BIF_ALIST_1)
     }
     read = (Sint64) erts_atomic64_read_nob(&dep->in);
     write = (Sint64) erts_atomic64_read_nob(&dep->out);
-    pend = (Sint64) erts_atomic_read_nob(&dep->qsize);
+    pend = (Sint64) erts_atomic_read_nob(&dep->total_qsize);
 
     erts_de_runlock(dep);
 
@@ -4230,13 +4392,13 @@ dist_get_stat_1(BIF_ALIST_1)
 BIF_RETTYPE
 dist_ctrl_input_handler_2(BIF_ALIST_2)
 {
-    DistEntry *dep = ERTS_PROC_GET_DIST_ENTRY(BIF_P);
     Uint32 conn_id;
+    DistEntry *dep = erts_dhandle_to_dist_entry(BIF_ARG_1, &conn_id);
 
     if (!dep)
         BIF_ERROR(BIF_P, EXC_NOTSUP);
 
-    if (erts_dhandle_to_dist_entry(BIF_ARG_1, &conn_id) != dep)
+    if ((ERTS_PROC_GET_DIST_ENTRY(BIF_P) != dep) && !is_internal_port(dep->cid))
         BIF_ERROR(BIF_P, BADARG);
 
     if (is_not_internal_pid(BIF_ARG_2))
@@ -4258,10 +4420,19 @@ dist_ctrl_get_data_1(BIF_ALIST_1)
 {
     DistEntry *dep = ERTS_PROC_GET_DIST_ENTRY(BIF_P);
     const Sint initial_reds = ERTS_BIF_REDS_LEFT(BIF_P);
-    Sint reds = initial_reds, obufsize = 0, ix, vlen;
+    Sint reds = initial_reds, ix, vlen;
+    /*
+     * 'obufsize' and 'ignore_obufsize' contains the number of bytes removed
+     * from the queue which will be updated (in dep->total_qsize and
+     * dep->qsize) before we return from this function. Note that
+     * 'obufsize' and 'ignore_obufsize' may be negative if we added to the
+     * queue size. This may occur since finalization of a buffer may increase
+     * buffer size.
+     */
+    Sint obufsize = 0, ignore_obufsize = 0;
     ErtsDistOutputBuf *obuf;
     Eterm *hp, res;
-    erts_aint_t qsize;
+    Sint qsize;
     Uint32 conn_id, get_size;
     Uint hsz = 0, data_sz;
     SysIOVec *iov;
@@ -4300,7 +4471,7 @@ dist_ctrl_get_data_1(BIF_ALIST_1)
     {
         if (!dep->tmp_out_queue.first) {
             ASSERT(!dep->tmp_out_queue.last);
-            qsize = erts_atomic_read_acqb(&dep->qsize);
+            qsize = (Sint) erts_atomic_read_acqb(&dep->total_qsize);
             if (qsize > 0) {
                 erts_mtx_lock(&dep->qlock);
                 dep->tmp_out_queue.first = dep->out_queue.first;
@@ -4319,13 +4490,16 @@ dist_ctrl_get_data_1(BIF_ALIST_1)
         }
 
         obuf = dep->tmp_out_queue.first;
-        obufsize += size_obuf(obuf);
+        add_obuf_sizes(obuf, &obufsize, &ignore_obufsize);
         reds = erts_encode_ext_dist_header_finalize(obuf, dep, dep->dflags, reds);
-        obufsize -= size_obuf(obuf);
+        subtract_obuf_sizes(obuf, &obufsize, &ignore_obufsize);
         if (reds < 0) { /* finalize needs to be restarted... */
             erts_de_runlock(dep);
-            if (obufsize)
-                erts_atomic_add_nob(&dep->qsize, (erts_aint_t) -obufsize);
+            if (obufsize) {
+                erts_mtx_lock(&dep->qlock);
+                update_qsizes(dep, NULL, NULL, -obufsize, -ignore_obufsize);
+                erts_mtx_unlock(&dep->qlock);
+            }
             ERTS_BIF_YIELD1(BIF_TRAP_EXPORT(BIF_dist_ctrl_get_data_1),
                             BIF_P, BIF_ARG_1);
         }
@@ -4357,7 +4531,7 @@ dist_ctrl_get_data_1(BIF_ALIST_1)
     ASSERT(iov[0].iov_len == 0);
     ASSERT(!binv[0]);
 
-    hsz = 2 /* cons */ + PROC_BIN_SIZE;
+    hsz = 2 /* cons */ + ERL_REFC_BITS_SIZE;
     hsz *= vlen - 1;
 
     get_size = dep->opts & ERTS_DIST_CTRL_OPT_GET_SIZE;
@@ -4375,47 +4549,35 @@ dist_ctrl_get_data_1(BIF_ALIST_1)
     res = NIL;
 
     for (ix = vlen - 1; ix > 0; ix--) {
-        Binary *bin;
-        ProcBin *pb;
         Eterm bin_term;
+        Binary *bin;
 
         ASSERT(binv[ix]);
-
-        /*
-         * We intentionally avoid using sub binaries
-         * since the GC might convert those to heap
-         * binaries and by this ruin the nice preparation
-         * for usage of this data as I/O vector in
-         * nifs/drivers.
-         */
-        
         bin = ErlDrvBinary2Binary(binv[ix]);
-        pb = (ProcBin *) (char *) hp;
-        hp += PROC_BIN_SIZE;
-        pb->thing_word = HEADER_PROC_BIN;
-        pb->size = (Uint) iov[ix].iov_len;
-        pb->next = MSO(BIF_P).first;
-        MSO(BIF_P).first = (struct erl_off_heap_header*) pb;
-        pb->val = bin;
-        pb->bytes = (byte*) iov[ix].iov_base;
-        pb->flags = 0;
-        OH_OVERHEAD(&MSO(BIF_P), pb->size / sizeof(Eterm));
-        bin_term = make_binary(pb);
+        bin_term = erts_wrap_refc_bitstring(&MSO(BIF_P).first,
+                                            &MSO(BIF_P).overhead,
+                                            &hp,
+                                            bin,
+                                            iov[ix].iov_base,
+                                            0,
+                                            NBITS(iov[ix].iov_len));
 
         res = CONS(hp, bin_term, res);
         hp += 2;
     }
 
-    obufsize += size_obuf(obuf);
+    add_obuf_sizes(obuf, &obufsize, &ignore_obufsize);
 
-    qsize = erts_atomic_add_read_nob(&dep->qsize, (erts_aint_t) -obufsize);
+    erts_mtx_lock(&dep->qlock);
 
-    ASSERT(qsize >= 0);
+    update_qsizes(dep, NULL, &qsize, -obufsize, -ignore_obufsize);
 
-    if (qsize < erts_dist_buf_busy_limit/2
-        && (erts_atomic32_read_acqb(&dep->qflgs) & ERTS_DE_QFLG_BUSY)) {
+    if (qsize >= erts_dist_buf_busy_limit/2
+        || !(de_qflags_read(dep) & ERTS_DE_QFLG_BUSY)) {
+        erts_mtx_unlock(&dep->qlock);
+    }
+    else {
         ErtsProcList *resume_procs = NULL;
-        erts_mtx_lock(&dep->qlock);
         resume_procs = get_suspended_on_de(dep, ERTS_DE_QFLG_BUSY);
         erts_mtx_unlock(&dep->qlock);
         if (resume_procs) {
@@ -4470,8 +4632,8 @@ static void kill_connection(DistEntry *dep)
 
     dep->state = ERTS_DE_STATE_EXITING;
     erts_mtx_lock(&dep->qlock);
-    ASSERT(!(erts_atomic32_read_nob(&dep->qflgs) & ERTS_DE_QFLG_EXIT));
-    erts_atomic32_read_bor_nob(&dep->qflgs, ERTS_DE_QFLG_EXIT);
+    ASSERT(!(de_qflags_read(dep) & ERTS_DE_QFLG_EXIT));
+    de_qflags_read_set(dep, ERTS_DE_QFLG_EXIT);
     erts_mtx_unlock(&dep->qlock);
 
     if (is_internal_port(dep->cid))
@@ -4714,8 +4876,21 @@ BIF_RETTYPE setnode_2(BIF_ALIST_2)
     erts_thr_progress_block();
 
     success = (!ERTS_PROC_IS_EXITING(net_kernel)
-               & !ERTS_PROC_GET_DIST_ENTRY(net_kernel));
+               && !ERTS_PROC_GET_DIST_ENTRY(net_kernel));
     if (success) {
+        /*
+         * Ensure we don't use a nodename-creation pair with
+         * external identifiers existing in the system.
+         */
+        while (!0) {
+            ErlNode *nep;
+            if (creation < 4)
+                creation = 4;
+            nep = erts_find_node(BIF_ARG_1, creation);
+            if (!nep || erts_node_refc(nep) == 0)
+                break;
+            creation++;
+        }
         inc_no_nodes();
         erts_set_this_node(BIF_ARG_1, (Uint32) creation);
         erts_this_dist_entry->creation = creation;
@@ -5071,7 +5246,6 @@ setup_connection_epiloge_rwunlock(Process *c_p, DistEntry *dep,
                                   Process *net_kernel)
 {
     Eterm notify_proc = NIL;
-    erts_aint32_t qflgs;
     ErtsProcLocks nk_locks;
     int success = 0;
 
@@ -5107,17 +5281,18 @@ setup_connection_epiloge_rwunlock(Process *c_p, DistEntry *dep,
     erts_set_dist_entry_connected(dep, ctrlr, flags);
 
     notify_proc = NIL;
-    if (erts_atomic_read_nob(&dep->qsize)) {
+    if (erts_atomic_read_nob(&dep->total_qsize)) {
         if (is_internal_port(dep->cid)) {
             erts_schedule_dist_command(NULL, dep);
         }
         else {
+            erts_aint32_t notify;
             ERTS_THR_READ_MEMORY_BARRIER;
-            qflgs = erts_atomic32_read_nob(&dep->qflgs);
-            if (qflgs & ERTS_DE_QFLG_REQ_INFO) {
-                qflgs = erts_atomic32_read_band_mb(&dep->qflgs,
-                                                   ~ERTS_DE_QFLG_REQ_INFO);
-                if (qflgs & ERTS_DE_QFLG_REQ_INFO) {
+            notify = erts_atomic32_read_nob(&dep->notify);
+            if (notify) {
+                notify = erts_atomic32_xchg_mb(&dep->notify,
+                                               (erts_aint32_t) 0);
+                if (notify) {
                     notify_proc = dep->cid;
                     ASSERT(is_internal_pid(notify_proc));
                 }
@@ -5337,6 +5512,7 @@ Sint erts_abort_pending_connection_rwunlock(DistEntry* dep,
         ASSERT(!dep->finalized_out_queue.first);
         resume_procs = get_suspended_on_de(dep, ERTS_DE_QFLGS_ALL);
 	erts_mtx_unlock(&dep->qlock);
+        erts_atomic32_set_relb(&dep->notify, 0);
 	erts_atomic_set_nob(&dep->dist_cmd_scheduled, 0);
 	dep->send = NULL;
 
@@ -5418,6 +5594,9 @@ int erts_auto_connect(DistEntry* dep, Process *proc, ErtsProcLocks proc_locks)
             return 0;
         }
 
+        if (proc == net_kernel)
+            nk_locks |= ERTS_PROC_LOCK_MAIN;
+
         /*
          * Send {auto_connect, Node, DHandle} to net_kernel
          */
@@ -5428,6 +5607,10 @@ int erts_auto_connect(DistEntry* dep, Process *proc, ErtsProcLocks proc_locks)
         msg = TUPLE3(hp, am_auto_connect, dep->sysname, dhandle);
         ERL_MESSAGE_TOKEN(mp) = am_undefined;
         erts_queue_proc_message(proc, net_kernel, nk_locks, mp, msg);
+
+        if (proc == net_kernel)
+            nk_locks &= ~ERTS_PROC_LOCK_MAIN;
+
         erts_proc_unlock(net_kernel, nk_locks);
     }
 
@@ -5720,10 +5903,10 @@ BIF_RETTYPE erts_internal_dist_spawn_request_4(BIF_ALIST_4)
         ok_result = ref;
     else {
         Eterm *hp = HAlloc(BIF_P, 3);
-        Eterm bool = ((monitor_oflags & ERTS_ML_FLG_SPAWN_MONITOR)
+        Eterm spawns_monitor = ((monitor_oflags & ERTS_ML_FLG_SPAWN_MONITOR)
                       ? am_true : am_false);
         ASSERT(BIF_ARG_4 == am_spawn_opt);
-        ok_result = TUPLE2(hp, ref, bool);
+        ok_result = TUPLE2(hp, ref, spawns_monitor);
     }
 
     code = erts_dsig_prepare(&ctx, dep,
@@ -5862,7 +6045,8 @@ send_error:
 /* node(Object) -> Node */
 
 BIF_RETTYPE node_1(BIF_ALIST_1)
-{ 
+{
+    /* NOTE: The JIT has its own implementation of this BIF. */
     if (is_not_node_container(BIF_ARG_1))
       BIF_ERROR(BIF_P, BADARG);
     BIF_RET(node_container_node_name(BIF_ARG_1));
@@ -6055,7 +6239,7 @@ nodes(Process *c_p, Eterm node_types, Eterm options)
         }
     }
     else {
-        Eterm ks[2], *hp, keys_tuple = THE_NON_VALUE;
+        Eterm ks[2], *hp;
         Uint map_size = 0, el_xtra, xtra;
         ErtsHeapFactory hfact;
 
@@ -6090,8 +6274,8 @@ nodes(Process *c_p, Eterm node_types, Eterm options)
                 vs[map_size++] = eni->type;
             }
 
-            info_map = erts_map_from_sorted_ks_and_vs(&hfact, ks, vs,
-                                                      map_size, &keys_tuple);
+            info_map = erts_map_from_ks_and_vs(&hfact, ks, vs, map_size);
+            ASSERT(is_value(info_map));
 
             hp = erts_produce_heap(&hfact, 3+2, xtra);
 
@@ -6677,8 +6861,7 @@ send_nodes_mon_msgs(Process *c_p, Eterm what, Eterm node,
                     map_size++;
                 }
 
-                info = erts_map_from_sorted_ks_and_vs(&hfact, ks, vs,
-                                                      map_size, NULL);
+                info = erts_map_from_ks_and_vs(&hfact, ks, vs, map_size);
                 ASSERT(is_value(info));
             }
             else { /* Info list */

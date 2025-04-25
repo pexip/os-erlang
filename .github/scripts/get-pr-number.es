@@ -1,5 +1,25 @@
 #!/usr/bin/env escript
 %%! -pa jsx/_build/default/lib/jsx/ebin/
+
+%%
+%% %CopyrightBegin%
+%%
+%% Copyright Ericsson AB 2024. All Rights Reserved.
+%%
+%% Licensed under the Apache License, Version 2.0 (the "License");
+%% you may not use this file except in compliance with the License.
+%% You may obtain a copy of the License at
+%%
+%%     http://www.apache.org/licenses/LICENSE-2.0
+%%
+%% Unless required by applicable law or agreed to in writing, software
+%% distributed under the License is distributed on an "AS IS" BASIS,
+%% WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+%% See the License for the specific language governing permissions and
+%% limitations under the License.
+%%
+%% %CopyrightEnd%
+
 -mode(compile).
 
 main([Repo, HeadSha]) ->
@@ -11,16 +31,43 @@ main([Repo, HeadSha]) ->
                    string:equal(HeadSha, Sha)
            end, AllOpenPrs) of
         {value, #{ <<"number">> := Number } } ->
-            io:format("::set-output name=result::~p~n", [Number]);
+            append_to_github_output("result=~p~n", [Number]);
         false ->
-            io:format("::set-output name=result::~ts~n", [""])
+            append_to_github_output("result=~ts~n", [""])
+    end.
+
+append_to_github_output(Fmt, Args) ->
+    case os:getenv("GITHUB_OUTPUT") of
+        false ->
+            io:format(standard_error, "GITHUB_OUTPUT env var missing?~n", []);
+        GitHubOutputFile ->
+            {ok, F} = file:open(GitHubOutputFile, [write, append]),
+            ok = io:fwrite(F, Fmt, Args),
+            ok = file:close(F)
     end.
 
 ghapi(CMD) ->
-    Data = cmd(CMD),
-    try jsx:decode(Data, [{return_maps,true}])
+    decode(cmd(CMD)).
+
+decode(Data) ->
+    try jsx:decode(Data,[{return_maps, true}, return_tail]) of
+        {with_tail, Json, <<>>} ->
+            Json;
+        {with_tail, Json, Tail} ->
+            lists:concat([Json | decodeTail(Tail)])
     catch E:R:ST ->
             io:format("Failed to decode: ~ts",[Data]),
+            erlang:raise(E,R,ST)
+    end.
+
+decodeTail(Data) ->
+    try jsx:decode(Data,[{return_maps, true}, return_tail]) of
+        {with_tail, Json, <<>>} ->
+            [Json];
+        {with_tail, Json, Tail} ->
+            [Json | decodeTail(Tail)]
+    catch E:R:ST ->
+            io:format(standard_error, "Failed to decode: ~ts",[Data]),
             erlang:raise(E,R,ST)
     end.
 

@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2011-2021. All Rights Reserved.
+%% Copyright Ericsson AB 2011-2024. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -885,6 +885,9 @@ trace_disallowed_calls(Node) ->
 
 check_disallowed_calls(TestNode,Line) ->
     receive
+        {trace,_,call,{file,read_file_info,["/bin/sh",[raw]]},{os,internal_init_cmd_shell,1}} ->
+            %% This call is done when kernel is started/reloaded and is ok
+            ok;
 	Trace when element(1,Trace)==trace ->
 	    ?print_line(Line,["Disallowed function called",Trace]),
 	    exit({disallowed_function_call,Trace})

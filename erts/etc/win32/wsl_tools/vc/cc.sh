@@ -2,7 +2,7 @@
 #
 # %CopyrightBegin%
 #
-# Copyright Ericsson AB 2002-2022. All Rights Reserved.
+# Copyright Ericsson AB 2002-2024. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -307,7 +307,7 @@ while (<FH>) {
 }
 flushDeps();
 ' $MSG_FILE "$MPATH"
-
+    RES=$?
     rm -f $ERR_FILE $MSG_FILE
 else
     # Compile

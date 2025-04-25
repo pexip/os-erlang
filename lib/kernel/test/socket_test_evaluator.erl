@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %% 
-%% Copyright Ericsson AB 2018-2022. All Rights Reserved.
+%% Copyright Ericsson AB 2018-2025. All Rights Reserved.
 %% 
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -97,7 +97,10 @@
       Init :: initial_evaluator_state().
                              
 start(Name, Seq, InitState) 
-  when is_list(Name) andalso is_list(Seq) andalso (Seq =/= []) ->
+  when is_list(Name) andalso
+       is_list(Seq)  andalso
+       (Seq =/= [])  andalso
+       is_map(InitState) ->
     %% Make sure 'parent' is not already used
     case maps:find(parent, InitState) of
         {ok, _} ->
@@ -134,6 +137,11 @@ loop(ID, [#{desc := Desc,
                         "~n   ~p", [ID, Reason]),
             exit({command_failed, ID, Reason, State})
     catch
+        error:notsup = Reason:Stack ->
+            ?SEV_IPRINT("command ~w skip: "
+                        "~n   ~p"
+                        "~n   ~p", [ID, Reason, Stack]),
+            exit({skip, Reason});
         C:{skip, command} = E:_ when ((C =:= throw) orelse (C =:= exit)) ->
             %% Secondary skip
             exit(E);
@@ -176,14 +184,14 @@ await_finish(Evs, OK, Fails) ->
 
         %% The evaluator can skip the test case:
         {'DOWN', _MRef, process, Pid, {skip, Reason}} ->
-            %% ?SEV_IPRINT("await_finish -> skip (down) received: "
-            %%             "~n   Pid:    ~p"
-            %%             "~n   Reason: ~p", [Pid, Reason]),
+            ?SEV_IPRINT("await_finish -> skip (down) received: "
+                        "~n   Pid:    ~p"
+                        "~n   Reason: ~p", [Pid, Reason]),
             await_finish_skip(Pid, Reason, Evs, OK);
         {'EXIT', Pid, {skip, Reason}} ->
-            %% ?SEV_IPRINT("await_finish -> skip (exit) received: "
-            %%             "~n   Pid:    ~p"
-            %%             "~n   Reason: ~p", [Pid, Reason]),
+            ?SEV_IPRINT("await_finish -> skip (exit) received: "
+                        "~n   Pid:    ~p"
+                        "~n   Reason: ~p", [Pid, Reason]),
             await_finish_skip(Pid, Reason, Evs, OK);
 
         %% Evaluator failed
@@ -194,6 +202,14 @@ await_finish(Evs, OK, Fails) ->
             {Evs2, OK2, Fails2} =
                 await_finish_fail(Pid, Reason, Evs, OK, Fails),
             await_finish(Evs2, OK2, Fails2);
+
+	%% Special case: TimeTrap
+        {'EXIT', Pid, {timetrap_timeout, _TO, CallStack} = Reason} ->
+            ?SEV_IPRINT("await_finish -> timetrap (from ~p): "
+                         "~n   ~p", [Pid, CallStack]),
+	    %% force_evc_termination(Evs),
+	    {error, Reason};
+
         {'EXIT', Pid, Reason} ->
             %% ?SEV_IPRINT("await_finish -> fail (exit) received: "
             %%             "~n   Pid:    ~p"
@@ -242,8 +258,19 @@ await_finish_skip(Pid, Reason, Evs, OK) ->
                 end,
                 Evs
         end,
+    ?SEV_IPRINT("ensure (~w) evaluator(s) are terminated", [length(Evs)]),
     await_evs_terminated(Evs2),
+    ?SEV_IPRINT("issue skip"),
     ?LIB:skip(Reason).
+
+%% force_evc_termination(Evs) ->
+%%     Kill = fun(#ev{name = Name, pid = Pid}) ->
+%% 		  ?SEV_EPRINT("kill evaluator ~p (~p) - timetrap",
+%% 			      [Name, Pid]),
+%% 		   exit(Pid, kill)
+%% 	   end,
+%%     lists:foreach(Kill, Evs).
+
 
 await_evs_terminated(Evs) ->
     Instructions =
@@ -555,10 +582,10 @@ await_termination(Pid, ExpReason) ->
       Reason       :: term().
 
 await(ExpPid, Name, Announcement, Slogan, OtherPids) 
-  when (is_pid(ExpPid) orelse (ExpPid =:= any)) andalso 
-       is_atom(Name) andalso 
-       is_atom(Announcement) andalso 
-       is_atom(Slogan) andalso 
+  when (is_pid(ExpPid) orelse (ExpPid =:= any)) andalso
+       is_atom(Name) andalso
+       is_atom(Announcement) andalso
+       is_atom(Slogan) andalso
        is_list(OtherPids) ->
     receive
         skip ->
@@ -576,7 +603,7 @@ await(ExpPid, Name, Announcement, Slogan, OtherPids)
         {'DOWN', _, process, Pid, {skip, SkipReason}} when (Pid =:= ExpPid) ->
             iprint("Unexpected SKIP from ~w (~p): "
                    "~n   ~p", [Name, Pid, SkipReason]),
-            ?LIB:skip({Name, SkipReason});
+            ?LIB:skip(SkipReason);
         {'DOWN', _, process, Pid, Reason} when (Pid =:= ExpPid) ->
             eprint("Unexpected DOWN from ~w (~p): "
                    "~n   ~p", [Name, Pid, Reason]),
@@ -590,10 +617,16 @@ await(ExpPid, Name, Announcement, Slogan, OtherPids)
                            "~n      OtherPids: "
                            "~n         ~p", [OtherPid, Reason, OtherPids]),
                     await(ExpPid, Name, Announcement, Slogan, OtherPids);
+                {skip, SkipName, SkipReason} ->
+                    iprint("Unexpected other SKIP from ~w (~p): "
+                           "~n      ~p", [SkipName, OtherPid, SkipReason]),
+                    ?LIB:skip(SkipReason);
                 {error, _} = ERROR ->
                     ERROR
             end
-    after infinity -> % For easy debugging, just change to some valid time (5000)
+
+            %% For easy debugging, just change to some valid time (5000)
+    after infinity ->
             iprint("await -> timeout for msg from ~p (~w): "
                    "~n   Announcement: ~p"
                    "~n   Slogan:       ~p"
@@ -613,9 +646,14 @@ pi(Pid, Item) ->
 check_down(Pid, DownReason, Pids) ->
     case lists:keysearch(Pid, 2, Pids) of
         {value, {Name, _}} ->
-            eprint("Unexpected DOWN from ~w (~p): "
-                   "~n   ~p", [Name, Pid, DownReason]),
-            {error, {unexpected_exit, Name, DownReason}};
+            case DownReason of
+                {skip, Reason} ->
+                    {skip, Name, Reason};
+                _ ->
+                    eprint("Unexpected DOWN from ~w (~p): "
+                           "~n   ~p", [Name, Pid, DownReason]),
+                    {error, {unexpected_exit, Name, DownReason}}
+            end;
         false ->
             ok
     end.
@@ -643,7 +681,7 @@ print(Prefix, F, A) ->
                 %% or a named process. Instead its 
                 %% most likely the test case itself, 
                 %% so skip the name and the pid.
-                "";
+                f("[~p]", [self()]);
             SName ->
                 f("[~s][~p]", [SName, self()])
         end,
