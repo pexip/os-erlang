@@ -1,3 +1,28 @@
+erlang (1:25.2.3+pexip24u8dfsg-1+deb12u1) pexip; urgency=medium
+
+  * New upstream release
+
+ -- Steve McIntyre <steve.mcintyre@pexip.com>  Mon, 28 Apr 2025 11:18:54 +0100
+
+erlang (1:25.2.3+dfsg-1+deb12u1) bookworm-security; urgency=high
+
+  [ Salvatore Bonaccorso ]
+  * ssh: implement strict KEX (CVE-2023-48795) (Closes: #1059002)
+  * ssh: reject SFTP packets exceeding max allowed size (CVE-2025-26618)
+  * ssh: fix denial of service due to erroneous processing of large KEX
+    init packages (CVE-2025-30211) (Closes: #1101713):
+    - reduce log processing for plain connections
+    - ignore too long algorithm names
+    - limit the length of error messages in reply to invalid packets
+    - add the custom_kexinit test to test large KEX init packages processing
+  * ssh: fix remote code execution (RCE) by an unauthenticated user
+    (CVE-2025-32433) (Closes: #1103442)
+
+  [ Sergei Golovan ]
+  * Cleanup the patches.
+
+ -- Sergei Golovan <sgolovan@debian.org>  Sun, 20 Apr 2025 08:09:59 +0300
+
 erlang (1:25.2.3+dfsg-1+pexip24u7) pexip-bookworm; urgency=medium
 
   * New versioning scheme
