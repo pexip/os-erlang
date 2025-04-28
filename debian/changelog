@@ -1,4 +1,4 @@
-erlang (1:25.2.3+pexip24u8dfsg-1+deb12u1) pexip; urgency=medium
+erlang (1:25.2.3+dfsg-1+pexip24u8+deb12u1) pexip; urgency=medium
 
   * New upstream release
 
