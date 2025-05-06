@@ -1,6 +1,8 @@
---- a/erts/preloaded/src/init.erl
-+++ b/erts/preloaded/src/init.erl
-@@ -403,6 +403,7 @@
+Index: erlang/erts/preloaded/src/init.erl
+===================================================================
+--- erlang.orig/erts/preloaded/src/init.erl
++++ erlang/erts/preloaded/src/init.erl
+@@ -710,6 +710,7 @@ boot_loop(BootPid, State) ->
  	    terminate(Pid,Kernel,Reason), %% If Pid is a Kernel pid, halt()!
  	    boot_loop(BootPid,State);
  	{stop,Reason} ->
@@ -8,7 +10,7 @@
  	    stop(Reason,State);
  	{From,fetch_loaded} ->   %% Fetch and reset initially loaded modules.
  	    From ! {init,State#state.loaded},
-@@ -475,6 +476,7 @@
+@@ -782,6 +783,7 @@ loop(State) ->
  	    terminate(Pid,Kernel,Reason), %% If Pid is a Kernel pid, halt()!
  	    loop(State);
  	{stop,Reason} ->
@@ -16,7 +18,7 @@
  	    stop(Reason,State);
  	{From,fetch_loaded} ->           %% The Loaded info is cleared in
  	    Loaded = State#state.loaded, %% boot_loop but is handled here 
-@@ -610,11 +612,14 @@
+@@ -917,10 +919,13 @@ set_flag(_,_,_) ->
  %%% -------------------------------------------------
  
  stop(Reason,State) ->
@@ -25,13 +27,12 @@
      {_,Progress} = State#state.status,
      State1 = State#state{status = {stopping, Progress}},
 +    debug(true, {stopping, clear_system, State}),
-     %% There is no need to unload code if the system is shutting down
-     clear_system(Reason=/=stop,BootPid,State1),
+     clear_system(should_unload(Reason),BootPid,State1),
 +    debug(true, {stopping, do_stop, State}),
      do_stop(Reason,State1).
  
- do_stop({restart,Mode},#state{start=Start, flags=Flags0, args=Args}) ->
-@@ -625,7 +630,9 @@
+ %% There is no need to unload code if the system is shutting down
+@@ -936,7 +941,9 @@ do_stop(restart,#state{start=Start, flag
  do_stop(reboot,_) ->
      halt();
  do_stop(stop,State) ->
@@ -41,7 +42,7 @@
      halt();
  do_stop({stop,Status},State) ->
      stop_heart(State),
-@@ -715,6 +722,7 @@
+@@ -1026,6 +1033,7 @@ shutdown(_,_,_,_) ->
  %% {'EXIT',Parent,Reason} and terminate upon it!
  %%
  shutdown_kernel_pid(Pid, BootPid, Timer, State) ->

@@ -6,6 +6,3 @@ doc.patch
 exdoc.patch
 
 init.patch
-openssl3-deprecations.patch
-fix-compilation_deprecated-OpenSSL-APIs.patch
-upstream_66c39d763afc3e7fda1a4acfc7ca4ea958a2cad2.patch
