@@ -1,3 +1,22 @@
+erlang (1:27.3.4.1+dfsg-1+deb13u1) trixie; urgency=medium
+
+  * Fix CVE-2025-48038: allocation of resources without limits or throttling
+    vulnerability in the ssh_sftp module allows excessive allocation,
+    resource leak exposure (closes: #1115093).
+  * Fix CVE-2025-48039: allocation of resources without limits or throttling
+    vulnerability in the ssh_sftp module allows excessive allocation,
+    resource leak exposure (closes: #1115092).
+  * Fix CVE-2025-48040: uncontrolled resource consumption vulnerability in
+    the ssh_sftp module allows excessive allocation, flooding (closes: 1115091).
+  * Fix CVE-2025-48041: allocation of resources without limits or throttling
+    vulnerability in the ssh_sftp module allows excessive allocation,
+    flooding (closes: #1115090).
+  * Fix CVE-2016-1000107: inets does not protect applications from the presence
+    of untrusted client data in the HTTP_PROXY environment variable
+    (closes: #1115086).
+
+ -- Sergei Golovan <sgolovan@debian.org>  Tue, 08 Jul 2025 10:27:28 +0300
+
 erlang (1:27.3.4.1+dfsg-1) unstable; urgency=medium
 
   * New upstream bugfix release.
@@ -3291,7 +3310,7 @@ erlang (49.1-1) unstable; urgency=low
 erlang (47.4.1-2) unstable; urgency=low
 
   * Closed bugs: #38119, #38265 - sparc, alpha ports and clean target.
-  
+
  -- Mark Ng <ng@debian.org>  Mon,  21 Jun 1999 21:45:00 +1100
 
 erlang (47.4.1-1) unstable; urgency=low
@@ -3299,7 +3318,7 @@ erlang (47.4.1-1) unstable; urgency=low
   * the .erl files now have their own package, giving a total of 5 packages.
   * moved the .jam files and docs into their arch independent packages.
   * New upstream release.
-  
+
  -- Mark Ng <ng@debian.org>  Sat,  8 May 1999 16:45:00 +1100
 
 erlang (47.4.0-1) unstable; urgency=low

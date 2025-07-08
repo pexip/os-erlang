@@ -4,3 +4,8 @@ javascript.patch
 x32.patch
 doc.patch
 exdoc.patch
+CVE-2016-1000107.patch
+CVE-2025-48038.patch
+CVE-2025-48039.patch
+CVE-2025-48040.patch
+CVE-2025-48041.patch
