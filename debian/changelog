@@ -1,3 +1,21 @@
+erlang (1:27.3.4.1+dfsg-1) unstable; urgency=medium
+
+  * New upstream bugfix release.
+  * Fix CVE-2025-4748 in erlang-stdlib application, where unzipping a ZIP
+    archive could overwrite files using absolute paths because of insufficient
+    path sanitizing (closes: #1107939).
+
+ -- Sergei Golovan <sgolovan@debian.org>  Tue, 08 Jul 2025 10:27:28 +0300
+
+erlang (1:27.3.4+dfsg-1) unstable; urgency=medium
+
+  * New upstream release.
+  * Fix CVE-2025-46712 in erlang-ssh application, where a man-in-the-middle
+    could use optional KEX messages to impact the KEX process (closes:
+    #1104963).
+
+ -- Sergei Golovan <sgolovan@debian.org>  Fri, 09 May 2025 09:04:59 +0300
+
 erlang (1:27.3.3+dfsg-1) unstable; urgency=medium
 
   * New upstream release.

@@ -16,9 +16,9 @@ Description: Patch fixes FTBFS when using pbuilder.
  
 +echo "${OUTPUT}"
 +
- if [ "${EX_DOC_WARNINGS_AS_ERRORS}" != "false" ]; then
-     if echo "${OUTPUT}" | grep "warning:" 1>/dev/null; then
-         echo "ex_doc emitted warnings"
+ ## If EX_DOC_WARNINGS_AS_ERRORS is not explicitly turned on
+ ## and any .app file is missing, we turn off warnings as errors
+ if [ "${EX_DOC_WARNINGS_AS_ERRORS}" != "true" ]; then
 --- a/make/ex_doc.exs
 +++ b/make/ex_doc.exs
 @@ -185,6 +185,7 @@
