@@ -1,0 +1,26 @@
+From: Sergei Golovan
+Subject: Patch fixes redefinition of an XSLT variable inside
+ a for-each loop.
+Last-Modified: Sat, 30 Aug 2025 20:43:16 +0300
+
+--- a/lib/erl_docgen/priv/xsl/db_html.xsl
++++ b/lib/erl_docgen/priv/xsl/db_html.xsl
+@@ -792,13 +792,13 @@
+ 
+   <xsl:variable name="erlref.nav_rtf">
+     <xsl:for-each select="//erlref">
+-      <xsl:variable name="cval" select="module"/>
+-      <xsl:variable name="link_cval"><xsl:value-of select="translate($cval, '&#173;', '')"/></xsl:variable>
+-      <module name="{$cval}">
++      <xsl:variable name="ccval" select="module"/>
++      <xsl:variable name="link_ccval"><xsl:value-of select="translate($ccval, '&#173;', '')"/></xsl:variable>
++      <module name="{$ccval}">
+ 	<xsl:call-template name="menu.funcs">
+ 	  <xsl:with-param name="entries" select="funcs/func/name"/>
+-	  <xsl:with-param name="cval" select="$cval"/>
+-	  <xsl:with-param name="basename" select="$link_cval"/>
++	  <xsl:with-param name="cval" select="$ccval"/>
++	  <xsl:with-param name="basename" select="$link_ccval"/>
+ 	</xsl:call-template>
+       </module>
+     </xsl:for-each>

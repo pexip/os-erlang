@@ -1,3 +1,17 @@
+erlang (1:25.2.3+dfsg-1+deb12u3) bookworm-proposed-updates; urgency=medium
+
+  * Fix FTBFS with newer xsltproc.
+
+ -- Sergei Golovan <sgolovan@debian.org>  Sun, 31 Aug 2025 13:57:31 +0300
+
+erlang (1:25.2.3+dfsg-1+deb12u2) bookworm-proposed-updates; urgency=medium
+
+  * ssh: fix strict KEX hardening (CVE-2025-46712) (closes: #1104963).
+  * zip: sanitize pathnames when extracting files with absolute pathnames
+    (CVE-2025-4748) (closes: #1107939).
+
+ -- Sergei Golovan <sgolovan@debian.org>  Tue, 29 Jul 2025 14:41:15 +0300
+
 erlang (1:25.2.3+dfsg-1+deb12u1) bookworm-security; urgency=high
 
   [ Salvatore Bonaccorso ]
