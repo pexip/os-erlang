@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2010-2024. All Rights Reserved.
+%% Copyright Ericsson AB 2010-2025. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -240,6 +240,9 @@ map_completion(_Config) ->
     %% test that an already specified key does not get suggested again
     {no, [], [{"a_key",_},{"c_key", _}]} = do_expand("MapBinding#{b_key=>1,"),
     %% test that unicode works
+    {yes, "'илли́ч'=>", []} = do_expand("UnicodeMap#{"),
+    %% test that non atoms are not suggested as completion
+    {no, "", []} = do_expand("NonAtomMap#{"),
     ok.
 
 function_parameter_completion(Config) ->
@@ -644,6 +647,8 @@ do_expand(String) ->
     Bs = [
           {'Binding', 0},
           {'MapBinding', #{a_key=>0, b_key=>1, c_key=>2}},
+          {'UnicodeMap', #{'илли́ч' => 0}},
+          {'NonAtomMap', #{{} => 1}},
           {'RecordBinding', {some_record, 1, 2}},
           {'TupleBinding', {0, 1, 2}},
           {'Söndag', 0},

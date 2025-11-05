@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 1997-2024. All Rights Reserved.
+%% Copyright Ericsson AB 1997-2025. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -60,7 +60,7 @@ suppress({M,F,A}=MFA) ->
 	    Args =
                 [lists:concat(["element(",I,", Arg)"])
                  || I <- lists:seq(1, A)],
-	    emit(["    ",{call,M,F,Args},com,nl])
+	    emit(["    _ = ",{call,M,F,Args},com,nl])
     end.
 
 gen_encode(Erules,Type) when is_record(Type,typedef) ->

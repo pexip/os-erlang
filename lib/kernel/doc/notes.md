@@ -21,6 +21,41 @@ limitations under the License.
 
 This document describes the changes made to the Kernel application.
 
+## Kernel 10.2.7.1
+
+### Fixed Bugs and Malfunctions
+
+- A remote shell can now exit by closing the input stream, without terminating the remote node.
+
+  Own Id: OTP-19667 Aux Id: [PR-9912]
+
+[PR-9912]: https://github.com/erlang/otp/pull/9912
+
+### Improvements and New Features
+
+- Document default buffer sizes
+
+  Own Id: OTP-19640 Aux Id: [GH-9722]
+
+[GH-9722]: https://github.com/erlang/otp/issues/9722
+
+## Kernel 10.2.7
+
+### Fixed Bugs and Malfunctions
+
+- With this change, disk_log will not crash when using chunk_step/3 after log size was decreased.
+
+  Own Id: OTP-19605 Aux Id: [GH-9720], [PR-9765]
+
+- With this change, disk_log will not run into infinite loop when using chunk/2,3 after log size was decreased.
+
+  Own Id: OTP-19608 Aux Id: [GH-9707], [PR-9767]
+
+[GH-9720]: https://github.com/erlang/otp/issues/9720
+[PR-9765]: https://github.com/erlang/otp/pull/9765
+[GH-9707]: https://github.com/erlang/otp/issues/9707
+[PR-9767]: https://github.com/erlang/otp/pull/9767
+
 ## Kernel 10.2.6
 
 ### Fixed Bugs and Malfunctions
