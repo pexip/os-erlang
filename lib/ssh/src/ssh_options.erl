@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2004-2024. All Rights Reserved.
+%% Copyright Ericsson AB 2004-2025. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -884,6 +884,12 @@ default(common) ->
 
        max_random_length_padding =>
            #{default => ?MAX_RND_PADDING_LEN,
+             chk => fun(V) -> check_non_neg_integer(V) end,
+             class => undoc_user_option
+            },
+
+       channel_close_timeout =>
+           #{default => 5 * 1000,
              chk => fun(V) -> check_non_neg_integer(V) end,
              class => undoc_user_option
             }

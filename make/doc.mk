@@ -1,7 +1,7 @@
 #
 # %CopyrightBegin%
 #
-# Copyright Ericsson AB 1997-2024. All Rights Reserved.
+# Copyright Ericsson AB 1997-2025. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -64,7 +64,7 @@ DEFAULT_DOC_TARGETS+=man
 endif
 DOC_TARGETS?=$(DEFAULT_DOC_TARGETS)
 
-EX_DOC_WARNINGS_AS_ERRORS?=true
+EX_DOC_WARNINGS_AS_ERRORS?=default
 
 docs: $(DOC_TARGETS)
 
