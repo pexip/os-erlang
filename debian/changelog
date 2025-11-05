@@ -1,3 +1,9 @@
+erlang (1:27.3.4.1+dfsg-1+pexip25u1) pexip-trixie; urgency=medium
+
+  * New upstream release
+
+ -- Mark Hymers <mark.hymers@pexip.com>  Wed, 05 Nov 2025 11:36:43 +0000
+
 erlang (1:27.3.4.1+dfsg-1) unstable; urgency=medium
 
   * New upstream bugfix release.
