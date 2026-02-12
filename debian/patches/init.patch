@@ -1,3 +1,5 @@
+Improve debugging of process start and stop
+
 Index: erlang/erts/preloaded/src/init.erl
 ===================================================================
 --- erlang.orig/erts/preloaded/src/init.erl
