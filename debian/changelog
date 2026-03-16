@@ -1,3 +1,28 @@
+erlang (1:27.3.4.1+dfsg-1+pexip25u1+deb13u1) pexip-trixie; urgency=medium
+
+  * New upstream release with security fixes
+
+ -- Steve McIntyre <steve.mcintyre@pexip.com>  Mon, 16 Mar 2026 16:40:59 +0000
+
+erlang (1:27.3.4.1+dfsg-1+deb13u1) trixie; urgency=medium
+
+  * Fix CVE-2025-48038: allocation of resources without limits or throttling
+    vulnerability in the ssh_sftp module allows excessive allocation,
+    resource leak exposure (closes: #1115093).
+  * Fix CVE-2025-48039: allocation of resources without limits or throttling
+    vulnerability in the ssh_sftp module allows excessive allocation,
+    resource leak exposure (closes: #1115092).
+  * Fix CVE-2025-48040: uncontrolled resource consumption vulnerability in
+    the ssh_sftp module allows excessive allocation, flooding (closes: 1115091).
+  * Fix CVE-2025-48041: allocation of resources without limits or throttling
+    vulnerability in the ssh_sftp module allows excessive allocation,
+    flooding (closes: #1115090).
+  * Fix CVE-2016-1000107: inets does not protect applications from the presence
+    of untrusted client data in the HTTP_PROXY environment variable
+    (closes: #1115086).
+
+ -- Sergei Golovan <sgolovan@debian.org>  Tue, 08 Jul 2025 10:27:28 +0300
+
 erlang (1:27.3.4.1+dfsg-1+pexip25u2) pexip-trixie; urgency=medium
 
   * Trixie build for product distribution
