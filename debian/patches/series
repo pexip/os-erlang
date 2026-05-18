@@ -9,5 +9,9 @@ CVE-2025-48038.patch
 CVE-2025-48039.patch
 CVE-2025-48040.patch
 CVE-2025-48041.patch
+CVE-2026-21620.patch
+CVE-2026-23941.patch
+CVE-2026-23942.patch
+CVE-2026-23943.patch
 
 init.patch
